@@ -1,21 +1,30 @@
 """ADC-666: RuntimeInstance envelopes native state and accepted consumers atomically."""
 from __future__ import annotations
 
+import copy
 import os
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from pops._bootstrap import StepAttemptRejected
 from pops.output._consumer_contracts import ConsumerCursorSet, ScheduleCursor
 from pops.output._writers.common import _OutputRecoveryRequired, _StagedOutputFile
-from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._consumer_transaction import ConsumerTransactionReport
-from pops.time import ALL_PROVISIONAL_STORES
+from pops.runtime._runtime_instance import RuntimeInstance
+from pops.runtime._step_strategy import run_step_attempt
+from pops.time import ALL_PROVISIONAL_STORES, FixedDt, StepTransactionReport
 
 
 class _Native:
-    def __init__(self, *, fail_begin=False, fail_commit=False):
+    def __init__(
+        self,
+        *,
+        fail_begin: bool = False,
+        fail_commit: bool = False,
+        fault_phase: str | None = None,
+    ):
         self.t = 0.0
         self.step_index = 0
         self._accepted = None
@@ -26,6 +35,11 @@ class _Native:
         self._step_transaction_plan = SimpleNamespace(stores=ALL_PROVISIONAL_STORES)
         self._step_controller = None
         self._last_step_transaction_report = None
+        self.fault_phase = fault_phase
+        self.states = {"left": [1.0, 2.0], "right": [3.0, 4.0]}
+        self.cache = {"rhs": [5.0]}
+        self.history = {"left.U": [[0.5, 1.5]]}
+        self.diagnostics = {"accepted_norm": 7.0}
 
     def time(self):
         return self.t
@@ -33,17 +47,48 @@ class _Native:
     def macro_step(self):
         return self.step_index
 
-    def step(self, dt):
+    def accepted_stores(self):
+        return copy.deepcopy({
+            "states": self.states,
+            "clock": (self.t, self.step_index),
+            "cache": self.cache,
+            "history": self.history,
+            "diagnostics": self.diagnostics,
+        })
+
+    def _mutate_provisional_stores(self, dt):
         self.t += float(dt)
         self.step_index += 1
+        self.states["left"][0] += 11.0
+        self.states["right"][1] -= 13.0
+        self.cache["rhs"].append(17.0)
+        self.history["left.U"].append([19.0, 23.0])
+        self.diagnostics["provisional_norm"] = 29.0
+
+    def _reject_fault(self, phase):
+        error = StepAttemptRejected(f"fault injected during {phase}")
+        error.status = "invalid_evaluation"
+        error.phase = phase
+        error.detail = f"fault injected during {phase}"
+        error.disposition = "reject"
+        error.reason_code = 666
+        raise error
+
+    def step(self, dt):
+        self._mutate_provisional_stores(dt)
+        if self.fault_phase in {"stage", "solve", "synchronize", "guard"}:
+            self._reject_fault(self.fault_phase)
         return float(dt)
 
     def _begin_step_transaction(self):
         if self._accepted is not None:
             raise RuntimeError("nested transaction")
-        self._accepted = (self.t, self.step_index)
+        self._accepted = self.accepted_stores()
         self._committed = False
         self.events.append("begin")
+        if self.fault_phase == "prepare":
+            self._mutate_provisional_stores(0.375)
+            raise RuntimeError("fault injected during prepare")
         if self.fail_begin:
             self.t = 0.375
             self.step_index = 3
@@ -67,7 +112,12 @@ class _Native:
     def _rollback_step_transaction(self):
         if self._accepted is None:
             raise RuntimeError("missing transaction")
-        self.t, self.step_index = self._accepted
+        accepted = self._accepted
+        self.states = accepted["states"]
+        self.t, self.step_index = accepted["clock"]
+        self.cache = accepted["cache"]
+        self.history = accepted["history"]
+        self.diagnostics = accepted["diagnostics"]
         self._accepted = None
         self._committed = False
         self.events.append("rollback")
@@ -277,3 +327,88 @@ def test_native_commit_failure_discards_prepared_outputs_before_they_become_visi
     assert runtime.artifacts == set()
     assert "publish" not in native.events
     assert native.events == ["begin", "commit", "rollback"]
+
+
+@pytest.mark.parametrize(
+    ("phase", "status", "action", "diagnostic"),
+    (
+        ("prepare", "failed", "fail_run", "fault injected during prepare"),
+        ("stage", "rejected", "reject_attempt", "fault injected during stage"),
+        ("solve", "rejected", "reject_attempt", "fault injected during solve"),
+        (
+            "synchronize",
+            "rejected",
+            "reject_attempt",
+            "fault injected during synchronize",
+        ),
+        ("guard", "rejected", "reject_attempt", "fault injected during guard"),
+        ("effect", "failed", "fail_run", "fault injected during effect publication"),
+        ("commit", "failed", "fail_run", "fault injected during native commit"),
+    ),
+)
+def test_fault_injection_matrix_restores_every_available_store_and_reports_exact_phase(
+    phase,
+    status,
+    action,
+    diagnostic,
+):
+    native = _Native(
+        fault_phase=phase if phase in {
+            "prepare", "stage", "solve", "synchronize", "guard"
+        } else None,
+        fail_commit=phase == "commit",
+    )
+    runtime = _Runtime(native, fail_effect=phase == "effect")
+    runtime._consumer_cursors = ConsumerCursorSet((
+        ScheduleCursor("accepted-sample", "accepted-occurrence", 3),
+    ))
+    native._last_step_transaction_report = StepTransactionReport(
+        status="accepted",
+        phase="commit",
+        action="commit",
+        staged_effects=("states",),
+        committed_effects=("states",),
+    )
+    runtime._consumer_reports = ("accepted-report",)
+    runtime._checkpoint_cursor_override = "accepted-checkpoint-cursor"
+    runtime.temporaries = {"accepted.tmp"}
+    runtime.artifacts = {"accepted.out"}
+
+    accepted_native = native.accepted_stores()
+    accepted_cursors = runtime.consumer_cursors.to_data()
+    accepted_reports = runtime._consumer_reports
+    accepted_checkpoint_cursor = runtime._checkpoint_cursor_override
+    accepted_temporaries = set(runtime.temporaries)
+    accepted_artifacts = set(runtime.artifacts)
+    accepted_attempt = runtime._attempt
+
+    def advance():
+        report = run_step_attempt(
+            native,
+            native,
+            FixedDt(0.25),
+            t_end=0.25,
+        )
+        return report, report.attempts
+
+    with pytest.raises(RuntimeError, match=diagnostic):
+        runtime._accepted_step_transaction(advance)
+
+    assert native.accepted_stores() == accepted_native
+    assert native._accepted is None
+    assert native._step_controller is None
+    assert runtime.consumer_cursors.to_data() == accepted_cursors
+    assert runtime._consumer_reports == accepted_reports
+    assert runtime._checkpoint_cursor_override == accepted_checkpoint_cursor
+    assert runtime.temporaries == accepted_temporaries
+    assert runtime.artifacts == accepted_artifacts
+    assert runtime._attempt == accepted_attempt
+
+    report = native._last_step_transaction_report
+    assert (report.status, report.phase, report.action) == (status, phase, action)
+    stores = tuple(store.value for store in ALL_PROVISIONAL_STORES)
+    assert report.staged_effects == stores
+    assert report.committed_effects == ()
+    assert report.rolled_back_effects == stores
+    assert report.attempts == 1
+    assert report.diagnostics == (diagnostic,)
