@@ -278,8 +278,14 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
   detail::AmrHistoryOps::rotate_histories(rt);
   EXPECT_EQ(detail::AmrHistoryOps::fill_count(rt, "R"), 1)
       << "cold copies do not warm additional logical slots";
-  // advance the live state so the next store differs.
-  rt.step(Real(0.01));
+  // Change the live state explicitly so the next store differs. History-ring mechanics must not
+  // invoke the retired native temporal engine merely to manufacture a second sample.
+  for (int k = 0; k < rt.nlev(); ++k) {
+    std::vector<double> changed = rt.block_level_state(0, k);
+    for (double& value : changed)
+      value *= 1.01;
+    rt.set_block_level_state(0, k, changed);
+  }
   const std::vector<double> s1 = block0_all_levels(rt);
   for (int k = 0; k < rt.nlev(); ++k)
     detail::AmrHistoryOps::store_history(rt, "R", k, rt.level_state(0, k), Real(0.01));
@@ -343,11 +349,11 @@ TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
   const std::vector<double> coarse_before = detail::AmrHistoryOps::global(rt, "R", 0, false);
   const std::size_t nfine = static_cast<std::size_t>(rt.block_level_state(0, 1).size());
 
-  // Activate a real regrid and fire it (a moving density front -> the fine layout changes).
+  // Activate a real regrid and fire the topology operation directly. The Program-level cadence and
+  // rollback contracts are covered below; this engine-level test owns only history rematerialization.
   rt.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
   test::install_prepared_threshold_union(rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
-  rt.step(Real(0.01));  // macro_step 0: no regrid (fresh grid), but stores nothing to the ring
-  rt.step(Real(0.01));  // macro_step 1 (every=1): regrid fires -> remap_rings runs
+  rt.regrid();
   ASSERT_GE(rt.regrid_count(), 1);
 
   // The ring's fine slot is defined on the NEW layout (finite, same global fine extent as U); the
