@@ -34,6 +34,13 @@ from pops.solvers.providers import (
 from pops.time import Program
 
 
+_HIERARCHY_BASE_CELLS = 8
+_HIERARCHY_DT = 0.01
+_HIERARCHY_ROTATION_RATE = 3.0
+_HIERARCHY_DENSITY = 2.0
+_HIERARCHY_POTENTIAL_AMPLITUDE = 0.01
+
+
 @pytest.mark.parametrize(
     "option",
     [
@@ -343,7 +350,13 @@ def test_hierarchy_program_and_codegen_core_have_no_builtin_backend_branch():
 
 
 def _public_amr_hierarchy_case(
-    solver, *, max_levels=2, temporal_ratios=(3,), bound_plasma=False,
+    solver,
+    *,
+    max_levels=2,
+    temporal_ratios=(3,),
+    bound_plasma=False,
+    manufactured_plasma=False,
+    base_cells=_HIERARCHY_BASE_CELLS,
 ):
     import pops
     from pops.amr import (
@@ -366,7 +379,8 @@ def _public_amr_hierarchy_case(
     from pops.initial import InitialCondition
     from pops.layouts import AMR
     from pops.lib.amr import StateTransfer
-    from pops.lib.initial import BindArray, Constant, Gaussian
+    from pops.analytic import coordinates, cos, sin
+    from pops.lib.initial import Analytic, BindArray, Constant, Gaussian
     from pops.math import ValueExpr, ddt, div
     from pops.mesh import CartesianGrid, PeriodicAxes
     from pops.numerics import (
@@ -387,6 +401,8 @@ def _public_amr_hierarchy_case(
         "external-hierarchy-square", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
+    if bound_plasma and manufactured_plasma:
+        raise ValueError("the bound and manufactured plasma profiles are exclusive")
 
     model = pops.Model("external-hierarchy-plasma", frame=frame)
     state = model.state(
@@ -560,13 +576,50 @@ def _public_amr_hierarchy_case(
             "accepted-marker", transported_marker, at=marker_temporal.next.point
         ),
     )
-    program.step_strategy(FixedDt(0.01))
+    program.step_strategy(FixedDt(_HIERARCHY_DT))
     case.program(program)
 
+    plasma_initial = Constant((2.0, 0.25, -0.5))
+    if bound_plasma:
+        plasma_initial = BindArray()
+    elif manufactured_plasma:
+        # Continuous manufactured solution for the first condensed solve.  With
+        # M = I - dt*J, A = I + dt^2*rho*M^-1 and phi*=a sin(2pi x)sin(2pi y),
+        # choose m = dt^-1 M A grad(phi*).  Then the authored condensed RHS is
+        #   -dt div(M^-1 m) = -div(A grad(phi*)).
+        # AnalyticReprojection evaluates this profile independently on every AMR level.
+        x_coordinate, y_coordinate = coordinates(frame)
+        wave_number = 2.0 * np.pi
+        potential_x = (
+            _HIERARCHY_POTENTIAL_AMPLITUDE
+            * wave_number
+            * cos(wave_number * x_coordinate)
+            * sin(wave_number * y_coordinate)
+        )
+        potential_y = (
+            _HIERARCHY_POTENTIAL_AMPLITUDE
+            * wave_number
+            * sin(wave_number * x_coordinate)
+            * cos(wave_number * y_coordinate)
+        )
+        density_profile = _HIERARCHY_DENSITY + 0.0 * x_coordinate
+        momentum_factor = (
+            1.0 / _HIERARCHY_DT + _HIERARCHY_DT * _HIERARCHY_DENSITY
+        )
+        plasma_initial = Analytic(
+            frame=frame,
+            components=(
+                density_profile,
+                momentum_factor * potential_x
+                - _HIERARCHY_ROTATION_RATE * potential_y,
+                _HIERARCHY_ROTATION_RATE * potential_x
+                + momentum_factor * potential_y,
+            ),
+        )
     case.initials.add(
         InitialCondition(
             state=state_instance,
-            value=BindArray() if bound_plasma else Constant((2.0, 0.25, -0.5)),
+            value=plasma_initial,
             projection=ConservativeCellAverage(),
         )
     )
@@ -594,7 +647,7 @@ def _public_amr_hierarchy_case(
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,
-            cells=(8, 8),
+            cells=(base_cells, base_cells),
             periodic=None if bound_plasma else PeriodicAxes(frame.axes),
         ),
         hierarchy=AMRHierarchy(
@@ -622,13 +675,7 @@ def _public_amr_hierarchy_case(
 
 
 def _constant_rotation_oracle(*, dt, rate, density, east, north):
-    """Closed-form inverse of ``I - dt*J`` for the authored skew source.
-
-    This deliberately does not call a PoPS kernel, generated helper, or the native provider.  The
-    spatially constant state has an exact zero condensed RHS, so the real hierarchy solver must still
-    execute but the accepted state is the independently checkable local implicit rotation on every
-    materialized level.
-    """
+    """Closed-form inverse of ``I - dt*J`` for the zero-spatial-mode guard case."""
     rotation = dt * rate
     denominator = 1.0 + rotation * rotation
     return np.asarray(
@@ -668,7 +715,9 @@ def _external_hierarchy_carry_metrics(so_path):
 
 
 def _nonuniform_plasma_initial():
-    coordinate = (np.arange(8, dtype=np.float64) + 0.5) / 8
+    coordinate = (
+        np.arange(_HIERARCHY_BASE_CELLS, dtype=np.float64) + 0.5
+    ) / _HIERARCHY_BASE_CELLS
     x, y = np.meshgrid(coordinate, coordinate, indexing="xy")
     density = 1.0 + 0.20 * np.exp(
         -80.0 * ((x - 0.40) ** 2 + (y - 0.55) ** 2)
@@ -676,6 +725,139 @@ def _nonuniform_plasma_initial():
     east = density * (0.25 + 0.08 * np.sin(2.0 * np.pi * y))
     north = density * (-0.15 + 0.06 * np.cos(2.0 * np.pi * x))
     return np.ascontiguousarray(np.stack((density, east, north)))
+
+
+def _manufactured_plasma_initial(cells):
+    """Evaluate the MMS with the runtime's independent four-point Gauss projection."""
+    spacing = 1.0 / cells
+    coordinate = (np.arange(cells, dtype=np.float64) + 0.5) * spacing
+    x_center, y_center = np.meshgrid(coordinate, coordinate, indexing="xy")
+    nodes = (
+        -0.861136311594052575223946488892809505,
+        -0.339981043584856264802665759103244687,
+        0.339981043584856264802665759103244687,
+        0.861136311594052575223946488892809505,
+    )
+    weights = (
+        0.347854845137453857373063949221999408,
+        0.652145154862546142626936050778000593,
+        0.652145154862546142626936050778000593,
+        0.347854845137453857373063949221999408,
+    )
+    wave_number = 2.0 * np.pi
+    potential_x = np.zeros((cells, cells), dtype=np.float64)
+    potential_y = np.zeros((cells, cells), dtype=np.float64)
+    for qy, weight_y in zip(nodes, weights, strict=True):
+        for qx, weight_x in zip(nodes, weights, strict=True):
+            x = x_center + 0.5 * spacing * qx
+            y = y_center + 0.5 * spacing * qy
+            weight = 0.25 * weight_x * weight_y
+            potential_x += (
+                weight
+                * _HIERARCHY_POTENTIAL_AMPLITUDE
+                * wave_number
+                * np.cos(wave_number * x)
+                * np.sin(wave_number * y)
+            )
+            potential_y += (
+                weight
+                * _HIERARCHY_POTENTIAL_AMPLITUDE
+                * wave_number
+                * np.sin(wave_number * x)
+                * np.cos(wave_number * y)
+            )
+    density = np.full((cells, cells), _HIERARCHY_DENSITY)
+    momentum_factor = (
+        1.0 / _HIERARCHY_DT + _HIERARCHY_DT * _HIERARCHY_DENSITY
+    )
+    east = (
+        momentum_factor * potential_x
+        - _HIERARCHY_ROTATION_RATE * potential_y
+    )
+    north = (
+        _HIERARCHY_ROTATION_RATE * potential_x
+        + momentum_factor * potential_y
+    )
+    return np.stack((density, east, north))
+
+
+def _periodic_condensed_fourier_oracle(initial, *, dt, rotation_rate):
+    """Independent inverse of the constant-coefficient discrete condensed operator."""
+    density, east, north = np.asarray(initial, dtype=np.float64)
+    cells = density.shape[0]
+    assert density.shape == east.shape == north.shape == (cells, cells)
+    np.testing.assert_allclose(
+        density, np.full_like(density, density[0, 0]), rtol=0.0, atol=5.0e-15
+    )
+    spacing = 1.0 / cells
+
+    def centered_difference(values, *, axis):
+        return (
+            np.roll(values, -1, axis=axis) - np.roll(values, 1, axis=axis)
+        ) / (2.0 * spacing)
+
+    rotation = dt * rotation_rate
+    denominator = 1.0 + rotation * rotation
+    flux_east = (east + rotation * north) / denominator
+    flux_north = (-rotation * east + north) / denominator
+    rhs = -dt * (
+        centered_difference(flux_east, axis=1)
+        + centered_difference(flux_north, axis=0)
+    )
+    assert np.max(np.abs(rhs)) > 1.0e-2
+
+    coefficient = 1.0 + dt * dt * float(density[0, 0]) / denominator
+    modes = np.fft.fftfreq(cells) * cells
+    kx, ky = np.meshgrid(modes, modes, indexing="xy")
+    eigenvalue = coefficient * 4.0 * cells * cells * (
+        np.sin(np.pi * kx / cells) ** 2
+        + np.sin(np.pi * ky / cells) ** 2
+    )
+    rhs_hat = np.fft.fft2(rhs)
+    phi_hat = np.zeros_like(rhs_hat)
+    nonzero = eigenvalue > 0.0
+    phi_hat[nonzero] = rhs_hat[nonzero] / eigenvalue[nonzero]
+    potential = np.fft.ifft2(phi_hat).real
+
+    gradient_east = centered_difference(potential, axis=1)
+    gradient_north = centered_difference(potential, axis=0)
+    velocity_east = east / density - dt * gradient_east
+    velocity_north = north / density - dt * gradient_north
+    expected_east = density * (
+        velocity_east + rotation * velocity_north
+    ) / denominator
+    expected_north = density * (
+        -rotation * velocity_east + velocity_north
+    ) / denominator
+    return (
+        np.stack((density, expected_east, expected_north)),
+        potential,
+        rhs,
+    )
+
+
+def _amr_history_level(values, *, level, base_cells=8):
+    """Decode one scalar level from the public concatenated AMR history convention."""
+    flat = np.asarray(values, dtype=np.float64)
+    cells = base_cells * 2**level
+    offset = sum((base_cells * 2**coarse) ** 2 for coarse in range(level))
+    end = offset + cells * cells
+    assert flat.size >= end
+    return flat[offset:end].reshape(cells, cells)
+
+
+def _patch_interior(mask, *, guard_cells=1):
+    """Exclude the one-cell C/F interpolation band from a periodic patch mask."""
+    interior = np.asarray(mask, dtype=bool).copy()
+    for _ in range(guard_cells):
+        interior &= (
+            np.roll(interior, 1, axis=0)
+            & np.roll(interior, -1, axis=0)
+            & np.roll(interior, 1, axis=1)
+            & np.roll(interior, -1, axis=1)
+        )
+    assert np.count_nonzero(interior) >= 16
+    return interior
 
 
 def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity(
@@ -991,16 +1173,39 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
     import pops
     from pops.codegen import Production
 
-    oracle = _constant_rotation_oracle(
-        dt=0.01, rate=3.0, density=2.0, east=0.25, north=-0.5,
+    manufactured_errors = {}
+    constant_oracle = _constant_rotation_oracle(
+        dt=_HIERARCHY_DT,
+        rate=_HIERARCHY_ROTATION_RATE,
+        density=2.0,
+        east=0.25,
+        north=-0.5,
     )
-    for max_levels, temporal_ratios, steps in ((2, (3,), 2), (3, (3, 5), 1)):
-        bound_plasma = max_levels == 2
+    configurations = (
+        # Preserve the two-step outflow/reflux/history-carry composition.
+        (2, (3,), 2, True, False, _HIERARCHY_BASE_CELLS),
+        # Independently quantify the nonzero two-level solve at h and h/2.
+        (2, (3,), 1, False, True, _HIERARCHY_BASE_CELLS),
+        (2, (3,), 1, False, True, 2 * _HIERARCHY_BASE_CELLS),
+        # Keep the N-level gather/publish and nonbinary temporal-ratio guard.  The nonzero N-level
+        # scientific gate remains open because the general FAC currently diverges on the MMS.
+        (3, (3, 5), 1, False, False, _HIERARCHY_BASE_CELLS),
+    )
+    for (
+        max_levels,
+        temporal_ratios,
+        steps,
+        bound_plasma,
+        manufactured_plasma,
+        base_cells,
+    ) in configurations:
         case, layout, plasma_state = _public_amr_hierarchy_case(
             ExternalHierarchySolver(),
             max_levels=max_levels,
             temporal_ratios=temporal_ratios,
             bound_plasma=bound_plasma,
+            manufactured_plasma=manufactured_plasma,
+            base_cells=base_cells,
         )
         resolved = pops.resolve(
             pops.validate(case),
@@ -1032,10 +1237,36 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         assert bound_solve == before_bind[3]
         assert simulation.n_levels() == max_levels
 
+        manufactured_oracle = None
+        if manufactured_plasma:
+            finest_cells = base_cells * 2 ** (max_levels - 1)
+            finest_initial = np.asarray(
+                simulation.block_level_state_global(
+                    "plasma", max_levels - 1
+                ),
+                dtype=np.float64,
+            ).reshape(3, finest_cells, finest_cells)
+            active = finest_initial[0] > 0.0
+            assert np.any(active) and np.any(~active)
+            uniform_initial = _manufactured_plasma_initial(finest_cells)
+            np.testing.assert_allclose(
+                finest_initial[:, active],
+                uniform_initial[:, active],
+                rtol=2.0e-13,
+                atol=2.0e-13,
+            )
+            manufactured_oracle = _periodic_condensed_fourier_oracle(
+                uniform_initial,
+                dt=_HIERARCHY_DT,
+                rotation_rate=_HIERARCHY_ROTATION_RATE,
+            )
+
         initial_marker_mass = simulation.integral(
             "marker", component=0, levels=(0,)
         )
-        report = pops.run(simulation, t_end=0.01 * steps, max_steps=steps)
+        report = pops.run(
+            simulation, t_end=_HIERARCHY_DT * steps, max_steps=steps
+        )
         run_register, run_prepare, run_execution, run_solve = (
             _external_hierarchy_counters(compiled.so_path)
         )
@@ -1055,7 +1286,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
         assert all(row["macro_step"] == steps for row in level_clocks)
         assert all(row["phase"] == {"numerator": 0, "denominator": 1} for row in level_clocks)
         assert all(
-            row["physical_time"] == pytest.approx(0.01 * steps)
+            row["physical_time"] == pytest.approx(_HIERARCHY_DT * steps)
             for row in level_clocks
         )
         assert program_report.level_relations == [
@@ -1118,9 +1349,72 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 assert actual.size > 0 and np.isfinite(actual).all()
             continue
 
-        # Fail on any per-level drift.  The exact zero condensed RHS is intentional: the counter
-        # above proves the real composite FAC still executes once, while this independent closed-form
-        # oracle isolates gather/publish, level qualification, and local reconstruction errors.
+        if not manufactured_plasma:
+            # N-level orchestration guard: every qualified level receives the exact local implicit
+            # rotation for the spatial zero mode, while ratios 3 then 5 remain distinct from spatial
+            # ratio two.  The independent nonzero scientific proof is the refined MMS pair below.
+            for level in range(max_levels):
+                actual = np.asarray(
+                    simulation.block_level_state_global("plasma", level),
+                    dtype=np.float64,
+                ).reshape(3, -1)
+                assert actual.shape[1] > 0
+                assert np.isfinite(actual).all()
+                active = actual[0] > 0.0
+                assert np.any(active)
+                np.testing.assert_array_equal(
+                    actual[0, active],
+                    np.full(np.count_nonzero(active), constant_oracle[0]),
+                )
+                np.testing.assert_allclose(
+                    actual[1:, active],
+                    np.broadcast_to(
+                        constant_oracle[1:, None],
+                        (2, np.count_nonzero(active)),
+                    ),
+                    rtol=5.0e-15,
+                    atol=5.0e-15,
+                )
+                np.testing.assert_array_equal(
+                    actual[:, ~active],
+                    np.zeros((3, np.count_nonzero(~active))),
+                )
+            continue
+
+        # Two genuinely refined solves execute the same nonzero manufactured problem at h and h/2.
+        # NumPy inverts the corresponding uniform discrete operator by FFT, independently of PoPS,
+        # FAC, generated C++, and the external provider.  Compare the qualified fine potential away
+        # from the exact C/F interpolation band; the measured error must converge under refinement.
+        assert manufactured_oracle is not None
+        _, expected_potential, manufactured_rhs = manufactured_oracle
+        assert float(np.linalg.norm(manufactured_rhs.ravel())) > 1.0
+        actual_potential = _amr_history_level(
+            # The accepted macro-step rotates the just-stored phi into lag-1.
+            simulation.history_global("plasma.tensor-potential", 1),
+            level=max_levels - 1,
+            base_cells=base_cells,
+        )
+        finest_cells = base_cells * 2 ** (max_levels - 1)
+        final_finest = np.asarray(
+            simulation.block_level_state_global("plasma", max_levels - 1),
+            dtype=np.float64,
+        ).reshape(3, finest_cells, finest_cells)
+        active = final_finest[0] > 0.0
+        interior = _patch_interior(active)
+        difference = actual_potential - expected_potential
+        # The periodic operator admits an arbitrary constant. Remove exactly that gauge mode before
+        # measuring the scientific error; no spatial error or provider tolerance is hidden.
+        difference -= float(difference[interior].mean())
+        relative_l2 = float(
+            np.linalg.norm(difference[interior])
+            / np.linalg.norm(expected_potential[interior])
+        )
+        assert np.isfinite(relative_l2) and relative_l2 > 0.0
+        manufactured_errors[base_cells] = relative_l2
+
+        # Every level remains populated and finite after the provider publishes the nonzero solution;
+        # this catches a provider that only solved/published the finest array while leaving qualified
+        # coarse state or history undefined.
         for level in range(max_levels):
             actual = np.asarray(
                 simulation.block_level_state_global("plasma", level),
@@ -1130,17 +1424,24 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
             assert np.isfinite(actual).all()
             active = actual[0] > 0.0
             assert np.any(active)
-            np.testing.assert_array_equal(
-                actual[0, active], np.full(np.count_nonzero(active), oracle[0]),
-            )
-            np.testing.assert_allclose(
-                actual[1:, active],
-                np.broadcast_to(
-                    oracle[1:, None], (2, np.count_nonzero(active)),
-                ),
-                rtol=5.0e-15,
-                atol=5.0e-15,
-            )
-            np.testing.assert_array_equal(
-                actual[:, ~active], np.zeros((3, np.count_nonzero(~active))),
-            )
+            if level > 0:
+                assert np.any(~active)
+
+    # The two-level runs use h and h/2 on their finest patches.  This is an observed
+    # convergence requirement, not a loose absolute tolerance: a zero-RHS solve, level-0-only solve,
+    # stale publication or arbitrary C/F fill cannot exhibit the expected refined MMS convergence.
+    assert set(manufactured_errors) == {
+        _HIERARCHY_BASE_CELLS,
+        2 * _HIERARCHY_BASE_CELLS,
+    }
+    observed_order = np.log(
+        manufactured_errors[_HIERARCHY_BASE_CELLS]
+        / manufactured_errors[2 * _HIERARCHY_BASE_CELLS]
+    ) / np.log(2.0)
+    assert observed_order >= 1.5, {
+        "coarse_8_relative_l2": manufactured_errors[_HIERARCHY_BASE_CELLS],
+        "coarse_16_relative_l2": manufactured_errors[
+            2 * _HIERARCHY_BASE_CELLS
+        ],
+        "observed_order": observed_order,
+    }
