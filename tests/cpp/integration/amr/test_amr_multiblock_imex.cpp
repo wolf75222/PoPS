@@ -1,8 +1,6 @@
-// AMR MULTI-BLOCS IMEX (capstone vii) : la FACADE RUNTIME (AmrSystem -> AmrRuntime) honore le
-// traitement temporel time="imex" PAR BLOC (source raide traitee en IMPLICITE localement par
-// backward_euler_source), en mirroir de la branche IMEX du moteur compile-time AmrSystemCoupler::step
-// (SourceFreeModel transport + AmrImplicitSourceStepper). Le pas IMEX d'UN bloc n'altere PAS les blocs
-// explicites voisins (selection PAR BLOC).
+// AMR MULTI-BLOCS IMEX (capstone vii / ADC-700): un Program explicite compose transport sans source,
+// backward_euler_source local sur un candidat prive, puis commit transactionnel. AmrRuntime reste le
+// moteur spatial; il ne choisit plus implicitement le traitement temporel de ce test.
 //
 // Ce que le test verrouille (cf. tache capstone vii + suite revue #184) :
 //   (1) STABILITE RAIDE : un bloc a SOURCE LOCALE RAIDE (relaxation, raideur 1/eps >> 1/dt) sous IMEX
@@ -18,23 +16,21 @@
 //       "negatif" de (1) : sans IMEX, la stabilite disparait. L'explosion est verifiee SUR mx/my/E.
 //   (3bis) IMEX SOUS-CYCLE substeps>1 (revue #184) : un run IMEX substeps=4 est fini, borne (densite ET
 //       mx/my/E), conservatif, et sa trajectoire DIFFERE d'un run IMEX substeps=1 -> le SOUS-CYCLAGE du
-//       splitting IMEX (decision d'integration, contraire au compile-time qui ignore substeps en IMEX)
-//       est INTENTIONNEL et reellement execute, pas un no-op silencieux.
-//   (4) OPT-IN BIT-IDENTIQUE : un multi-blocs TOUT-EXPLICITE est inchange (dmax==0 entre deux runs), et
-//       le mono-bloc reste sur AmrCouplerMP (dmax==0). L'IMEX par bloc est strictement opt-in.
-//   (5) FACADE : AmrSystem.add_block(time="imex") en MULTI-BLOCS construit et tourne (bloc IMEX
-//       potential + bloc explicite ExB), etat fini ; et le masque IMEX partiel (implicit_roles) est
-//       refuse en explicite ET resolu en multi-blocs (un role absent leve une erreur claire).
+//       splitting IMEX porte par le Program est INTENTIONNEL et reellement execute, pas un no-op.
+//   (4) OPT-IN BIT-IDENTIQUE : deux Programs TOUT-EXPLICITES identiques donnent le meme resultat
+//       (dmax==0). L'IMEX porte par le Program est strictement opt-in.
+//   (5) FACADE : AmrSystem.add_block(time="imex") sans Program ne peut pas avancer ; le moteur spatial
+//       se materialise cependant avec un masque IMEX partiel resolu (un role absent leve clairement).
 //
-// La source RAIDE (relaxation S = -k * (u - u_eq), cellule-locale) n'est PAS ModelSpec-atteignable
-// (aucune brique de dispatch), donc le coeur du test (1)(2)(3) travaille au niveau du MOTEUR
-// AmrRuntime + build_amr_block, EXACTEMENT comme test_amr_multiblock_substeps (acces niveaux/masses).
-// La FACADE (4)(5) passe par AmrSystem (modeles ModelSpec : exb, potential).
+// La source RAIDE n'est pas ModelSpec-atteignable; deux builders compiles fournissent donc seulement
+// les noyaux spatiaux au meme AmrSystem. Toutes les avances passent neanmoins par la facade + Program.
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, BackgroundDensity, ChargeDensity, PotentialForce
 #include <pops/numerics/fv/flux_failure.hpp>
+#include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / build_amr_block / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                 // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/amr_system.hpp>                      // facade AmrSystem
@@ -45,8 +41,11 @@
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
+#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -150,37 +149,99 @@ double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
   return d;
 }
 
-// Construit un AmrRuntime a DEUX blocs sur une hierarchie 2 NIVEAUX figee N x N : un bloc RAIDE
-// (StiffModel) au traitement @p imex_stiff et de cadence @p substeps sous-pas, et un bloc NEUTRE
-// explicite. La densite initiale rho est posee sur les deux. Le patch fin central FIXE de
-// make_shared_amr_layout donne la 2e niveau (couverture). @p substeps : sous-pas du bloc raide
-// (1 = un seul advance par macro-pas ; >1 = le pas effectif est decoupe en substeps morceaux, le
-// splitting IMEX est alors SOUS-CYCLE par le moteur -- decision assumee, cf. amr_runtime.hpp).
-AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
-                           const std::vector<double>& rho, int substeps = 1) {
-  AmrBuildParams bp;
-  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-  bp.mesh.periodicity = Periodicity{true, true};
-  bp.mesh.n = N;
-  bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};   // periodique
-  const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
-  std::vector<AmrRuntimeBlock> blocks;
-  // bloc A : raide, traitement imex_stiff (true = IMEX, false = explicite : disable-and-fail).
-  blocks.push_back(detail::build_amr_block<StiffModel, Minmod, RusanovFlux>(
-      make_stiff(eps), S, "stiff", rho, /*has_density=*/true, kGamma, substeps,
-      /*recon_prim=*/false, /*imex=*/imex_stiff, /*stride=*/1));
-  // bloc B : neutre, EXPLICITE (voisin sur la hierarchie partagee ; Poisson somme co-localise).
-  blocks.push_back(detail::build_amr_block<NeutralModel, Minmod, RusanovFlux>(
-      make_neutral(), S, "neutral", rho, /*has_density=*/true, kGamma, /*substeps=*/1,
-      /*recon_prim=*/false, /*imex=*/false, /*stride=*/1));
-  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                     S.replicated_coarse, S.wall);
-  test::install_second_order_amr_transfer_authorities(runtime, 2);
-  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
-      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
-  return runtime;
+template <class Model>
+AmrCompiledBlockBuilder make_program_block_builder(Model model) {
+  return [model](const detail::SharedAmrLayout& layout, const std::string& name,
+                 const std::vector<double>& density, bool has_density,
+                 const std::vector<double>& state, bool has_state, double gamma, int substeps,
+                 bool recon_prim, bool imex, int stride,
+                 const std::vector<std::string>& implicit_vars,
+                 const std::vector<std::string>& implicit_roles, double pos_floor,
+                 double weno_epsilon, bool wave_speed_cache) {
+    if (imex || !implicit_vars.empty() || !implicit_roles.empty())
+      throw std::invalid_argument(
+          "the IMEX test Program owns source treatment; its spatial block must be explicit");
+    return detail::build_amr_block<Model, Minmod, RusanovFlux>(
+        model, layout, name, density, has_density, gamma, substeps, recon_prim,
+        /*imex=*/false, stride, {}, NewtonOptions{}, has_state ? &state : nullptr,
+        /*newton_diagnostics=*/false, AmrTimeMethod::kEuler, pos_floor, weno_epsilon,
+        wave_speed_cache);
+  };
+}
+
+// Install one explicitly authored Lie Program:
+//   source-free Forward Euler transport; local backward-Euler source on a private candidate; commit.
+// The explicit oracle uses the same Program skeleton but evaluates the complete stiff RHS directly.
+void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool implicit_stiff,
+                                int stiff_substeps) {
+  system.set_program_block_map({0, 1});
+  system.install_program_step([](double) {});
+  if (!system.uses_runtime_engine() || system.engine() == nullptr)
+    throw std::runtime_error("stiff-pair test Program requires the materialized AMR engine");
+
+  auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
+  context->configure_primary_clock("test.clock.macro");
+  context->install([context, stiff_model, implicit_stiff, stiff_substeps](double macro_dt) {
+    context->advance_hierarchy(
+        macro_dt, [context, stiff_model, implicit_stiff, stiff_substeps](double level_dt) {
+          (void)context->solve_fields();
+          MultiFab& stiff_live = context->state(0);
+          MultiFab& neutral_live = context->state(1);
+          MultiFab& stiff_candidate = context->scratch_state(1000, 0, stiff_live);
+          MultiFab& neutral_candidate = context->scratch_state(1001, 0, neutral_live);
+          context->lincomb(stiff_candidate, Real(1), stiff_live, Real(0), stiff_live);
+          context->lincomb(neutral_candidate, Real(1), neutral_live, Real(0), neutral_live);
+
+          const Real stiff_dt = Real(level_dt) / static_cast<Real>(stiff_substeps);
+          for (int substep = 0; substep < stiff_substeps; ++substep) {
+            context->set_stage_time(substep, stiff_substeps);
+            MultiFab& stiff_rate =
+                context->rhs_scratch(2000 + substep, 0, stiff_candidate);
+            if (implicit_stiff) {
+              context->neg_div_flux_default_into(0, stiff_candidate, stiff_rate, 3000 + substep);
+              context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
+              backward_euler_source(stiff_model, context->aux(), stiff_candidate, stiff_dt,
+                                    NewtonOptions{}, ImplicitMask<StiffModel::n_vars>{}, nullptr);
+            } else {
+              context->rhs_into(0, stiff_candidate, stiff_rate, 3000 + substep);
+              context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
+            }
+          }
+
+          context->set_stage_time(0, 1);
+          MultiFab& neutral_rate = context->rhs_scratch(2100, 0, neutral_candidate);
+          context->rhs_into(1, neutral_candidate, neutral_rate, 3100);
+          context->axpy(neutral_candidate, Real(level_dt), neutral_rate, Real(level_dt),
+                        {{1, 1, 1}});
+          context->commit_many(
+              {{&stiff_live, &stiff_candidate}, {&neutral_live, &neutral_candidate}});
+        });
+  });
+}
+
+// Construit une facade AmrSystem a deux blocs sur une hierarchie deux niveaux. Les builders ne
+// transportent aucune decision temporelle : le Program ci-dessus est l'unique autorite IMEX/explicite.
+std::unique_ptr<AmrSystem> make_stiff_pair(int N, double L, double eps, bool imex_stiff,
+                                          const std::vector<double>& rho, int substeps = 1) {
+  AmrSystemConfig cfg;
+  cfg.n = N;
+  cfg.L = L;
+  cfg.level_count = 2;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+  auto system = std::make_unique<AmrSystem>(cfg);
+  const StiffModel stiff_model = make_stiff(eps);
+  system->set_compiled_block(StiffModel::n_vars, kGamma, /*substeps=*/1,
+                             make_program_block_builder(stiff_model), "stiff");
+  system->set_compiled_block(NeutralModel::n_vars, kGamma, /*substeps=*/1,
+                             make_program_block_builder(make_neutral()), "neutral");
+  system->set_density("stiff", rho);
+  system->set_density("neutral", rho);
+  system->set_poisson("charge_density", "geometric_mg", "periodic");
+  system->set_refinement(1e29);
+  system->set_temporal_relations({2}, {1}, {"integral_only"});
+  install_stiff_pair_program(*system, stiff_model, imex_stiff, substeps);
+  return system;
 }
 
 // Lit DIRECTEMENT le grossier (niveau 0) du bloc @p b et renvoie le max |U(.,.,c)| sur les
@@ -261,7 +322,7 @@ TEST(test_amr_multiblock_imex, Runs) {
       << "charged facade fixtures must satisfy the periodic Poisson nullspace before solve";
 
   // ============================================================================================
-  // (1)+(2)+(3) STABILITE RAIDE + CONSERVATION + DISABLE-AND-FAIL, au niveau du moteur AmrRuntime.
+  // (1)+(2)+(3) STABILITE RAIDE + CONSERVATION + DISABLE-AND-FAIL via le Program AMR.
   //     eps << dt : explicite (facteur |1 - dt/eps| >> 1) DIVERGE, IMEX (backward Euler) reste fini.
   // ============================================================================================
   const double eps = 1e-5, dt = 1e-3;
@@ -269,12 +330,13 @@ TEST(test_amr_multiblock_imex, Runs) {
 
   // (1) IMEX : bloc raide STABLE (fini + borne) sur 2 niveaux.
   {
-    AmrRuntime rt = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho);
+    auto sim = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho);
+    AmrRuntime& rt = *sim->engine();
     const Real m0 = rt.mass(0);  // masse du bloc raide AVANT (sur le grossier, cascade incluse)
     EXPECT_EQ(rt.nlev(), 2)
         << "imex_two_levels_present";  // un patch fin existe (couverture exercee)
     for (int s = 0; s < K; ++s)
-      rt.step(static_cast<Real>(dt));
+      sim->step(dt);
     const std::vector<double> dStiff = rt.density(0);
     const std::vector<double> dNeutral = rt.density(1);
     const Real m1 = rt.mass(0);
@@ -302,11 +364,12 @@ TEST(test_amr_multiblock_imex, Runs) {
   //     est GENUINEMENT exercee (sans elle, la stabilite disparait). On observe l'explosion SUR LE CHAMP
   //     STIFFENE (mx/my/E directement, comp 1/2/3), la ou la source agit, pas seulement sur la densite.
   {
-    AmrRuntime rt = make_stiff_pair(N, L, eps, /*imex_stiff=*/false, rho);
+    auto sim = make_stiff_pair(N, L, eps, /*imex_stiff=*/false, rho);
+    AmrRuntime& rt = *sim->engine();
     bool explicit_rejected = false;
     try {
       for (int s = 0; s < K; ++s)
-        rt.step(static_cast<Real>(dt));
+        sim->step(dt);
     } catch (const FluxEvaluationFailure& failure) {
       if (failure.status() != EvaluationStatus::kReject ||
           failure.action() != TransactionFailureAction::kRejectStep ||
@@ -333,30 +396,30 @@ TEST(test_amr_multiblock_imex, Runs) {
   }
 
   // ============================================================================================
-  // (3bis) IMEX SOUS-CYCLE substeps>1 (revue #184) : le chemin IMEX avec substeps>1 est ATTEIGNABLE
-  //     (AmrRuntime::step boucle substeps fois sur les DEUX traitements) et la DECISION d'integration
-  //     est de SOUS-CYCLER le splitting IMEX (K=substeps pas de Lie sur dt/K), CONTRAIREMENT au moteur
-  //     compile-time AmrSystemCoupler::step qui ignore substeps sur sa branche IMEX. Ce test VERROUILLE
-  //     cette semantique : un run IMEX substeps=4 est (a) fini, (b) borne (densite ET mx/my/E directement),
+  // (3bis) IMEX SOUS-CYCLE substeps>1 (revue #184) : le Program sous-cycle explicitement le splitting
+  //     IMEX (K=substeps pas de Lie sur dt/K). Ce test verrouille cette semantique : un run IMEX
+  //     substeps=4 est (a) fini, (b) borne (densite ET mx/my/E directement),
   //     (c) conservatif en masse, et SURTOUT (d) sa trajectoire DIFFERE d'un run IMEX substeps=1 (memes
   //     eps/dt/macro-pas). La difference PROUVE que le sous-cyclage est INTENTIONNEL et REELLEMENT
   //     execute (si substeps etait silencieusement ignore comme en compile-time, dmax serait nul).
   // ============================================================================================
   {
     // substeps=1 : reference (un seul pas de Lie par macro-pas).
-    AmrRuntime rt1 = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho, /*substeps=*/1);
+    auto sim1 = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho, /*substeps=*/1);
+    AmrRuntime& rt1 = *sim1->engine();
     const Real m0_1 = rt1.mass(0);
     for (int s = 0; s < K; ++s)
-      rt1.step(static_cast<Real>(dt));
+      sim1->step(dt);
     const std::vector<double> d1 = rt1.density(0);
     const double drift1 = std::fabs(static_cast<double>(rt1.mass(0) - m0_1)) /
                           (std::fabs(static_cast<double>(m0_1)) + 1e-30);
 
     // substeps=4 : meme eps/dt/macro-pas, mais le moteur SOUS-CYCLE le splitting IMEX en 4 pas de dt/4.
-    AmrRuntime rt4 = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho, /*substeps=*/4);
+    auto sim4 = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho, /*substeps=*/4);
+    AmrRuntime& rt4 = *sim4->engine();
     const Real m0_4 = rt4.mass(0);
     for (int s = 0; s < K; ++s)
-      rt4.step(static_cast<Real>(dt));
+      sim4->step(dt);
     const std::vector<double> d4 = rt4.density(0);
     bool me4_finite = false;
     const double me4_max = max_momentum_energy_coarse(rt4, 0, me4_finite);
@@ -379,16 +442,16 @@ TEST(test_amr_multiblock_imex, Runs) {
   }
 
   // ============================================================================================
-  // (4) OPT-IN BIT-IDENTIQUE : un multi-blocs TOUT-EXPLICITE (deux blocs neutres) est inchange entre
-  //     deux runs (dmax==0). L'IMEX par bloc ne perturbe RIEN tant qu'aucun bloc n'est IMEX.
+  // (4) OPT-IN BIT-IDENTIQUE : deux Programs TOUT-EXPLICITES identiques donnent le meme resultat
+  //     (dmax==0). L'IMEX ne perturbe rien tant que le Program ne l'appelle pas.
   // ============================================================================================
   {
     auto run_all_explicit = [&]() {
-      // regime NON raide (eps modere) : explicite NE diverge pas, et les deux blocs sont explicites.
-      AmrRuntime rt = make_stiff_pair(N, L, /*eps=*/1.0, /*imex_stiff=*/false, rho);
+      // Regime non raide : l'oracle Program reste entièrement explicite et ne diverge pas.
+      auto sim = make_stiff_pair(N, L, /*eps=*/1.0, /*imex_stiff=*/false, rho);
       for (int s = 0; s < 5; ++s)
-        rt.step(static_cast<Real>(1e-3));
-      return rt.density(0);
+        sim->step(1e-3);
+      return sim->engine()->density(0);
     };
     const std::vector<double> a = run_all_explicit();
     const std::vector<double> b = run_all_explicit();
@@ -397,9 +460,8 @@ TEST(test_amr_multiblock_imex, Runs) {
   }
 
   // ============================================================================================
-  // (5) FACADE AmrSystem : la configuration IMEX construit encore le moteur spatial, mais elle ne
-  //     constitue plus une autorite temporelle implicite. Les avances IMEX restent prouvees
-  //     directement sur AmrRuntime ci-dessus, jusqu'a leur lowering explicite en ProgramGraph.
+  // (5) FACADE AmrSystem : une configuration IMEX sans Program construit encore le moteur spatial,
+  //     mais ne constitue jamais une autorite temporelle implicite.
   // ============================================================================================
   {
     // (5a) deux blocs via la facade : le drapeau time="imex" traverse encore le builder spatial,

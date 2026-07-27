@@ -1,7 +1,6 @@
-// AMR MULTI-BLOCS SOURCES COUPLEES (capstone vi) : la FACADE RUNTIME (AmrSystem -> AmrRuntime) expose
-// une SOURCE COUPLEE inter-especes (DSL CoupledSource, bytecode P5) sur la hierarchie AMR PARTAGEE, en
-// mirroir du moteur compile-time AmrSystemCoupler::coupled_source_step (splitting forward-Euler par
-// niveau + cascade fin -> grossier #169) et du chemin non-AMR System::add_coupled_source (ABI plate).
+// AMR MULTI-BLOCS SOURCES COUPLEES (capstone vi / ADC-700): un Program applique une source
+// inter-especes (DSL CoupledSource, bytecode P5) sur un pack complet de candidats prives, puis publie
+// atomiquement et restaure la couverture fine -> grossier.
 //
 // Ce que le test verrouille (cf. tache capstone vi) :
 //   (1) ECHANGE CONSERVATIF PAR CELLULE : deux blocs ("ions" + "neutrals") sur une hierarchie 2 niveaux,
@@ -10,14 +9,14 @@
 //       conserve n_ions + n_neutrals A LA CELLULE pres a ~machine ; l'etat reste FINI (rejet nan/inf
 //       AVANT toute tolerance).
 //   (2) ACTIVE : la source CHANGE l'etat (les deux blocs evoluent) vs un run sans source -> non no-op.
-//   (3) CONSERVATION GLOBALE sous macro-pas complets : apres K step() (transport + source), la masse
-//       composite n_ions + n_neutrals (somme leaf-aware par bloc) est conservee globalement a ~machine.
+//   (3) CONSERVATION GLOBALE sous K applications Program : la masse composite n_ions + n_neutrals
+//       (somme leaf-aware par bloc) est conservee globalement a ~machine.
 //   (4) COUVERTURE (#169) : apres la source, une cellule grossiere COUVERTE par le patch fin reste la
 //       moyenne 2x2 de ses enfants fins (la cascade average_down a tourne).
 //   (5) MULTIRATE : la conservation globale composite tient AUSSI avec un bloc stride=2 (la source doit
 //       rester conservative sous le hold-then-catch-up).
-//   (6) OPT-IN BIT-IDENTIQUE : un run multi-blocs SANS source couplee est bit-identique a avant
-//       (dmax==0 entre deux runs ; et identique a un runtime equivalent jamais touche par la feature).
+//   (6) OPT-IN BIT-IDENTIQUE : un Program SANS source couplee est un no-op deterministe, tandis que
+//       le meme pack AVEC source change effectivement l'etat.
 //
 // On travaille au niveau du MOTEUR AmrRuntime + build_amr_block (les briques de cette PR), ou l'on
 // construit la hierarchie partagee et l'on accede aux densites/masses par bloc et au RHS Poisson.
@@ -222,8 +221,6 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     const std::vector<double> accepted_ions = rt.density(0);
     const std::vector<double> accepted_neutrals = rt.density(1);
 
-    EXPECT_THROW(rt.step(dt), std::logic_error)
-        << "the retired native step must not hide a live-state coupling transaction";
     EXPECT_THROW(
         rt.apply_coupling_operators_at_level(
             0, dt, std::vector<MultiFab*>{&live_ions, &live_neutrals}),
@@ -371,7 +368,7 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     auto run_no_source = [&]() {
       AmrRuntime rt = make_two_block(N, L, B0, rho_ions, rho_neut, 1, 1);
       for (int s = 0; s < K; ++s)
-        rt.step(dt);
+        apply_candidate_source_step(rt, dt);
       return rt.density(0);
     };
     const std::vector<double> a = run_no_source();

@@ -222,6 +222,42 @@ static void install_native_ab2_program(runtime::program::AmrProgramContext& cont
   });
 }
 
+// Minimal explicit Program used by the facade transaction tests below.  The hierarchy attempt owns
+// regrid, level clocks and conservative catch-up; the probe publication deliberately happens after
+// that inner attempt so the retained outer AmrSystem transaction must commit or restore both parts.
+static void install_transaction_probe_program(runtime::program::AmrProgramContext& context,
+                                              AmrRuntime& runtime,
+                                              std::function<void()> after_hierarchy = {}) {
+  context.configure_primary_clock("clock.macro");
+  context.install([&context, &runtime, after_hierarchy = std::move(after_hierarchy)](
+                      double macro_dt) {
+    context.advance_hierarchy(macro_dt, [&context](double level_dt) {
+      context.set_stage_time(0, 1);
+      (void)context.solve_fields();
+      std::vector<MultiFab*> states;
+      std::vector<MultiFab*> rates;
+      states.reserve(static_cast<std::size_t>(context.n_blocks()));
+      rates.reserve(static_cast<std::size_t>(context.n_blocks()));
+      for (int block = 0; block < context.n_blocks(); ++block) {
+        MultiFab& state = context.state(block);
+        MultiFab& rate = context.rhs_scratch(5000 + block, 0, state);
+        context.rhs_into(block, state, rate, 6000 + block);
+        states.push_back(&state);
+        rates.push_back(&rate);
+      }
+      for (std::size_t block = 0; block < states.size(); ++block)
+        context.axpy(*states[block], Real(level_dt), *rates[block], Real(level_dt),
+                     {{1, 1, 1}});
+    });
+    for (int level = 0; level < runtime.nlev(); ++level)
+      detail::AmrHistoryOps::store_history(runtime, "R", level, runtime.level_state(0, level),
+                                           Real(macro_dt));
+    detail::AmrHistoryOps::rotate_histories(runtime);
+    if (after_hierarchy)
+      after_hierarchy();
+  });
+}
+
 // Concatenated per-level flat of block 0's live state (the ground truth a stored ring slot mirrors).
 static std::vector<double> block0_all_levels(AmrRuntime& rt) {
   std::vector<double> out;
@@ -1191,6 +1227,7 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   sim.set_refinement(1.2);
   sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
   sim.set_density("b", blob(n, 0.75, 0.5, 1.0, 1.0, 0.06));
+  sim.set_program_block_map({0, 1});
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
@@ -1202,13 +1239,9 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   const std::vector<double> state_before = rt->block_level_state(0, 0);
   const int regrids_before = rt->regrid_count();
 
-  sim.install_program_step([&](double dt) {
-    rt->step(static_cast<Real>(dt));
-    for (int k = 0; k < rt->nlev(); ++k)
-      detail::AmrHistoryOps::store_history(*rt, "R", k, rt->level_state(0, k), Real(dt));
-    detail::AmrHistoryOps::rotate_histories(*rt);
-    sim.record_program_diagnostic("accepted", 7.0);
-  });
+  runtime::program::AmrProgramContext context(rt, &sim);
+  install_transaction_probe_program(
+      context, *rt, [&] { sim.record_program_diagnostic("accepted", 7.0); });
 
   sim.begin_step_transaction();
   sim.step(0.01);
@@ -1218,7 +1251,6 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
 
   EXPECT_DOUBLE_EQ(sim.time(), 0.26);
   EXPECT_EQ(sim.macro_step(), 2);
-  EXPECT_EQ(rt->macro_step(), 2);
   EXPECT_NE(rt->block_level_state(0, 0), state_before);
   EXPECT_TRUE(detail::AmrHistoryOps::initialized(*rt, "R"));
   ASSERT_EQ(sim.program_diagnostics().count("accepted"), 1u);
@@ -1246,6 +1278,7 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   sim.set_refinement(1.2);
   sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
   sim.set_density("b", blob(n, 0.75, 0.5, 1.0, 1.0, 0.06));
+  sim.set_program_block_map({0, 1});
   ASSERT_TRUE(sim.uses_runtime_engine());
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
@@ -1262,12 +1295,9 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   const int regrids_before = rt->regrid_count();
   bool topology_changed_during_attempt = false;
 
-  sim.install_program_step([&](double dt) {
-    rt->step(static_cast<Real>(dt));  // includes due regrid + multi-block advance
+  runtime::program::AmrProgramContext context(rt, &sim);
+  install_transaction_probe_program(context, *rt, [&] {
     topology_changed_during_attempt = !same_patches(rt->patch_boxes(), patches_before);
-    for (int k = 0; k < rt->nlev(); ++k)
-      detail::AmrHistoryOps::store_history(*rt, "R", k, rt->level_state(0, k), Real(dt));
-    detail::AmrHistoryOps::rotate_histories(*rt);
     sim.record_program_diagnostic("provisional", 42.0);
     throw runtime::program::StepAttemptRejected(
         SolveStatus::kIterationLimit, "solve",
