@@ -1086,6 +1086,63 @@ def test_openmp_native_scripts_share_the_fail_closed_requirement_policy(relative
     assert "OK (rien a compiler)" not in source
 
 
+def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
+    workflow = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
+    prewarm = workflow.split("\n  quality-native-prewarm:\n", 1)[1].split(
+        "\n  # --- Warnings stricts", 1
+    )[0]
+    assert "timeout-minutes: 60" in prewarm
+    assert "profile: [warnings, asan, coverage]" in prewarm
+    assert "lane: [system, amr-base, amr-compressible, amr-compiled]" in prewarm
+    assert "CCACHE_MAXSIZE: 2G" in prewarm
+    assert "scripts/ci_python_module_objects.py" in prewarm
+    assert "--contract-file" in prewarm
+    assert 'run_with_heartbeat \\\n            "quality ${{ matrix.profile }} prewarm' in prewarm
+    assert "50m" in prewarm
+    assert "compression-level: 0" in prewarm
+    upload = prewarm.split(
+        "\n      - name: Upload exact quality prewarm cache and contract", 1
+    )[1]
+    assert "name: quality-prewarm-${{ matrix.profile }}-${{ matrix.lane }}" in upload
+    assert (
+        "quality-${{ matrix.profile }}-prewarm-ccache-${{ matrix.lane }}.tar"
+        in upload
+    )
+    assert (
+        "quality-${{ matrix.profile }}-prewarm-contract-${{ matrix.lane }}.json"
+        in upload
+    )
+    artifact_names = {
+        f"quality-prewarm-{profile}-{lane}"
+        for profile in ("warnings", "asan", "coverage")
+        for lane in ("system", "amr-base", "amr-compressible", "amr-compiled")
+    }
+    assert len(artifact_names) == 12
+    for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
+        assert linked_artifact not in upload
+
+    job_markers = {
+        "warnings": ("\n  warnings:\n", "\n  # --- clang-tidy", "build-kokkos-warnings"),
+        "asan": ("\n  sanitizers:\n", "\n  # --- TSan", "build-kokkos-asan"),
+        "coverage": ("\n  coverage:\n", "\n  # --- CodeQL", "build-kokkos-coverage"),
+    }
+    for profile, (start, end, build_dir) in job_markers.items():
+        block = workflow.split(start, 1)[1].split(end, 1)[0]
+        assert "needs: [set-mode, quality-native-prewarm]" in block
+        assert "CCACHE_MAXSIZE: 2G" in block
+        assert f"pattern: quality-prewarm-{profile}-*" in block
+        assert "test \"${#cache_archives[@]}\" -eq 4" in block
+        assert "test \"${#compile_contracts[@]}\" -eq 4" in block
+        assert f"--build-dir {build_dir}" in block
+        assert "--verify-contracts" in block
+        assert block.index(f"cmake --preset ci-{profile}") < block.index(
+            "--verify-contracts"
+        )
+        assert block.index("--verify-contracts") < block.index(
+            f"cmake --build --preset ci-{profile}"
+        )
+
+
 def test_ci_control_plane_inputs_force_full_functional_selection():
     selector = _load("ci_select_tests")
     for path in (
