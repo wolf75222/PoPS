@@ -40,6 +40,7 @@
 #include <pops/runtime/context/grid_context.hpp>    // GridContext (System aux seam)
 #include <pops/runtime/program/cache_manager.hpp>   // CacheManager (held-node value cache, ADC-458)
 #include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system.hpp>                  // System (the runtime this facade forwards to)
 
 /// @file
@@ -68,25 +69,8 @@ namespace pops {
 namespace runtime {
 namespace program {
 
-class ProgramContext {
+class ProgramContext : public ProgramExecutionServices<ProgramContext> {
  public:
-  /// One generated simultaneous-field override.  The block index is the immutable Program block
-  /// identity, not its current System position; the context authenticates and remaps it through the
-  /// installed block map.  Generated code passes these through an initializer_list, so constructing a
-  /// solve request never allocates a host pointer vector.
-  struct FieldStageOverride {
-    int program_block = -1;
-    const MultiFab* state = nullptr;
-  };
-
-  /// One candidate state in an operator-split coupling group.  Coupling is intrinsically
-  /// multi-block, so generated Programs pass the complete ordered Program block pack and the context
-  /// authenticates/remaps it before any device kernel runs.
-  struct CouplingStateOverride {
-    int program_block = -1;
-    MultiFab* state = nullptr;
-  };
-
   /// One exact logical-clock child interval.  The generated subcycle cursor validates iteration
   /// order; this companion owns the numerical evaluation window used by prepared operators.  It is
   /// deliberately move-only and restores the enclosing dt/phase/time/stage on every exit path, so
@@ -185,87 +169,8 @@ class ProgramContext {
     logical_physical_time_offset_ = 0.0;
   }
 
-  /// Exact stage abscissa emitted for a rate evaluation. A flat hierarchy has no parent/child time
-  /// interpolation to update, but the shared generated body must retain and validate the same temporal
-  /// contract as its AMR entry point. This is therefore a validated semantic no-op, not a fallback.
-  void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
-    if (denominator <= 0 || numerator < 0 || numerator > denominator)
-      throw std::runtime_error("Program stage time is outside [0,1]");
-    stage_time_ = amr::Rational(numerator, denominator);
-  }
-
-  void configure_primary_clock(const std::string& clock) const {
-    clock_schedule_.configure_primary_clock(clock);
-    primary_clock_ = clock;
-  }
-  void declare_clock_relation(const std::string& parent, const std::string& child,
-                              int count) const {
-    clock_schedule_.declare_relation(parent, child, count);
-  }
-  bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
-                              const std::string& stage_identity, int level) const {
-    return clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step())
-        .has_value();
-  }
-  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind, const std::string& clock,
-                       const std::string& stage_identity, int level) const {
-    if (node_id < 0 || every_n <= 0)
-      throw std::runtime_error("Program schedule requires a valid node and positive period");
-    const auto coordinate =
-        clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step());
-    return coordinate && coordinate->value % every_n == 0;
-  }
-  bool schedule_at_start(ScheduleDomainKind kind, const std::string& clock,
-                         const std::string& stage_identity, int level) const {
-    const auto coordinate =
-        clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step());
-    return coordinate && coordinate->value == 0;
-  }
-
-  /// Record exactly one decision for a scheduled Program node. The due expression is evaluated by
-  /// the typed domain seam above; this wrapper authenticates the node id and forwards the result to
-  /// the shared Profiler, which distinguishes real cache-backed policies from skip/zero/error.
-  bool schedule_decision(int node_id, bool due, bool cache_backed) const {
-    if (node_id < 0)
-      throw std::runtime_error("Program schedule decision requires a valid node");
-    return sys_->profiler().schedule_decision(due, cache_backed);
-  }
-
-  ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
-                                                   const std::string& child, int count) const {
-    return clock_schedule_.subcycle(parent, child, count);
-  }
   [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
     return LogicalEvaluationScope(*this, iteration, count);
-  }
-  void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
-                                   Real offset) const {
-    clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
-  }
-
-  /// Translate a PROGRAM block index @p b (P.state declaration order, what the codegen emits) to the
-  /// SYSTEM block index it names (Spec 3 criterion 23, ADC-457). install_program stores the explicit
-  /// name-matched map before the generated entry point constructs this context. Direct C++ users must
-  /// install the same explicit map themselves: an empty, incomplete or invalid map is never interpreted
-  /// positionally. Every seam method taking a block index routes through here, so the System blocks may
-  /// be added in ANY order vs the Program's P.state declarations.
-  int sys_block(int b) const {
-    const std::vector<int>& m = sys_->program_block_map();
-    if (m.empty())
-      throw block_map_error_(
-          "ProgramContext::sys_block: no explicit program-to-system block map is installed; "
-          "positional block identity is not supported");
-    if (b < 0 || b >= static_cast<int>(m.size()))
-      throw block_map_error_("ProgramContext::sys_block: program block index " + std::to_string(b) +
-                             " is outside the explicit block map [0, " + std::to_string(m.size()) +
-                             ")");
-    const int mapped = m[static_cast<std::size_t>(b)];
-    const int count = sys_->n_blocks();
-    if (mapped < 0 || mapped >= count)
-      throw block_map_error_("ProgramContext::sys_block: program block index " + std::to_string(b) +
-                             " maps to invalid system block index " + std::to_string(mapped) +
-                             " for a System with " + std::to_string(count) + " blocks");
-    return mapped;
   }
 
   SolveReport solve_fields() const {
@@ -377,20 +282,6 @@ class ProgramContext {
     count_kernel();
     FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
     return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
-  }
-  int n_blocks() const { return sys_->n_blocks(); }
-  Real physical_time() const { return static_cast<Real>(sys_->time()); }
-  void set_field_logical_timepoint(const std::string& field,
-                                   const FieldLogicalTimePoint& point) const {
-    sys_->set_field_logical_timepoint(field, point);
-  }
-  void set_field_boundary_parameters(const std::string& field,
-                                     const std::vector<double>& parameters) const {
-    sys_->set_field_boundary_parameters(field, parameters);
-  }
-  void set_field_boundary_kernel(const std::string& field,
-                                 const CompiledFieldBoundaryKernel& kernel) const {
-    sys_->set_field_boundary_kernel(field, kernel);
   }
   MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
   /// Evaluate one authored rate at its exact, stable node identity.  There is deliberately no
@@ -1287,87 +1178,6 @@ class ProgramContext {
     count_kernel(static_cast<std::int64_t>(applied));
   }
 
-  /// Store a runtime Scalar @p value into the System diagnostics map under @p name (spec op 23),
-  /// retrievable after the step via System::program_diagnostic / program_diagnostics (exposed to
-  /// Python as sim.program_diagnostic / sim.program_diagnostics). A pure side effect: the scalar is
-  /// recorded for inspection / logging, it does not feed the numerics. Forwards to
-  /// System::record_program_diagnostic.
-  void record_scalar(const std::string& name, Real value) const {
-    sys_->record_program_diagnostic(name, value);
-  }
-
-  /// The CURRENT RuntimeParams of PROGRAM block @p b (epic ADC-479 / ADC-510, Spec 5 C5): the
-  /// per-block runtime-parameter values a compiled Program's lowered source / linear-source kernel
-  /// reads via ``params.get(<index>)``. The codegen binds ``const pops::RuntimeParams params =
-  /// ctx.program_params(<b>);`` ONCE per fab (outside the per-cell loop), then the device lambda
-  /// captures it by value -- trivially copyable, device-clean, ``get()`` is POPS_HD. @p b is the
-  /// PROGRAM block index (P.state declaration order, the index install_program seeded), NOT routed
-  /// through sys_block: the System keys the store by program index, the same index Python's params
-  /// route writes via set_program_params. A block with no runtime param returns a default
-  /// RuntimeParams (count 0). Forwards to System::program_params; the value reflects the LATEST
-  /// set_program_params (no recompile), since the store lives on the System the captured ctx points at.
-  RuntimeParams program_params(int b) const { return sys_->program_params(b); }
-
-  /// @name Per-node profiling (Spec 3 section 29, ADC-459)
-  /// Time a single Program node into the System Profiler, so sim.profile_report() shows per-node
-  /// times ("node:rhs2", "node:solve_fields1", ...) alongside the coarse "step" / "field_solve"
-  /// phases. The Profiler is disabled by default; both calls are ~free when off (a ProfileScope still
-  /// reads the clock twice -- wrap a per-node scope, the intended granularity, not the inner loops).
-  /// @{
-  /// The System Profiler (non-owning). A hand-written C++ stage can construct its own ProfileScope on
-  /// it; the codegen uses profile_record below (which preserves the step body's C++ variable scope).
-  runtime::program::Profiler& profiler() const { return sys_->profiler(); }
-  /// RAII timer for one node: ``pops::runtime::program::ProfileScope s = ctx.profile_node("node:x");``
-  /// times its own lifetime into the System Profiler. For a hand-rolled C++ stage that can wrap a whole
-  /// block; the generated step body cannot use it (a node's emitted C++ declarations must outlive the
-  /// node), so the codegen pairs a steady_clock now() with profile_record instead.
-  runtime::program::ProfileScope profile_node(const std::string& name) const {
-    return runtime::program::ProfileScope(sys_->profiler(), name);
-  }
-  /// Record one node's elapsed time (now() - @p t0) under @p name into the System Profiler. The
-  /// generated step body captures @p t0 = std::chrono::steady_clock::now() BEFORE the node's
-  /// statements and calls this AFTER them, so the node's C++ declarations stay at body scope (a
-  /// surrounding RAII block would hide them from later nodes). No-op contribution when profiling is
-  /// off (Profiler::record early-returns); the only cost is one extra clock read per node.
-  void profile_record(const std::string& name, std::chrono::steady_clock::time_point t0) const {
-    const auto t1 = std::chrono::steady_clock::now();
-    sys_->profiler().record(name, std::chrono::duration<double>(t1 - t0).count());
-  }
-  /// @}
-
-  /// @name Profiling counters (Spec 3 section 29, ADC-459)
-  /// The named integer counters sim.profile_report() surfaces alongside the per-node timings: how many
-  /// kernel launches a step issued, how the held-node scheduler hit/missed its cache, and the scratch
-  /// peak memory. Each helper is a single predictable branch when profiling is off (Profiler::count /
-  /// count_max early-return), so the hot path pays nothing unless sim.enable_profiling() ran. These move
-  /// only on the COMPILED-PROGRAM path (a problem.so step body calling these seam ops); the native step
-  /// counts "kernels" at its own elliptic-solve chokepoint instead (System::Impl::solve_fields).
-  /// @{
-  /// One per kernel-dispatching seam op (a -div F / source / matvec / solve). The compiled step body
-  /// reaches the seam through these methods, so counting at this op granularity counts the per-node
-  /// kernel LAUNCHES (the device dispatch in mesh/execution/for_each.hpp is a shared free function with
-  /// no profiler handle -- instrumenting it would touch every numerics TU and add a hidden hot-path
-  /// argument, so the op-granularity count is the deliberate, labeled choice, Spec 3 section 29).
-  void count_kernel(std::int64_t by = 1) const { sys_->profiler().count("kernels", by); }
-  /// Record one scratch MultiFab allocation: bumps the allocation count and updates the byte peak with
-  /// THIS buffer's footprint. The peak is the largest SINGLE scratch (a deep allocation); a running
-  /// "live total" is not tracked because the seam hands the buffer to the caller (no free hook here),
-  /// so we report what is exactly knowable -- the allocation count and the largest one -- never a faked
-  /// live-bytes figure (Spec 3 section 29 scratch peak memory).
-  void count_scratch(const MultiFab& mf) const {
-    runtime::program::Profiler& prof = sys_->profiler();
-    if (!prof.enabled()) {
-      return;  // skip the byte-summing loop entirely when profiling is off (zero hot-path cost)
-    }
-    prof.count("scratch_allocs");
-    std::int64_t bytes = 0;
-    for (int li = 0; li < mf.local_size(); ++li) {
-      bytes += mf.fab(li).size() * static_cast<std::int64_t>(sizeof(Real));
-    }
-    prof.count_max("scratch_peak_bytes", bytes);
-  }
-  /// @}
-
   /// @name Scheduler value cache (Spec 3 section 17-18, ADC-458)
   /// A held field-solve node recomputes only when DUE (every N macro-steps) and reuses the cached
   /// System aux (phi / grad / E) in between. The cache is owned by the System (one CacheManager per
@@ -1419,9 +1229,6 @@ class ProgramContext {
   void cache_restore_scratch(int node_id, MultiFab& scratch) const {
     sys_->program_cache().restore_into(node_id, scratch);
   }
-  /// The current macro step (0-based). Mirrors System::macro_step(); the codegen lowers on_start() to
-  /// ``ctx.macro_step() == 0`` and reads it for any step-indexed predicate.
-  int macro_step() const { return sys_->macro_step(); }
   /// Add a skipped step's @p dt to node @p node_id's accumulator (accumulate_dt policy): on a NOT-due
   /// step the held node does not recompute but records the dt so the next due step sees the full
   /// skipped interval. Variable step_cfl safe (the actual skipped dt, not N * dt_current).
@@ -1433,11 +1240,6 @@ class ProgramContext {
   /// node's recompute so it advances over the whole skipped interval at once.
   Real cache_effective_dt(int node_id, Real dt_now) const {
     return sys_->program_cache().effective_dt(node_id, dt_now);
-  }
-  /// Fail loud: a node with an `error` policy was reached off its schedule cadence (a stale value would
-  /// be read). The codegen emits this on the not-due branch of an `error`-policy node.
-  [[noreturn]] void scheduler_error(const std::string& what) const {
-    throw std::runtime_error("pops Program scheduler: " + what);
   }
   /// @}
 
@@ -1810,9 +1612,36 @@ class ProgramContext {
                              report.status_name() + " (" + detail + ")");
   }
 
-  mutable ClockScheduleState clock_schedule_;
-  mutable std::string primary_clock_;
-  mutable amr::Rational stage_time_{0, 1};
+  friend class ProgramExecutionServices<ProgramContext>;
+  const std::vector<int>& program_execution_block_map_() const {
+    return sys_->program_block_map();
+  }
+  int program_execution_block_count_() const { return sys_->n_blocks(); }
+  Real program_execution_physical_time_() const {
+    return static_cast<Real>(sys_->time());
+  }
+  void program_execution_record_scalar_(const std::string& name, Real value) const {
+    sys_->record_program_diagnostic(name, value);
+  }
+  RuntimeParams program_execution_params_(int block) const {
+    return sys_->program_params(block);
+  }
+  void program_execution_set_field_timepoint_(
+      const std::string& field, const FieldLogicalTimePoint& point) const {
+    sys_->set_field_logical_timepoint(field, point);
+  }
+  void program_execution_set_field_parameters_(
+      const std::string& field, const std::vector<double>& parameters) const {
+    sys_->set_field_boundary_parameters(field, parameters);
+  }
+  void program_execution_set_field_kernel_(
+      const std::string& field, const CompiledFieldBoundaryKernel& kernel) const {
+    sys_->set_field_boundary_kernel(field, kernel);
+  }
+  Profiler& program_execution_profiler_() const { return sys_->profiler(); }
+  int program_execution_macro_step_() const { return sys_->macro_step(); }
+  int program_execution_active_level_() const { return -1; }
+
   mutable double current_dt_ = 0.0;
   mutable amr::Rational logical_phase_begin_{0, 1};
   mutable amr::Rational logical_phase_span_{1, 1};

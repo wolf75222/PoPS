@@ -42,17 +42,18 @@
 #include <pops/runtime/amr_system.hpp>  // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
+#include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
 #include <pops/runtime/program/wire_ids.hpp>       // stable compiled-Program numeric protocol
 
 /// @file
-/// @brief AmrProgramContext -- the AMR counterpart of ProgramContext (epic ADC-508, Spec 6).
+/// @brief AMR topology/storage provider for the shared Program execution services.
 ///
 /// A compiled time Program lowers its macro-step body referencing ONLY the variable `ctx` (never the
-/// type ProgramContext). The SAME generated body therefore compiles against any object exposing
-/// ProgramContext's method surface. AmrProgramContext is that duck-typed structural mirror, driving the
-/// lowered body on explicit parent/child level clocks over the AMR hierarchy. The `{amr_install}` slot
+/// concrete context type). Topology-independent operations are inherited from
+/// ProgramExecutionServices; this class supplies hierarchy storage, level-local spatial execution and
+/// conservative synchronization. The `{amr_install}` slot
 /// installs one recursive Berger-Oliger driver: child steps partition the parent window, each rate reads
 /// a mandatory old/new dense-output interpolation at its exact Program abscissa, and level sync is
 /// conservative reflux followed by average-down. The single coarse system Poisson per macro-step
@@ -64,18 +65,8 @@ namespace pops {
 namespace runtime {
 namespace program {
 
-class AmrProgramContext {
+class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
  public:
-  struct FieldStageOverride {
-    int program_block = -1;
-    const MultiFab* state = nullptr;
-  };
-
-  struct CouplingStateOverride {
-    int program_block = -1;
-    MultiFab* state = nullptr;
-  };
-
   enum class SyncPhase { Reflux, AverageDown };
   struct SyncEvent {
     int parent_level = 0;
@@ -193,7 +184,7 @@ class AmrProgramContext {
       hierarchy_tensor_solver_registry_ = facade_->hierarchy_tensor_solver_provider_registry();
   }
 
-  // --- driver state (mutable: every seam method mirrors the const ProgramContext surface) ------------
+  // --- hierarchy-driver state -----------------------------------------------------------------------
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
   /// Epoch used by generated install-time resource bundles. A regrid/rebalance changes this value;
@@ -296,58 +287,8 @@ class AmrProgramContext {
                      });
   }
 
-  /// Exact local abscissa of the next rate evaluation, emitted from the Program's TimePoint.
-  void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
-    stage_time_ = amr::Rational(numerator, denominator);
-    if (stage_time_ < amr::Rational(0, 1) || amr::Rational(1, 1) < stage_time_)
-      throw std::runtime_error("Program stage time is outside [0,1]");
-  }
-  void configure_primary_clock(const std::string& clock) const {
-    clock_schedule_.configure_primary_clock(clock);
-    primary_clock_ = clock;
-  }
-  void declare_clock_relation(const std::string& parent, const std::string& child,
-                              int count) const {
-    clock_schedule_.declare_relation(parent, child, count);
-  }
-  bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
-                              const std::string& stage_identity, int level) const {
-    return clock_schedule_.coordinate(kind, clock, stage_identity, level, level_, macro_step())
-        .has_value();
-  }
-  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind, const std::string& clock,
-                       const std::string& stage_identity, int level) const {
-    if (node_id < 0 || every_n <= 0)
-      throw std::runtime_error("AMR Program schedule requires a valid node and positive period");
-    const auto coordinate =
-        clock_schedule_.coordinate(kind, clock, stage_identity, level, level_, macro_step());
-    return coordinate && coordinate->value % every_n == 0;
-  }
-  bool schedule_at_start(ScheduleDomainKind kind, const std::string& clock,
-                         const std::string& stage_identity, int level) const {
-    const auto coordinate =
-        clock_schedule_.coordinate(kind, clock, stage_identity, level, level_, macro_step());
-    return coordinate && coordinate->value == 0;
-  }
-
-  /// Exact parity with ProgramContext: record one typed scheduler decision. Cache-backed AMR
-  /// policies still fail loud at their cache action seams below; this counter never pretends that
-  /// an AMR cache exists, it only reports the decision that was actually reached.
-  bool schedule_decision(int node_id, bool due, bool cache_backed) const {
-    if (node_id < 0)
-      throw std::runtime_error("AMR Program schedule decision requires a valid node");
-    return facade_->profiler_handle().schedule_decision(due, cache_backed);
-  }
-  ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
-                                                   const std::string& child, int count) const {
-    return clock_schedule_.subcycle(parent, child, count);
-  }
   [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
     return LogicalEvaluationScope(*this, iteration, count);
-  }
-  void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
-                                   Real offset) const {
-    clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
   }
 
   /// Register the macro-step body (forwards to AmrSystem::install_program_step). @p step is the per-level
@@ -374,43 +315,6 @@ class AmrProgramContext {
             refresh_resources();
           owner->refresh_accepted_hierarchy_state_();
         });
-  }
-
-  /// Translate a PROGRAM block index to its explicit, name-matched AMR block index (Spec 3 criterion
-  /// 23). Empty, incomplete and invalid maps fail before any hierarchy storage is accessed; positional
-  /// block identity is never inferred.
-  int sys_block(int b) const {
-    const std::vector<int>& m = facade_->program_block_map();
-    if (m.empty())
-      throw block_map_error_(
-          "AmrProgramContext::sys_block: no explicit program-to-AMR block map is installed; "
-          "positional block identity is not supported");
-    if (b < 0 || b >= static_cast<int>(m.size()))
-      throw block_map_error_("AmrProgramContext::sys_block: program block index " +
-                             std::to_string(b) + " is outside the explicit block map [0, " +
-                             std::to_string(m.size()) + ")");
-    const int mapped = m[static_cast<std::size_t>(b)];
-    const int count = static_cast<int>(eng_->n_blocks());
-    if (mapped < 0 || mapped >= count)
-      throw block_map_error_("AmrProgramContext::sys_block: program block index " +
-                             std::to_string(b) + " maps to invalid AMR block index " +
-                             std::to_string(mapped) + " for an AmrRuntime with " +
-                             std::to_string(count) + " blocks");
-    return mapped;
-  }
-  int n_blocks() const { return static_cast<int>(eng_->n_blocks()); }
-  Real physical_time() const { return static_cast<Real>(facade_->time()); }
-  void set_field_logical_timepoint(const std::string& field,
-                                   const FieldLogicalTimePoint& point) const {
-    facade_->set_field_logical_timepoint(field, point);
-  }
-  void set_field_boundary_parameters(const std::string& field,
-                                     const std::vector<double>& parameters) const {
-    facade_->set_field_boundary_parameters(field, parameters);
-  }
-  void set_field_boundary_kernel(const std::string& field,
-                                 const CompiledFieldBoundaryKernel& kernel) const {
-    facade_->set_field_boundary_kernel(field, kernel);
   }
 
   // --- inter-level coupling -------------------------------------------------------------------------
@@ -1290,37 +1194,6 @@ class AmrProgramContext {
     rotate_histories();
   }
 
-  // --- diagnostics / runtime params (forward to the facade store) -----------------------------------
-  void record_scalar(const std::string& name, Real value) const {
-    facade_->record_program_diagnostic(name, value);
-  }
-  /// Program block @p b's CURRENT RuntimeParams (keyed by PROGRAM index, NOT sys_block -- parity with
-  /// ProgramContext: the store is keyed by program index, the same index set_program_params writes).
-  RuntimeParams program_params(int b) const { return facade_->program_params(b); }
-
-  // --- profiling counters (forward to the facade profiler; no-op when disabled) ---------------------
-  void count_kernel(std::int64_t by = 1) const { facade_->profiler_handle().count("kernels", by); }
-  void count_scratch(const MultiFab& mf) const {
-    Profiler& prof = facade_->profiler_handle();
-    if (!prof.enabled())
-      return;
-    prof.count("scratch_allocs");
-    std::int64_t bytes = 0;
-    for (int li = 0; li < mf.local_size(); ++li)
-      bytes += mf.fab(li).size() * static_cast<std::int64_t>(sizeof(Real));
-    prof.count_max("scratch_peak_bytes", bytes);
-  }
-  Profiler& profiler() const { return facade_->profiler_handle(); }
-  ProfileScope profile_node(const std::string& name) const {
-    return ProfileScope(facade_->profiler_handle(), name);
-  }
-  void profile_record(const std::string& name, std::chrono::steady_clock::time_point t0) const {
-    const auto t1 = std::chrono::steady_clock::now();
-    facade_->profiler_handle().record(name, std::chrono::duration<double>(t1 - t0).count());
-  }
-
-  int macro_step() const { return facade_->macro_step(); }
-
   // --- condensed-implicit elliptic primitives on the hierarchy (ADC-633 / ADC-637): WIRED per level ---
   // The codegen lowers a condensed-implicit (ADC-637) Program to inline block-inverse assembly kernels
   // referencing ONLY the variable `ctx`, so the SAME emitted body compiles against this context. With its
@@ -1632,15 +1505,6 @@ class AmrProgramContext {
         "the scheduler accumulate_dt policy under a compiled Program on AMR is deferred; use "
         "System.");
   }
-  /// Fail loud: an `error`-policy scheduled node reached off cadence. ProgramContext throws here; the
-  /// AMR path never installs a schedule (the cache seams above fail loud first), so this only fires if
-  /// the body reaches the off-cadence branch directly. Keep the exact [[noreturn]] signature.
-  [[noreturn]] void scheduler_error(const std::string& what) const {
-    deferred_op("scheduler_error",
-                ("the scheduled error policy reached its off-cadence branch (" + what +
-                 "); scheduled Programs on AMR are deferred; use System"));
-  }
-
  private:
   struct CouplingWorkspace {
     std::vector<int> program_to_runtime;
@@ -3837,6 +3701,40 @@ class AmrProgramContext {
     }
   }
 
+  friend class ProgramExecutionServices<AmrProgramContext>;
+  const std::vector<int>& program_execution_block_map_() const {
+    return facade_->program_block_map();
+  }
+  int program_execution_block_count_() const {
+    return static_cast<int>(eng_->n_blocks());
+  }
+  Real program_execution_physical_time_() const {
+    return static_cast<Real>(facade_->time());
+  }
+  void program_execution_record_scalar_(const std::string& name, Real value) const {
+    facade_->record_program_diagnostic(name, value);
+  }
+  RuntimeParams program_execution_params_(int block) const {
+    return facade_->program_params(block);
+  }
+  void program_execution_set_field_timepoint_(
+      const std::string& field, const FieldLogicalTimePoint& point) const {
+    facade_->set_field_logical_timepoint(field, point);
+  }
+  void program_execution_set_field_parameters_(
+      const std::string& field, const std::vector<double>& parameters) const {
+    facade_->set_field_boundary_parameters(field, parameters);
+  }
+  void program_execution_set_field_kernel_(
+      const std::string& field, const CompiledFieldBoundaryKernel& kernel) const {
+    facade_->set_field_boundary_kernel(field, kernel);
+  }
+  Profiler& program_execution_profiler_() const {
+    return facade_->profiler_handle();
+  }
+  int program_execution_macro_step_() const { return facade_->macro_step(); }
+  int program_execution_active_level_() const { return level_; }
+
   AmrSystem* facade_;
   AmrRuntime* eng_;
   mutable int level_ = 0;
@@ -3906,7 +3804,6 @@ class AmrProgramContext {
   mutable std::uint64_t observed_operator_topology_epoch_ =
       std::numeric_limits<std::uint64_t>::max();
   mutable int observed_operator_level_ = -1;
-  mutable amr::Rational stage_time_{0, 1};
   mutable std::optional<ActiveParentWindow> active_parent_;
   // One old/new parent-state image per coarse level.  The vector changes shape only after a real
   // hierarchy-depth change; normal attempts perform Kokkos copies into stable resident storage.
@@ -3944,8 +3841,6 @@ class AmrProgramContext {
   // pre-reflux ring slot against a post-reflux live state. On nlev==1 the deferral collapses to the
   // original store->rotate order -> bit-identical to the Uniform route.
   mutable bool rotate_pending_ = false;
-  mutable ClockScheduleState clock_schedule_;
-  mutable std::string primary_clock_;
   // Per-step record of (level, ring name) whose slot-0 was written FROM the live level state this step:
   // after the reflux corrects that live state, couple_levels re-copies it into slot 0 so the stored state
   // and the live state stay consistent. A ring storing a non-live buffer (AB2 stores the RHS) is absent.
