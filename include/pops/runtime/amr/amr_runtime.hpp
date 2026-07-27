@@ -3616,49 +3616,6 @@ class AmrRuntime {
     coupled_operators_.push_back(std::move(view));
   }
 
-  /// Applies ALL the registered coupled sources of a step dt, by forward-Euler splitting. Runtime
-  /// counterpart of AmrSystemCoupler::coupled_source_step: we refresh the fields (aux per level) then,
-  /// source by source, we apply the bytecode INDEPENDENTLY AT EACH LEVEL of the shared hierarchy (the
-  /// blocks live on ALL levels), followed by a fine -> coarse cascade.
-  ///
-  /// COVERAGE INVARIANT (#169): the source was applied independently on EACH level, so a coarse cell
-  /// COVERED by a fine patch would otherwise carry its own coarse source, unrelated to the source seen
-  /// by its fine children. A covered coarse cell MUST be the 2x2 average of its children (it does not
-  /// represent matter on its own). We restore this consistency by the SAME fine -> coarse cascade
-  /// (mf_average_down_mb) as solve_fields and the compile-time engine: without it, the mass diagnostic
-  /// (sum of the coarse only) would count a phantom coarse source under the patch. Single-level
-  /// hierarchy: no covered cell, the cascade loops do not run -> bit-identical to the no-patch case.
-  ///
-  /// PER-CELL CONSERVATION: at a given level, each term writes out(i,j,comp) += dt * S(reg(i,j)) on
-  /// the SAME cell (i,j) read by the inputs; an add_pair exchange lays +S on one block and -S on the
-  /// other AT THE SAME (i,j), so the sum of the two blocks is unchanged cell by cell. Without a
-  /// registered source (coupled_sources_ empty): total no-op -> bit-identical trajectory.
-  void coupled_source_step(Real dt) {
-    if (coupled_sources_.empty())
-      return;  // opt-in: no source -> bit-identical path
-    require_solved_field_report(solve_fields(), "AmrRuntime::coupled_source_step");
-    for (const auto& cs : coupled_sources_) {
-      // PER-LEVEL application: at each level k, the blocks share EXACTLY the same layout
-      // (same_layout_or_throw guard), so same local_size() and same local indexing -> we iterate in
-      // parallel over the local fabs. local_size()==0 on a rank without a box -> empty loop (MPI-safe).
-      for (int k = 0; k < nlev_; ++k) {
-        coupled_live_state_workspace_.resize(blocks_.size());
-        for (std::size_t block = 0; block < blocks_.size(); ++block)
-          coupled_live_state_workspace_[block] = &(*blocks_[block].levels)[k].U;
-        apply_coupling_operator_to_pack_(cs, dt, coupled_live_state_workspace_);
-      }
-      // Restore the consistency of the covered coarse cells (cf. COVERAGE INVARIANT above).
-      for (auto& b : blocks_) {
-        if (!b.average_down_plan)
-          throw std::logic_error("AMR block average-down plan was not prepared");
-        for (int k = nlev_ - 1; k >= 1; --k)
-          mf_average_down_mb((*b.levels)[k].U, (*b.levels)[k - 1].U,
-                             b.average_down_plan->transition_for_child(k),
-                             b.average_down_plan->topology_generation(), world_communicator_view());
-      }
-    }
-  }
-
   /// sync_down (per block) + system coarse Poisson (CO-LOCATED SUMMED RHS) + coarse aux + fine
   /// injection. Reproduces AmrSystemCoupler::solve_fields identically, but the system RHS is assembled
   /// by the blocks' add_elliptic_rhs closures (Sum_b elliptic_rhs_b(U_b)) not a compile-time RhsAssembler.
@@ -4584,6 +4541,10 @@ class AmrRuntime {
   /// backward-Euler stable at any step, stiff relaxation more accurate). imex == false everywhere ->
   /// advance path only -> bit-identical trajectory to the historical one (the IMEX is opt-in).
   void step(Real dt) {
+    if (!coupled_sources_.empty())
+      throw std::logic_error(
+          "AmrRuntime::step cannot execute registered coupled sources; install a Program that "
+          "applies them to a complete candidate-state pack");
     // PREPARE before any observable mutation (including regrid, field warm-start and diagnostics).
     // This rejects an invalid rational IntegralOnly relation or an old block without the explicit
     // execution closure while the accepted numerical state is still untouched.
@@ -4652,10 +4613,6 @@ class AmrRuntime {
       if (b.project_per_level)
         b.project_per_level(*b.levels);
     }
-    // Inter-species coupled sources AFTER the transport (same order as AmrSystemCoupler: transport then
-    // coupled_source_step), by forward-Euler splitting. No-op if no source registered -> bit-identical
-    // trajectory to the historical one (the feature is opt-in).
-    coupled_source_step(dt);
     ++macro_step_;
   }
 
@@ -5817,7 +5774,6 @@ class AmrRuntime {
   std::map<std::string, NamedField> named_fields_;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
-  std::vector<MultiFab*> coupled_live_state_workspace_;
   // TYPED coupling operator inspect metadata (ADC-595, parity with System::Impl::coupled_operators_):
   // one read-only view (label + declared contracts) per registered coupled source, in registration
   // order. Populated by add_coupled_source (unchecked) / add_coupling_operator (declared). Metadata
