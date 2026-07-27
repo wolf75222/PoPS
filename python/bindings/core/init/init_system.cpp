@@ -312,7 +312,7 @@ void bind_system_assembly(py::class_<System>& cls) {
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
       .def("install_program", &System::install_program, py::arg("so_path"))
       // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the
-      // installed program closure (cf. SystemStepper::step). Separate from install_program so the .so
+      // installed program closure (cf. SystemProgramDriver::step). Separate from install_program so the .so
       // Internal compiled-kernel cadence seam; the public controller is Program.step_strategy().
       .def("set_program_cadence", &System::set_program_cadence, py::arg("substeps"),
            py::arg("stride"));

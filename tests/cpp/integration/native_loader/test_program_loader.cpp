@@ -207,7 +207,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   sim.set_state("gas", U0);
   sim.install_program(so);  // dlopen + ABI check + pops_install_program(this)
   const int step0 = sim.macro_step();
-  sim.step(dt);  // SystemStepper dispatches to the installed Program
+  sim.step(dt);  // SystemProgramDriver dispatches to the installed Program
   const std::vector<double> Up = sim.get_state("gas");
 
   double err = 0, change = 0;

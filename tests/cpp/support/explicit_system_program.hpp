@@ -10,7 +10,7 @@ namespace pops::test {
 
 /// Install the simplest authored whole-system Program used by Uniform facade integration tests.
 ///
-/// This is deliberately a real ProgramContext composition, not a callback into SystemStepper:
+/// This is deliberately a real ProgramContext composition, not a callback into SystemProgramDriver:
 /// solve the current fields, evaluate every block rate at the same stage, publish every new state
 /// only after all rates have been evaluated, then let the facade own the accepted clock tick.
 inline void install_forward_euler_program(System& system) {

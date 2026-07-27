@@ -21,7 +21,7 @@
 //     history / cache seams are not wired), so these stay EMPTY on AMR. Keeping the storage here (one
 //     struct) means an AMR history/cache seam later plugs into the SAME fields, never a fork.
 // WHO OWNS STEPPING: the cadence fields (step_ / substeps_ / stride_ / dt_bound_) are READ by the
-// stepper, but the cadence LOOP lives at the call site, not here -- SystemStepper::run_program_cadence
+// driver, but the cadence LOOP lives at the call site, not here -- SystemProgramDriver::run_program_cadence
 // on the uniform side, AmrSystem::Impl::run_program_cadence_ on the AMR side. This struct only STORES
 // the cadence; it never advances the clock (no Impl / grid dependency leaks in).
 //

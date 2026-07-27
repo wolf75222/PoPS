@@ -4660,7 +4660,7 @@ class AmrRuntime {
   /// fields (max_speed needs the aux), scans the per-block transport / source / stability bounds + the
   /// coupled-frequency + global bounds, and returns the macro-step dt (records last_dt_reason_). Split
   /// out so an installed compiled Program can take the SAME CFL dt and drive the macro-step itself
-  /// (AmrSystem::step_cfl's Program route, parity SystemStepper::step_cfl) instead of the native step.
+  /// (AmrSystem::step_cfl's Program route, parity SystemProgramDriver::step_cfl) instead of the native step.
   /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
   Real cfl_dt(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
     preflight_native_temporal_step_();

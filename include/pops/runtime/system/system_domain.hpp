@@ -27,11 +27,11 @@
 ///
 /// CONSTRUCTED FIRST: the members have an init-order dependency (`dm` sizes from `ba`, `aux` allocates
 /// on `ba`/`dm`), so this struct owns the exact historical init-list. `System::Impl` holds a
-/// `SystemDomain domain_` constructed BEFORE `fields_` / `stepper_`, whose back-pointers read the
+/// `SystemDomain domain_` constructed BEFORE `fields_` / `program_driver_`, whose back-pointers read the
 /// layout through Impl's reference aliases.
 ///
 /// STEPPER / FIELD VISIBILITY: `geom`, `pgeom_`, `polar_`, `aux`, `aux_ncomp_`, `ba`, `dm`, `bc_`,
-/// `dom`, `per_`, `cfg`, `geometry_mode_` and `eb_set_` are read by SystemStepper /
+/// `dom`, `per_`, `cfg`, `geometry_mode_` and `eb_set_` are read by SystemProgramDriver /
 /// SystemFieldSolver / native_loader via `owner_->` / `P->`. Impl re-exposes EVERY member under its
 /// exact historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom), so the three
 /// dependent headers and the MockImpl stay byte-unchanged -- the block closures that capture `&aux` by

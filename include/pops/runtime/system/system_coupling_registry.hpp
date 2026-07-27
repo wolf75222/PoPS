@@ -17,7 +17,7 @@
 /// bounds they impose".
 ///
 /// STEPPER VISIBILITY: `dt_bounds`, `coupled_freqs` and `coupled_freq_exprs` are read by
-/// SystemStepper for `step_cfl`; `operators` are consumed only by explicit Program lowering. Impl
+/// SystemProgramDriver for `step_cfl`; `operators` are consumed only by explicit Program lowering. Impl
 /// re-exposes the bound collections under their exact
 /// historical names via REFERENCE ALIASES (couplings / dt_bounds_ / coupled_freqs_ /
 /// coupled_freq_exprs_). `coupled_operators` is METADATA ONLY -> accessed registry-direct.

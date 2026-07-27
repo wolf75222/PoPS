@@ -623,7 +623,7 @@ void System::set_block_dt_bounds(const std::string& name,
 }
 
 // GLOBAL step bound (host, one evaluation per step): multi-block coupling, Schur/Poisson,
-// scheduler, user policy. cf. SystemStepper::step_cfl for the aggregation.
+// scheduler, user policy. cf. SystemProgramDriver::step_cfl for the aggregation.
 void System::add_dt_bound(const std::string& label, std::function<double()> fn) {
   require_assembling(p_->lifecycle_, "add_dt_bound");  // frozen once pops.bind completes (ADC-592)
   if (!fn)
@@ -633,7 +633,7 @@ void System::add_dt_bound(const std::string& label, std::function<double()> fn) 
 
 // ACTIVE bound of the last step_cfl (step-policy diagnostic). "" before the first step.
 std::string System::last_dt_bound() const {
-  return p_->stepper_.last_dt_reason();
+  return p_->program_driver_.last_dt_reason();
 }
 
 // dt_hotspot diagnostic (ADC-182): the GLOBAL cell (i, j) that dominates the transport CFL
@@ -1562,7 +1562,7 @@ std::vector<double> System::aux_field_component(int comp) const {
 // are removed (ADC-595): they are Python presets (python/pops/physics/coupling_presets.py) that emit the
 // same formulas as a generic CoupledSource and register through add_coupling_operator with a declared
 // conservation contract. Impl::couplings / coupled_freqs_ / coupled_freq_exprs_ STORAGE stays untouched
-// (explicit Program lowering consumes operators; SystemStepper::step_cfl reads the bounds); only the
+// (explicit Program lowering consumes operators; SystemProgramDriver::step_cfl reads the bounds); only the
 // entry methods go.
 
 void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,

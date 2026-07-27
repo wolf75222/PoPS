@@ -24,7 +24,7 @@ void System::install_program_step(std::function<void(double)> step) {
   p_->program_.step_ = std::move(step);
 }
 // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the installed
-// program closure (cf. SystemStepper::step). Kept separate from install_program so the .so ABI is
+// program closure (cf. SystemProgramDriver::step). Kept separate from install_program so the .so ABI is
 // untouched. Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void System::set_program_cadence(int substeps, int stride) {
   require_assembling(p_->lifecycle_,
@@ -287,7 +287,7 @@ Real System::block_max_speed(int b, const MultiFab& U) const {
   return p_->sp[static_cast<std::size_t>(b)].max_speed(U);
 }
 // MIN physical cell size of the grid: Cartesian min(dx, dy) / polar min(dr, r_min*dtheta), the exact
-// formula SystemStepper::cfl_grid_h uses for the native CFL (kept consistent so a Program dt bound and
+// formula SystemProgramDriver::cfl_grid_h uses for the native CFL (kept consistent so a Program dt bound and
 // the native CFL share the same hmin).
 Real System::cfl_min_dx() const {
   return p_->polar_ ? std::min(p_->pgeom_.dr(), p_->pgeom_.r_min * p_->pgeom_.dtheta())

@@ -34,17 +34,17 @@
 /// it with System::Impl after defining Impl. owner_ is an Impl* (the helper lifetime is subordinate to
 /// that of Impl). System::step and step_cfl delegate here after the facade's fail-before-mutation guard.
 
-namespace pops {
-namespace stepper {
+namespace pops::runtime::system {
 
-/// SystemStepper<Impl>: see the contract above. All methods are MEMBERS because they
-/// share the step orchestration; accesses to the SHARED state of Impl go through owner_-> verbatim.
+/// SystemProgramDriver<Impl>: see the contract above. All methods are MEMBERS because they share
+/// Program cadence and stability-bound evaluation; accesses to the SHARED state of Impl go through
+/// owner_-> verbatim.
 /// Templated on Impl to stay free of any dependency on the (private) definition of System::Impl.
 template <class Impl>
-class SystemStepper {
+class SystemProgramDriver {
  public:
   /// @param owner back-pointer to System::Impl (lifetime subordinate to that of Impl).
-  explicit SystemStepper(Impl* owner) : owner_(owner) {}
+  explicit SystemProgramDriver(Impl* owner) : owner_(owner) {}
 
   /// True if a block of cadence @p stride CATCHES UP at this macro-step (END of window).
   /// STRIDE SEMANTICS = HOLD-THEN-CATCH-UP (catch-up at the END of the window). A block of cadence M is
@@ -345,5 +345,4 @@ class SystemStepper {
   std::string last_dt_reason_;  // active bound of the last step_cfl (diagnostic)
 };
 
-}  // namespace stepper
-}  // namespace pops
+}  // namespace pops::runtime::system

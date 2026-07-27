@@ -755,7 +755,7 @@ defined in [`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/i
 (`TimePolicy<Method, Treatment, substeps, stride>`, aliases `ExplicitTime` / `ImplicitTime` /
 `IMEXTime` / `PrescribedTime`). A `TimeTreatment::Prescribed` block is skipped (the guard
 `!= Prescribed`). The step choice lives in
-[`runtime/system_stepper.hpp`](../include/pops/runtime/system/system_stepper.hpp): `step_cfl` computes
+[`runtime/system_program_driver.hpp`](../include/pops/runtime/system/system_program_driver.hpp): `step_cfl` computes
 the bound, while `run_program_cadence` and `stride_due(macro_step, stride)` apply the explicit
 whole-Program cadence $(k+1)\bmod m = 0$. The speed $w_b$ comes from `max_wave_speed_mf`
 ([`numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp)), collective

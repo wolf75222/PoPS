@@ -22,7 +22,7 @@
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver (direct polar Poisson, REUSED)
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/runtime/system/system_field_solver.hpp>  // SystemFieldSolver: elliptic solve + field derivation (Batch B)
-#include <pops/runtime/system/system_stepper.hpp>  // SystemStepper: Program cadence + native CFL bound
+#include <pops/runtime/system/system_program_driver.hpp>  // Program cadence + native CFL bound
 #include <pops/runtime/system/system_block_store.hpp>  // SystemBlockStore: block management (BlockState + registry + index/copy/write) (Batch B.3)
 #include <pops/runtime/system/system_diagnostics_registry.hpp>  // SystemDiagnosticsRegistry: block/stage options + Newton reports (ADC-578)
 #include <pops/runtime/system/system_coupling_registry.hpp>  // SystemCouplingRegistry: couplings + dt bounds + frequency bounds (ADC-578)
@@ -161,8 +161,8 @@ struct System::Impl {
   // by-name access (index / find) and the state marshaling (copy_comp0 / copy_state / write_state) now
   // live there. See include/pops/runtime/system_block_store.hpp.
   //
-  // COMPATIBILITY ALIASES. The already-extracted header templates (SystemFieldSolver, SystemStepper,
-  // native_loader) iterate `owner_->sp` / `P->sp` and name `Impl::Species`; we keep these two
+  // COMPATIBILITY ALIASES. The already-extracted header templates (SystemFieldSolver,
+  // SystemProgramDriver, native_loader) iterate `owner_->sp` / `P->sp` and name `Impl::Species`; we keep these two
   // access points identical (zero churn outside this file):
   //  - `Species` = the block type carried by the store (init via positional aggregate unchanged);
   //  - `sp` = a REFERENCE to the store registry (same object, same iteration, same indexing).
@@ -170,10 +170,11 @@ struct System::Impl {
 
   // GEOMETRY / LAYOUT + SHARED aux + embedded-boundary domain, EXTRACTED into SystemDomain (ADC-578,
   // include/pops/runtime/system/system_domain.hpp). domain_ is constructed FIRST (before fields_ /
-  // stepper_) so its exact historical init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_,
+  // program_driver_) so its exact historical init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_,
   // aux) runs before any back-pointer reads it. Every member is re-exposed under its exact
-  // historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom): SystemStepper /
-  // SystemFieldSolver / native_loader read them via owner_-> / P-> unchanged, and the block closures
+  // historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom):
+  // SystemProgramDriver / SystemFieldSolver / native_loader read them via owner_-> / P-> unchanged,
+  // and the block closures
   // capture a stable `&aux == &domain_.aux` -> those headers and the MockImpl stay byte-unchanged.
   pops::runtime::system::SystemDomain domain_;
   SystemConfig& cfg = domain_.cfg;
@@ -251,17 +252,16 @@ struct System::Impl {
   // Python bind flow calls it LAST, after every install call). When frozen (Bound / Checkpointed /
   // Finalized) the structural setters reject; the runtime-data setters stay allowed. It is the
   // authoritative NATIVE lifecycle source the Python freeze gates query. NOT referenced by
-  // SystemStepper -> no MockImpl impact (MockImpl never had bound_); Assembling for a direct engine
+  // SystemProgramDriver -> no MockImpl impact (MockImpl never had bound_); Assembling for a direct engine
   // script that never binds (the low-level C++ tests) -> historical behavior unchanged. See
   // include/pops/runtime/system/system_lifecycle.hpp.
   pops::runtime::system::SystemLifecycle lifecycle_;
   // INTER-SPECIES COUPLING SUBSYSTEM, EXTRACTED into SystemCouplingRegistry (ADC-578,
   // include/pops/runtime/system/system_coupling_registry.hpp): the splitting-source operators, the
   // GLOBAL host dt bounds, the constant / per-cell coupled-source frequency bounds, and the typed
-  // coupling-operator inspect views. The stepper reads couplings / dt_bounds_ / coupled_freqs_ /
+  // coupling-operator inspect views. The Program driver reads dt_bounds_ / coupled_freqs_ /
   // coupled_freq_exprs_, so those keep their exact names via REFERENCE ALIASES into the registry
-  // (SAME objects) -> system_stepper.hpp and the MockImpl stay byte-unchanged. coupled_operators_ is
-  // METADATA ONLY (never stepper-read) -> accessed registry-direct. The GlobalDtBound / CoupledFreq /
+  // (SAME objects). coupled_operators_ is METADATA ONLY -> accessed registry-direct. The GlobalDtBound / CoupledFreq /
   // CoupledFreqExpr struct types now live in the registry header; the `using` aliases below keep the
   // `Impl::GlobalDtBound{...}` construction sites in this TU unchanged.
   pops::runtime::system::SystemCouplingRegistry coupling_;
@@ -273,9 +273,9 @@ struct System::Impl {
   std::vector<CoupledFreq>& coupled_freqs_ = coupling_.coupled_freqs;
   std::vector<CoupledFreqExpr>& coupled_freq_exprs_ = coupling_.coupled_freq_exprs;
 
-  // stride_due (hold-then-catch-up cadence filter) EXTRACTED into stepper_ (SystemStepper, Batch B):
-  // it serves exclusively the time advance. macro_step_ (above) stays a SHARED member of Impl
-  // (read by time() indirectly via t, incremented by stepper_ via owner_->macro_step_).
+  // stride_due (hold-then-catch-up Program cadence filter) lives in program_driver_.
+  // macro_step_ (above) stays a SHARED member of Impl (read by time() indirectly via t,
+  // incremented by program_driver_ via owner_->macro_step_).
 
   // Elliptic solve + field derivation EXTRACTED into fields_ (SystemFieldSolver, Batch B,
   // cf. docs/SYSTEM_CPP_EXTRACTION_PLAN.md section 2): the Poisson configuration (p_rhs/p_solver/
@@ -301,9 +301,10 @@ struct System::Impl {
 
   // domain_ (SystemDomain) is constructed FIRST from the config: it owns the exact historical
   // geometry/layout init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_, aux) so
-  // fields_ / stepper_ back-pointers read a fully-built layout. The reference aliases above then bind
-  // to domain_.*, and fields_(this) / stepper_(this) capture Impl (bit-identical addresses).
-  explicit Impl(const SystemConfig& c) : domain_(c), fields_(this), stepper_(this) {}
+  // fields_ / program_driver_ back-pointers read a fully-built layout. The reference aliases above
+  // then bind to domain_.*, and fields_(this) / program_driver_(this) capture Impl (bit-identical
+  // addresses).
+  explicit Impl(const SystemConfig& c) : domain_(c), fields_(this), program_driver_(this) {}
 
   // Elliptic solve + field derivation (Batch B). OWNS the solvers (ell_/pell_), the Poisson
   // config, the coefficient fields and the aux application buffers (B_z, T_e). owner_ = this: the
@@ -312,12 +313,13 @@ struct System::Impl {
   // ordering dependency. See include/pops/runtime/system_field_solver.hpp.
   field_solver::SystemFieldSolver<Impl> fields_;
 
-  // Program-only time advance. The stepper computes native CFL bounds and wraps the installed
+  // Program-only time advance. The driver computes native CFL bounds and wraps the installed
   // whole-system Program in its declared cadence; it has no native transport/coupling fallback.
-  // owner_ = this: the stepper reads the SHARED sp / fields_ / t / macro_step_ / geom / pgeom_ / polar_
-  // of Impl via its back-pointer. Pure back-pointer at construction (no dereferencing) ->
-  // init at end of list without ordering dependency. See include/pops/runtime/system_stepper.hpp.
-  stepper::SystemStepper<Impl> stepper_;
+  // owner_ = this: the driver reads the SHARED sp / fields_ / t / macro_step_ / geom / pgeom_ /
+  // polar_ of Impl via its back-pointer. Pure back-pointer at construction (no dereferencing) ->
+  // init at end of list without ordering dependency. See
+  // include/pops/runtime/system/system_program_driver.hpp.
+  pops::runtime::system::SystemProgramDriver<Impl> program_driver_;
 
   // Guarantees an aux width >= ncomp (SHARED channel). Reallocating the aux KEEPS its address (member:
   // the block closures capture &aux via grid_ctx) and re-applies B_z. No-op if already wide enough.
@@ -620,7 +622,7 @@ struct System::Impl {
           cache(impl.program_.cache_),
           history(impl.program_.hist_),
           profiler(impl.program_.profiler_),
-          last_dt_reason(impl.stepper_.last_dt_reason()) {
+          last_dt_reason(impl.program_driver_.last_dt_reason()) {
       states.reserve(impl.sp.size());
       for (const auto& block : impl.sp)
         states.emplace_back(block.U);
@@ -646,7 +648,7 @@ struct System::Impl {
         if (report && saved != newton_reports.end())
           *report = saved->second;
       }
-      impl.stepper_.restore_last_dt_reason(last_dt_reason);
+      impl.program_driver_.restore_last_dt_reason(last_dt_reason);
     }
   };
 

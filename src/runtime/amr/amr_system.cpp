@@ -459,14 +459,14 @@ struct AmrSystem::Impl {
     p_solver_options = field_solver_registry_->resolve(p_solver)->default_field_options();
   }
 
-  // SUBSTEPS/STRIDE cadence around the installed program closure (parity SystemStepper::run_program_
+  // SUBSTEPS/STRIDE cadence around the installed program closure (parity SystemProgramDriver::run_program_
   // cadence): runs the whole program ONCE over eff_dt = stride*dt when the stride window closes (the
   // clock still ticks every macro-step), subdivided into substeps equal program calls. With 1/1 this is
   // a single program_.step_(dt) call (bit-identical to a bare install). MULTI-BLOCK stride is GLOBAL
   // (whole-program), equal to the native per-block stride only for a single-block Program.
   void run_program_cadence_(double dt) {
     // stride window: program runs only at the END of each stride window ((macro_step_+1) % stride == 0),
-    // mirroring AmrRuntime::step / SystemStepper. stride=1 -> always true (every macro-step).
+    // mirroring AmrRuntime::step / SystemProgramDriver. stride=1 -> always true (every macro-step).
     if ((macro_step_ + 1) % program_.stride_ != 0)
       return;
     const double eff_dt = dt * static_cast<double>(program_.stride_);  // catch-up effective step
@@ -474,7 +474,7 @@ struct AmrSystem::Impl {
     for (int s = 0; s < program_.substeps_; ++s) {
       // ADC-626/ADC-631: expose this interval before the Program stores its pre-commit history
       // sample. The ring ledger then records the outgoing dt from that sample toward the next
-      // accepted sample (variable-dt replay). Parity with SystemStepper::run_program_cadence.
+      // accepted sample (variable-dt replay). Parity with SystemProgramDriver::run_program_cadence.
       program_.last_dt_ = h;
       program_.step_(h);
     }
@@ -3947,7 +3947,7 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
 // enable_profiling / profile_report drive the facade-owned Profiler (parity with System). The
 // multi-block AmrRuntime engine (wired at build via set_profiler) times its non-numeric AMR phases
 // -- regrid / fill_boundary / average_down -- and bumps the per-run + MPI counters into it. The
-// Profiler lives on the Impl (NOT on SystemStepper), so the C++ MockImpl never reads it. enable
+// Profiler lives on the Impl (NOT on SystemProgramDriver), so the C++ MockImpl never reads it. enable
 // BEFORE the run; the engine is enabled()-guarded so toggling between runs is safe.
 void AmrSystem::enable_profiling() {
   p_->program_.profiler_.enable();
