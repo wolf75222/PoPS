@@ -90,7 +90,7 @@ chk(True, "IMEX par defaut reste un descripteur d'auteur valide")
 newton_knobs = (
     ("newton_max_iters", {"newton_max_iters": 5}),
     ("newton_rel_tol", {"newton_rel_tol": 1e-12}),
-    ("newton_abs_tol", {"newton_abs_tol": 1e-12}),
+    ("newton_abs_tol", {"newton_abs_tol": 2e-12}),
     ("newton_fd_eps", {"newton_fd_eps": 2e-7}),
     ("newton_damping", {"newton_damping": 0.5}),
 )
