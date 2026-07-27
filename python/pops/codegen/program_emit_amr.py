@@ -16,9 +16,10 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).
     ``target='amr_system'`` emits ``pops_install_program_amr``, the entry ``AmrSystem::install_program``
     resolves (it dlopens the .so, validates the ABI key + section-24 requirements, binds the blocks by
-    name, seeds the runtime params, then calls this). It constructs an ``AmrProgramContext`` (the AMR
-    counterpart of ``ProgramContext``, a DUCK-TYPED structural mirror) over the ``AmrSystem`` and installs
-    the recursively subcycled per-level macro-step driver: the IDENTICAL lowered ``{body}`` -- the
+    name, seeds the runtime params, then calls this). It constructs an ``AmrProgramContext`` over the
+    ``AmrSystem``; topology-independent operations come from the same
+    ``ProgramExecutionServices`` implementation as ``ProgramContext``. It then installs the recursively
+    subcycled per-level macro-step driver: the IDENTICAL lowered ``{body}`` -- the
     one ``pops_install_program`` runs on ``System`` -- wrapped in an explicit level-clock scheduler.
     Its install-time prelude is materialized once per native level, not once per hierarchy: each
     closure therefore owns fields/workspaces with the exact level layout. A topology-epoch or
@@ -175,8 +176,8 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         '\n#include <pops/runtime/program/amr_program_context.hpp>  // AmrProgramContext (the AMR driver, ADC-508)\n'
         '// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target=\'amr_system\' counterpart\n'
         '// of pops_install_program. AmrSystem::install_program resolves + calls it after binding the\n'
-        '// blocks by name and seeding the runtime params. It constructs an AmrProgramContext (the AMR\n'
-        '// mirror of ProgramContext) and installs the explicit parent/child clock driver: the SAME\n'
+        '// blocks by name and seeding the runtime params. It constructs an AmrProgramContext backed\n'
+        '// by the shared ProgramExecutionServices and installs the parent/child clock driver: the SAME\n'
         '// lowered body is recursively subcycled, temporally interpolated and conservatively synced.\n'
         'extern "C" void pops_install_program_amr(void* sys) {\n'
         '  auto ctx_owner = std::make_shared<pops::runtime::program::AmrProgramContext>(sys);\n'

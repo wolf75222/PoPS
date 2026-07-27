@@ -329,10 +329,13 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
 def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    shared = (
+        ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
+    ).read_text(encoding="utf-8")
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     for source in (uniform, amr):
         assert "apply_coupling_operators(" in source
-        assert "CouplingStateOverride" in source
+    assert shared.count("struct CouplingStateOverride") == 1
     assert "complete candidate pack for every System block" in uniform
     assert "complete candidate pack for every runtime block" in amr
     assert "cannot alias accepted live states" in uniform
