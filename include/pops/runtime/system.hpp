@@ -1053,6 +1053,12 @@ class System {
   /// caller is responsible for layout compatibility: the ring slots share the block's (ba, dm, ncomp),
   /// so a value built from the same block matches (lincomb is a valid-cell copy, no layout check).
   POPS_EXPORT void store_history(const std::string& name, const MultiFab& value);
+  /// Qualified generated-Program route: identical to the overload above, but records the exact
+  /// outgoing interval of the active logical clock. A child-clock subcycle therefore owns child
+  /// timestamps rather than inheriting the enclosing macro dt. @p outgoing_dt must be finite and
+  /// non-negative; generated Program scopes always provide a strictly positive value.
+  POPS_EXPORT void store_history(const std::string& name, const MultiFab& value,
+                                 double outgoing_dt);
   /// Shift every history ring buffer one step (slot k <- slot k-1, for k = depth-1 .. 1), called ONCE
   /// at the end of each macro-step (the generated step body emits ctx.rotate_histories() last). The
   /// current slot [0] is recycled (it gets the oldest buffer; the next store overwrites it before any

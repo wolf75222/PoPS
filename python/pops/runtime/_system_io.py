@@ -56,6 +56,8 @@ class _SystemIO(_System):
 
     def _prepare_checkpoint_capture(self, path: Any) -> _PreparedUniformCapture:
         """Freeze and identify all local metadata before the first native collective."""
+        import math
+
         import numpy as np
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
         from pops.identity import make_identity
@@ -121,8 +123,12 @@ class _SystemIO(_System):
             if hasattr(self._s, "program_cache_nodes")
             else ()
         )
-        if len(cache_nodes) != len(set(cache_nodes)):
-            raise ValueError("checkpoint scheduled-cache node ids must be unique")
+        if cache_nodes != tuple(sorted(set(cache_nodes))) or any(node < 0 for node in cache_nodes):
+            raise ValueError(
+                "checkpoint scheduled-cache node ids must be unique non-negative canonical ids"
+            )
+        if cache_nodes and macro_step == 0:
+            raise ValueError("checkpoint cannot carry a valid scheduled cache at step zero")
         if cache_nodes:
             required_collectives.append("program_cache_global")
         missing_collectives = sorted(
@@ -141,7 +147,15 @@ class _SystemIO(_System):
             ngrow = int(self._s.program_cache_ngrow(nid))
             last_update = int(self._s.program_cache_last_update_step(nid))
             accum_dt = float(self._s.program_cache_accumulated_dt(nid))
-            if not name or ncomp <= 0 or ngrow < 0:
+            if (
+                not name
+                or ncomp <= 0
+                or ngrow < 0
+                or last_update < 0
+                or last_update >= macro_step
+                or not math.isfinite(accum_dt)
+                or accum_dt < 0.0
+            ):
                 raise ValueError("checkpoint scheduled-cache metadata is invalid for node %d" % nid)
             cache_names.append(name)
             out["cache_ncomp_%d" % nid] = ncomp
@@ -158,7 +172,7 @@ class _SystemIO(_System):
                     "accumulated_dt": accum_dt.hex(),
                 }
             )
-        out["cache_names"] = np.array(cache_names)
+        out["cache_names"] = np.asarray(cache_names, dtype=str)
         runtime_identities = [value.to_data() for value in self._checkpoint_identities()]
         run_identity = self.last_run_identity.to_data()
         capture_identity = make_identity(
@@ -326,27 +340,62 @@ class _SystemIO(_System):
         current_histories = (
             list(self._s.history_names()) if hasattr(self._s, "history_names") else []
         )
-        if history_names != current_histories:
+        # The generated Program registers its native rings lazily inside the first step closure.
+        # A fresh bind is nevertheless a valid restart target, so the authenticated installed
+        # temporal schedule is the pre-mutation authority until that native registry exists.
+        # Once any ring has materialized, require the whole registry to agree exactly.
+        if current_histories and history_names != current_histories:
             raise RuntimeError(
-                "checkpoint Program histories %r != installed qualified histories %r"
+                "checkpoint Program histories %r != installed histories %r"
                 % (history_names, current_histories)
+            )
+        schedule = temporal.program_schedule
+        if (history_names or len(d["cache_nodes"])) and schedule is None:
+            raise RuntimeError(
+                "checkpoint history/cache state requires an installed temporal Program schedule"
+            )
+        scheduled_histories = {
+            str(row["name"]): row for row in (schedule or {}).get("histories", ())
+        }
+        if history_names != list(scheduled_histories):
+            raise RuntimeError(
+                "checkpoint Program histories differ from the installed temporal schedule"
             )
         for name in history_names:
             depth = int(d["history_depth_" + name])
             ncomp = int(d["history_ncomp_" + name])
-            if name in current_histories and (
+            scheduled = scheduled_histories[name]
+            scheduled_ncomp = scheduled.get("ncomp")
+            if scheduled_ncomp is None:
+                owner = scheduled.get("owner")
+                owner_name = owner.get("local_id") if isinstance(owner, dict) else None
+                if not isinstance(owner_name, str) or owner_name not in current_blocks:
+                    raise RuntimeError(
+                        "installed full-state history '%s' has no current block owner" % name
+                    )
+                scheduled_ncomp = int(self._s.n_vars(owner_name))
+            if depth != int(scheduled["ring_slots"]) or ncomp != int(scheduled_ncomp):
+                raise ValueError(
+                    "restart : history '%s' shape differs from the installed ring" % name
+                )
+            if current_histories and (
                 depth != int(self._s.history_depth(name))
                 or ncomp != int(self._s.history_ncomp(name))
             ):
                 raise ValueError(
-                    "restart : history '%s' shape differs from the installed ring" % name
+                    "restart : history '%s' shape differs from the materialized native ring" % name
                 )
             policy = HistoryPersistence.from_json(str(d["history_policy_" + name]))
             initialized = bool(d["history_init_" + name])
             fill_count = history_fill_count_from_payload(d, name, depth, initialized)
             requested = sorted(int(slot) for slot in d["history_requested_stored_slots_" + name])
             stored = sorted(int(slot) for slot in d["history_stored_slots_" + name])
-            expected_requested, expected_stored, expected_mode, _ = resolve_history_storage(
+            (
+                expected_requested,
+                expected_stored,
+                expected_mode,
+                expected_regrid_steps,
+            ) = resolve_history_storage(
                 policy,
                 depth,
                 fill_count=fill_count,
@@ -366,6 +415,22 @@ class _SystemIO(_System):
                 raise ValueError(
                     "restart : history '%s' stored slots/mode differ from its resolved plan" % name
                 )
+            regrid_key = "history_regrid_steps_" + name
+            if expected_regrid_steps is None:
+                if regrid_key in d:
+                    raise ValueError(
+                        "restart : dense history '%s' carries a spurious replay schedule" % name
+                    )
+            else:
+                if regrid_key not in d:
+                    raise ValueError(
+                        "restart : selective history '%s' lacks its replay schedule" % name
+                    )
+                recorded_regrid_steps = tuple(int(step) for step in d[regrid_key])
+                if recorded_regrid_steps != tuple(expected_regrid_steps):
+                    raise ValueError(
+                        "restart : history '%s' replay schedule differs from its policy" % name
+                    )
             if len(stored) < depth and not hasattr(self._s, "rebuild_history_slots"):
                 raise RuntimeError(
                     "runtime cannot rebuild selectively persisted history '%s'" % name
@@ -379,6 +444,17 @@ class _SystemIO(_System):
         cache_nodes = [int(node) for node in d["cache_nodes"]]
         if cache_nodes and not hasattr(self._s, "restore_program_cache"):
             raise RuntimeError("runtime cannot restore the checkpoint's scheduled value cache")
+        scheduled_cache_nodes = {
+            int(row["node_id"])
+            for row in (schedule or {}).get("schedules", ())
+            if bool(row["cache_required"])
+        }
+        unknown_cache_nodes = sorted(set(cache_nodes) - scheduled_cache_nodes)
+        if unknown_cache_nodes:
+            raise ValueError(
+                "restart : scheduled cache node(s) %r do not belong to the installed Program"
+                % unknown_cache_nodes
+            )
         for node in cache_nodes:
             ncomp = int(d["cache_ncomp_%d" % node])
             ngrow = int(d["cache_ngrow_%d" % node])
