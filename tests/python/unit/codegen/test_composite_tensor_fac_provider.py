@@ -343,7 +343,7 @@ def test_hierarchy_program_and_codegen_core_have_no_builtin_backend_branch():
 
 
 def _public_amr_hierarchy_case(
-    solver, *, max_levels=2, temporal_ratios=(3,),
+    solver, *, max_levels=2, temporal_ratios=(3,), bound_plasma=False,
 ):
     import pops
     from pops.amr import (
@@ -360,11 +360,13 @@ def _public_amr_hierarchy_case(
         Tag,
     )
     from pops.domain import Rectangle
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Outflow
     from pops.frames import Cartesian2D
     from pops.initial import InitialCondition
     from pops.layouts import AMR
     from pops.lib.amr import StateTransfer
-    from pops.lib.initial import Constant, Gaussian
+    from pops.lib.initial import BindArray, Constant, Gaussian
     from pops.math import ValueExpr, ddt, div
     from pops.mesh import CartesianGrid, PeriodicAxes
     from pops.numerics import (
@@ -379,7 +381,7 @@ def _public_amr_hierarchy_case(
     from pops.projection import ConservativeCellAverage
     from pops.representations import Conservative
     from pops.spaces import CellState
-    from pops.time import FailRun, FixedDt, every
+    from pops.time import FailRun, FixedDt, StagePoint, TimePoint, every
 
     frame = Rectangle(
         "external-hierarchy-square", lower=(0.0, 0.0), upper=(1.0, 1.0)
@@ -434,12 +436,17 @@ def _public_amr_hierarchy_case(
         roles={"marker": Density()},
     )
     (marker,) = marker_state
+    marker_x_speed = 0.25
+    marker_y_speed = -0.1
     marker_flux = marker_model.flux(
         "marker-transport",
         frame=frame,
         state=marker_state,
-        components={x_axis: (0.0 * marker,), y_axis: (0.0 * marker,)},
-        waves={x_axis: (0.0,), y_axis: (0.0,)},
+        components={
+            x_axis: (marker_x_speed * marker,),
+            y_axis: (marker_y_speed * marker,),
+        },
+        waves={x_axis: (marker_x_speed,), y_axis: (marker_y_speed,)},
     )
     marker_rate = marker_model.rate(
         "marker-rate", equation=ddt(marker_state) == -div(marker_flux)
@@ -450,9 +457,9 @@ def _public_amr_hierarchy_case(
     marker_block = case.block("marker", model=marker_model)
     state_instance = block[state]
     marker_instance = marker_block[marker_state]
-    for owner, declared_rate, declared_flux, declared_state in (
-        (block, rate, flux, state),
-        (marker_block, marker_rate, marker_flux, marker_state),
+    for owner, declared_rate, declared_flux, declared_state, declared_instance in (
+        (block, rate, flux, state, state_instance),
+        (marker_block, marker_rate, marker_flux, marker_state, marker_instance),
     ):
         numerics = DiscretizationPlan()
         numerics.rates.add(
@@ -464,6 +471,18 @@ def _public_amr_hierarchy_case(
                 riemann=riemann.Rusanov(),
             ),
         )
+        if bound_plasma:
+            boundaries = frame.boundaries
+            numerics.boundaries.add(
+                TransportBoundarySet(
+                    {
+                        boundaries.x_min: Outflow(state=declared_instance),
+                        boundaries.x_max: Outflow(state=declared_instance),
+                        boundaries.y_min: Outflow(state=declared_instance),
+                        boundaries.y_max: Outflow(state=declared_instance),
+                    }
+                )
+            )
         case.numerics(numerics, block=owner)
 
     program = pops.Program("public-external-hierarchy-step")
@@ -517,6 +536,20 @@ def _public_amr_hierarchy_case(
         th_dt=program.dt,
         c_rho=0,
     )
+    # This independent conservative block belongs to the publish region: its explicit flux work is
+    # evaluated after the hierarchy barrier and is therefore still present when couple_levels()
+    # performs reflux.  It intentionally shares neither state nor scratch with the condensed block.
+    explicit_point = StagePoint(
+        "transport-stage", {"main": TimePoint(program.clock, 0)}
+    )
+    explicit_marker_rate = program.value(
+        "marker-transport-rate", marker_rate(marker_temporal.n), at=explicit_point
+    )
+    transported_marker = program.value(
+        "transported-marker",
+        marker_temporal.n + program.dt * explicit_marker_rate,
+        at=marker_temporal.next.point,
+    )
     program.commit(
         temporal.next,
         program.value("accepted-state", reconstructed, at=temporal.next.point),
@@ -524,7 +557,7 @@ def _public_amr_hierarchy_case(
     program.commit(
         marker_temporal.next,
         program.value(
-            "accepted-marker", marker_temporal.n, at=marker_temporal.next.point
+            "accepted-marker", transported_marker, at=marker_temporal.next.point
         ),
     )
     program.step_strategy(FixedDt(0.01))
@@ -533,7 +566,7 @@ def _public_amr_hierarchy_case(
     case.initials.add(
         InitialCondition(
             state=state_instance,
-            value=Constant((2.0, 0.25, -0.5)),
+            value=BindArray() if bound_plasma else Constant((2.0, 0.25, -0.5)),
             projection=ConservativeCellAverage(),
         )
     )
@@ -547,7 +580,7 @@ def _public_amr_hierarchy_case(
                 center={x_axis: 0.5, y_axis: 0.5},
                 background=0.0,
                 amplitude=2.0,
-                inverse_width=64.0,
+                inverse_width=100.0,
             ),
             projection=ConservativeCellAverage(),
         )
@@ -562,7 +595,7 @@ def _public_amr_hierarchy_case(
         grid=CartesianGrid(
             frame=frame,
             cells=(8, 8),
-            periodic=PeriodicAxes(frame.axes),
+            periodic=None if bound_plasma else PeriodicAxes(frame.axes),
         ),
         hierarchy=AMRHierarchy(
             max_levels=max_levels,
@@ -585,7 +618,7 @@ def _public_amr_hierarchy_case(
             )
         ),
     )
-    return case, layout
+    return case, layout, state_instance
 
 
 def _constant_rotation_oracle(*, dt, rate, density, east, north):
@@ -622,6 +655,29 @@ def _external_hierarchy_counters(so_path):
     )
 
 
+def _external_hierarchy_carry_metrics(so_path):
+    library = ctypes.CDLL(so_path)
+    library.pops_test_hierarchy_first_solution_norm_sum.restype = ctypes.c_double
+    library.pops_test_hierarchy_second_guess_norm_sum.restype = ctypes.c_double
+    library.pops_test_hierarchy_second_guess_calls.restype = ctypes.c_uint64
+    return (
+        float(library.pops_test_hierarchy_first_solution_norm_sum()),
+        float(library.pops_test_hierarchy_second_guess_norm_sum()),
+        int(library.pops_test_hierarchy_second_guess_calls()),
+    )
+
+
+def _nonuniform_plasma_initial():
+    coordinate = (np.arange(8, dtype=np.float64) + 0.5) / 8
+    x, y = np.meshgrid(coordinate, coordinate, indexing="xy")
+    density = 1.0 + 0.20 * np.exp(
+        -80.0 * ((x - 0.40) ** 2 + (y - 0.55) ** 2)
+    )
+    east = density * (0.25 + 0.08 * np.sin(2.0 * np.pi * y))
+    north = density * (-0.15 + 0.06 * np.cos(2.0 * np.pi * x))
+    return np.ascontiguousarray(np.stack((density, east, north)))
+
+
 def test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity(
     tmp_path, isolated_native_cache, native_cxx, kokkos_root,
 ):
@@ -647,14 +703,23 @@ std::atomic<std::uint64_t> register_calls{0};
 std::atomic<std::uint64_t> prepare_calls{0};
 std::atomic<std::uint64_t> execution_queries{0};
 std::atomic<std::uint64_t> solve_calls{0};
+std::atomic<std::uint64_t> second_guess_calls{0};
+// Provider orchestration is single-threaded.  The Kokkos reductions complete before these host-only
+// witnesses are read or written, so atomics would add no safety and are unavailable for double in
+// the project's C++17 contract.
+double first_solution_norm_sum = 0.0;
+double second_guess_norm_sum = 0.0;
 
 class DelegatingPrepared final
     : public pops::runtime::program::PreparedHierarchyTensorSolver {
  public:
   DelegatingPrepared(
       std::string contract,
+      std::vector<bool> level_populated,
       std::unique_ptr<pops::runtime::program::PreparedHierarchyTensorSolver> delegate)
-      : contract_(std::move(contract)), delegate_(std::move(delegate)) {
+      : contract_(std::move(contract)),
+        level_populated_(std::move(level_populated)),
+        delegate_(std::move(delegate)) {
     if (!delegate_)
       throw std::invalid_argument("external hierarchy delegate is missing");
   }
@@ -675,15 +740,28 @@ class DelegatingPrepared final
     return delegate_->solution(level);
   }
   void stage_initial_guess(int level, const pops::MultiFab* guess) override {
+    if (solve_calls.load(std::memory_order_relaxed) == 1 && guess != nullptr) {
+      second_guess_norm_sum += static_cast<double>(pops::norm_inf(*guess));
+      second_guess_calls.fetch_add(1, std::memory_order_relaxed);
+    }
     delegate_->stage_initial_guess(level, guess);
   }
   pops::SolveReport solve(
       const pops::runtime::program::HierarchyTensorSolveControls& controls) override {
-    solve_calls.fetch_add(1, std::memory_order_relaxed);
-    return delegate_->solve(controls);
+    const std::uint64_t solve_index =
+        solve_calls.fetch_add(1, std::memory_order_relaxed);
+    pops::SolveReport report = delegate_->solve(controls);
+    if (solve_index == 0) {
+      for (std::size_t level = 0; level < level_populated_.size(); ++level)
+        if (level_populated_[level])
+          first_solution_norm_sum +=
+              static_cast<double>(pops::norm_inf(delegate_->solution(static_cast<int>(level))));
+    }
+    return report;
   }
  private:
   std::string contract_;
+  std::vector<bool> level_populated_;
   std::unique_ptr<pops::runtime::program::PreparedHierarchyTensorSolver> delegate_;
 };
 
@@ -775,7 +853,8 @@ class Provider final
     auto prepared_delegate = delegate.prepare(delegate_request(request));
     prepare_calls.fetch_add(1, std::memory_order_relaxed);
     return std::make_unique<DelegatingPrepared>(
-        expected_prepared_contract(request), std::move(prepared_delegate));
+        expected_prepared_contract(request), request.level_populated,
+        std::move(prepared_delegate));
   }
 };
 
@@ -807,6 +886,18 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_execution_queries() noe
 
 extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept {
   return pops_test_hierarchy::solve_calls.load(std::memory_order_relaxed);
+}
+
+extern "C" POPS_EXPORT double pops_test_hierarchy_first_solution_norm_sum() noexcept {
+  return pops_test_hierarchy::first_solution_norm_sum;
+}
+
+extern "C" POPS_EXPORT double pops_test_hierarchy_second_guess_norm_sum() noexcept {
+  return pops_test_hierarchy::second_guess_norm_sum;
+}
+
+extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() noexcept {
+  return pops_test_hierarchy::second_guess_calls.load(std::memory_order_relaxed);
 }
 """,
         encoding="utf-8",
@@ -854,7 +945,13 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
 
     class ExternalHierarchySolver:
         def prepare_program_solve(self):
-            return external.prepare(CompositeTensorFAC().canonical_options())
+            return external.prepare(
+                CompositeTensorFAC(
+                    max_iter=400,
+                    rel_tol=1.0e-8,
+                    abs_tol=1.0e-12,
+                ).canonical_options()
+            )
 
     program, source = _build(ExternalHierarchySolver())
     assert "#include <tests_hierarchy_provider.hpp>" in source
@@ -886,11 +983,13 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
     oracle = _constant_rotation_oracle(
         dt=0.01, rate=3.0, density=2.0, east=0.25, north=-0.5,
     )
-    for max_levels, temporal_ratios in ((2, (3,)), (3, (3, 5))):
-        case, layout = _public_amr_hierarchy_case(
+    for max_levels, temporal_ratios, steps in ((2, (3,), 2), (3, (3, 5), 1)):
+        bound_plasma = max_levels == 2
+        case, layout, plasma_state = _public_amr_hierarchy_case(
             ExternalHierarchySolver(),
             max_levels=max_levels,
             temporal_ratios=temporal_ratios,
+            bound_plasma=bound_plasma,
         )
         resolved = pops.resolve(
             pops.validate(case),
@@ -905,7 +1004,14 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
         assert Path(compiled.so_path).is_file()
         before_bind = _external_hierarchy_counters(compiled.so_path)
 
-        simulation = pops.bind(compiled)
+        simulation = pops.bind(
+            compiled,
+            initial_values=(
+                {plasma_state: _nonuniform_plasma_initial()}
+                if bound_plasma
+                else None
+            ),
+        )
         bound_register, bound_prepare, bound_execution, bound_solve = (
             _external_hierarchy_counters(compiled.so_path)
         )
@@ -915,15 +1021,18 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
         assert bound_solve == before_bind[3]
         assert simulation.n_levels() == max_levels
 
-        report = pops.run(simulation, t_end=0.01, max_steps=1)
+        initial_marker_mass = simulation.integral(
+            "marker", component=0, levels=(0,)
+        )
+        report = pops.run(simulation, t_end=0.01 * steps, max_steps=steps)
         run_register, run_prepare, run_execution, run_solve = (
             _external_hierarchy_counters(compiled.so_path)
         )
-        assert report.accepted_steps == 1
+        assert report.accepted_steps == steps
         assert run_register == bound_register
         assert run_prepare == bound_prepare
         assert run_execution > bound_execution
-        assert run_solve == bound_solve + 1
+        assert run_solve == bound_solve + steps
 
         # Each level owns a distinct qualified clock, while the authored temporal ratios remain
         # independent from the spatial ratio two (and from each other in the three-level tower).
@@ -932,9 +1041,12 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
             row for row in program_report.clocks if row["kind"] == "level"
         ]
         assert {row["level"] for row in level_clocks} == set(range(max_levels))
-        assert all(row["macro_step"] == 1 for row in level_clocks)
+        assert all(row["macro_step"] == steps for row in level_clocks)
         assert all(row["phase"] == {"numerator": 0, "denominator": 1} for row in level_clocks)
-        assert all(row["physical_time"] == pytest.approx(0.01) for row in level_clocks)
+        assert all(
+            row["physical_time"] == pytest.approx(0.01 * steps)
+            for row in level_clocks
+        )
         assert program_report.level_relations == [
             {
                 "parent_level": level,
@@ -944,6 +1056,56 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
             }
             for level, ratio in enumerate(temporal_ratios)
         ]
+
+        # This is one combined Program, not two adjacent tests: its explicit finite-volume rate
+        # materializes the accepted interface-flux ledger and the same macro-step then executes the
+        # hierarchy-scoped condensed solve.  Every refined level participates and synchronization
+        # remains conservative reflux followed by average-down.
+        assert {row["level"] for row in program_report.flux_ledger} == set(
+            range(max_levels)
+        )
+        assert {row["phase"] for row in program_report.synchronization} == {
+            "reflux",
+            "average_down",
+        }
+
+        if bound_plasma:
+            # ADC-639 composition: the Gaussian marker has nontrivial C/F transport fluxes while the
+            # sibling plasma block executes its hierarchy solve.  The accepted marker mass remains
+            # conservative after both refluxed macro-steps.
+            final_marker_mass = simulation.integral(
+                "marker", component=0, levels=(0,)
+            )
+            assert abs(final_marker_mass - initial_marker_mass) < 1.0e-8
+
+            # ADC-427 composition: after solve 1 the nonzero hierarchy potential is stored in the
+            # qualified one-component ring.  At gather 2 every active level stages that exact phi^n
+            # as the composite initial guess.  The provider-side norm witness observes the hand-off
+            # across the generated store/read boundary rather than merely inspecting authored IR.
+            first_solution_norm, second_guess_norm, second_guess_calls = (
+                _external_hierarchy_carry_metrics(compiled.so_path)
+            )
+            assert first_solution_norm > 1.0e-8
+            assert second_guess_calls == max_levels
+            assert second_guess_norm == pytest.approx(
+                first_solution_norm, rel=5.0e-15, abs=5.0e-15
+            )
+            histories = {
+                row["name"]: row for row in program_report.histories
+            }
+            assert histories["plasma.tensor-potential"] == {
+                "name": "plasma.tensor-potential",
+                "depth": 2,
+                "ncomp": 1,
+                "initialized": True,
+            }
+            for level in range(max_levels):
+                actual = np.asarray(
+                    simulation.block_level_state_global("plasma", level),
+                    dtype=np.float64,
+                )
+                assert actual.size > 0 and np.isfinite(actual).all()
+            continue
 
         # Fail on any per-level drift.  The exact zero condensed RHS is intentional: the counter
         # above proves the real composite FAC still executes once, while this independent closed-form
