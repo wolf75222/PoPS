@@ -270,6 +270,7 @@ void install_single_block_test_program(AmrSystem& system, Model model, bool impl
       context->commit_many({{&live, &candidate}});
     });
   });
+  system.set_program_block_map({0});
 }
 
 // @p setup installe l'unique bloc (add_compiled_model ou add_block) ; le reste (Poisson, raffinement,
@@ -280,8 +281,8 @@ Snap run(int n, const std::vector<double>& rho, int nsteps, double dt, Model mod
   AmrSystem s(make_cfg(n));
   setup(s);
   configure_refined_execution(s);
-  install_single_block_test_program(s, model, implicit_source);
   s.set_density("gas", rho);
+  install_single_block_test_program(s, model, implicit_source);
   for (int k = 0; k < nsteps; ++k)
     s.step(dt);
   return Snap{s.density(), s.mass(), s.n_patches()};

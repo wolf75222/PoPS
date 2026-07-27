@@ -757,10 +757,12 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
         pops::MultiFab& state = cadence_context.state(0);
         pops::MultiFab& rate = cadence_context.rhs_scratch(101, 0, state);
         cadence_context.rhs_into(0, state, rate, 101);
-        cadence_context.axpy(state, static_cast<pops::Real>(level_step), rate);
+        cadence_context.axpy(state, static_cast<pops::Real>(level_step), rate,
+                             static_cast<pops::Real>(level_step), {{1, 1, 1}});
       });
       cadence_tag_counts.push_back(tag_call_count());
     });
+    system.set_program_block_map({0});
     const int cadence_calls_before = tag_call_count();
     system.step(0.2);
     ASSERT_EQ(cadence_times.size(), 2u);
@@ -832,9 +834,11 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
         pops::MultiFab& state_value = stride_context.state(0);
         pops::MultiFab& rate = stride_context.rhs_scratch(201, 0, state_value);
         stride_context.rhs_into(0, state_value, rate, 201);
-        stride_context.axpy(state_value, static_cast<pops::Real>(level_step), rate);
+        stride_context.axpy(state_value, static_cast<pops::Real>(level_step), rate,
+                            static_cast<pops::Real>(level_step), {{1, 1, 1}});
       });
     });
+    stride_system.set_program_block_map({0});
     const int stride_calls_before = tag_call_count();
     stride_system.step(0.05);  // held
     stride_system.step(0.15);  // first variable-dt window starts at tick 0
@@ -880,11 +884,13 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
         pops::MultiFab& state_value = retry_context.state(0);
         pops::MultiFab& rate = retry_context.rhs_scratch(301, 0, state_value);
         retry_context.rhs_into(0, state_value, rate, 301);
-        retry_context.axpy(state_value, static_cast<pops::Real>(level_step), rate);
+        retry_context.axpy(state_value, static_cast<pops::Real>(level_step), rate,
+                           static_cast<pops::Real>(level_step), {{1, 1, 1}});
         if (reject_second_substep && program_invocation == 2 && retry_context.level() == 0)
           throw std::runtime_error("intentional second AMR Program substep failure");
       });
     });
+    retry_system.set_program_block_map({0});
 
     const double retry_time_before = retry_system.time();
     const int retry_macro_before = retry_system.macro_step();

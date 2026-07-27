@@ -226,7 +226,7 @@ def test_checkpoint_level_envelope_refuses_a_different_configured_depth():
         )
 
 
-def test_strict_v4_level_envelope_refuses_missing_configured_depth():
+def test_strict_v5_level_envelope_refuses_missing_configured_depth():
     class _FilesOnlyPayload:
         files = ("n_levels",)
 

@@ -431,7 +431,7 @@ def capabilities() -> Any:
                 "PER_RANK topology; collective HDF5 requires the native C++ parallel-HDF5 route"
             ),
             "checkpoint_restart": (
-                "strict accepted-state v4 for Uniform and AMR, including multi-block, active "
+                "strict accepted-state v5 for Uniform and AMR, including multi-block, active "
                 "regridding, fields, histories, clocks and consumer cursors; exact MPI_COMM_WORLD "
                 "captures collectively and publishes one rank-0 NPZ artifact"
             ),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from math import isfinite
 from typing import Any
@@ -12,8 +13,9 @@ _STRIDE = "program_cadence_stride"
 _WINDOW_STEPS = "program_cadence_window_steps"
 _WINDOW_DT = "program_cadence_window_dt"
 _WINDOW_START_TIME = "program_cadence_window_start_time"
+_LAST_DT = "program_last_dt"
 PROGRAM_CADENCE_CHECKPOINT_KEYS = frozenset(
-    {_SUBSTEPS, _STRIDE, _WINDOW_STEPS, _WINDOW_DT, _WINDOW_START_TIME}
+    {_SUBSTEPS, _STRIDE, _WINDOW_STEPS, _WINDOW_DT, _WINDOW_START_TIME, _LAST_DT}
 )
 
 
@@ -26,6 +28,7 @@ class ProgramCadenceCheckpointState:
     held_steps: int
     accumulated_dt: float
     window_start_time: float
+    last_dt: float
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -34,6 +37,7 @@ class ProgramCadenceCheckpointState:
             _WINDOW_STEPS: self.held_steps,
             _WINDOW_DT: self.accumulated_dt,
             _WINDOW_START_TIME: self.window_start_time,
+            _LAST_DT: self.last_dt,
         }
 
     def to_data(self) -> dict[str, Any]:
@@ -43,17 +47,24 @@ class ProgramCadenceCheckpointState:
             "held_steps": self.held_steps,
             "accumulated_dt": self.accumulated_dt.hex(),
             "window_start_time": self.window_start_time.hex(),
+            "last_dt": self.last_dt.hex(),
         }
 
 
 def _payload_files(payload: Any) -> set[str]:
     files = getattr(payload, "files", None)
     if files is not None:
-        return {str(key) for key in (files() if callable(files) else files)}
+        file_values = files() if callable(files) else files
+        if not isinstance(file_values, Iterable):
+            raise TypeError("checkpoint payload files must be iterable")
+        return {str(key) for key in file_values}
     keys = getattr(payload, "keys", None)
     if not callable(keys):
         raise TypeError("checkpoint payload exposes neither files nor keys()")
-    return {str(key) for key in keys()}
+    key_values = keys()
+    if not isinstance(key_values, Iterable):
+        raise TypeError("checkpoint payload keys() must return an iterable")
+    return {str(key) for key in key_values}
 
 
 def _exact_integer_scalar(payload: Any, key: str) -> int:
@@ -117,6 +128,8 @@ def _validate_state(
         raise ValueError(
             "%s : active Program cadence window start must precede accepted time" % phase
         )
+    if not isfinite(state.last_dt) or state.last_dt < 0.0:
+        raise ValueError("%s : Program accepted last dt must be finite and non-negative" % phase)
 
 
 def capture_program_cadence(sim: Any, *, macro_step: int) -> ProgramCadenceCheckpointState:
@@ -129,6 +142,7 @@ def capture_program_cadence(sim: Any, *, macro_step: int) -> ProgramCadenceCheck
         "program_cadence_window_steps",
         "program_cadence_window_dt",
         "program_cadence_window_start_time",
+        "program_last_dt",
     )
     missing = [name for name in required if not callable(getattr(sim, name, None))]
     if missing:
@@ -139,6 +153,7 @@ def capture_program_cadence(sim: Any, *, macro_step: int) -> ProgramCadenceCheck
         held_steps=int(sim.program_cadence_window_steps()),
         accumulated_dt=float(sim.program_cadence_window_dt()),
         window_start_time=float(sim.program_cadence_window_start_time()),
+        last_dt=float(sim.program_last_dt()),
     )
     _validate_state(
         state,
@@ -169,6 +184,7 @@ def prepare_program_cadence(
         held_steps=_exact_integer_scalar(payload, _WINDOW_STEPS),
         accumulated_dt=_exact_float_scalar(payload, _WINDOW_DT),
         window_start_time=_exact_float_scalar(payload, _WINDOW_START_TIME),
+        last_dt=_exact_float_scalar(payload, _LAST_DT),
     )
     _validate_state(
         state,
@@ -201,7 +217,7 @@ def restore_program_cadence(
     macro_step: int,
     accepted_time: float,
 ) -> None:
-    """Install the authenticated window immediately before the matching clock restore."""
+    """Stage the authenticated window immediately before the matching clock restore."""
 
     if type(state) is not ProgramCadenceCheckpointState:
         raise TypeError("Program cadence restore requires its exact prepared state")
@@ -215,6 +231,8 @@ def restore_program_cadence(
         state.accumulated_dt,
         state.held_steps,
         state.window_start_time,
+        state.last_dt,
+        accepted_time,
         macro_step,
     )
 

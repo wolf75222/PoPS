@@ -862,7 +862,8 @@ class System {
   /// saxpy(U, dt, R)). The authored rate identity is mandatory at the native boundary.
   /// @{
   /// Install the mandatory macro-step body. System::step, advance, step_cfl and step_adaptive reject
-  /// before mutation while it is empty. Pass an empty std::function to clear it during assembly.
+  /// before mutation while it is absent. An empty std::function is rejected: there is no public
+  /// temporal route that silently clears the whole-system Program.
   /// POPS_EXPORT: a generated problem.so resolves these across the dlopen boundary from the globally
   /// promoted host; without default visibility the .so could not find them (_pops is built with
   /// hidden visibility). The generated package itself remains RTLD_LOCAL.
@@ -888,10 +889,14 @@ class System {
   POPS_EXPORT double program_cadence_window_dt() const;
   POPS_EXPORT int program_cadence_window_steps() const;
   POPS_EXPORT double program_cadence_window_start_time() const;
-  /// Restore the exact held-window image before set_clock during strict restart. The image must match
-  /// @p macro_step modulo the installed stride; malformed or missing mid-window state is rejected.
+  /// Exact accepted Program interval provenance. Zero means no Program invocation has been accepted.
+  POPS_EXPORT double program_last_dt() const;
+  /// Stage the exact held-window image before set_clock during strict restart. The image must match
+  /// the exact accepted (@p accepted_time, @p macro_step) cursor, @p accepted_last_dt and installed
+  /// stride; malformed, missing or mismatched state is rejected without mutating accepted state.
   POPS_EXPORT void restore_program_cadence_window(double accumulated_dt, int held_steps,
-                                                  double window_start_time, int macro_step);
+                                                  double window_start_time, double accepted_last_dt,
+                                                  double accepted_time, int macro_step);
   /// Number of blocks (species) installed.
   POPS_EXPORT int n_blocks() const;
   /// The conservative state MultiFab of block @p b (zero-copy, non-owning reference).
@@ -1251,7 +1256,7 @@ class System {
   int nx() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / step_cfl). Necessary
   /// for checkpoint/restart: the stride cadence (hold-then-catch-up) depends on macro_step % stride,
-  /// not only on the time t (accepted-state v3). POPS_EXPORT: a scheduled (every(N)/hold) program
+  /// not only on the time t (accepted-state restart). POPS_EXPORT: a scheduled (every(N)/hold) program
   /// `.so` calls it for the cadence decision, so it must be in the loader's flat ABI like the other
   /// seam accessors (grid_context / solve_fields_from_state); without it the held-schedule `.so`
   /// fails to dlopen ("symbol not found in flat namespace"), caught by the Spec 3 runtime e2e test.
@@ -1280,9 +1285,9 @@ class System {
   double mass(const std::string& name) const;
   std::vector<double> density(const std::string& name) const;  ///< ny*nx row-major (j slow, i fast)
   std::vector<double> potential();  ///< phi, ny*nx row-major (j slow, i fast)
-  /// RESTORES the potential phi (accepted-state v3, reserved for restart): without it the multigrid would restart
-  /// from a blank phi and the resume would not be bit-identical (warm start lost). Field ny*nx
-  /// row-major (same layout as potential()).
+  /// RESTORES the potential phi (accepted-state restart): without it the multigrid would restart from
+  /// a blank phi and the resume would not be bit-identical (warm start lost). Field ny*nx row-major
+  /// (same layout as potential()).
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);

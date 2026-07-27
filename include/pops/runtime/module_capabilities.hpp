@@ -322,7 +322,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format advertises "
                        "its exact supported modes",
                        kLayoutRouteTokensCsv, "runtime", "host|mpi", mpi, gpu),
-      capability_route("checkpoint:accepted_state_v4", "available",
+      capability_route("checkpoint:accepted_state_v5", "available",
                        "single-file strict accepted-state checkpoint; MPI_COMM_WORLD uses one "
                        "rank-0 publication with collective capture and consensus",
                        kLayoutRouteTokensCsv, "runtime", "host|mpi", mpi, gpu),
@@ -330,10 +330,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "parallel HDF5 checkpoint is not a native checkpoint route",
                        kLayoutRouteTokensCsv, "none", "mpi", mpi, gpu,
                        "restartable checkpoint encoded as parallel HDF5",
-                       "strict accepted-state v4 NPZ checkpoint",
+                       "strict accepted-state v5 NPZ checkpoint",
                        "use RuntimeInstance.checkpoint() or the typed Checkpoint consumer"),
       capability_route("checkpoint:amr_dynamic_regrid", status_from_bool(caps.supports_amr),
-                       "strict v4 accepted-state restart; non-Dense history replay keeps rank "
+                       "strict v5 accepted-state restart; non-Dense history replay keeps rank "
                        "count",
                        "amr", "runtime", "host", mpi, gpu),
   };

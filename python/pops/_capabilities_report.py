@@ -1001,7 +1001,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             source=source,
         ),
         _row(
-            "checkpoint:accepted_state_v4",
+            "checkpoint:accepted_state_v5",
             layout="uniform|amr",
             backend="runtime",
             platform="host|mpi",
@@ -1020,7 +1020,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="unavailable",
             limitation="parallel HDF5 checkpoint is not a native checkpoint route",
             requested="restartable checkpoint encoded as parallel HDF5",
-            available_route="strict accepted-state v4 NPZ checkpoint",
+            available_route="strict accepted-state v5 NPZ checkpoint",
             alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
             source=source,
         ),
@@ -1033,7 +1033,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             flag="supports_amr",
             mpi=mpi,
             limitation=(
-                "strict v4 accepted-state restart; exact rank-local AMR ownership and "
+                "strict v5 accepted-state restart; exact rank-local AMR ownership and "
                 "compiled-Program publications keep the native rank count"
             ),
             source=source,

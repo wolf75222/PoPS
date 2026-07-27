@@ -231,8 +231,9 @@ class _AmrSystemInstall(_AmrSystem):
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) INITIAL state: AMR has one typed InitialConditionPlan authority. Uniform
-        # ``initial_state`` block tables never enter this installer.
+        # (4) INITIAL state: register every bootstrap authority before hierarchy materialization.
+        # Cell arrays are staged on the native block descriptors here; this does not build the
+        # hierarchy, so the compiled Program still installs at the unique pre-build boundary below.
         initial_rows = tuple(initial_values)
         if any(spec.get("initial") is not None for spec in instances.values()):
             raise ValueError(
@@ -325,6 +326,13 @@ class _AmrSystemInstall(_AmrSystem):
         for field_plan in field_plans.values():
             self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
 
+        # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the remaining
+        # runtime params and attach the typed step-transaction contract. The native loader
+        # materializes the hierarchy itself, after every block/field/aux/bootstrap descriptor exists
+        # but before any cell payload is copied into that hierarchy.
+        # Extracted into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
+        self._finish_program_install(compiled, so_path, bind_schema, params)
+
         if bootstrap_plan is not None:
             from pops.runtime._amr_bootstrap_execution import execute_native_bootstrap
 
@@ -337,11 +345,6 @@ class _AmrSystemInstall(_AmrSystem):
                     for name, field_plan in field_plans.items()
                 },
             )
-
-        # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the remaining
-        # runtime params and attach the typed step-transaction contract.
-        # Extracted into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
-        self._finish_program_install(compiled, so_path, bind_schema, params)
 
         # The shared-interface scheduler authenticates the materialized per-level MultiFabs. Keep
         # that structural install inside the bind transaction: after lazy runtime construction, before

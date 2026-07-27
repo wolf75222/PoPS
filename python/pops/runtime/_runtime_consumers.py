@@ -576,7 +576,7 @@ class _PreparedCheckpoint(PreparedPublication):
         return PublicationReceipt(
             self.effect_identity,
             self.payload_identity,
-            "pops.restart-checkpoint.v4",
+            "pops.restart-checkpoint.v5",
             artifact.token,
             self._effect.target.parallel_mode,
         )

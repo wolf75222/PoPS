@@ -60,8 +60,8 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert bool(route.alternative) is (not supports_mpi)
     assert "ParallelContext" not in routes["parallel:custom_communicator"].alternative
     assert "PrecisionPolicy is representable" in routes["precision:single_or_mixed"].limitation
-    assert routes["checkpoint:accepted_state_v4"].status == "available"
-    assert routes["checkpoint:accepted_state_v4"].layout == "uniform|amr"
+    assert routes["checkpoint:accepted_state_v5"].status == "available"
+    assert routes["checkpoint:accepted_state_v5"].layout == "uniform|amr"
     assert routes["checkpoint:amr_dynamic_regrid"].status == "available"
     assert "checkpoint:system_v1" not in routes
     weno = routes["reconstruction:weno5"]

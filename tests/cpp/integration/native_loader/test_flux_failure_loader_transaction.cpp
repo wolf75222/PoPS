@@ -41,6 +41,7 @@ void install_ssprk2_subcycled_program(pops::System& system) {
     context.axpy(stage, pops::Real(dt), residual);
     context.lincomb(state, pops::Real(0.5), initial, pops::Real(0.5), stage);
   });
+  system.set_program_block_map({0});
 
   // Preserve the package contract under test explicitly: two SSPRK2 substeps in one facade step.
   system.set_program_cadence(/*substeps=*/2, /*stride=*/1);

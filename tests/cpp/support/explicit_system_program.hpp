@@ -41,6 +41,7 @@ inline void install_forward_euler_program(System& system) {
     for (std::size_t block = 0; block < states.size(); ++block)
       context.lincomb(*states[block], Real(0), *states[block], Real(1), *next_states[block]);
   });
+  system.set_program_block_map(block_map);
 }
 
 }  // namespace pops::test

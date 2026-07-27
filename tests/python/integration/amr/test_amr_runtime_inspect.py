@@ -231,7 +231,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
     assert rep.restartable is True and rep.violations == []
-    assert "bit-identical v4" in str(rep)
+    assert "bit-identical v5" in str(rep)
 
 
 def test_explain_checkpoint_supports_dynamic_regrid():

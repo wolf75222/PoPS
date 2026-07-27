@@ -402,7 +402,7 @@ def write_v3(owner, sim, path, lengths, lower, regrid_every, persistence=None):
 
 
 def prepare_v3(owner, sim, d, lengths, lower):
-    """Validate a v3 AMR payload completely without mutating the native engine.
+    """Validate an accepted-state v5 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -511,7 +511,7 @@ def prepare_v3(owner, sim, d, lengths, lower):
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # program-hash guard (m5): a v3 checkpoint of a compiled AMR Program refuses a DIFFERENT program.
+    # Program-hash guard: an accepted-state v5 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -771,7 +771,7 @@ def apply_v3(owner, sim, prepared):
     macro_step = int(d["macro_step"])
     if history_names:
         # History replay first primes the facade cursor. A mid-stride cursor is valid only with its
-        # exact authenticated held-window image installed.
+        # exact authenticated held-window image staged for that exact set_clock pair.
         restore_program_cadence(
             sim,
             prepared.cadence_state,
@@ -919,7 +919,7 @@ def _preflight_histories_v3(sim, d, current_ranks):
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore v3 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v5 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function

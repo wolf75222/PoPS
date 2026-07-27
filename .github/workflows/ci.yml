@@ -398,28 +398,28 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en six shards deterministes
+  # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en sept shards deterministes
   # dont l'union est verifiee par ci_select_tests.py avant exposition au workflow. Chaque shard
   # authentifie et reutilise le socle prechauffe, construit ses cibles explicites puis applique la
-  # regex CTest du meme shard : aucune compilation runtime commune n'est multipliee six fois.
+  # regex CTest du meme shard : aucune compilation runtime commune n'est multipliee sept fois.
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
     # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
-    # for tests. A cold common runtime can no longer consume this watchdog independently six times.
+    # for tests. A cold common runtime can no longer consume this watchdog independently seven times.
     timeout-minutes: 40
     needs: [changes, set-mode, gate-cpp-prewarm]
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6]
     # Tout evenement non-PR (push master / nightly / dispatch) lance le gate ; sur pull_request,
     # uniquement si un chemin C++ a bouge, ou si un label force explicitement Kokkos.
     if: needs.set-mode.outputs.cpp_required == 'true'
 
     env:
-      # Le cache final fusionne les quatre partitions runtime puis ajoute les objets de tests du
+      # Le cache final fusionne les trois partitions runtime puis ajoute les objets de tests du
       # shard. Deux Gio evitent d'evincer le socle authentifie avant son utilisation.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
@@ -430,7 +430,7 @@ jobs:
       CCACHE_SLOPPINESS: locale
       # Cle exacte unique par tentative : cache/save peut persister le travail partiel d'un shard
       # apres echec/annulation. Les restore prefixes restent limites au MEME shard (PR puis master) ;
-      # aucun fallback vers l'ancien cache monolithique de 1.3 Go, qui serait duplique six fois.
+      # aucun fallback vers l'ancien cache monolithique de 1.3 Go, qui serait duplique sept fois.
       # `runner.*` is unavailable in job-level env expressions. Keep the portable suffix here and
       # add the runner OS only at the cache steps, where that context is authenticated by Actions.
       CCACHE_CACHE_KEY: kokkos-serial-shard-${{ matrix.shard }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -468,7 +468,7 @@ jobs:
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             --shard-index "${{ matrix.shard }}" \
-            --shard-total 6 \
+            --shard-total 7 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
@@ -720,11 +720,11 @@ jobs:
       - name: Pyright
         run: pyright
 
-  # PREWARM PYTHON NATIF : quatre runners compilent des ensembles d'objets O3 disjoints du MEME
-  # graphe Ninja (System/core, AMR base, AMR compressible, AMR compiled). Ils ne publient aucun
+  # PREWARM PYTHON NATIF : trois runners compilent des ensembles d'objets O3 disjoints du MEME
+  # graphe Ninja (System/core, AMR base, AMR compressible). Ils ne publient aucun
   # binaire : seulement
   # les entrees ccache adressees par contenu et un contrat compilateur/flags/SHA/sources. Le build
-  # final ci-dessous reconfigure officiellement tout le module, authentifie les quatre contrats,
+  # final ci-dessous reconfigure officiellement tout le module, authentifie les trois contrats,
   # consomme les hits puis effectue lui-meme le link. Un cache module exact evite meme ce prewarm.
   gate-python-prewarm:
     name: ubuntu-latest / Kokkos Serial (Python prewarm ${{ matrix.lane }})
@@ -827,8 +827,8 @@ jobs:
           test "${#object_targets[@]}" -gt 0
           # Four simultaneous GCC frontends for the heavy AMR block seams exhaust a 16 GiB hosted
           # runner. Two semantic, disjoint lanes keep their independently measured critical paths
-          # below the watchdog; each uses two frontends and preserves O3. The lighter System and
-          # compiled-AMR lanes retain all four runner cores.
+          # below the watchdog; each uses two frontends and preserves O3. The lighter System lane
+          # retains all four runner cores.
           lane_parallelism=4
           case "${{ matrix.lane }}" in
             amr-base|amr-compressible) lane_parallelism=2 ;;
@@ -1427,7 +1427,7 @@ jobs:
         run: ccache -s
 
   # PREWARM MPI NATIF. Le prewarm Serial ci-dessus ne peut pas produire de hits ccache fiables pour
-  # une compilation MPI/HDF5 : les definitions, include paths et commandes C++ different. Ces quatre
+  # une compilation MPI/HDF5 : les definitions, include paths et commandes C++ different. Ces trois
   # lanes configurent donc le graphe ci-mpi exact et compilent uniquement sa partition disjointe
   # d'objets runtime. Comme pour le prewarm Serial, les artefacts ne contiennent aucun binaire lie :
   # seulement les entrees ccache et un contrat compiler/flags/revision/sources que le job final verifie.
@@ -1932,7 +1932,7 @@ jobs:
           key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
   # PREWARM OPENMP NATIF. Une invalidation froide des en-tetes de production ne doit pas forcer
-  # chacun des six shards C++ ni le module Python a recompiler leur socle runtime avant leurs
+  # chacun des sept shards C++ ni le module Python a recompiler leur socle runtime avant leurs
   # executables/bindings. Les graphes C++ et Python ont volontairement des defines/visibilites
   # differents : chaque graphe possede donc ses trois lanes semantiques exactes. Elles publient
   # uniquement ccache et le contrat compilateur/flags/revision/sources ; aucun binaire lie n'est
@@ -2097,7 +2097,7 @@ jobs:
           retention-days: 1
 
   kokkos-openmp:
-    # The OpenMP C++ proof is the same exact six-way target partition as the Serial gate:
+    # The OpenMP C++ proof is the same exact seven-way target partition as the Serial gate:
     # every non-MPI target belongs to exactly one shard and every built target must expose
     # an authenticated CTest label before its cases can run.  The independent Python/native-ABI
     # proof stays in its own lane because it builds one module rather than the C++ test graph.
@@ -2115,32 +2115,37 @@ jobs:
           - lane: cpp-0
             kind: cpp
             shard: 0
-            shard_total: 6
+            shard_total: 7
             ccache_maxsize: 2G
           - lane: cpp-1
             kind: cpp
             shard: 1
-            shard_total: 6
+            shard_total: 7
             ccache_maxsize: 2G
           - lane: cpp-2
             kind: cpp
             shard: 2
-            shard_total: 6
+            shard_total: 7
             ccache_maxsize: 2G
           - lane: cpp-3
             kind: cpp
             shard: 3
-            shard_total: 6
+            shard_total: 7
             ccache_maxsize: 2G
           - lane: cpp-4
             kind: cpp
             shard: 4
-            shard_total: 6
+            shard_total: 7
             ccache_maxsize: 2G
           - lane: cpp-5
             kind: cpp
             shard: 5
-            shard_total: 6
+            shard_total: 7
+            ccache_maxsize: 2G
+          - lane: cpp-6
+            kind: cpp
+            shard: 6
+            shard_total: 7
             ccache_maxsize: 2G
           - lane: python
             kind: python
@@ -2155,7 +2160,7 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       # Chaque lane C++ fusionne le socle runtime OpenMP prechauffe avant d'ajouter les objets de
-      # son sixieme du graphe. Deux Gio evitent d'evincer immediatement ce socle authentifie.
+      # son septieme du graphe. Deux Gio evitent d'evincer immediatement ce socle authentifie.
       # La lane Python conserve le meme budget pour son module de production unique.
       CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}
       CCACHE_BASEDIR: ${{ github.workspace }}

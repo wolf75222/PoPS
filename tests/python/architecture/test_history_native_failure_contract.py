@@ -10,6 +10,7 @@ HISTORY_NATIVE_TESTS = (
     "tests/python/integration/io/test_amr_history_checkpoint.py",
     "tests/python/integration/io/test_amr_history_regrid_replay.py",
     "tests/python/integration/io/test_time_history_checkpoint.py",
+    "tests/python/integration/io/test_uniform_selective_history_checkpoint.py",
     "tests/python/unit/time/test_time_history.py",
 )
 NATIVE_STAGE_CALLS = {"compile", "compile_problem", "install_program"}

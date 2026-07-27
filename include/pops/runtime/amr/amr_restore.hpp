@@ -5,7 +5,7 @@
 /// (set_regrid, set_clustering). Included at the END of amr_runtime.hpp, so the full AmrRuntime class
 /// is visible; NOT a standalone header (it defines AmrRuntime members).
 ///
-/// rebuild_hierarchy imposes a mid-run hierarchy from a v4 checkpoint by REUSING the regrid R6/R7
+/// rebuild_hierarchy imposes a mid-run hierarchy from a v5 checkpoint by REUSING the regrid R6/R7
 /// machinery (amr_runtime.hpp regrid()) MINUS tagging / clustering / prolong: the checkpoint supplies
 /// the layout (BoxArrays + DistributionMappings) AND the data (the per-level state restore overwrites
 /// every valid cell), so the divergence argument of the frozen-hierarchy limitation evaporates -- a
@@ -81,7 +81,7 @@ inline std::vector<int> AmrRuntime::level_owner_ranks(int k) const {
 
 // FULL shared aux of level k: ALL aux_ncomp_ components of aux_[k], LOCAL valid cells at
 // level-domain-relative component-major flat indices (zeros outside the patches at a fine level) -- the
-// exact layout of block_level_state, so the v4 checkpoint reader/writer share one convention. phi
+// exact layout of block_level_state, so the v5 checkpoint reader/writer share one convention. phi
 // (comp 0) is included; the level-0 multigrid WARM START stays a separate phi_<k> payload
 // (level_potential), which reads mg_.phi(), not aux_[0].
 inline std::vector<double> AmrRuntime::level_aux_flat(int k) const {
@@ -144,7 +144,7 @@ inline void AmrRuntime::set_level_aux_flat(int k, const std::vector<double>& v) 
   }
 }
 
-// --- ADC-542 hierarchy rebuild (v4 checkpoint restore) --------------------------------------------
+// --- ADC-542 hierarchy rebuild (v5 checkpoint restore) --------------------------------------------
 
 inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox>>& level_boxes,
                                           const std::vector<std::vector<int>>& level_owner_ranks) {

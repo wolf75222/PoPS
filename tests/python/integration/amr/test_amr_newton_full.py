@@ -28,6 +28,8 @@ def iso_model():
     return engine.Model(
         state=engine.FluidState("isothermal", cs2=0.5),
         transport=engine.IsothermalFlux(),
+        source=engine.NoSource(),
+        elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
     )
 
 

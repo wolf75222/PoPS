@@ -794,6 +794,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     )
     assert "timeout-minutes: 40" in cpp_shards_block
     assert "timeout-minutes: 30" in cpp_shards_block
+    assert "shard: [0, 1, 2, 3, 4, 5, 6]" in cpp_shards_block
+    assert "--shard-total 7" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
     assert "test \"${#cache_archives[@]}\" -eq 3" in cpp_shards_block
@@ -947,13 +949,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 70" in openmp_block
     assert "needs: [set-mode, gate-openmp-prewarm]" in openmp_block
     assert "fail-fast: false" in openmp_block
-    assert openmp_block.count("- lane: cpp-") == 6
-    for shard in range(6):
+    assert openmp_block.count("- lane: cpp-") == 7
+    for shard in range(7):
         assert (
             f"- lane: cpp-{shard}\n"
             "            kind: cpp\n"
             f"            shard: {shard}\n"
-            "            shard_total: 6\n"
+            "            shard_total: 7\n"
             "            ccache_maxsize: 2G"
         ) in openmp_block
     assert (

@@ -17,7 +17,6 @@ namespace pops::test {
 inline void install_forward_euler_program(AmrSystem& system) {
   std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
   std::iota(block_map.begin(), block_map.end(), 0);
-  system.set_program_block_map(block_map);
   // The facade selects the common AmrRuntime route during lazy construction only when a Program
   // authority already exists. Install a temporary body before materialization; the typed
   // AmrProgramContext below replaces it immediately after the engine becomes available.
@@ -48,6 +47,9 @@ inline void install_forward_euler_program(AmrSystem& system) {
                       {{1, 1, 1}});
     });
   });
+  // A direct Program replacement revokes every artifact-derived binding authority, including the
+  // block map. Publish this fixture's explicit identity map only after the final body is installed.
+  system.set_program_block_map(block_map);
 }
 
 }  // namespace pops::test

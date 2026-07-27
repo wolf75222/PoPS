@@ -426,6 +426,7 @@ def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_rest
             "program_cadence_window_steps": np.array(0, dtype=np.int64),
             "program_cadence_window_dt": np.array(0.0, dtype=np.float64),
             "program_cadence_window_start_time": np.array(0.0, dtype=np.float64),
+            "program_last_dt": np.array(0.0, dtype=np.float64),
         }
     )
     preflight_uniform_restart(payload)
@@ -436,12 +437,15 @@ def test_uniform_preflight_rejects_incomplete_dynamic_indexes_before_native_rest
 
 
 class _CadenceEngine:
-    def __init__(self, *, substeps=2, stride=3, held_steps=2, dt=0.3, start=4.0):
+    def __init__(
+        self, *, substeps=2, stride=3, held_steps=2, dt=0.3, start=4.0, last_dt=0.07
+    ):
         self.substeps = substeps
         self.stride = stride
         self.held_steps = held_steps
         self.dt = dt
         self.start = start
+        self.last_dt = last_dt
         self.restored = None
 
     def program_substeps(self):
@@ -462,13 +466,24 @@ class _CadenceEngine:
     def program_cadence_window_start_time(self):
         return self.start
 
+    def program_last_dt(self):
+        return self.last_dt
+
     def restore_program_cadence_window(
-        self, accumulated_dt, held_steps, window_start_time, macro_step
+        self,
+        accumulated_dt,
+        held_steps,
+        window_start_time,
+        accepted_last_dt,
+        accepted_time,
+        macro_step,
     ):
         self.restored = (
             accumulated_dt,
             held_steps,
             window_start_time,
+            accepted_last_dt,
+            accepted_time,
             macro_step,
         )
 
@@ -482,9 +497,91 @@ def test_program_cadence_checkpoint_preserves_exact_variable_dt_window():
     assert prepared == captured
     assert prepared.to_data()["accumulated_dt"] == (0.3).hex()
     assert prepared.to_data()["window_start_time"] == (4.0).hex()
+    assert prepared.to_data()["last_dt"] == (0.07).hex()
 
     restore_program_cadence(engine, prepared, macro_step=5, accepted_time=4.3)
-    assert engine.restored == (0.3, 2, 4.0, 5)
+    assert engine.restored == (0.3, 2, 4.0, 0.07, 4.3, 5)
+
+
+def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypatch):
+    from pops.runtime._program_cadence_checkpoint import ProgramCadenceCheckpointState
+    from pops.runtime._system_io import _PreparedUniformRestart, _SystemIO
+    import pops.runtime._system_io_history as history_io
+
+    events = []
+
+    class Native:
+        def __init__(self):
+            self.clock = (0.0, 0)
+            self.staged = None
+
+        def set_state(self, block, values):
+            events.append(("state", block))
+
+        def set_potential(self, values):
+            events.append(("potential", len(values)))
+
+        def set_clock(self, time, macro_step):
+            assert self.staged == (0.125, time, macro_step)
+            self.clock = (time, macro_step)
+            events.append(("clock", time, macro_step))
+
+        def restore_program_cadence_window(
+            self,
+            accumulated_dt,
+            held_steps,
+            window_start_time,
+            accepted_last_dt,
+            accepted_time,
+            macro_step,
+        ):
+            assert (accumulated_dt, held_steps, window_start_time) == (0.0, 0, 0.0)
+            self.staged = (accepted_last_dt, accepted_time, macro_step)
+            events.append(("cadence", accepted_time, macro_step))
+
+    native = Native()
+
+    def assert_checkpoint_cursor_before_replay(sim, payload):
+        assert sim is native
+        assert sim.clock == (1.5, 3)
+        events.append(("history", sim.clock))
+        return "replay-report"
+
+    monkeypatch.setattr(history_io, "restore_histories", assert_checkpoint_cursor_before_replay)
+    payload = {
+        "blocks": np.array(["blk"]),
+        "state_blk": np.array([1.0], dtype=np.float64),
+        "phi": np.array([0.0], dtype=np.float64),
+        "field_provider_slots": np.array([], dtype="U1"),
+        "history_names": np.array(["blk.state"]),
+        "cache_names": np.array([], dtype="U1"),
+        "cache_nodes": np.array([], dtype=np.int64),
+        "t": np.array(1.5, dtype=np.float64),
+        "macro_step": np.array(3, dtype=np.int64),
+    }
+    prepared = _PreparedUniformRestart(
+        payload=payload,
+        restart_identity="restart-id",
+        temporal_state="temporal-state",
+        cadence_state=ProgramCadenceCheckpointState(
+            substeps=1,
+            stride=1,
+            held_steps=0,
+            accumulated_dt=0.0,
+            window_start_time=0.0,
+            last_dt=0.125,
+        ),
+    )
+
+    class Owner:
+        _s = native
+        _temporal_restart_state = "old-temporal-state"
+        _step_controller = object()
+
+    owner = Owner()
+    assert _SystemIO._apply_checkpoint_restart(owner, prepared) == "restart-id"
+    assert owner._last_restart_report == "replay-report"
+    assert events.index(("clock", 1.5, 3)) < events.index(("history", (1.5, 3)))
 
 
 @pytest.mark.parametrize(
@@ -515,6 +612,18 @@ def test_program_cadence_checkpoint_preserves_exact_variable_dt_window():
         ),
         (
             lambda payload: payload.__setitem__(
+                "program_last_dt", np.array(-0.01, dtype=np.float64)
+            ),
+            "last dt",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "program_last_dt", np.array(0.07, dtype=np.float32)
+            ),
+            "binary64",
+        ),
+        (
+            lambda payload: payload.__setitem__(
                 "program_cadence_stride", np.array(4, dtype=np.int64)
             ),
             "macro-step phase",
@@ -530,6 +639,7 @@ def test_program_cadence_checkpoint_rejects_incomplete_or_inconsistent_state(mut
             "program_cadence_window_steps": np.array(2, dtype=np.int64),
             "program_cadence_window_dt": np.array(0.3, dtype=np.float64),
             "program_cadence_window_start_time": np.array(4.0, dtype=np.float64),
+            "program_last_dt": np.array(0.07, dtype=np.float64),
         }
     )
     mutation(payload)
@@ -546,6 +656,7 @@ def test_program_cadence_checkpoint_rejects_installed_configuration_mismatch():
             "program_cadence_window_steps": np.array(2, dtype=np.int64),
             "program_cadence_window_dt": np.array(0.3, dtype=np.float64),
             "program_cadence_window_start_time": np.array(4.0, dtype=np.float64),
+            "program_last_dt": np.array(0.07, dtype=np.float64),
         }
     )
     with pytest.raises(ValueError, match="differs from the installed cadence"):

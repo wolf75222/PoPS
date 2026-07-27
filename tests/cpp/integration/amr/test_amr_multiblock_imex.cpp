@@ -249,6 +249,7 @@ void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool 
       context->commit_many({{&stiff_live, &stiff_candidate}, {&neutral_live, &neutral_candidate}});
     });
   });
+  system.set_program_block_map({0, 1});
 }
 
 // Source-only Program used by the nonlinear AMR oracle below. It deliberately commits both private
@@ -276,6 +277,7 @@ void install_nonlinear_source_program(AmrSystem& system, NonlinearDensityDecay d
       context->commit_many({{&decay_live, &decay_candidate}, {&neutral_live, &neutral_candidate}});
     });
   });
+  system.set_program_block_map({0, 1});
 }
 
 // Construit une facade AmrSystem a deux blocs sur une hierarchie deux niveaux. Les builders ne

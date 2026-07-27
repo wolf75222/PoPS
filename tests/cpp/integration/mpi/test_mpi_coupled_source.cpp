@@ -61,13 +61,12 @@ static void install_ionization_program(System& system) {
     context.lincomb(next_electrons, Real(1), electrons, Real(0), electrons);
     context.lincomb(next_ions, Real(1), ions, Real(0), ions);
     context.lincomb(next_neutrals, Real(1), neutrals, Real(0), neutrals);
-    context.apply_coupling_operators(
-        Real(step),
-        {{0, &next_electrons}, {1, &next_ions}, {2, &next_neutrals}});
-    context.commit_many({{&electrons, &next_electrons},
-                         {&ions, &next_ions},
-                         {&neutrals, &next_neutrals}});
+    context.apply_coupling_operators(Real(step),
+                                     {{0, &next_electrons}, {1, &next_ions}, {2, &next_neutrals}});
+    context.commit_many(
+        {{&electrons, &next_electrons}, {&ions, &next_ions}, {&neutrals, &next_neutrals}});
   });
+  system.set_program_block_map({0, 1, 2});
 }
 
 static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
@@ -139,8 +138,8 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
   chk(sys.coupled_operators().size() == 1, "coupled_source_metadata_registered");
   bool live_state_rejected = false;
   try {
-    sys.apply_coupling_operators(
-        Real(dt), {&sys.block_state(0), &sys.block_state(1), &sys.block_state(2)});
+    sys.apply_coupling_operators(Real(dt),
+                                 {&sys.block_state(0), &sys.block_state(1), &sys.block_state(2)});
   } catch (const std::invalid_argument&) {
     live_state_rejected = true;
   }

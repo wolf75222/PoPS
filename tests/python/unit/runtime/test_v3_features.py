@@ -9,8 +9,8 @@
   (C) set_conservative_state MULTI-BLOCS : l'etat complet (avec quantite de mouvement) seede le
       grossier (la masse et la dynamique different du seed densite au repos) ;
   (D, compilateur) enable_hllc : riemann='hllc' accepte sur un modele DSL 3-var NON Euler via la
-      capability emise ; rejete sans elle ; source_jacobian : parite de trajectoire avec les FD ;
-      garde CODEGEN : source_jacobian sans source leve a compile() (pas seulement check()).
+      capability emise ; rejete sans elle ; un package source_jacobian ne peut pas recreer l'ancien
+      IMEX sans Program ; garde CODEGEN : source_jacobian sans source leve a compile().
 
 Invariants par assert ; imprime "OK test_v3_features" en cas de succes.
 """
@@ -30,6 +30,10 @@ from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import (
+    install_forward_euler_program,
+    install_ssprk2_program,
+)
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
@@ -89,6 +93,7 @@ na = src.block("a").role("density")
 k = src.param("k", 1e-3)
 src.add_pair("a", "b", role="density", expr=k * na)
 sim.add_coupling(src.compile())
+install_ssprk2_program(sim, coupled_sources=True)
 dt = sim.step_cfl(0.4)
 chk(abs(dt - 0.4 / 500.0) < 1e-15, f"dt = cfl/mu = 8e-4 ({dt:.3e})")
 chk(
@@ -169,6 +174,7 @@ rho0 = rho16
 u0 = 0.3 * np.ones((16, 16))
 amr3.set_conservative_state("e1", np.stack([rho0, rho0 * u0, 0.0 * rho0]))
 amr3.set_density("e2", rho0)
+install_forward_euler_program(amr3)
 d_before = np.asarray(amr3.density("e1")).reshape(16, 16).copy()
 amr3.step(2e-3)
 d_after = np.asarray(amr3.density("e1")).reshape(16, 16)
@@ -235,6 +241,7 @@ try:
     )
     z = np.zeros((24, 24))
     sh.set_primitive_state("f", rho=gaussian(24), u=z, v=z)
+    install_forward_euler_program(sh)
     for _ in range(5):
         sh.step_cfl(0.3)
     chk(
@@ -251,7 +258,7 @@ try:
     except (ValueError, RuntimeError) as e:
         chk("hllc" in str(e), f"rejet sans capability : {str(e)[:70]}")
 
-    print("== (D2) source_jacobian : meme trajectoire que les differences finies ==")
+    print("== (D2) source_jacobian : aucun ancien IMEX sans Program ==")
     cm_j = iso3_dsl("iso3_jac", jac=True).compile(
         os.path.join(tmp, "iso3_jac.so"), INCLUDE, backend="production"
     )
@@ -259,22 +266,24 @@ try:
     cm_f._m._src_jac = None  # meme modele, SANS jacobien emis -> FD historiques
     cm_f = cm_f.compile(os.path.join(tmp, "iso3_fd.so"), INCLUDE, backend="production")
 
-    def run_imex(cm):
+    def expect_imex_program_required(cm, label):
         s = System(n=16, L=1.0, periodicity=(True, True))
         s.set_poisson()
         s.add_equation("f", model=cm, spatial=engine.Spatial(limiter=Minmod()), time=engine.IMEX())
         z16 = np.zeros((16, 16))
         s.set_primitive_state("f", rho=gaussian(16), u=0.2 + z16, v=z16)
-        for _ in range(4):
+        try:
             s.step(1e-3)
-        return np.asarray(s.get_state("f"))
+        except RuntimeError as error:
+            chk(
+                "installed whole-system Program" in str(error),
+                f"{label}: pas de solveur IMEX cache",
+            )
+            return
+        chk(False, f"{label}: un ancien solveur IMEX a avance sans Program")
 
-    uj, uf = run_imex(cm_j), run_imex(cm_f)
-    chk(
-        np.allclose(uj, uf, rtol=1e-9, atol=1e-11),
-        f"jacobien analytique ~ FD (ecart max {float(np.max(np.abs(uj - uf))):.2e})",
-    )
-    chk(np.all(np.isfinite(uj)), "source raide (k*dt = 0.05*50) : etat fini")
+    expect_imex_program_required(cm_j, "jacobien analytique")
+    expect_imex_program_required(cm_f, "jacobien differences finies")
 
     print("== (D3) garde CODEGEN : source_jacobian sans source -> erreur (pas de purge muette) ==")
     mg = iso3_dsl("iso3_guard", jac=True)

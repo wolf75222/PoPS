@@ -15,6 +15,7 @@ point-qualified residual and its spatial tests use explicitly authored SSPRK2/SS
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -35,6 +36,11 @@ MANIFEST = ROOT / "tests/test_manifest.toml"
 
 EXPLICIT_TEST_BRIDGE = "tests.python.support.explicit_program"
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
+MIXED_SEMANTIC_BLOCKERS = {
+    "tests/python/unit/runtime/test_v3_features.py": (
+        "expect_imex_program_required",
+    ),
+}
 
 # These remain executable semantic tests in the normal manifest.  They are blockers, not candidates
 # for an explicit-Euler compatibility rewrite.
@@ -71,6 +77,16 @@ def _function_body(source: str, signature: str) -> str:
             if depth == 0:
                 return source[start : position + 1]
     raise AssertionError("unterminated C++ definition for %s" % signature)
+
+
+def _python_function_source(source: str, name: str) -> str:
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            segment = ast.get_source_segment(source, node)
+            assert segment is not None
+            return segment
+    raise AssertionError("missing Python function %r" % name)
 
 
 def test_system_temporal_facades_dispatch_only_through_an_installed_program():
@@ -238,7 +254,17 @@ def test_unlowerable_semantic_tests_remain_real_manifest_tests_without_fe_bridge
     for relative, markers in SEMANTIC_BLOCKERS.items():
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert 'path = "%s"' % Path(relative).parent.as_posix() in manifest
-        assert EXPLICIT_TEST_BRIDGE not in source
+        blocker_functions = MIXED_SEMANTIC_BLOCKERS.get(relative)
+        if blocker_functions is None:
+            assert EXPLICIT_TEST_BRIDGE not in source
+        else:
+            # A mixed integration file may use authored FE/SSPRK Programs for genuinely explicit
+            # sections. Its still-unlowerable semantic helpers must remain fail-closed.
+            for function_name in blocker_functions:
+                blocker_source = _python_function_source(source, function_name)
+                assert "install_forward_euler_program" not in blocker_source
+                assert "install_ssprk2_program" not in blocker_source
+                assert "installed whole-system Program" in blocker_source
         for marker in markers:
             assert marker in source, "%s lost semantic marker %r" % (relative, marker)
 

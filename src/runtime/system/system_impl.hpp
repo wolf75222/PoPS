@@ -608,6 +608,11 @@ struct System::Impl {
     int cadence_window_steps;
     double cadence_window_start_time;
     bool cadence_clock_restore_pending;
+    double cadence_clock_restore_dt;
+    int cadence_clock_restore_steps;
+    double cadence_clock_restore_start_time;
+    double cadence_clock_restore_last_dt;
+    double cadence_clock_restore_accepted_time;
     int cadence_clock_restore_macro_step;
     std::map<std::string, Real> program_diagnostics;
     pops::runtime::program::CacheManager cache;
@@ -626,6 +631,11 @@ struct System::Impl {
           cadence_window_steps(impl.program_.cadence_window_steps_),
           cadence_window_start_time(impl.program_.cadence_window_start_time_),
           cadence_clock_restore_pending(impl.program_.cadence_clock_restore_pending_),
+          cadence_clock_restore_dt(impl.program_.cadence_clock_restore_dt_),
+          cadence_clock_restore_steps(impl.program_.cadence_clock_restore_steps_),
+          cadence_clock_restore_start_time(impl.program_.cadence_clock_restore_start_time_),
+          cadence_clock_restore_last_dt(impl.program_.cadence_clock_restore_last_dt_),
+          cadence_clock_restore_accepted_time(impl.program_.cadence_clock_restore_accepted_time_),
           cadence_clock_restore_macro_step(impl.program_.cadence_clock_restore_macro_step_),
           program_diagnostics(impl.program_.diagnostics_),
           cache(impl.program_.cache_),
@@ -652,6 +662,11 @@ struct System::Impl {
       impl.program_.cadence_window_steps_ = cadence_window_steps;
       impl.program_.cadence_window_start_time_ = cadence_window_start_time;
       impl.program_.cadence_clock_restore_pending_ = cadence_clock_restore_pending;
+      impl.program_.cadence_clock_restore_dt_ = cadence_clock_restore_dt;
+      impl.program_.cadence_clock_restore_steps_ = cadence_clock_restore_steps;
+      impl.program_.cadence_clock_restore_start_time_ = cadence_clock_restore_start_time;
+      impl.program_.cadence_clock_restore_last_dt_ = cadence_clock_restore_last_dt;
+      impl.program_.cadence_clock_restore_accepted_time_ = cadence_clock_restore_accepted_time;
       impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       impl.program_.diagnostics_ = program_diagnostics;
       impl.program_.cache_ = cache;

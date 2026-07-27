@@ -167,7 +167,7 @@ class ProgramContext {
   explicit ProgramContext(void* sys) : sys_(static_cast<System*>(sys)) {}
 
   /// Register the macro-step body. @p step advances ONE macro-step over dt (it owns solve_fields,
-  /// the RHS, the linear combine and the commit). Empty std::function clears it.
+  /// the RHS, the linear combine and the commit). An empty std::function is rejected.
   void install(std::function<void(double)> step) const {
     sys_->install_program_step(std::move(step));
   }
@@ -1111,11 +1111,12 @@ class ProgramContext {
   }
 
   /// Register (idempotent) the history @p name with maximum lag @p lag, allocating the ring buffer
-  /// WITHOUT reading it. The codegen emits this ONCE at the top of the step body for each declared
-  /// history, so the ring depth is locked before the first store (the cold-start fill then broadcasts
-  /// the first stored value into every -- already allocated -- slot). @p ncomp is the slot component
-  /// count: the default -1 resolves to block 0's ncomp (the multistep ring, byte-identical), and an
-  /// explicit @p ncomp >= 1 sizes a narrower ring (ADC-427: a 1-component cross-step potential carry).
+  /// WITHOUT reading it. The codegen emits this ONCE in the artifact-install prelude for each
+  /// declared history, so a fresh restart sees the complete ring schema before the first step and
+  /// the depth is locked before the first store (the cold-start fill then broadcasts the first
+  /// stored value into every -- already allocated -- slot). @p ncomp is the slot component count:
+  /// the default -1 resolves to block 0's ncomp (the multistep ring, byte-identical), and an explicit
+  /// @p ncomp >= 1 sizes a narrower ring (ADC-427: a 1-component cross-step potential carry).
   /// Forwards to System::register_history. A read-only counterpart of @ref history.
   void register_history(const std::string& name, int lag, int ncomp = -1) const {
     sys_->register_history(name, lag, ncomp);
@@ -1269,11 +1270,10 @@ class ProgramContext {
   /// Apply every registered coupled-source operator to a complete simultaneous candidate-state
   /// group.  Candidates remain private Program values until the caller projects and commit_many()
   /// publishes them, so a failed coupling cannot expose a partially committed multi-block state.
-  void apply_coupling_operators(
-      Real dt, std::initializer_list<CouplingStateOverride> candidates) const {
+  void apply_coupling_operators(Real dt,
+                                std::initializer_list<CouplingStateOverride> candidates) const {
     if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
-      throw std::invalid_argument(
-          "Program coupling application requires a finite non-negative dt");
+      throw std::invalid_argument("Program coupling application requires a finite non-negative dt");
     if (coupling_workspace_.in_use)
       throw std::logic_error("Program coupling workspace is already in use");
     prepare_coupling_workspace_(candidates);
@@ -1465,8 +1465,7 @@ class ProgramContext {
     std::map<std::int64_t, FieldSolveWorkspace> generated;
   };
 
-  void prepare_coupling_workspace_(
-      std::initializer_list<CouplingStateOverride> candidates) const {
+  void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
     const std::vector<int>& block_map = sys_->program_block_map();
     const std::size_t system_blocks = static_cast<std::size_t>(sys_->n_blocks());
     if (block_map.empty())
@@ -1476,14 +1475,14 @@ class ProgramContext {
       throw std::invalid_argument(
           "Program coupling requires a complete candidate pack for every System block");
 
-    const bool structure_changed =
-        coupling_workspace_.program_to_system != block_map ||
-        coupling_workspace_.system_states.size() != system_blocks;
+    const bool structure_changed = coupling_workspace_.program_to_system != block_map ||
+                                   coupling_workspace_.system_states.size() != system_blocks;
     if (structure_changed) {
       coupling_workspace_.system_states.assign(system_blocks, nullptr);
       for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
         const int system_block = sys_block(static_cast<int>(program_block));
-        MultiFab*& mapped = coupling_workspace_.system_states[static_cast<std::size_t>(system_block)];
+        MultiFab*& mapped =
+            coupling_workspace_.system_states[static_cast<std::size_t>(system_block)];
         if (mapped != nullptr)
           throw std::invalid_argument(
               "Program coupling block map does not cover each System block exactly once");
@@ -1493,8 +1492,8 @@ class ProgramContext {
       coupling_workspace_.program_to_system.assign(block_map.begin(), block_map.end());
     }
 
-    std::fill(coupling_workspace_.system_states.begin(),
-              coupling_workspace_.system_states.end(), nullptr);
+    std::fill(coupling_workspace_.system_states.begin(), coupling_workspace_.system_states.end(),
+              nullptr);
     std::size_t ordinal = 0;
     for (const CouplingStateOverride& candidate : candidates) {
       if (candidate.program_block != static_cast<int>(ordinal) || candidate.state == nullptr)

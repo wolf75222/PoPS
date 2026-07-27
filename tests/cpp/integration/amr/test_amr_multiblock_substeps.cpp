@@ -138,6 +138,7 @@ static void install_multirate_forward_euler_program(AmrSystem& system, std::vect
           }
         });
       });
+  system.set_program_block_map(block_map);
 }
 
 // Construit une facade AmrSystem a DEUX blocs ExB sur une hierarchie partagee et installe le Program
@@ -297,6 +298,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
           }
         });
       });
+      system->set_program_block_map({0, 1});
       return system;
     };
 

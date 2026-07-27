@@ -152,6 +152,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
       ctx.axpy(U, Real(h), R);  // U <- U + h R
     }
   });
+  sim.set_program_block_map({0});
   sim.step(dt);
   const std::vector<double> Up = sim.get_state("gas");
 
@@ -442,6 +443,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
       ctx.lincomb(U, Real(0.5), U, Real(0.5), u1);  // U <- 1/2 U + 1/2 (U1 + dt R(U1))
     }
   });
+  sim.set_program_block_map({0});
   sim.step(dt);
   const std::vector<double> Up = sim.get_state("gas");
 

@@ -24,9 +24,11 @@ class _AmrSystemProgram(_AmrSystem):
                                 params: Any) -> Any:
         """Steps 5/5b/6 of ``_install_compiled`` for a COMPILED time Program (ADC-508).
 
-        Runs AFTER the field solvers, blocks, aux inputs and initial state are wired:
+        Runs after field solvers, blocks, aux inputs, bootstrap descriptors and staged initial arrays
+        are wired, but before any of those descriptors materialize the hierarchy:
 
-          - (5) install the compiled time Program on the AMR hierarchy (binds blocks by name +
+          - (5) install the compiled time Program on the AMR hierarchy (binds blocks by name,
+            materializes the hierarchy, then
             runs the section-24 .so requirement validation: block instance / solver). The .so must
             export pops_install_program_amr (target='amr_system'); a target='system' .so is rejected
             at the C++ loader with an actionable message. NATIVE mode (so_path is None) installs only

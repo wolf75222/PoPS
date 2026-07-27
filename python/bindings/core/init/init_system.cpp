@@ -331,9 +331,10 @@ void bind_system_program(py::class_<System>& cls) {
       .def("program_cadence_window_dt", &System::program_cadence_window_dt)
       .def("program_cadence_window_steps", &System::program_cadence_window_steps)
       .def("program_cadence_window_start_time", &System::program_cadence_window_start_time)
+      .def("program_last_dt", &System::program_last_dt)
       .def("restore_program_cadence_window", &System::restore_program_cadence_window,
            py::arg("accumulated_dt"), py::arg("held_steps"), py::arg("window_start_time"),
-           py::arg("macro_step"))
+           py::arg("accepted_last_dt"), py::arg("accepted_time"), py::arg("macro_step"))
       // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)

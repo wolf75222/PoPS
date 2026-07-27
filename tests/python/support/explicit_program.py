@@ -432,7 +432,7 @@ extern "C" void pops_install_program_amr(void* system) {
       pops::runtime::program::AmrProgramContext& ctx = *context;
 %s
     });
-  });
+  }, context);
 }
 """ % body
     return common + install

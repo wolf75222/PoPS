@@ -105,6 +105,10 @@ def _forward_euler(states_and_rates):
     endpoints = []
     for name, state, rate in states_and_rates:
         temporal = program.state(state)
+        if name == "gas":
+            # Keep one real native history ring cold through explicit bootstrap. The checkpoint
+            # before the first accepted step proves its materialization and accepted-state axes.
+            program.keep_history(temporal, depth=1)
         stage = StagePoint(name + "_stage", {"main": TimePoint(program.clock, 0)})
         rhs = program.value(name + "_rhs", rate(temporal.n), at=stage)
         next_value = program.value(
@@ -185,7 +189,8 @@ def _full_conservative_state() -> np.ndarray:
     return np.ascontiguousarray(np.stack((rho, 0.3 * rho, -0.15 * rho)))
 
 
-def test_public_amr_bind_preserves_every_conservative_component(native_cxx, isolated_native_cache, kokkos_root):
+def test_public_amr_bind_preserves_every_conservative_component(
+        native_cxx, isolated_native_cache, kokkos_root, tmp_path):
     del isolated_native_cache, kokkos_root
     initial = _full_conservative_state()
     zero_momentum = initial.copy()
@@ -203,6 +208,32 @@ def test_public_amr_bind_preserves_every_conservative_component(native_cxx, isol
     # Bootstrap materializes the resolved two-level hierarchy during bind; it is not deferred to
     # the first time step and must not mutate the authenticated coarse state while prolonging it.
     assert simulation.n_levels() == 2
+    # The persistent compiled Program context is created while the explicit-bootstrap engine is
+    # coarse-only. Each committed hierarchy transition must republish its accepted clocks
+    # immediately: the accepted boundary before the first Program step describes every active level.
+    level_clocks = [
+        row for row in simulation._s.program_clock_manifest()
+        if row and row[0] == "level"
+    ]
+    assert [int(row[1]) for row in level_clocks] == [0, 1]
+    assert all(int(row[2]) == 0 and float(row[5]) == 0.0 for row in level_clocks)
+    # Checkpoints carry an exact run-controls identity. Establish it with a zero-step run while
+    # preserving the same post-bind accepted boundary; no Program step or hierarchy mutation occurs.
+    initial_report = pops.run(
+        simulation, t_end=simulation.time(), max_steps=0, console=False
+    )
+    assert initial_report.accepted_steps == simulation.macro_step() == 0
+    checkpoint = simulation.checkpoint(tmp_path / "before-first-accepted-step")
+    restarted = pops.bind(artifact, initial_values={gas_state: initial})
+    restarted.restart(checkpoint)
+    restarted_levels = [
+        row for row in restarted._s.program_clock_manifest()
+        if row and row[0] == "level"
+    ]
+    assert [int(row[1]) for row in restarted_levels] == [0, 1]
+    restart_report = pops.run(restarted, t_end=DT, max_steps=1)
+    assert restart_report.accepted_steps == restarted.macro_step() == 1
+    assert restarted.n_levels() == 2
 
     report = pops.run(simulation, t_end=2.0 * DT, max_steps=2)
     stationary_report = pops.run(stationary, t_end=2.0 * DT, max_steps=2)

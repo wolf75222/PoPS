@@ -3997,6 +3997,10 @@ class AmrRuntime {
     aux_.push_back(std::move(fine_aux));
     ++nlev_;
     refresh_active_temporal_relations_();
+    // A compiled multistep Program is installed while explicit bootstrap still exposes only level
+    // zero. Grow every registered history slot through the same owner-qualified prolongation route
+    // used by dynamic regridding before the generated resource refresh observes the new hierarchy.
+    remap_history_rings_(fb, dmap, nlev_ - 1, pk, /*prolong=*/true);
     for (auto& block : blocks_)
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[level].aux = &aux_[level];
@@ -4036,24 +4040,58 @@ class AmrRuntime {
                                  subject + "'");
     for (const auto& [name, ring] : hist_rings_) {
       const auto owner = hist_block_owner_.find(name);
-      if (owner == hist_block_owner_.end() || owner->second >= blocks_.size() || ring.size() != 2 ||
-          ring[0].size() != static_cast<std::size_t>(nlev_) ||
-          ring[1].size() != static_cast<std::size_t>(nlev_) ||
-          ring[0][0].ncomp() != blocks_[owner->second].ncomp ||
-          hist_init_[name].size() != static_cast<std::size_t>(nlev_) ||
-          hist_fill_count_[name].size() != static_cast<std::size_t>(nlev_) ||
-          hist_store_pending_[name].size() != static_cast<std::size_t>(nlev_) ||
-          hist_slot_dt_[name].size() != ring.size())
+      const auto depth = hist_depth_.find(name);
+      const auto initialized = hist_init_.find(name);
+      const auto fill_counts = hist_fill_count_.find(name);
+      const auto pending = hist_store_pending_.find(name);
+      const auto slot_dt = hist_slot_dt_.find(name);
+      bool invalid_layout =
+          owner == hist_block_owner_.end() || owner->second >= blocks_.size() ||
+          depth == hist_depth_.end() || depth->second < 2 ||
+          ring.size() != static_cast<std::size_t>(depth->second) ||
+          initialized == hist_init_.end() || fill_counts == hist_fill_count_.end() ||
+          pending == hist_store_pending_.end() || slot_dt == hist_slot_dt_.end() ||
+          initialized->second.size() != static_cast<std::size_t>(nlev_) ||
+          fill_counts->second.size() != static_cast<std::size_t>(nlev_) ||
+          pending->second.size() != static_cast<std::size_t>(nlev_) ||
+          slot_dt->second.size() != ring.size();
+      if (!invalid_layout) {
+        int ncomp = -1;
+        for (const auto& slot : ring) {
+          if (slot.size() != static_cast<std::size_t>(nlev_)) {
+            invalid_layout = true;
+            continue;
+          }
+          if (ncomp < 0)
+            ncomp = slot.front().ncomp();
+          invalid_layout = invalid_layout || ncomp < 1;
+          for (int level = 0; level < nlev_; ++level) {
+            const MultiFab& value = slot[static_cast<std::size_t>(level)];
+            invalid_layout =
+                invalid_layout || value.ncomp() != ncomp || value.n_grow() != 1 ||
+                value.box_array().boxes() !=
+                    hierarchy_.ba[static_cast<std::size_t>(level)].boxes() ||
+                value.dmap().ranks() != hierarchy_.dm[static_cast<std::size_t>(level)].ranks();
+          }
+        }
+        invalid_layout =
+            invalid_layout ||
+            std::any_of(slot_dt->second.begin(), slot_dt->second.end(),
+                        [](Real value) { return !std::isfinite(value) || value < Real(0); });
+      }
+      if (invalid_layout)
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +
-                                 "' requires an explicit materialization provider");
+                                 "' has incomplete level materialization");
       bool invalid_fill = false;
       for (int level = 0; level < nlev_; ++level) {
         const auto index = static_cast<std::size_t>(level);
-        const int fill = hist_fill_count_[name][index];
-        invalid_fill = invalid_fill || hist_init_[name][index] == 0 || fill < 0 ||
-                       fill > static_cast<int>(ring.size()) ||
-                       hist_store_pending_[name][index] != 0 ||
-                       (hist_init_[name][index] != 0) != (fill > 0);
+        const int fill = fill_counts->second[index];
+        // A history declared by the installed Program is legitimately cold at t=0. Accept exactly
+        // the coherent (initialized=false, fill=0, pending=false) image; any warm level must carry a
+        // positive bounded fill count. The first Program store performs the normal cold broadcast.
+        invalid_fill = invalid_fill || fill < 0 || fill > static_cast<int>(ring.size()) ||
+                       pending->second[index] != 0 ||
+                       (initialized->second[index] != 0) != (fill > 0);
       }
       if (invalid_fill)
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +

@@ -689,7 +689,8 @@ class AmrSystem {
   std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
   std::vector<OutputPiece> output_field_root_pieces(const WorldCommunicator& world,
                                                     const std::string& provider_slot, int level);
-  /// Transaction bracket used by the v3 reader after complete payload preflight.  Every hierarchy,
+  /// Transaction bracket used by the accepted-state reader after complete payload preflight. Every
+  /// hierarchy,
   /// state, aux, field warm-start, history and clock mutation is rolled back if any restore step fails.
   void begin_restart_transaction();
   void commit_restart_transaction();
@@ -774,12 +775,16 @@ class AmrSystem {
   /// native AMR loader.
   /// @{
   /// Install the mandatory macro-step body. AmrSystem::step, advance and step_cfl reject before lazy
-  /// hierarchy construction or any other mutation while it is empty. Pass an empty std::function to
-  /// clear it during assembly.
+  /// hierarchy construction or any other mutation while it is absent. An empty std::function is
+  /// rejected: there is no public temporal route that silently clears the whole-system Program.
   /// POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary, like
   /// set_compiled_block. The closure executes the normalized ProgramGraph on the hierarchy through
   /// an AmrProgramContext (the AMR counterpart of ProgramContext).
   POPS_EXPORT void install_program_step(std::function<void(double)> step);
+  /// Install the companion callback that republishes Program-owned accepted clocks/history whenever
+  /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
+  /// low-level steps may omit it because they have no authenticated checkpoint context.
+  POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
@@ -797,16 +802,21 @@ class AmrSystem {
   POPS_EXPORT double program_cadence_window_dt() const;
   POPS_EXPORT int program_cadence_window_steps() const;
   POPS_EXPORT double program_cadence_window_start_time() const;
-  /// Restore the exact held-window image before set_clock during strict restart. The image must match
-  /// @p macro_step modulo the installed stride; malformed or missing mid-window state is rejected.
+  /// Exact accepted Program interval provenance. Zero means no Program invocation has been accepted.
+  POPS_EXPORT double program_last_dt() const;
+  /// Stage the exact held-window image before set_clock during strict restart. The image must match
+  /// the exact accepted (@p accepted_time, @p macro_step) cursor, @p accepted_last_dt and installed
+  /// stride; malformed, missing or mismatched state is rejected without mutating accepted state.
   POPS_EXPORT void restore_program_cadence_window(double accumulated_dt, int held_steps,
-                                                  double window_start_time, int macro_step);
+                                                  double window_start_time, double accepted_last_dt,
+                                                  double accepted_time, int macro_step);
   /// Install the program-index -> AMR-block-index map (entry p = the AMR block index of Program block
   /// p), built by install_program after matching the .so's block names to the instantiated AMR blocks
-  /// BY NAME (Spec 3 criterion 23, ADC-457). Empty clears it (identity: a single-block or order-matching
-  /// Program). Read by the AmrProgramContext to resolve a Program block index to the name-matched block.
+  /// BY NAME (Spec 3 criterion 23, ADC-457). Empty clears it and is never an implicit positional
+  /// identity. Read by the AmrProgramContext to resolve a Program block index to the name-matched block.
   POPS_EXPORT void set_program_block_map(const std::vector<int>& prog_to_sys);
-  /// The installed program-index -> AMR-block-index map (empty = identity). Read by the AmrProgramContext.
+  /// The installed program-index -> AMR-block-index map. Empty means no authenticated mapping and is
+  /// rejected by AmrProgramContext.
   POPS_EXPORT const std::vector<int>& program_block_map() const;
   /// Load a generated problem.so and install its compiled time Program on the AMR hierarchy. dlopens
   /// @p so_path, checks its ABI key against this module (fail-loud on mismatch), runs the section-24
@@ -822,7 +832,6 @@ class AmrSystem {
   /// The last macro-step dt handed to the installed Program (ADC-631): the AmrProgramContext reads it
   /// so a pre-commit history sample records its outgoing interval (variable-dt replay). POPS_EXPORT
   /// for the dlopen boundary (the generated AMR Program .so reads it via the AmrProgramContext).
-  POPS_EXPORT double program_last_dt() const;
   /// Authenticated accepted-state image owned by the compiled AMR Program context.  This is distinct
   /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
   /// identities and lagged effective-flux publications required for conservative multistep restart.
@@ -923,7 +932,7 @@ class AmrSystem {
   POPS_EXPORT double time() const;
   /// ACCEPTED macro-step counter (0-indexed; incremented by step / advance / step_cfl), parity with
   /// System::macro_step. Required for checkpoint/restart because Program schedules and regrid cadence
-  /// depend on accepted-step phase, not only on physical time. Persisted by accepted-state v3.
+  /// depend on accepted-step phase, not only on physical time. Persisted by accepted-state restart.
   /// POPS_EXPORT: the AmrProgramContext (a generated AMR Program .so) reads it across the dlopen
   /// boundary for the head-of-step regrid cadence, like the other program seam accessors (ADC-508).
   POPS_EXPORT int macro_step() const;
@@ -1057,8 +1066,8 @@ class AmrSystem {
   void restore_history_slot_dt(const std::string& name, int slot, double dt);
   int rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots);
   /// The sorted macro-step cursors at which the LAST rebuild_history_slots fired an in-window regrid
-  /// (ADC-635). The v3 reader asserts it against the checkpoint's recorded schedule fingerprint; empty
-  /// after a Dense / clean-window / no-regrid replay.
+  /// (ADC-635). The accepted-state reader asserts it against the checkpoint's recorded schedule
+  /// fingerprint; empty after a Dense / clean-window / no-regrid replay.
   std::vector<int> last_replay_regrid_steps() const;
   /// @}
 

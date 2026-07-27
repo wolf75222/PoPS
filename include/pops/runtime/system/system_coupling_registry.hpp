@@ -69,8 +69,7 @@ struct CoupledFreqExpr {
 /// Program.  Keeping the state pack explicit lets a Program apply an operator-split source to its
 /// uncommitted endpoint candidates and publish the whole group only after coupling and projection
 /// succeed; no operator has to borrow or mutate the accepted live states.
-using PreparedCouplingOperator =
-    std::function<void(Real, const std::vector<MultiFab*>&)>;
+using PreparedCouplingOperator = std::function<void(Real, const std::vector<MultiFab*>&)>;
 
 /// Prepared registry of the couplings and the step bounds they impose.
 struct SystemCouplingRegistry {

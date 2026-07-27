@@ -150,6 +150,22 @@ def test_hash_changes_but_outputs_same():
     assert _commit_signature(Q) == _commit_signature(P), "committed outputs changed"
 
 
+def test_history_ring_is_materialized_before_program_install():
+    """A fresh restart must expose the qualified ring before its first post-bind step."""
+    program = adctime.Program("install_history")
+    state = typed_state(program, "plasma")
+    program.keep_history(state, depth=1)
+    program.commit(
+        state.next,
+        program.value("next", 1.0 * state.n, at=state.next.point),
+    )
+
+    source = emit_cpp_program(program)
+    registration = source.index("ctx.register_history(")
+    install = source.index("ctx.install(")
+    assert registration < install
+
+
 def test_chained_dead_nodes_removed():
     """A dead node feeding only another dead node: BOTH go (reverse-reachability, not one level)."""
     P = adctime.Program("chain")

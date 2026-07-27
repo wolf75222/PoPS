@@ -97,7 +97,7 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
         },
     )
     assert checkpoint.output_format is None
-    assert checkpoint.operation_data["provider_id"] == "pops.restart.accepted-state-v4"
+    assert checkpoint.operation_data["provider_id"] == "pops.restart.accepted-state-v5"
     assert checkpoint.operation_data["bit_identical"] is True
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
 

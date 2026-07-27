@@ -165,7 +165,7 @@
   "test_program_abi_symbols": 0.01,
   "test_program_context_contract": 0.05,
   "test_program_context_schur_free": 0.01,
-  "test_program_loader": 0.01,
+  "test_program_loader": 45.0,
   "test_program_reflux_ledger": 0.01,
   "test_program_runtime": 0.02,
   "test_public_validation_errors": 0.01,

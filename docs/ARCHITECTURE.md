@@ -437,7 +437,7 @@ positive-definiteness are mutually exclusive. Consequently CG requires the globa
 when `nullspace=None`, and the complement-SPD certificate for `ConstantNullspace`; PoPS never swaps
 methods or upgrades a certificate from stencil metadata.
 
-Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v4
+Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v5
 reader validates topology, ownership maps, state, aux, potentials, provider slots and history rings
 before its first write, then restores the hierarchy through the final clock update inside one native
 accepted-state transaction.  Any exception restores the previous hierarchy, data, field warm starts,
@@ -445,8 +445,12 @@ histories, diagnostics and cadence counters; a partially restored simulation is 
 The sealed accepted-state contract also records the topology epoch and regrid count, exact rational
 level clocks, owner/state/space-qualified ring slots, lagged effective-flux publications, parent/child
 temporal relations and every required transfer route.  Restart compares the bound identities and this
-provenance before mutation.  Multi-block and active-regrid layouts use this same strict route; PoPS does
-not silently degrade to a weaker regrid-on-restart guarantee.
+provenance before mutation.  During explicit bootstrap, the installed Program context republishes
+that level-qualified image before each spatial hierarchy transition commits.  After the mandatory
+zero-step `pops.run` establishes the checkpoint's controls identity, a checkpoint before the first
+accepted step therefore cannot retain a stale coarse-only clock axis.  Multi-block and active-regrid
+layouts use this same strict route; PoPS does not silently degrade to a weaker regrid-on-restart
+guarantee.
 
 The transport of a block, in turn, reads this aux. The retained low-level `SystemCoupler`
 `advance_transport` utility routes toward the closure `s.advance` (full path) or its disk variants;

@@ -15,6 +15,29 @@ MANIFEST_KEY = "pops_checkpoint_manifest"
 IDENTITY_KEY = "pops_restart_identity"
 
 
+def require_exact_payload_version(
+    payload: Any,
+    key: str,
+    expected: int,
+    *,
+    runtime: str,
+) -> int:
+    """Read one payload version without numeric or textual coercion."""
+    import numpy as np
+
+    value = np.asarray(payload[key])
+    if value.ndim != 0 or value.dtype.kind not in "iu":
+        raise TypeError("%s checkpoint version must be an exact integer scalar" % runtime)
+    version = int(value.item())
+    if version != expected:
+        raise ValueError(
+            "%s checkpoint version %r is unsupported (expected exactly %d; "
+            "historical checkpoints require offline migration)"
+            % (runtime, version, expected)
+        )
+    return version
+
+
 def _identity_json(value: Identity) -> dict[str, Any]:
     return {
         "domain": value.domain, "schema_version": value.schema_version,
@@ -175,5 +198,6 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
 
 __all__ = [
     "CHECKPOINT_SCHEMA_VERSION", "IDENTITY_KEY", "MANIFEST_KEY",
-    "authenticate_checkpoint_payload", "seal_checkpoint_payload",
+    "authenticate_checkpoint_payload", "require_exact_payload_version",
+    "seal_checkpoint_payload",
 ]

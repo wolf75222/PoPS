@@ -839,7 +839,10 @@ class PreparedAmrProgramRefluxTransition {
       validate_parent_state_(parent_state);
       if (coarse_role.size() != child_global_size_ || fine_role.size() != child_global_size_)
         throw std::runtime_error(
-            "AMR Program reflux ledger size differs from the prepared child layout");
+            "AMR Program reflux ledger size differs from the prepared child layout "
+            "(coarse=" +
+            std::to_string(coarse_role.size()) + ", fine=" + std::to_string(fine_role.size()) +
+            ", child=" + std::to_string(child_global_size_) + ")");
       for (std::size_t global_child = 0; global_child < child_global_size_; ++global_child) {
         const CoarseStrip& coarse = coarse_role[global_child];
         const FineStrip& fine = fine_role[global_child];

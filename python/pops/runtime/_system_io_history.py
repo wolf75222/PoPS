@@ -8,8 +8,10 @@ to ``dense_regrid_safety``; a non-default whole-Program cadence is promoted to
 ``dense_cadence_safety``. Restart replays only cadence-1/1 gaps proven exact by every guard.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
+from typing import Any, cast
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +28,7 @@ class HistoryRingCapture:
     stored_slots: tuple[int, ...]
     storage_mode: str
     regrid_steps: tuple[int, ...] | None
-    slot_dt: tuple[float, ...] | None
+    slot_dt: tuple[float, ...]
 
     def to_data(self):
         return {
@@ -42,9 +44,7 @@ class HistoryRingCapture:
             "regrid_steps": (None if self.regrid_steps is None else list(self.regrid_steps)),
             # This projection participates in the checkpoint capture identity.  Canonical CBOR
             # intentionally refuses Python floats, so preserve each binary64 value exactly.
-            "slot_dt": (
-                None if self.slot_dt is None else [float(value).hex() for value in self.slot_dt]
-            ),
+            "slot_dt": [float(value).hex() for value in self.slot_dt],
         }
 
 
@@ -69,7 +69,7 @@ def resolve_ring_policy(policy, depth):
 
 
 def history_fill_count_from_payload(payload, name, depth, initialized):
-    """Return the mandatory authenticated fill age from a strict v4 payload."""
+    """Return the mandatory authenticated fill age from a strict v5 payload."""
     key = "history_fill_count_" + name
     if key not in payload:
         raise ValueError("history '%s' lacks strict fill-count metadata" % name)
@@ -193,9 +193,17 @@ def resolve_history_storage(
 
 def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0):
     """Validate every ring and freeze its exact gather order without a collective call."""
+    import numpy as np
+
     names = tuple(str(name) for name in system.history_names())
     if len(names) != len(set(names)):
         raise ValueError("checkpoint history names must be unique")
+    raw_slot_dt_provider = getattr(system, "history_slot_dt", None)
+    if names and not callable(raw_slot_dt_provider):
+        raise TypeError(
+            "checkpoint history capture requires the native history_slot_dt(name, slot) seam"
+        )
+    slot_dt_provider = cast(Callable[[str, int], Any], raw_slot_dt_provider)
     rings = []
     program_substeps = (
         int(system.program_substeps()) if callable(getattr(system, "program_substeps", None)) else 1
@@ -222,9 +230,17 @@ def prepare_history_capture(system, persistence, *, macro_step=0, regrid_every=0
             program_substeps=program_substeps,
             program_stride=program_stride,
         )
-        slot_dt = None
-        if hasattr(system, "history_slot_dt"):
-            slot_dt = tuple(float(system.history_slot_dt(hname, k)) for k in range(depth))
+        slot_dt_key = "history_slot_dt_" + hname
+        slot_dt = validate_history_slot_dt_payload(
+            {
+                slot_dt_key: np.asarray(
+                    tuple(slot_dt_provider(hname, k) for k in range(depth))
+                )
+            },
+            hname,
+            depth,
+            fill_count,
+        )
         rings.append(
             HistoryRingCapture(
                 name=hname,
@@ -273,8 +289,7 @@ def capture_histories(system, plan, out):
         # carries no fabricated cursor fingerprint.
         if ring.regrid_steps is not None:
             out["history_regrid_steps_" + hname] = np.asarray(ring.regrid_steps, dtype=np.int64)
-        if ring.slot_dt is not None:
-            out["history_slot_dt_" + hname] = np.asarray(ring.slot_dt, dtype=np.float64)
+        out["history_slot_dt_" + hname] = np.asarray(ring.slot_dt, dtype=np.float64)
         for k in ring.stored_slots:
             out["history_%s_%d" % (hname, k)] = np.asarray(
                 system.history_global(hname, k), dtype=np.float64

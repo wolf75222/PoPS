@@ -32,7 +32,10 @@ import tempfile
 
 import pytest
 
-from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+from pops._generated_release_contract import (
+    AMR_CHECKPOINT_PAYLOAD_VERSION,
+    UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+)
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -67,6 +70,50 @@ def _require_native_toolchain(section):
 _C = 0.75  # source coefficient: S(rho) = _C*rho (a linear ODE rho' = c rho; R changes every step)
 _DT = 0.01
 _NSTEPS = 6  # even, so N/2 is a whole number of macro-steps
+
+
+def test_checkpoint_payload_version_requires_an_exact_integer_scalar():
+    import numpy as np
+
+    from pops.runtime._checkpoint_manifest import require_exact_payload_version
+
+    cases = (
+        ("pops_checkpoint_version", UNIFORM_CHECKPOINT_PAYLOAD_VERSION, "Uniform"),
+        ("pops_amr_checkpoint_version", AMR_CHECKPOINT_PAYLOAD_VERSION, "AMR"),
+    )
+    for key, expected, runtime in cases:
+        for exact in (expected, np.int64(expected), np.asarray(expected, dtype=np.uint64)):
+            assert (
+                require_exact_payload_version(
+                    {key: exact},
+                    key,
+                    expected,
+                    runtime=runtime,
+                )
+                == expected
+            )
+
+        with pytest.raises(ValueError, match="historical checkpoints require offline migration"):
+            require_exact_payload_version(
+                {key: np.int64(expected - 1)},
+                key,
+                expected,
+                runtime=runtime,
+            )
+
+        for malformed in (
+            np.float64(expected + 0.9),
+            np.str_(str(expected)),
+            np.bool_(True),
+            np.asarray([expected], dtype=np.int64),
+        ):
+            with pytest.raises(TypeError, match="exact integer scalar"):
+                require_exact_payload_version(
+                    {key: malformed},
+                    key,
+                    expected,
+                    runtime=runtime,
+                )
 
 
 def test_collective_failure_preserves_one_scientific_error_family():
@@ -214,6 +261,7 @@ def test_current_checkpoint_envelope_roundtrips():
         "program_cadence_window_steps": np.array(0, dtype=np.int64),
         "program_cadence_window_dt": np.array(0.0, dtype=np.float64),
         "program_cadence_window_start_time": np.array(0.0, dtype=np.float64),
+        "program_last_dt": np.array(0.0, dtype=np.float64),
         "state_blk": np.arange(16, dtype=np.float64),
     }
     expected = seal_checkpoint_payload(owner, out, runtime_kind="uniform")
@@ -262,6 +310,7 @@ def test_history_persistence_key_scheme():
             self.rebuilt = None
             self.init = None
             self.fill_count = None
+            self.history_gathers = []
 
         # --- writer side ---
         def history_names(self):
@@ -280,6 +329,7 @@ def test_history_persistence_key_scheme():
             return depth
 
         def history_global(self, name, slot):
+            self.history_gathers.append((name, slot))
             return full[slot]
 
         def history_slot_dt(self, name, slot):
@@ -354,6 +404,11 @@ def test_history_persistence_key_scheme():
         def history_fill_count(self, name):
             return self._fill_count
 
+        def history_slot_dt(self, name, slot):
+            if self._fill_count == 0:
+                return 0.0
+            return super().history_slot_dt(name, slot)
+
     # Cold registration, first accepted store and depth-1 accepted stores still contain at least
     # one startup broadcast copy. They persist densely. Only a fully warm ring may use its selective
     # anchors.
@@ -371,6 +426,43 @@ def test_history_persistence_key_scheme():
         else:
             assert fill_plan.storage_mode == "policy"
             assert fill_plan.stored_slots == (0, 2, 4)
+
+    # A strict v5 writer cannot publish a ring without its exact outgoing-dt ledger. Both a missing
+    # native seam and invalid native data fail while building the collective-free plan: no slot gather
+    # runs and the output mapping remains untouched.
+    class MissingSlotDtSystem(FakeSystem):
+        history_slot_dt = None
+
+    missing_slot_dt = MissingSlotDtSystem(present_slots=None)
+    missing_out = {}
+    with pytest.raises(TypeError, match="history_slot_dt"):
+        serialize_histories(missing_slot_dt, {hname: Revolve(3)}, missing_out)
+    assert missing_out == {}
+    assert missing_slot_dt.history_gathers == []
+
+    class NonFiniteSlotDtSystem(FakeSystem):
+        def history_slot_dt(self, name, slot):
+            if slot == 2:
+                return np.nan
+            return super().history_slot_dt(name, slot)
+
+    nonfinite_slot_dt = NonFiniteSlotDtSystem(present_slots=None)
+    nonfinite_out = {}
+    with pytest.raises(ValueError, match="outgoing-dt ledger must be finite"):
+        serialize_histories(nonfinite_slot_dt, {hname: Revolve(3)}, nonfinite_out)
+    assert nonfinite_out == {}
+    assert nonfinite_slot_dt.history_gathers == []
+
+    class NonBinary64SlotDtSystem(FakeSystem):
+        def history_slot_dt(self, name, slot):
+            return np.float32(super().history_slot_dt(name, slot))
+
+    nonbinary64_slot_dt = NonBinary64SlotDtSystem(present_slots=None)
+    nonbinary64_out = {}
+    with pytest.raises(TypeError, match="binary64"):
+        serialize_histories(nonbinary64_slot_dt, {hname: Revolve(3)}, nonbinary64_out)
+    assert nonbinary64_out == {}
+    assert nonbinary64_slot_dt.history_gathers == []
 
     # READER: round-trip through numpy so the dtypes match, then restore + replay.
     with tempfile.TemporaryDirectory() as tmp:
@@ -416,6 +508,7 @@ def test_history_persistence_key_scheme():
         "history_names": np.array([hname]),
         "history_depth_" + hname: depth,
         "history_init_" + hname: True,
+        "history_fill_count_" + hname: depth,
     }
     for k in range(depth):
         v1["history_%s_%d" % (hname, k)] = full[k]
@@ -661,6 +754,49 @@ def _run_section_b(t):
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim1.checkpoint(os.path.join(tmp, "ab2"))
 
+        # A correctly authenticated payload may still advertise one extra ring. Clone the complete
+        # real-ring payload, reseal the envelope, and prove the exact-schema rejection happens before
+        # any native/Python restart mutation.
+        from pops.runtime._checkpoint_manifest import (
+            IDENTITY_KEY,
+            MANIFEST_KEY,
+            seal_checkpoint_payload,
+        )
+
+        with np.load(ckpt, allow_pickle=False) as recorded:
+            poisoned_payload = {
+                key: np.array(recorded[key], copy=True)
+                for key in recorded.files
+                if key not in {MANIFEST_KEY, IDENTITY_KEY}
+            }
+        (source_history,) = [str(name) for name in poisoned_payload["history_names"]]
+        for key, value in tuple(poisoned_payload.items()):
+            if source_history in key:
+                poisoned_payload[key.replace(source_history, "poison")] = np.array(value, copy=True)
+        poisoned_payload["history_names"] = np.asarray(
+            [source_history, "poison"]
+        )
+        seal_checkpoint_payload(sim1, poisoned_payload, runtime_kind="uniform")
+        poisoned_ckpt = os.path.join(tmp, "ab2_poisoned.npz")
+        with open(poisoned_ckpt, "wb") as stream:
+            np.savez_compressed(stream, **poisoned_payload)
+
+        poisoned, _ = _build_system(pops, np, n)
+        poisoned.set_state("blk", np.stack([rho0]))
+        poisoned.install_program(compiled.so_path)
+        _authorize_identity_runtime(poisoned, compiled)
+        state_before = np.array(poisoned.get_state("blk"), copy=True)
+        time_before = poisoned.time()
+        step_before = poisoned.macro_step()
+        histories_before = list(poisoned._s.history_names())
+        assert histories_before == [source_history]
+        with pytest.raises(RuntimeError, match="checkpoint Program histories"):
+            poisoned.restart(poisoned_ckpt)
+        assert np.array_equal(poisoned.get_state("blk"), state_before)
+        assert poisoned.time() == time_before
+        assert poisoned.macro_step() == step_before
+        assert list(poisoned._s.history_names()) == histories_before
+
         # (3) FRESH system, re-add block, re-install the SAME program, RESTART, run N/2 more -> B.
         sim2, _ = _build_system(pops, np, n)
         sim2.install_program(compiled.so_path)  # the hash guard needs the program installed first
@@ -777,6 +913,9 @@ def test_uniform_variable_dt_stride_checkpoint_closes_like_continuous_run():
     _require_native_toolchain("variable-dt stride checkpoint")
     import numpy as np
     import pops
+    from pops.runtime._run_manifest import begin_run
+    from pops.runtime._step_strategy import run_control_payload
+    from pops.time import ExternalTimeGrid
 
     n = 8
     compiled = _compile_program(
@@ -788,7 +927,14 @@ def test_uniform_variable_dt_stride_checkpoint_closes_like_continuous_run():
         "fe_stride_ckpt_model",
     )
     initial = np.stack([_rho0(np, n)])
-    steps = (0.01, 0.02, 0.03)
+    # The first attempt after restart must repeat the checkpointed controller contract. The sequence
+    # is still genuinely variable while its third step closes the held cadence window.
+    steps = (0.01, 0.02, 0.02)
+    grid = (0.0, steps[0], steps[0] + steps[1], sum(steps))
+    direct_step_control = run_control_payload(
+        ExternalTimeGrid("checkpoint_test_grid"),
+        {"checkpoint_test_grid": grid},
+    )
 
     def fresh():
         system, _ = _build_system(pops, np, n)
@@ -796,6 +942,13 @@ def test_uniform_variable_dt_stride_checkpoint_closes_like_continuous_run():
         system.install_program(compiled.so_path)
         system._s.set_program_cadence(1, 3)
         _authorize_identity_runtime(system, compiled)
+        begin_run(
+            system,
+            t_end=grid[-1],
+            step_transaction=direct_step_control,
+            max_steps=len(steps),
+            output_dir=None,
+        )
         return system
 
     continuous = fresh()

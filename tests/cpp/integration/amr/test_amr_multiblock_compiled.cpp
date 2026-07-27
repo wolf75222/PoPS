@@ -233,7 +233,6 @@ static void register_ionization(AmrSystem& sim, const std::string& block_a,
 // Program-owned split used by the compiled-block coupling proof: one explicit transport rate for
 // each block, then one simultaneous coupled-source update on private candidates and one group commit.
 static void install_compiled_coupling_program(AmrSystem& system) {
-  system.set_program_block_map({0, 1});
   system.install_program_step([](double) {});
   if (!system.uses_runtime_engine() || system.engine() == nullptr)
     throw std::runtime_error("compiled coupled-source fixture failed to materialize AmrRuntime");
@@ -263,6 +262,7 @@ static void install_compiled_coupling_program(AmrSystem& system) {
       context->commit_many({{&ions, &ions_candidate}, {&neutrals, &neutrals_candidate}});
     });
   });
+  system.set_program_block_map({0, 1});
 }
 
 TEST(test_amr_multiblock_compiled, Runs) {
@@ -482,7 +482,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     std::string refusal;
     try {
       sim.step(1e-3);
-    } catch (const std::runtime_error& error) {
+    } catch (const std::exception& error) {
       refusal = error.what();
     }
     EXPECT_TRUE(refusal.find("Program") != std::string::npos)

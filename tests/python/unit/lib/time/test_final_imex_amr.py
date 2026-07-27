@@ -221,7 +221,7 @@ def test_every_output_and_checkpoint_schedule_is_accepted_step_only():
     }
     assert all(node["schedule"]["domain"]["type"] == "accepted_step" for node in data["nodes"])
     (checkpoint,) = [node for node in data["nodes"] if node["operation"] is not None]
-    assert checkpoint["operation"]["provider_id"] == "pops.restart.accepted-state-v4"
+    assert checkpoint["operation"]["provider_id"] == "pops.restart.accepted-state-v5"
     assert checkpoint["operation"]["bit_identical"] is True
 
 

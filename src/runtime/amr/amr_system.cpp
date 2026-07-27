@@ -385,11 +385,12 @@ struct AmrSystem::Impl {
   // stride_ / installed_hash_ / block_map_ / block_params_ / diagnostics_ / profiler_ / dt_bound_);
   // cache_ / hist_ stay EMPTY because their hierarchy-aware seams are not wired. AmrRuntime is wired
   // to &program_.profiler_ at build (parity with System::Impl); the Profiler's Impl
-  // address stays stable (program_ is a stable Impl member). AmrSystem::step routes through
-  // run_program_cadence_ (reading program_.step_ / substeps_ / stride_) when a program is installed.
+  // address stays stable (program_ is a stable Impl member). AmrSystem::step routes unconditionally
+  // through run_program_cadence_ (reading program_.step_ / substeps_ / stride_).
   pops::runtime::program::ProgramRuntimeState program_;
-  // ADC-635: the in-window regrid schedule the LAST rebuild_history_slots fired (for the v3 reader's
-  // coherence assertion against the checkpoint fingerprint). Reset each rebuild; empty on a clean window.
+  // ADC-635: the in-window regrid schedule the LAST rebuild_history_slots fired (for the
+  // accepted-state reader's coherence assertion against the checkpoint fingerprint). Reset each
+  // rebuild; empty on a clean window.
   std::vector<int> last_replay_regrid_steps_;
 
   explicit Impl(const AmrSystemConfig& c)
@@ -464,6 +465,11 @@ struct AmrSystem::Impl {
     int cadence_window_steps = 0;
     double cadence_window_start_time = 0.0;
     bool cadence_clock_restore_pending = false;
+    double cadence_clock_restore_dt = 0.0;
+    int cadence_clock_restore_steps = 0;
+    double cadence_clock_restore_start_time = 0.0;
+    double cadence_clock_restore_last_dt = 0.0;
+    double cadence_clock_restore_accepted_time = 0.0;
     int cadence_clock_restore_macro_step = 0;
     std::map<std::string, Real> program_diagnostics;
     pops::runtime::program::CacheManager cache;
@@ -503,6 +509,11 @@ struct AmrSystem::Impl {
       cadence_window_steps = impl.program_.cadence_window_steps_;
       cadence_window_start_time = impl.program_.cadence_window_start_time_;
       cadence_clock_restore_pending = impl.program_.cadence_clock_restore_pending_;
+      cadence_clock_restore_dt = impl.program_.cadence_clock_restore_dt_;
+      cadence_clock_restore_steps = impl.program_.cadence_clock_restore_steps_;
+      cadence_clock_restore_start_time = impl.program_.cadence_clock_restore_start_time_;
+      cadence_clock_restore_last_dt = impl.program_.cadence_clock_restore_last_dt_;
+      cadence_clock_restore_accepted_time = impl.program_.cadence_clock_restore_accepted_time_;
       cadence_clock_restore_macro_step = impl.program_.cadence_clock_restore_macro_step_;
       copy_value_map_into(program_diagnostics, impl.program_.diagnostics_);
       // AMR currently owns its native cache/history rings inside AmrRuntime.  These two shared
@@ -528,6 +539,11 @@ struct AmrSystem::Impl {
       impl.program_.cadence_window_steps_ = cadence_window_steps;
       impl.program_.cadence_window_start_time_ = cadence_window_start_time;
       impl.program_.cadence_clock_restore_pending_ = cadence_clock_restore_pending;
+      impl.program_.cadence_clock_restore_dt_ = cadence_clock_restore_dt;
+      impl.program_.cadence_clock_restore_steps_ = cadence_clock_restore_steps;
+      impl.program_.cadence_clock_restore_start_time_ = cadence_clock_restore_start_time;
+      impl.program_.cadence_clock_restore_last_dt_ = cadence_clock_restore_last_dt;
+      impl.program_.cadence_clock_restore_accepted_time_ = cadence_clock_restore_accepted_time;
       impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       copy_value_map_into(impl.program_.diagnostics_, program_diagnostics);
       impl.program_.cache_ = cache;
@@ -2689,7 +2705,20 @@ void AmrSystem::commit_bootstrap_level() {
     throw std::runtime_error(
         "AmrSystem::commit_bootstrap_level requires the authoritative clock to remain at "
         "t=0/step=0");
-  p_->runtime->commit_bootstrap_level();
+  // The generated Program context was constructed against the coarse-only engine. Requalify its
+  // accepted level clocks/history while the hierarchy transition is still rollback-capable, then
+  // commit the spatial transaction. If either validation fails, preserve the previous accepted
+  // bytes/revision; NativeAMRBootstrapConsumer will roll back the still-pending hierarchy.
+  const std::vector<std::uint8_t> previous_program_state = p_->program_accepted_state_;
+  const std::uint64_t previous_program_revision = p_->program_accepted_state_revision_;
+  try {
+    p_->program_.refresh_hierarchy_state("AmrSystem::commit_bootstrap_level");
+    p_->runtime->commit_bootstrap_level();
+  } catch (...) {
+    p_->program_accepted_state_ = previous_program_state;
+    p_->program_accepted_state_revision_ = previous_program_revision;
+    throw;
+  }
 }
 
 void AmrSystem::rollback_bootstrap_level() {
@@ -3264,11 +3293,16 @@ int AmrSystem::macro_step() const {
   return p_->macro_step_;
 }
 void AmrSystem::set_clock(double t, int macro_step) {
-  if (macro_step < 0)
-    throw std::runtime_error("AmrSystem::set_clock : macro_step >= 0 (restart)");
-  if (!std::isfinite(t))
-    throw std::runtime_error("AmrSystem::set_clock : time must be finite");
-  p_->program_.consume_cadence_clock_restore(t, macro_step, "AmrSystem");
+  try {
+    if (macro_step < 0)
+      throw std::runtime_error("AmrSystem::set_clock : macro_step >= 0 (restart)");
+    if (!std::isfinite(t))
+      throw std::runtime_error("AmrSystem::set_clock : time must be finite");
+    p_->program_.consume_cadence_clock_restore(t, macro_step, "AmrSystem");
+  } catch (...) {
+    p_->program_.cancel_cadence_clock_restore();
+    throw;
+  }
   p_->t = t;
   p_->macro_step_ = macro_step;
   // Program cadence and regrid read this facade authority directly.  AmrRuntime deliberately owns
@@ -3282,9 +3316,10 @@ void AmrSystem::set_clock(double t, int macro_step) {
 // set. The cadence + RuntimeParams stores live in program_ (not the .so closure), mirroring System, so
 // a value change reaches the captured context.
 void AmrSystem::install_program_step(std::function<void(double)> step) {
-  p_->program_.step_ = std::move(step);
-  p_->program_.artifact_backed_ = false;
-  p_->program_.history_replay_authorities_.clear();
+  p_->program_.install_unverified_step(std::move(step));
+}
+void AmrSystem::install_program_hierarchy_refresh(std::function<void()> refresh) {
+  p_->program_.install_hierarchy_refresh(std::move(refresh), "AmrSystem");
 }
 // GLOBAL macro-step cadence around the installed program closure (parity System::set_program_cadence,
 // ADC-411). Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
@@ -3311,9 +3346,10 @@ double AmrSystem::program_cadence_window_start_time() const {
   return p_->program_.cadence_window_start_time_;
 }
 void AmrSystem::restore_program_cadence_window(double accumulated_dt, int held_steps,
-                                               double window_start_time, int macro_step) {
-  p_->program_.restore_cadence_window(accumulated_dt, held_steps, window_start_time, macro_step,
-                                      "AmrSystem");
+                                               double window_start_time, double accepted_last_dt,
+                                               double accepted_time, int macro_step) {
+  p_->program_.restore_cadence_window(accumulated_dt, held_steps, window_start_time,
+                                      accepted_last_dt, accepted_time, macro_step, "AmrSystem");
 }
 // NAME-based block binding seam (Spec 3 criterion 23, ADC-457): install_program builds the map after
 // matching the .so's block names; the AmrProgramContext reads it to translate a Program block index to
@@ -3615,6 +3651,9 @@ double AmrSystem::composite_reduce_field(const std::string& provider_slot, const
 POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   require_assembling_amr(p_->bound_,
                          "install_program");  // frozen once pops.bind completes (ADC-592)
+  if (p_->built || p_->runtime)
+    throw std::logic_error(
+        "AmrSystem::install_program must run before the AMR runtime is materialized");
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
   pops::dynlib::handle h = pops::dynlib::open(so_path);
@@ -3746,11 +3785,30 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     pops::dynlib::close(h);
     throw;
   }
+  // Resolve every target-specific scalar entry before the first facade mutation. In particular,
+  // never install DSO-backed boundary pointers and then discover that the module must be unloaded.
+  using has_dt_t = bool (*)();
+  using dt_bound_t = pops::Real (*)(void*, pops::Real);
+  auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
+  auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound_amr"));
+  const bool program_has_dt_bound = has_dt && has_dt();
+  if (program_has_dt_bound && !dt_bound) {
+    pops::dynlib::close(h);
+    throw std::runtime_error(
+        "AmrSystem::install_program: Program declares a dt bound but "
+        "pops_program_dt_bound_amr is missing; regenerate the AMR artifact");
+  }
+  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
+  const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
+  auto install_boundaries =
+      reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_field_boundaries_amr"));
+
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). The Program numbers its blocks in P.state
   // declaration order (the .so's pops_program_block_name table); the AMR facade numbers its blocks in
   // add order (block_names). Bind by NAME, store the program-index -> AMR-block-index map (read by the
   // AmrProgramContext). A Program block whose name has no AMR block fails loud. The explicit block
   // identity table is REQUIRED; positional binding is unsupported.
+  std::vector<int> program_block_map;
   {
     using count_t = int (*)();
     using name_t = const char* (*)(int);
@@ -3772,7 +3830,7 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     // common AmrRuntime, which evaluates a shared interface exactly once before either residual is
     // consumed. Consequently the former single-block guard is obsolete; retaining it would reject a
     // route whose coupled scheduler semantics are already proved at resolve time.
-    std::vector<int> prog_to_sys(static_cast<std::size_t>(n), -1);
+    program_block_map.assign(static_cast<std::size_t>(n), -1);
     for (int p = 0; p < n; ++p) {
       const std::string want = block_name(p);
       int found = -1;
@@ -3786,14 +3844,14 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
         throw std::runtime_error("Program requires block instance '" + want +
                                  "', but simulation did not instantiate it");
       }
-      prog_to_sys[static_cast<std::size_t>(p)] = found;
+      program_block_map[static_cast<std::size_t>(p)] = found;
     }
-    set_program_block_map(prog_to_sys);
   }
   // RUNTIME PARAMETERS (ADC-508, parity ADC-510). Seed each PROGRAM block's RuntimeParams to the .so
   // pops_program_param_* declaration defaults so an install WITHOUT a runtime set behaves as with a const
   // param; a later Python params= route overwrites the supplied values via set_program_params. A Program
   // with no runtime param (the count symbol absent or 0) seeds nothing. VERBATIM mirror of System.
+  std::map<int, std::vector<double>> program_param_defaults;
   {
     using count_t = int (*)();
     using ival_t = int (*)(int);
@@ -3804,69 +3862,72 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_program_param_default"));
     if (pcount && pblock && pindex && pdef) {
       const int np = pcount();
-      std::map<int, std::vector<double>>
-          defaults_by_block;  // program block -> defaults in index order
       for (int i = 0; i < np; ++i) {
         const int blk = pblock(i);
         const int idx = pindex(i);
-        std::vector<double>& d = defaults_by_block[blk];
+        std::vector<double>& d = program_param_defaults[blk];
         if (static_cast<int>(d.size()) <= idx)
           d.resize(static_cast<std::size_t>(idx) + 1, 0.0);
         d[static_cast<std::size_t>(idx)] = pdef(i);
       }
-      for (const auto& kv : defaults_by_block)
-        seed_program_params(kv.first, kv.second);
     }
   }
-  // Target-specific counterpart of the uniform generated boundary-kernel install.  It mutates the
-  // facade plans before ensure_built(), so the freshly materialized AmrRuntime receives the exact
-  // function pointers and execution context on its first construction.
-  if (auto install_boundaries = reinterpret_cast<void (*)(void*)>(
-          pops::dynlib::sym(h, "pops_install_field_boundaries_amr")))
-    install_boundaries(static_cast<void*>(this));
-  // Resolve the optional target-specific dt-bound ABI before installing any closure from the
-  // module. A declared bound without its AMR entry is rejected while unloading is still safe.
-  using has_dt_t = bool (*)();
-  using dt_bound_t = pops::Real (*)(void*, pops::Real);
-  auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
-  auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound_amr"));
-  const bool program_has_dt_bound = has_dt && has_dt();
-  if (program_has_dt_bound && !dt_bound) {
-    pops::dynlib::close(h);
-    throw std::runtime_error(
-        "AmrSystem::install_program: Program declares a dt bound but "
-        "pops_program_dt_bound_amr is missing; regenerate the AMR artifact");
-  }
-  // Install the macro-step body after the unique AmrRuntime materializes its per-level state.
-  const auto previous_operator_authorities = p_->program_.operator_authorities_;
-  const auto previous_history_replay_authorities = p_->program_.history_replay_authorities_;
-  const bool previous_artifact_backed = p_->program_.artifact_backed_;
-  p_->program_.operator_authorities_ = operator_authorities;
+
+  // Install the macro-step body after the unique AmrRuntime materializes its per-level state. Every
+  // facade value mutated below has an exact rollback image, and all DSO-backed closures are destroyed
+  // before the handle is closed on failure.
+  auto previous_install = p_->program_.capture_artifact_step_install();
+  auto previous_field_plans = p_->field_plans_;
+  const bool previous_field_consensus = p_->field_plan_consensus_verified_;
+  auto previous_program_accepted_state = p_->program_accepted_state_;
+  const std::uint64_t previous_program_accepted_state_revision =
+      p_->program_accepted_state_revision_;
   try {
+    p_->program_.reset_artifact_candidate_state();
+    p_->program_.block_map_ = program_block_map;
+    p_->program_.block_params_.clear();
+    for (const auto& [block, defaults] : program_param_defaults)
+      seed_program_params(block, defaults);
+    p_->program_.operator_authorities_ = operator_authorities;
     p_->ensure_built();
     install(static_cast<void*>(this));
+    p_->program_.require_exact_artifact_step_install(previous_install,
+                                                     "AmrSystem::install_program:");
+    if (!p_->program_.hierarchy_refresh_)
+      throw std::runtime_error(
+          "AmrSystem::install_program: artifact installer did not install its accepted-state "
+          "hierarchy refresh hook");
+
+    p_->program_.block_map_ = std::move(program_block_map);
+    for (const auto& [block, defaults] : program_param_defaults)
+      seed_program_params(block, defaults);
+    p_->program_.operator_authorities_ = std::move(operator_authorities);
+    p_->program_.history_replay_authorities_ = std::move(history_replay_authorities);
+    p_->program_.installed_hash_ = installed_hash;
+    if (program_has_dt_bound) {
+      AmrSystem* self = this;
+      p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real {
+        return dt_bound(static_cast<void*>(self), cfl);
+      };
+    }
+    p_->program_.artifact_backed_ = true;
+
+    // The generated boundary context requires the engine, so install it only after ensure_built().
+    // Each setter also updates the live runtime; both the facade plans and runtime are discarded if
+    // the generated entry fails part-way through.
+    if (install_boundaries)
+      install_boundaries(static_cast<void*>(this));
   } catch (...) {
-    p_->program_.operator_authorities_ = previous_operator_authorities;
-    p_->program_.history_replay_authorities_ = previous_history_replay_authorities;
-    p_->program_.artifact_backed_ = previous_artifact_backed;
-    throw;
-  }
-  p_->program_.history_replay_authorities_ = std::move(history_replay_authorities);
-  p_->program_.artifact_backed_ = true;
-  // Record the program's IR hash (parity System, checkpoint guard). Missing symbol -> empty hash.
-  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
-  p_->program_.installed_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
-  // OPTIONAL compiled-Program dt bound, parity with System::install_program. The AMR-target module
-  // owns construction of AmrProgramContext and exposes a void*-facade ABI, so this loader never
-  // guesses the target context layout. A declared bound without its target-specific export is an ABI
-  // error, not a silently unconstrained run.
-  if (program_has_dt_bound) {
-    AmrSystem* self = this;
-    p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real {
-      return dt_bound(static_cast<void*>(self), cfl);
-    };
-  } else {
-    p_->program_.dt_bound_ = nullptr;
+    const std::exception_ptr failure = std::current_exception();
+    p_->program_.rollback_artifact_step_install(std::move(previous_install));
+    p_->program_accepted_state_ = std::move(previous_program_accepted_state);
+    p_->program_accepted_state_revision_ = previous_program_accepted_state_revision;
+    p_->field_plans_ = std::move(previous_field_plans);
+    p_->field_plan_consensus_verified_ = previous_field_consensus;
+    p_->runtime.reset();
+    p_->built = false;
+    pops::dynlib::close(h);
+    std::rethrow_exception(failure);
   }
   // .so left loaded for the duration of the process (the installed closure points to code in it).
 }
@@ -4369,9 +4430,11 @@ int AmrSystem::rebuild_history_slots(const std::string& name,
   // ADC-635: the replay re-steps the installed Program with regrid ACTIVE. The head-of-step
   // ctx.regrid_if_due(ctx.macro_step()) reads THIS facade's macro_step_: the closure drives it to the
   // engine-supplied per-re-step cursor (m-1-j) so the original in-window regrid schedule fires. m is
-  // the facade cursor (primed by the v3 reader); it is restored on every exit, coherence failure too.
+  // the facade cursor (primed by the accepted-state reader); both that cursor and the accepted last
+  // Program dt are restored on every exit, including a historical Program exception.
   Impl* imp = p_.get();
   const int m = p_->macro_step_;
+  const Real accepted_last_dt = p_->program_.last_dt_;
   detail::AmrHistoryOps::ReplayOutcome outcome;
   try {
     outcome = detail::AmrHistoryOps::rebuild_slots(
@@ -4383,9 +4446,11 @@ int AmrSystem::rebuild_history_slots(const std::string& name,
         });
   } catch (...) {
     p_->macro_step_ = m;
+    p_->program_.last_dt_ = accepted_last_dt;
     throw;
   }
   p_->macro_step_ = m;
+  p_->program_.last_dt_ = accepted_last_dt;
   p_->last_replay_regrid_steps_ = outcome.fired_regrid_steps;
   return outcome.recomputed;
 }

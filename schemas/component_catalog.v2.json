@@ -2,7 +2,7 @@
   "catalog_schema_version": 1,
   "component_manifest_schema_version": 2,
   "route_registry_version": 2,
-  "capability_vocabulary_version": 1,
+  "capability_vocabulary_version": 2,
   "interface_vocabulary": [
     {
       "name": "requirement",

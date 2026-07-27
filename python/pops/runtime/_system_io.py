@@ -240,7 +240,10 @@ class _SystemIO(_System):
         import numpy as np
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
-        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        from pops.runtime._checkpoint_manifest import (
+            authenticate_checkpoint_payload,
+            require_exact_payload_version,
+        )
         from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
         from pops.runtime._temporal_restart import TemporalRestartState
         from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
@@ -252,13 +255,12 @@ class _SystemIO(_System):
 
         d = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
-        version = int(d["pops_checkpoint_version"])
-        if version != UNIFORM_CHECKPOINT_PAYLOAD_VERSION:
-            raise ValueError(
-                "restart : checkpoint version %r not supported (expected exactly %d; "
-                "historical checkpoints require offline migration)"
-                % (version, UNIFORM_CHECKPOINT_PAYLOAD_VERSION)
-            )
+        require_exact_payload_version(
+            d,
+            "pops_checkpoint_version",
+            UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+            runtime="Uniform",
+        )
         preflight_uniform_restart(d)
         cadence = prepare_program_cadence(
             self._s,
@@ -324,10 +326,10 @@ class _SystemIO(_System):
         current_histories = (
             list(self._s.history_names()) if hasattr(self._s, "history_names") else []
         )
-        missing = [name for name in current_histories if name not in history_names]
-        if missing:
+        if history_names != current_histories:
             raise RuntimeError(
-                "checkpoint does not contain required Program history '%s'" % missing[0]
+                "checkpoint Program histories %r != installed qualified histories %r"
+                % (history_names, current_histories)
             )
         for name in history_names:
             depth = int(d["history_depth_" + name])
@@ -418,6 +420,17 @@ class _SystemIO(_System):
             self._s.set_field_potential(
                 slot, np.asarray(d["field_potential_%d" % index], dtype=np.float64).ravel()
             )
+        macro_step = int(d["macro_step"])
+        restore_program_cadence(
+            self._s,
+            prepared.cadence_state,
+            macro_step=macro_step,
+            accepted_time=float(d["t"]),
+        )
+        # Selective history replay executes the installed Program. Restore its authoritative
+        # accepted cursor first so time-, schedule- and cursor-dependent nodes see the exact
+        # checkpoint context, matching the AMR restart route.
+        self._s.set_clock(float(d["t"]), macro_step)
         histories = [str(name) for name in d["history_names"]]
         self._last_restart_report = restore_histories(self._s, d) if histories else None
         cache_names = [str(name) for name in d["cache_names"]]
@@ -431,14 +444,6 @@ class _SystemIO(_System):
                 cache_names[index],
                 np.asarray(d["cache_value_%d" % node], dtype=np.float64),
             )
-        macro_step = int(d["macro_step"])
-        restore_program_cadence(
-            self._s,
-            prepared.cadence_state,
-            macro_step=macro_step,
-            accepted_time=float(d["t"]),
-        )
-        self._s.set_clock(float(d["t"]), macro_step)
         self._temporal_restart_state = prepared.temporal_state
         self._step_controller = None
         self._last_restart_identity = prepared.restart_identity

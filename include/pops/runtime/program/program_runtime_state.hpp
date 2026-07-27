@@ -34,9 +34,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -150,6 +152,14 @@ struct ProgramRuntimeState {
   /// Installed macro-step body (ADC-399); empty makes every public facade temporal operation fail
   /// before mutation.
   std::function<void(double)> step_;
+  /// AMR-only accepted-state requalification hook installed by the same generated artifact as
+  /// `step_`. Explicit bootstrap grows the hierarchy after the Program context is constructed; this
+  /// closure lets the facade ask that persistent context to republish its level-qualified clocks and
+  /// histories before committing each hierarchy transition. Uniform leaves it empty.
+  std::function<void()> hierarchy_refresh_;
+  /// Monotone witness incremented only by install_unverified_step. Dynamic artifact loaders use it to
+  /// prove that one installer invocation actually replaced the whole-system Program step.
+  std::uint64_t step_install_generation_ = 0;
   /// OPTIONAL compiled-Program dt bound (ADC-417). The target-specific loader stores a closure here
   /// over ProgramContext (uniform) or AmrProgramContext (AMR); step_cfl tightens dt to
   /// min(native CFL, program bound). EMPTY when no Program exports a bound, so the native CFL is used
@@ -177,12 +187,18 @@ struct ProgramRuntimeState {
   /// essential at large physical times: reconstructing it as `accepted_time - accumulated_dt` loses
   /// low bits before the Program starts. Zero is the canonical inactive image.
   double cadence_window_start_time_ = 0.0;
-  /// A strict checkpoint restore installs the window before restoring the facade clock. This token
-  /// authenticates that one subsequent set_clock targets the exact macro-step used to validate the
-  /// window; direct mid-window clock changes without the window image fail closed.
+  /// A strict checkpoint restore stages, but does not yet install, one authenticated window. The
+  /// subsequent set_clock must present the exact accepted (time, macro-step) pair that validated the
+  /// staged image; only that call commits the window. A mismatch discards the staged transaction and
+  /// leaves the accepted cadence image unchanged.
   bool cadence_clock_restore_pending_ = false;
+  double cadence_clock_restore_dt_ = 0.0;
+  int cadence_clock_restore_steps_ = 0;
+  double cadence_clock_restore_start_time_ = 0.0;
+  double cadence_clock_restore_last_dt_ = 0.0;
+  double cadence_clock_restore_accepted_time_ = 0.0;
   int cadence_clock_restore_macro_step_ = 0;
-  /// LAST macro-step dt handed to step_ (ADC-626). Set by the stepper right before each
+  /// LAST accepted numerical interval handed to step_ (ADC-626). Set by the driver right before each
   /// program_.step_(h) call (run_program_cadence, shared by step() and step_cfl()), so the runtime's
   /// pre-commit store_history can tag its state sample with the outgoing interval that advances it
   /// toward the next accepted sample (HistoryManager::slot_dt). A plain data field only assigned by
@@ -229,12 +245,12 @@ struct ProgramRuntimeState {
   /// policy mutation or handcrafted binding calls cannot bypass that proof.
   std::vector<std::pair<std::string, int>> history_replay_authorities_;
   /// True only after install_program has authenticated an artifact and its replay-authority table.
-  /// Direct C++ install_program_step is an explicitly trusted native composition seam and remains
-  /// usable by low-level runtime tests; it is not exposed through the Python bindings.
+  /// Direct C++ install_program_step remains a low-level composition seam for ordinary runtime tests,
+  /// but it is never authority to recompute omitted checkpoint history.
   bool artifact_backed_ = false;
   /// NAME-based block binding (ADC-457): program-index -> runtime-block-index map. Entry p holds the
-  /// runtime block index the Program's block p names. EMPTY = identity (positional convention). Used
-  /// by BOTH runtimes; read by the (Amr)ProgramContext.
+  /// runtime block index the Program's block p names. EMPTY means no authenticated mapping; positional
+  /// identity is not inferred. Used by BOTH runtimes; read by the (Amr)ProgramContext.
   std::vector<int> block_map_;
 
   // --- runtime data owned across the step closure --------------------------------------------------
@@ -261,6 +277,22 @@ struct ProgramRuntimeState {
 
   // --- self-contained helpers (grid-free, Program-subsystem-worded errors) -------------------------
 
+  struct ArtifactStepInstallSnapshot {
+    std::function<void(double)> step;
+    std::function<void()> hierarchy_refresh;
+    std::function<Real(Real)> dt_bound;
+    std::uint64_t generation = 0;
+    std::string installed_hash;
+    std::vector<std::array<std::uint64_t, 4>> operator_authorities;
+    std::vector<std::pair<std::string, int>> history_replay_authorities;
+    std::vector<int> block_map;
+    std::map<int, RuntimeParams> block_params;
+    std::map<std::string, Real> diagnostics;
+    CacheManager cache;
+    HistoryManager history;
+    bool artifact_backed = false;
+  };
+
   /// Require the whole-system Program before a public facade may start a temporal operation.
   ///
   /// This guard deliberately lives in the shared Program state so Uniform and AMR fail with the
@@ -273,8 +305,108 @@ struct ProgramRuntimeState {
                              " requires an installed whole-system Program");
   }
 
+  /// Install an ordinary native step without granting artifact-only replay authority.
+  ///
+  /// The dynamic Program loader calls the same facade seam while its artifact install entry runs,
+  /// then publishes the validated `(ring, depth)` table and marks the completed install artifact
+  /// backed. A direct caller never reaches that completion step. Replacing an artifact-backed step
+  /// therefore revokes every artifact-derived authority before the new closure becomes usable.
+  void install_unverified_step(std::function<void(double)> step) {
+    if (!step)
+      throw std::invalid_argument("Program install requires a non-empty whole-system step");
+    if (step_install_generation_ == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("Program step-install generation overflow");
+    step_ = std::move(step);
+    hierarchy_refresh_ = nullptr;
+    dt_bound_ = nullptr;
+    installed_hash_.clear();
+    operator_authorities_.clear();
+    history_replay_authorities_.clear();
+    block_map_.clear();
+    block_params_.clear();
+    artifact_backed_ = false;
+    ++step_install_generation_;
+  }
+
+  ArtifactStepInstallSnapshot capture_artifact_step_install() const {
+    return ArtifactStepInstallSnapshot{step_,
+                                       hierarchy_refresh_,
+                                       dt_bound_,
+                                       step_install_generation_,
+                                       installed_hash_,
+                                       operator_authorities_,
+                                       history_replay_authorities_,
+                                       block_map_,
+                                       block_params_,
+                                       diagnostics_,
+                                       cache_,
+                                       hist_,
+                                       artifact_backed_};
+  }
+
+  /// Start one isolated artifact candidate after its complete rollback image has been captured.
+  /// Histories, scheduled values and diagnostics are qualified by the installed Program: retaining
+  /// any of them across A -> B could either expose removed names or let coincident node/ring ids read
+  /// values produced by A. The dynamic loaders call this before the generated prelude; a failed
+  /// candidate restores the snapshot above.
+  void reset_artifact_candidate_state() {
+    diagnostics_.clear();
+    cache_.clear();
+    hist_ = HistoryManager{};
+  }
+
+  void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
+    step_ = std::move(snapshot.step);
+    hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
+    dt_bound_ = std::move(snapshot.dt_bound);
+    step_install_generation_ = snapshot.generation;
+    installed_hash_ = std::move(snapshot.installed_hash);
+    operator_authorities_ = std::move(snapshot.operator_authorities);
+    history_replay_authorities_ = std::move(snapshot.history_replay_authorities);
+    block_map_ = std::move(snapshot.block_map);
+    block_params_ = std::move(snapshot.block_params);
+    diagnostics_ = std::move(snapshot.diagnostics);
+    cache_ = std::move(snapshot.cache);
+    hist_ = std::move(snapshot.history);
+    artifact_backed_ = snapshot.artifact_backed;
+  }
+
+  void require_exact_artifact_step_install(const ArtifactStepInstallSnapshot& before,
+                                           const std::string& runtime) const {
+    if (!step_ || before.generation == std::numeric_limits<std::uint64_t>::max() ||
+        step_install_generation_ != before.generation + 1 || artifact_backed_)
+      throw std::runtime_error(runtime +
+                               " artifact installer must install exactly one new unverified "
+                               "whole-system Program step");
+  }
+
+  /// Attach the hierarchy callback emitted beside the installed AMR Program step. It remains part
+  /// of the artifact-install rollback image so no DSO-backed closure survives a failed install.
+  void install_hierarchy_refresh(std::function<void()> refresh, const std::string& runtime) {
+    if (!step_)
+      throw std::logic_error(runtime +
+                             "::install_program_hierarchy_refresh requires an installed Program");
+    if (!refresh)
+      throw std::invalid_argument(runtime +
+                                  "::install_program_hierarchy_refresh requires a non-empty hook");
+    hierarchy_refresh_ = std::move(refresh);
+  }
+
+  /// Requalify Program-owned accepted state for the hierarchy currently exposed by the AMR engine.
+  /// Direct low-level C++ steps have no artifact context and intentionally remain a no-op; an
+  /// authenticated artifact must always provide the hook.
+  void refresh_hierarchy_state(const std::string& runtime) const {
+    if (!hierarchy_refresh_) {
+      if (artifact_backed_)
+        throw std::logic_error(runtime +
+                               " artifact lacks its accepted-state hierarchy refresh hook");
+      return;
+    }
+    hierarchy_refresh_();
+  }
+
   bool authorizes_history_replay(const std::string& ring, int depth) const {
-    return !artifact_backed_ ||
+    return artifact_backed_ &&
            std::find(history_replay_authorities_.begin(), history_replay_authorities_.end(),
                      std::make_pair(ring, depth)) != history_replay_authorities_.end();
   }
@@ -300,40 +432,56 @@ struct ProgramRuntimeState {
     stride_ = stride;
   }
 
-  /// Validate the exact held-window image against one accepted facade cursor.
-  void validate_cadence_window(int macro_step, const std::string& runtime) const {
+  /// Validate one exact held-window image against an accepted facade macro-step without mutating the
+  /// live cadence state. This is also the preflight used by strict checkpoint restore.
+  void validate_cadence_window_image(double accumulated_dt, int held_steps,
+                                     double window_start_time, int macro_step,
+                                     const std::string& runtime) const {
     if (macro_step < 0)
       throw std::invalid_argument(runtime + " Program cadence requires macro_step >= 0");
     if (stride_ < 1 || substeps_ < 1)
       throw std::logic_error(runtime + " Program cadence configuration is invalid");
-    if (cadence_window_steps_ < 0 || cadence_window_steps_ >= stride_)
+    if (held_steps < 0 || held_steps >= stride_)
       throw std::runtime_error(runtime + " Program cadence window has an invalid held-step count");
-    if (cadence_window_steps_ != macro_step % stride_)
+    if (held_steps != macro_step % stride_)
       throw std::runtime_error(
           runtime +
           " Program cadence window phase differs from the authoritative macro-step; restore the "
           "strict cadence-window checkpoint state before set_clock");
-    if (!std::isfinite(cadence_window_dt_) || cadence_window_dt_ < 0.0)
+    if (!std::isfinite(accumulated_dt) || accumulated_dt < 0.0)
       throw std::runtime_error(runtime +
                                " Program cadence window duration must be finite and non-negative");
-    if (!std::isfinite(cadence_window_start_time_))
+    if (!std::isfinite(window_start_time))
       throw std::runtime_error(runtime + " Program cadence window start time must be finite");
-    if ((cadence_window_steps_ == 0) != (cadence_window_dt_ == 0.0))
+    if ((held_steps == 0) != (accumulated_dt == 0.0))
       throw std::runtime_error(
           runtime +
           " Program cadence window duration/count are inconsistent (zero iff no step is held)");
-    if (cadence_window_steps_ == 0 && cadence_window_start_time_ != 0.0)
+    if (held_steps == 0 && window_start_time != 0.0)
       throw std::runtime_error(
           runtime + " Program cadence inactive window must use the canonical zero start time");
   }
 
-  /// Bind an active held window to the exact accepted physical cursor that owns it.
-  void validate_cadence_window_time(double accepted_time, const std::string& runtime) const {
+  /// Validate an image's exact accepted physical cursor without mutating the live cadence state.
+  void validate_cadence_window_time_image(int held_steps, double window_start_time,
+                                          double accepted_time, const std::string& runtime) const {
     if (!std::isfinite(accepted_time))
       throw std::invalid_argument(runtime + " Program cadence requires a finite accepted time");
-    if (cadence_window_steps_ != 0 && !(cadence_window_start_time_ < accepted_time))
+    if (held_steps != 0 && !(window_start_time < accepted_time))
       throw std::runtime_error(
           runtime + " Program cadence active window start must precede the accepted physical time");
+  }
+
+  /// Validate the currently accepted held-window image.
+  void validate_cadence_window(int macro_step, const std::string& runtime) const {
+    validate_cadence_window_image(cadence_window_dt_, cadence_window_steps_,
+                                  cadence_window_start_time_, macro_step, runtime);
+  }
+
+  /// Bind the currently accepted held window to the physical cursor that owns it.
+  void validate_cadence_window_time(double accepted_time, const std::string& runtime) const {
+    validate_cadence_window_time_image(cadence_window_steps_, cadence_window_start_time_,
+                                       accepted_time, runtime);
   }
 
   /// Prepare one public facade step without mutating the accepted cadence image.
@@ -439,25 +587,46 @@ struct ProgramRuntimeState {
     }
   }
 
-  /// Install an authenticated checkpoint window before set_clock. No historical duration is guessed.
+  /// Stage an authenticated checkpoint window for one exact set_clock transaction. The accepted
+  /// window is not mutated until the matching clock pair is consumed, and no historical duration is
+  /// guessed.
   void restore_cadence_window(double accumulated_dt, int held_steps, double window_start_time,
-                              int macro_step, const std::string& runtime) {
-    const double saved_dt = cadence_window_dt_;
-    const int saved_steps = cadence_window_steps_;
-    const double saved_start = cadence_window_start_time_;
-    cadence_window_dt_ = accumulated_dt;
-    cadence_window_steps_ = held_steps;
-    cadence_window_start_time_ = window_start_time;
-    try {
-      validate_cadence_window(macro_step, runtime);
-    } catch (...) {
-      cadence_window_dt_ = saved_dt;
-      cadence_window_steps_ = saved_steps;
-      cadence_window_start_time_ = saved_start;
-      throw;
-    }
-    cadence_clock_restore_pending_ = true;
+                              double accepted_last_dt, double accepted_time, int macro_step,
+                              const std::string& runtime) {
+    if (cadence_clock_restore_pending_)
+      throw std::logic_error(runtime +
+                             " Program cadence already has a pending clock-restore transaction");
+    validate_cadence_window_image(accumulated_dt, held_steps, window_start_time, macro_step,
+                                  runtime);
+    validate_cadence_window_time_image(held_steps, window_start_time, accepted_time, runtime);
+    if (!std::isfinite(accepted_last_dt) || accepted_last_dt < 0.0)
+      throw std::runtime_error(runtime +
+                               " Program accepted last dt must be finite and non-negative");
+    const Real native_last_dt = static_cast<Real>(accepted_last_dt);
+    if (!std::isfinite(static_cast<double>(native_last_dt)) ||
+        static_cast<double>(native_last_dt) != accepted_last_dt)
+      throw std::runtime_error(runtime +
+                               " Program accepted last dt is not exactly representable by the "
+                               "runtime precision");
+    cadence_clock_restore_dt_ = accumulated_dt;
+    cadence_clock_restore_steps_ = held_steps;
+    cadence_clock_restore_start_time_ = window_start_time;
+    cadence_clock_restore_last_dt_ = accepted_last_dt;
+    cadence_clock_restore_accepted_time_ = accepted_time;
     cadence_clock_restore_macro_step_ = macro_step;
+    cadence_clock_restore_pending_ = true;
+  }
+
+  /// Discard a staged restore without touching the accepted cadence image. Facade set_clock calls
+  /// this on every validation failure so a bad clock cannot strand a pending transaction.
+  void cancel_cadence_clock_restore() noexcept {
+    cadence_clock_restore_pending_ = false;
+    cadence_clock_restore_dt_ = 0.0;
+    cadence_clock_restore_steps_ = 0;
+    cadence_clock_restore_start_time_ = 0.0;
+    cadence_clock_restore_last_dt_ = 0.0;
+    cadence_clock_restore_accepted_time_ = 0.0;
+    cadence_clock_restore_macro_step_ = 0;
   }
 
   /// Authenticate/consume the cadence image for a facade clock restore. At a clean stride boundary,
@@ -465,12 +634,30 @@ struct ProgramRuntimeState {
   void consume_cadence_clock_restore(double accepted_time, int macro_step,
                                      const std::string& runtime) {
     if (cadence_clock_restore_pending_) {
-      if (macro_step != cadence_clock_restore_macro_step_)
+      if (macro_step != cadence_clock_restore_macro_step_ ||
+          std::bit_cast<std::uint64_t>(accepted_time) !=
+              std::bit_cast<std::uint64_t>(cadence_clock_restore_accepted_time_)) {
+        cancel_cadence_clock_restore();
         throw std::runtime_error(runtime +
-                                 " set_clock macro-step differs from the restored cadence window");
-      validate_cadence_window(macro_step, runtime);
-      validate_cadence_window_time(accepted_time, runtime);
-      cadence_clock_restore_pending_ = false;
+                                 " set_clock accepted time or macro-step differs from the restored "
+                                 "cadence window");
+      }
+      try {
+        validate_cadence_window_image(cadence_clock_restore_dt_, cadence_clock_restore_steps_,
+                                      cadence_clock_restore_start_time_,
+                                      cadence_clock_restore_macro_step_, runtime);
+        validate_cadence_window_time_image(cadence_clock_restore_steps_,
+                                           cadence_clock_restore_start_time_,
+                                           cadence_clock_restore_accepted_time_, runtime);
+      } catch (...) {
+        cancel_cadence_clock_restore();
+        throw;
+      }
+      cadence_window_dt_ = cadence_clock_restore_dt_;
+      cadence_window_steps_ = cadence_clock_restore_steps_;
+      cadence_window_start_time_ = cadence_clock_restore_start_time_;
+      last_dt_ = static_cast<Real>(cadence_clock_restore_last_dt_);
+      cancel_cadence_clock_restore();
       return;
     }
     validate_cadence_window(macro_step, runtime);

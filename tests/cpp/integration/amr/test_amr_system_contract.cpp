@@ -433,6 +433,47 @@ TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
   EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
 }
 
+TEST(test_amr_system_contract, CadenceRestoreRejectsClockDriftWithoutMutatingAcceptedState) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+
+  AmrSystem system(cfg);
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+  system.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
+                                        /*window_start_time=*/0.0, /*accepted_last_dt=*/0.075,
+                                        /*accepted_time=*/0.1,
+                                        /*macro_step=*/1);
+
+  // The candidate stays staged until set_clock authenticates the exact accepted pair.
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.0);
+  EXPECT_THROW(system.set_clock(std::nextafter(0.1, 1.0), /*macro_step=*/1), std::runtime_error);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+
+  // The failed clock consumed the staged token; the exact retry can stage and commit cleanly.
+  system.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
+                                        /*window_start_time=*/0.0, /*accepted_last_dt=*/0.075,
+                                        /*accepted_time=*/0.1,
+                                        /*macro_step=*/1);
+  system.set_clock(/*t=*/0.1, /*macro_step=*/1);
+  EXPECT_DOUBLE_EQ(system.time(), 0.1);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.075);
+}
+
 TEST(test_amr_system_contract,
      NonAssociativeCadenceClosesTheSerializedAcceptedClockAtTheFacadeEndpoint) {
 #if defined(POPS_HAS_KOKKOS)

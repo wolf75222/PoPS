@@ -1311,7 +1311,7 @@ Le graphe est résolu avec le layout, authentifié dans le plan et l'artefact, p
 `RuntimeInstance`. Le snapshot de bind ne possède aucun registre parallèle `outputs` ou `diagnostics` :
 les recréer à ce niveau constituerait une seconde autorité et est interdit.
 L'autorité de restart manuel est elle aussi matérialisée pendant `resolve` puis conservée dans le
-plan compilé : soit le provider unique d'un nœud `Checkpoint`, soit le builtin v4 identifié quand le
+plan compilé : soit le provider unique d'un nœud `Checkpoint`, soit le builtin v5 identifié quand le
 graphe n'en déclare aucun. `RuntimeInstance` ne construit jamais un provider de repli tardif. Tout
 provider déclare aussi `validate_snapshot()` et doit produire une préparation compensatable portant
 `discard()` et `rollback()` ; ce protocole est vérifié avant qu'un effet accepté puisse être publié.
@@ -1357,14 +1357,14 @@ Un checkpoint strict conserve au minimum : identités du plan/programme/composan
 consommateurs et contrat de plateforme. Un restart refuse toute divergence non autorisée. La garantie
 bit-identique est prouvée par continuation indépendante, pas par comparaison du manifest seul.
 
-Le restart v4 MPI est un protocole collectif du `RuntimeInstance`, jamais une lecture concurrente du
+Le restart v5 MPI est un protocole collectif du `RuntimeInstance`, jamais une lecture concurrente du
 fichier par les moteurs. Tous les rangs authentifient d'abord la même cible ; le rang 0 lit une seule
 fois l'artefact, authentifie son enveloppe et diffuse ses bytes exacts ainsi que les cursors via le
 communicator porté par `ExecutionContext`. Chaque rang décode alors le payload en mémoire et termine
 le préflight complet Uniform, AMR ou multi-layout. Un consensus sans erreur est obligatoire avant la
 première mutation native. L'application conserve un snapshot accepté sur chaque rang jusqu'aux
 consensus `apply` et `commit` ; toute erreur ou divergence déclenche le rollback de tous les moteurs.
-Le multi-layout encapsule les payloads enfants dans le container v4 et les rejoue directement en
+Le multi-layout encapsule les payloads enfants dans le container v5 et les rejoue directement en
 mémoire, sans fichiers enfants temporaires ni `np.load` concurrent sur un filesystem partagé.
 
 La capture suit le contrat symétrique avant tout `*_global` natif : chaque rang construit sans

@@ -994,6 +994,7 @@ void System::set_field_boundary_kernel(const std::string& provider_slot,
   auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
   if (plan_it == p_->fields_.named_field_plans_.end())
     throw std::runtime_error("System::set_field_boundary_kernel unknown provider slot");
+  p_->fields_.prepare_program_boundary_kernel_install(provider_slot);
   auto& plan = plan_it->second;
   plan.boundary_kernel = kernel;
   plan.has_boundary_kernel = true;

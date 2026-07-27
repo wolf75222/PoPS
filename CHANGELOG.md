@@ -18,6 +18,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Strict Uniform/AMR accepted-state checkpoints now use payload v5, persist the held Program cadence
+  window and last accepted Program interval, commit clock restoration transactionally, and allow
+  selective history replay only for the exact ring/depth authority exported by the installed artifact.
+  Explicit AMR bootstrap also republishes the Program's level-qualified accepted image before each
+  hierarchy transition commits, so a checkpoint taken before the first accepted step (after the
+  required zero-step `pops.run` establishes its controls identity) already covers every active level.
+- Dynamic Program replacement now stages histories, scheduled-value caches and scalar diagnostics as
+  artifact-qualified state: a successful A-to-B replacement starts B cold, while a rejected candidate
+  restores A's complete state and executable step.
 - Scientific output now publishes readable field names, compressed compact VTU/PVTU datasets,
   temporal PVD catalogues, physical-time schedules, configurable failure policies, asynchronous
   serial and MPI consumers, ParaView state recipes, and Catalyst Live. The reproducible local live

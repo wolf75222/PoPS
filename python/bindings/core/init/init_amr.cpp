@@ -785,9 +785,11 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("program_cadence_window_dt", &AmrSystem::program_cadence_window_dt)
       .def("program_cadence_window_steps", &AmrSystem::program_cadence_window_steps)
       .def("program_cadence_window_start_time", &AmrSystem::program_cadence_window_start_time)
+      // Accepted Program interval provenance used by strict history replay validation.
+      .def("program_last_dt", &AmrSystem::program_last_dt)
       .def("restore_program_cadence_window", &AmrSystem::restore_program_cadence_window,
            py::arg("accumulated_dt"), py::arg("held_steps"), py::arg("window_start_time"),
-           py::arg("macro_step"))
+           py::arg("accepted_last_dt"), py::arg("accepted_time"), py::arg("macro_step"))
       // Changes the RUNTIME parameters of a compiled time PROGRAM block WITHOUT recompiling the .so
       // (ADC-508, parity ADC-510). prog_block = the PROGRAM block index (P.state order); values = that
       // block's params in sorted-name order. Python's _install_program_params routes params={name: value}

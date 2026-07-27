@@ -39,6 +39,7 @@
 #include <map>  // named_aux_: NAMED aux fields (comp -> field), re-applied after channel realloc
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1427,6 +1428,129 @@ class SystemFieldSolver {
     std::unique_ptr<FieldNullspaceWorkspace> nullspace_workspace;
   };
 
+  struct ProgramInstallSnapshot {
+    struct RegisteredPlan {
+      bool has_plan = false;
+      FieldSolveConfig plan;
+    };
+    struct BoundaryBaseline {
+      bool has_kernel = false;
+      CompiledFieldBoundaryKernel kernel;
+      FieldLogicalTimePoint point;
+    };
+
+    std::map<std::string, FieldSolveConfig> plans;
+    std::map<std::string, RegisteredPlan> registered;
+    std::map<std::string, BoundaryBaseline> boundary_baselines;
+    std::set<std::string> candidate_boundary_slots;
+    bool boundary_install_active = false;
+    bool consensus_verified = false;
+  };
+
+  /// Begin the Program-owned dynamic-boundary overlay transaction. Any boundary kernel installed by
+  /// the previous artifact is first replaced by its pre-artifact baseline, so an artifact with no
+  /// boundary export removes the old overlay instead of silently inheriting its function pointers.
+  ProgramInstallSnapshot begin_program_install() {
+    if (program_boundary_install_active_)
+      throw std::logic_error("System Program boundary install transaction is already active");
+    ProgramInstallSnapshot snapshot;
+    snapshot.plans = named_field_plans_;
+    snapshot.boundary_baselines = program_boundary_baselines_;
+    snapshot.candidate_boundary_slots = candidate_program_boundary_slots_;
+    snapshot.boundary_install_active = program_boundary_install_active_;
+    snapshot.consensus_verified = field_plan_consensus_verified_;
+    for (const auto& [name, field] : named_fields_) {
+      if (field.backend || field.nullspace_workspace)
+        throw std::logic_error(
+            "System::install_program dynamic field boundaries must be installed before a named "
+            "field backend is materialized");
+      snapshot.registered.emplace(
+          name, typename ProgramInstallSnapshot::RegisteredPlan{field.has_plan, field.plan});
+    }
+
+    // Validate every baseline before mutating a plan, keeping begin itself atomic on an inconsistent
+    // registry. A registered field is optional: plans may be authored before their output block.
+    for (const auto& [slot, baseline] : program_boundary_baselines_) {
+      (void)baseline;
+      if (named_field_plans_.find(slot) == named_field_plans_.end())
+        throw std::logic_error("System Program boundary baseline lost provider slot '" + slot +
+                               "'");
+    }
+    for (const auto& [slot, baseline] : program_boundary_baselines_) {
+      auto& plan = named_field_plans_.at(slot);
+      plan.has_boundary_kernel = baseline.has_kernel;
+      plan.boundary_kernel = baseline.kernel;
+      plan.boundary_context.point = baseline.point;
+      const auto registered = named_fields_.find(slot);
+      if (registered != named_fields_.end()) {
+        registered->second.plan.has_boundary_kernel = baseline.has_kernel;
+        registered->second.plan.boundary_kernel = baseline.kernel;
+        registered->second.plan.boundary_context.point = baseline.point;
+        invalidate_named_backend_(registered->second);
+      }
+    }
+    if (!program_boundary_baselines_.empty())
+      field_plan_consensus_verified_ = false;
+    candidate_program_boundary_slots_.clear();
+    program_boundary_install_active_ = true;
+    return snapshot;
+  }
+
+  /// Record the baseline before a Program installer replaces one provider slot. Repeated writes by
+  /// the same installer preserve the first baseline. A manual write outside a Program transaction
+  /// supersedes any prior Program ownership and becomes the new durable authoring state.
+  void prepare_program_boundary_kernel_install(const std::string& slot) {
+    if (!program_boundary_install_active_) {
+      program_boundary_baselines_.erase(slot);
+      candidate_program_boundary_slots_.erase(slot);
+      return;
+    }
+    const auto plan = named_field_plans_.find(slot);
+    if (plan == named_field_plans_.end())
+      throw std::logic_error("System Program boundary install lost provider slot '" + slot + "'");
+    if (program_boundary_baselines_.find(slot) == program_boundary_baselines_.end()) {
+      program_boundary_baselines_.emplace(
+          slot, typename ProgramInstallSnapshot::BoundaryBaseline{
+                    plan->second.has_boundary_kernel, plan->second.boundary_kernel,
+                    plan->second.boundary_context.point});
+    }
+    candidate_program_boundary_slots_.insert(slot);
+  }
+
+  /// Publish exactly the boundary slots installed by the candidate artifact.
+  void commit_program_install() {
+    if (!program_boundary_install_active_)
+      throw std::logic_error("System Program boundary install transaction is not active");
+    for (auto it = program_boundary_baselines_.begin(); it != program_boundary_baselines_.end();) {
+      if (candidate_program_boundary_slots_.find(it->first) ==
+          candidate_program_boundary_slots_.end())
+        it = program_boundary_baselines_.erase(it);
+      else
+        ++it;
+    }
+    candidate_program_boundary_slots_.clear();
+    program_boundary_install_active_ = false;
+  }
+
+  /// Roll back a failed generated boundary installer before its DSO is unloaded.
+  void restore_program_install_snapshot(ProgramInstallSnapshot&& snapshot) {
+    named_field_plans_ = std::move(snapshot.plans);
+    for (auto& [name, field] : named_fields_) {
+      const auto saved = snapshot.registered.find(name);
+      if (saved == snapshot.registered.end())
+        throw std::logic_error("System Program-install rollback lost a named field");
+      field.has_plan = saved->second.has_plan;
+      field.plan = std::move(saved->second.plan);
+      field.backend.reset();
+      field.nullspace_ready = false;
+      field.nullspace_workspace.reset();
+    }
+    program_boundary_baselines_ = std::move(snapshot.boundary_baselines);
+    candidate_program_boundary_slots_ = std::move(snapshot.candidate_boundary_slots);
+    program_boundary_install_active_ = snapshot.boundary_install_active;
+    field_plan_consensus_verified_ = snapshot.consensus_verified;
+  }
+
   static void invalidate_named_backend_(NamedField& field) {
     field.backend.reset();
     field.nullspace_ready = false;
@@ -1447,6 +1571,10 @@ class SystemFieldSolver {
   // Field plans are installed before compiled block loaders register their output components.
   // Keep the exact per-provider plan independently, then attach it when register_named_field runs.
   std::map<std::string, FieldSolveConfig> named_field_plans_;
+  std::map<std::string, typename ProgramInstallSnapshot::BoundaryBaseline>
+      program_boundary_baselines_;
+  std::set<std::string> candidate_program_boundary_slots_;
+  bool program_boundary_install_active_ = false;
   std::map<std::string, std::shared_ptr<runtime::field::PreparedFieldSolverComponent>>
       external_field_components_;
   EllipticBackendRegistry elliptic_registry_;

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""ADC-631 (c): mid-regrid v3 checkpoint of a multistep AMR history -> fresh restart -> bit-identical.
+"""ADC-631 (c): mid-regrid v5 checkpoint of a multistep AMR history -> fresh restart -> bit-identical.
 
 Under ACTIVE regridding (regrid_every=2, regrids firing BEFORE the checkpoint and AFTER the restart),
-a compiled multistep Program's history ring is remapped through every regrid; a v3 checkpoint stores it
+a compiled multistep Program's history ring is remapped through every regrid; a v5 checkpoint stores it
 per the persistence policy and a FRESH AmrSystem restart reproduces the uninterrupted trajectory
 BIT-IDENTICALLY (np.array_equal, no tolerance -- extends the ADC-542 acceptance with histories):
 
   (1) Dense (AB2 R-ring, depth 2): every slot stored -> no replay -> the ring round-trips through the
-      regrid remap + v3 restore and the continuation is bit-identical end-to-end;
+      regrid remap + v5 restore and the continuation is bit-identical end-to-end;
   (2) NON-Dense 3-slot state ring (max lag 2, Interval(2), regrid_every=4): the checkpoint stores
       slots {0,2} and the restart REPLAYS slot 1 by re-stepping the installed Program. The checkpoint
       (m=8) is taken BETWEEN two regrids (fired at step 4; next at the head of step 8, post-restart)
@@ -233,7 +233,7 @@ def _build(program_factory, regrid_every=2, program_cadence=None):
     amr._step_strategy = authored._step_strategy
     amr._step_transaction_plan = authored.transaction_plan()
     # Attach the per-ring persistence policy (what pops.bind's step-5a does): the low-level
-    # install_program(so_path) seam does not see the compiled Program object, so the v3 checkpoint
+    # install_program(so_path) seam does not see the compiled Program object, so the v5 checkpoint
     # would otherwise persist Dense. name -> policy from the compiled Program's _history_persistence.
     persistence = getattr(getattr(compiled, "program", None), "_history_persistence", None)
     if persistence:
@@ -276,6 +276,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
 
     run, _ = _build(program_factory, regrid_every)
     _advance(run, half)
+    accepted_program_dt = run._s.program_last_dt()
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = run.checkpoint(os.path.join(tmp, label))
         d = np.load(ckpt, allow_pickle=False)
@@ -304,6 +305,10 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
             stored_info[h] = (depth, sorted(requested), sorted(stored), mode, fingerprint)
         fresh, _ = _build(program_factory, regrid_every)
         fresh.restart(ckpt)
+        assert fresh._s.program_last_dt() == accepted_program_dt, (
+            "history replay must restore the checkpoint's accepted Program dt instead of leaking "
+            "one internal replay interval"
+        )
         rings_after_restart = _rings(fresh)
         report = fresh.last_restart_report()
         _advance(fresh, nsteps - half)
@@ -312,7 +317,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
 
 
 def test_ab2_dense_checkpoint_bit_identical():
-    print("== (1) AB2 Dense: mid-regrid v3 ckpt -> restart -> bit-identical continuation ==")
+    print("== (1) AB2 Dense: mid-regrid v5 ckpt -> restart -> bit-identical continuation ==")
     out, err = _run_case(_ab2_program, nsteps=6, half=3, label="ab2")
     assert out is not None, err
     ref, got, cont_rings, rest_rings, stored_info, _report = out

@@ -248,7 +248,7 @@ class _RestartSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class RestartV3:
-    """Compatibility-named adapter over the strict Uniform/AMR accepted-state v4 payloads."""
+    """Compatibility-named adapter over the strict Uniform/AMR accepted-state v5 payloads."""
 
     __pops_ir_immutable__ = True
     bit_identical: bool = False
@@ -260,7 +260,7 @@ class RestartV3:
     def consumer_data(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
-            "provider_id": "pops.restart.accepted-state-v4",
+            "provider_id": "pops.restart.accepted-state-v5",
             "extension": ".npz",
             "bit_identical": self.bit_identical,
             # A serial runtime is the one-member case of this collective operation.  Providers
@@ -333,7 +333,7 @@ class RestartAuthority:
     """Resolved, plan-owned authority for manual and scheduled restart checkpoints."""
 
     operation: Any = field(repr=False)
-    source: str = "builtin-v4"
+    source: str = "builtin-v5"
     operation_data: Any = field(init=False, repr=False)
     identity: Any = field(init=False)
 
@@ -342,7 +342,7 @@ class RestartAuthority:
         from pops._frozen_data import thaw_data
         from ._consumer_contracts import _provider_data
 
-        if self.source not in {"builtin-v4", "consumer-graph"}:
+        if self.source not in {"builtin-v5", "consumer-graph"}:
             raise ValueError("restart authority has an unsupported source")
         data = _provider_data(
             self.operation,

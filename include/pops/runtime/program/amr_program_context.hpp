@@ -359,6 +359,23 @@ class AmrProgramContext {
     facade_->install_program_step(std::move(step));
   }
 
+  /// Generated AMR artifacts retain their context in @p owner and install a second closure beside
+  /// the macro-step. Explicit bootstrap can then requalify the accepted level axes immediately,
+  /// before a checkpoint is observable and without reconstructing Program-owned state in Python.
+  void install(std::function<void(double)> step, std::shared_ptr<AmrProgramContext> owner,
+               std::function<void()> refresh_resources = {}) const {
+    if (!owner || owner.get() != this)
+      throw std::invalid_argument(
+          "AMR Program hierarchy refresh owner must be the installed context");
+    install(std::move(step));
+    facade_->install_program_hierarchy_refresh(
+        [owner = std::move(owner), refresh_resources = std::move(refresh_resources)]() {
+          if (refresh_resources)
+            refresh_resources();
+          owner->refresh_accepted_hierarchy_state_();
+        });
+  }
+
   /// Translate a PROGRAM block index to its explicit, name-matched AMR block index (Spec 3 criterion
   /// 23). Empty, incomplete and invalid maps fail before any hierarchy storage is accessed; positional
   /// block identity is never inferred.
@@ -2147,7 +2164,11 @@ class AmrProgramContext {
         sync_report_.push_back({parent, child, b, SyncPhase::Reflux, sync_clock});
         const EdgeFlux coarse_role = reflux_flux_from_ledger_(b, parent, ledger_begin, ledger_end);
         const EdgeFlux fine_role = reflux_flux_from_ledger_(b, child, ledger_begin, ledger_end);
-        pops::detail::route_reflux_program(*eng_, sb, child, coarse_role, fine_role);
+        if (coarse_role.empty() != fine_role.empty())
+          throw std::runtime_error(
+              "AMR conservative ledger contains only one side of a parent/child flux pair");
+        if (!coarse_role.empty())
+          pops::detail::route_reflux_program(*eng_, sb, child, coarse_role, fine_role);
       }
       sync_report_.push_back({parent, child, b, SyncPhase::AverageDown, sync_clock});
       eng_->average_down_level(sb, child);
@@ -2589,6 +2610,14 @@ class AmrProgramContext {
     facade_->restore_program_accepted_state(
         serialize_amr_program_accepted_state(accepted_state_()));
     accepted_state_revision_ = facade_->program_accepted_state_revision();
+  }
+
+  void refresh_accepted_hierarchy_state_() const {
+    if (attempt_snapshot_active_ || active_parent_ || conservative_ledger_.in_transaction())
+      throw std::logic_error(
+          "AMR Program hierarchy refresh requires an accepted bootstrap boundary");
+    ensure_level_clocks_();
+    publish_program_accepted_state_();
   }
 
   struct ActiveParentWindow {

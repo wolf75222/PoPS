@@ -108,24 +108,25 @@ Supported native routes include:
   exact provider route only on AMR level 0.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v4 for Uniform and AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v5 for Uniform and AMR. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
-  authority is resolved into the compiled plan, including the builtin v4 manual route. Restart reads
+  authority is resolved into the compiled plan, including the builtin v5 manual route. Restart reads
   and authenticates that file once on rank
   zero, broadcasts the exact bytes through the installed `ExecutionContext` communicator, preflights
   every rank before mutation, and keeps a rollback snapshot until apply/commit consensus. Multi-layout
   child payloads are decoded and replayed in memory without shared child files. AMR preserves
   multi-block/multi-level accepted state under active regridding, including topology ownership,
-  clocks, histories and transfer provenance.
+  clocks, the held cadence window, the last accepted Program interval, histories and transfer
+  provenance.
 
 Explicit unsupported rows include:
 
 - `limiter:mc` and `limiter:superbee`: catalogued descriptors with no native C++ symbol.
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
-  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use accepted-state v4.
-- `checkpoint:amr_dynamic_regrid` is available through the strict v4 accepted-state route. The single
+  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use accepted-state v5.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v5 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
   per native rank, so AMR restart currently requires the same rank count; rank redistribution is never
   inferred from opaque local publications.

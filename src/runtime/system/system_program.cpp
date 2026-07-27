@@ -22,9 +22,7 @@ void require_cartesian_boundary_linearization(bool embedded_boundary_set, Geomet
 // Compiled time-program seam (epic ADC-399 / ADC-401): a generated problem.so installs its macro-step
 // body and reaches per-block storage through these accessors (Impl is private to this TU).
 void System::install_program_step(std::function<void(double)> step) {
-  p_->program_.step_ = std::move(step);
-  p_->program_.artifact_backed_ = false;
-  p_->program_.history_replay_authorities_.clear();
+  p_->program_.install_unverified_step(std::move(step));
 }
 // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the installed
 // program closure (cf. SystemProgramDriver::step). Kept separate from install_program so the .so ABI is
@@ -53,10 +51,14 @@ int System::program_cadence_window_steps() const {
 double System::program_cadence_window_start_time() const {
   return p_->program_.cadence_window_start_time_;
 }
+double System::program_last_dt() const {
+  return static_cast<double>(p_->program_.last_dt_);
+}
 void System::restore_program_cadence_window(double accumulated_dt, int held_steps,
-                                            double window_start_time, int macro_step) {
-  p_->program_.restore_cadence_window(accumulated_dt, held_steps, window_start_time, macro_step,
-                                      "System");
+                                            double window_start_time, double accepted_last_dt,
+                                            double accepted_time, int macro_step) {
+  p_->program_.restore_cadence_window(accumulated_dt, held_steps, window_start_time,
+                                      accepted_last_dt, accepted_time, macro_step, "System");
 }
 int System::n_blocks() const {
   return static_cast<int>(p_->sp.size());

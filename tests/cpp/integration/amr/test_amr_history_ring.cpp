@@ -249,7 +249,8 @@ static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n,
   return rt;
 }
 
-static void install_native_ab2_program(runtime::program::AmrProgramContext& context,
+static void install_native_ab2_program(AmrSystem& system,
+                                       runtime::program::AmrProgramContext& context,
                                        std::function<void()> after_level = {}) {
   context.configure_primary_clock("clock.macro");
   context.register_history("a.rate", 1, -1, 0, "block.a.U", "cell.conservative", "clock.macro",
@@ -273,12 +274,19 @@ static void install_native_ab2_program(runtime::program::AmrProgramContext& cont
         after_level();
     });
   });
+  // Direct Program replacement revokes every artifact-derived binding authority. This native
+  // fixture owns an explicit identity map and republishes it only after the final body is installed.
+  std::vector<int> block_map(static_cast<std::size_t>(context.n_blocks()));
+  for (int block = 0; block < context.n_blocks(); ++block)
+    block_map[static_cast<std::size_t>(block)] = block;
+  system.set_program_block_map(block_map);
 }
 
 // Minimal explicit Program used by the facade transaction tests below.  The hierarchy attempt owns
 // regrid, level clocks and conservative catch-up; the probe publication deliberately happens after
 // that inner attempt so the retained outer AmrSystem transaction must commit or restore both parts.
-static void install_transaction_probe_program(runtime::program::AmrProgramContext& context,
+static void install_transaction_probe_program(AmrSystem& system,
+                                              runtime::program::AmrProgramContext& context,
                                               AmrRuntime& runtime,
                                               std::function<void()> after_hierarchy = {}) {
   context.configure_primary_clock("clock.macro");
@@ -308,6 +316,10 @@ static void install_transaction_probe_program(runtime::program::AmrProgramContex
     if (after_hierarchy)
       after_hierarchy();
   });
+  std::vector<int> block_map(static_cast<std::size_t>(context.n_blocks()));
+  for (int block = 0; block < context.n_blocks(); ++block)
+    block_map[static_cast<std::size_t>(block)] = block;
+  system.set_program_block_map(block_map);
 }
 
 // Concatenated per-level flat of block 0's live state (the ground truth a stored ring slot mirrors).
@@ -415,6 +427,48 @@ TEST(test_amr_history_ring, SelectiveReplayCapabilityCannotBeForgedByAnEngineCal
   SUCCEED();
 }
 
+TEST(test_amr_history_ring, DirectProgramStepCannotAuthorizeFacadeSelectiveReplay) {
+  constexpr int n = 8;
+  constexpr int depth = 3;
+  const std::string ring = "R";
+
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+  AmrSystem sim(cfg);
+  sim.add_block("a", exb_spec(+1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1);
+  sim.set_density("a", blob(n, 0.5, 0.5, 0.25, 1.0, 0.1));
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  int executed_steps = 0;
+  sim.install_program_step([&executed_steps](double) { ++executed_steps; });
+  sim.set_program_block_map({0});
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* runtime = sim.engine();
+  ASSERT_NE(runtime, nullptr);
+  detail::AmrHistoryOps::register_history(*runtime, 0, ring, depth - 1);
+  const std::vector<double> anchor = runtime->block_level_state(0, 0);
+  sim.restore_history(ring, 0, anchor);
+  sim.restore_history(ring, depth - 1, anchor);
+  for (int slot = 0; slot < depth; ++slot)
+    sim.restore_history_slot_dt(ring, slot, 0.05);
+  sim.set_history_initialized(ring, true);
+
+  try {
+    (void)sim.rebuild_history_slots(ring, {0, depth - 1});
+    FAIL() << "an AMR direct Program step forged selective replay authority";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("validated native authority"), std::string::npos);
+    EXPECT_NE(std::string(error.what()).find("Dense()"), std::string::npos);
+  }
+  EXPECT_EQ(executed_steps, 0);
+
+  sim.restore_history(ring, 1, anchor);
+  EXPECT_EQ(sim.rebuild_history_slots(ring, {0, 1, 2}), 0);
+  EXPECT_EQ(executed_steps, 0);
+}
+
 TEST(test_amr_history_ring, InvalidOutgoingDtIsRejectedBeforeRestoreMutation) {
   AmrRuntime runtime = make_two_block(32, 1.0, 1.0);
   detail::AmrHistoryOps::register_history(runtime, 0, "R", 2);
@@ -513,6 +567,8 @@ TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp) {
   AmrRuntime* rt = sim.engine();
   ASSERT_NE(rt, nullptr);
   ASSERT_EQ(rt->nlev(), 1);
+  const std::string cold_history = "bootstrap.cold.depth3";
+  detail::AmrHistoryOps::register_history(*rt, 0, cold_history, 2);
 
   // The test owns only scheduler semantics, so use the runtime's generic bootstrap seam directly:
   // a deterministic positive component tag materializes L1 and L2 without involving Python.
@@ -526,6 +582,10 @@ TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp) {
   EXPECT_GT(rt->fill_bootstrap_block_constant(1, 2, {1.0}), 0);
   rt->commit_bootstrap_level();
   ASSERT_EQ(rt->nlev(), 3);
+  EXPECT_EQ(sim.history_depth(cold_history), 3);
+  EXPECT_FALSE(sim.history_initialized(cold_history));
+  EXPECT_EQ(sim.history_fill_count(cold_history), 0);
+  EXPECT_GT(sim.history_global(cold_history, 2).size(), static_cast<std::size_t>(n * n));
   rt->set_parent_child_temporal_relations(
       {::pops::amr::ParentChildClockRelation(0, 1, ::pops::amr::Rational(2, 1),
                                              ::pops::amr::RemainderPolicy::IntegralOnly),
@@ -583,6 +643,62 @@ TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp) {
   EXPECT_EQ(report[8].parent_level, 0);
   EXPECT_EQ(report[8].child_level, 1);
   EXPECT_EQ(report[8].clock.phase, amr::Rational(1, 1));
+}
+
+TEST(test_amr_history_ring, BootstrapRefreshFailureRollsBackAcceptedStateAndCanRetry) {
+  constexpr int n = 16;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.level_count = 2;
+  cfg.explicit_bootstrap = true;
+  cfg.periodicity = {true, true};
+  AmrSystem sim(cfg);
+  install_history_state_authorities(sim);
+  sim.set_temporal_relations({1}, {1}, {"integral_only"});
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
+  sim.set_density("b", blob(n, 0.65, 0.5, 0.5, 1.0, 0.12));
+  sim.set_program_block_map({0, 1});
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* runtime = sim.engine();
+  ASSERT_NE(runtime, nullptr);
+  ASSERT_EQ(runtime->nlev(), 1);
+  test::install_prepared_threshold_union(*runtime, {{0, 0, Real(0.5)}},
+                                         "test.bootstrap-refresh-rollback-tag");
+  sim.install_program_step([](double) {});
+
+  const auto accepted_before = sim.program_accepted_state();
+  const auto revision_before = sim.program_accepted_state_revision();
+  int refresh_calls = 0;
+  sim.install_program_hierarchy_refresh([&] {
+    ++refresh_calls;
+    sim.restore_program_accepted_state({1, 2, 3});
+    throw std::runtime_error("injected hierarchy refresh failure");
+  });
+  sim.begin_bootstrap_plan();
+  ASSERT_TRUE(sim.bootstrap_next_level(2));
+  EXPECT_THROW(sim.commit_bootstrap_level(), std::runtime_error);
+  EXPECT_EQ(refresh_calls, 1);
+  EXPECT_EQ(sim.program_accepted_state(), accepted_before);
+  EXPECT_EQ(sim.program_accepted_state_revision(), revision_before);
+  sim.rollback_bootstrap_level();
+  EXPECT_EQ(runtime->nlev(), 1);
+
+  sim.install_program_hierarchy_refresh([&] {
+    ++refresh_calls;
+    sim.restore_program_accepted_state({4, 5, 6});
+  });
+  sim.begin_bootstrap_plan();
+  ASSERT_TRUE(sim.bootstrap_next_level(2));
+  EXPECT_NO_THROW(sim.commit_bootstrap_level());
+  EXPECT_EQ(refresh_calls, 2);
+  EXPECT_EQ(runtime->nlev(), 2);
+  EXPECT_EQ(sim.program_accepted_state(), (std::vector<std::uint8_t>{4, 5, 6}));
+  EXPECT_EQ(sim.program_accepted_state_revision(), revision_before + 1);
 }
 
 TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace) {
@@ -785,6 +901,7 @@ TEST(test_amr_history_ring, LogicalSubcyclesPartitionEveryLevelWindowAndRestoreI
       parents_after.push_back({context.level(), take_snapshot()});
     });
   });
+  sim.set_program_block_map({0, 1});
   const double initial_time = sim.time();
   sim.step(macro_dt);
 
@@ -898,7 +1015,7 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   test::install_prepared_threshold_union(*rt, {{0, 0, Real(-1.0e30)}, {1, 0, Real(-1.0e30)}},
                                          "test::lagged-flux-depth-refine@1");
   runtime::program::AmrProgramContext context(rt, &sim);
-  install_native_ab2_program(context);
+  install_native_ab2_program(sim, context);
 
   sim.step(dt);  // fresh hierarchy: bind the accepted one-level topology and seed AB2
   ASSERT_EQ(rt->nlev(), 1);
@@ -1048,6 +1165,7 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
           context.rotate_histories("clock.macro");
         });
   });
+  sim.set_program_block_map({0, 1});
 
   sim.step(dt);
   sim.step(dt);
@@ -1084,7 +1202,7 @@ TEST(test_amr_history_ring, ProgramHistoryMetadataShrinksAndRegrowsWithActiveHie
   ASSERT_EQ(rt->max_levels(), 2);
 
   runtime::program::AmrProgramContext context(rt, &sim);
-  install_native_ab2_program(context);
+  install_native_ab2_program(sim, context);
   sim.step(dt);  // initialize both temporal slots on the bootstrap hierarchy
 
   // Empty tags remove the child before the next Program body.  The accepted image must expose only
@@ -1168,7 +1286,7 @@ TEST(test_amr_history_ring, RejectedAb2RegridRestoresTopologyHistoryFluxAndState
 
   bool reject_after_rebind = false;
   bool saw_changed_topology = false;
-  install_native_ab2_program(context, [&] {
+  install_native_ab2_program(sim, context, [&] {
     if (reject_after_rebind && context.level() == 1 &&
         context.history_flux_topology_rebind_count() == 1) {
       saw_changed_topology = true;
@@ -1243,7 +1361,7 @@ TEST(test_amr_history_ring, AcceptedStateRestartReconstructsReboundFluxAuthority
   AmrSystem sim(cfg);
   AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n);
   runtime::program::AmrProgramContext original(rt, &sim);
-  install_native_ab2_program(original);
+  install_native_ab2_program(sim, original);
 
   sim.step(dt);
   sim.step(dt);
@@ -1269,7 +1387,7 @@ TEST(test_amr_history_ring, AcceptedStateRestartReconstructsReboundFluxAuthority
   sim.restore_program_accepted_state(checkpoint);
   runtime::program::AmrProgramContext restored(rt, &sim);
   ASSERT_FALSE(restored.history_flux_topology_bound());
-  install_native_ab2_program(restored);
+  install_native_ab2_program(sim, restored);
   ASSERT_FALSE(restored.history_flux_topology_bound());
   sim.step(dt);
 
@@ -1312,7 +1430,7 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   const int regrids_before = rt->regrid_count();
 
   runtime::program::AmrProgramContext context(rt, &sim);
-  install_transaction_probe_program(context, *rt,
+  install_transaction_probe_program(sim, context, *rt,
                                     [&] { sim.record_program_diagnostic("accepted", 7.0); });
 
   sim.begin_step_transaction();
@@ -1338,7 +1456,6 @@ TEST(test_amr_history_ring, FacadeSnapshotRestoresClockAfterSeveralAcceptedSteps
   AmrSystemConfig cfg;
   cfg.n = 8;
   cfg.L = 1.0;
-  cfg.level_count = 1;
   cfg.regrid_every = 0;
   cfg.periodicity = {true, true};
 
@@ -1398,7 +1515,7 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   bool topology_changed_during_attempt = false;
 
   runtime::program::AmrProgramContext context(rt, &sim);
-  install_transaction_probe_program(context, *rt, [&] {
+  install_transaction_probe_program(sim, context, *rt, [&] {
     topology_changed_during_attempt = !same_patches(rt->patch_boxes(), patches_before);
     sim.record_program_diagnostic("provisional", 42.0);
     throw runtime::program::StepAttemptRejected(
@@ -1513,6 +1630,7 @@ TEST(test_amr_history_ring, FineNonFiniteAfterCoarseSuccessRestoresCompleteAccep
       }
     });
   });
+  sim.set_program_block_map({0});
 
   const double time_before = sim.time();
   const int facade_step_before = sim.macro_step();
