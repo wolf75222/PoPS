@@ -116,6 +116,22 @@ def _current_temporal_json(
             else state.last_accepted_dt.hex()
         ),
     }
+    from pops.time import ErrorControlledDt
+
+    if type(state.step_strategy) is ErrorControlledDt:
+        next_dt = (
+            state.step_strategy.dt_init
+            if state.last_accepted_dt is None
+            else min(
+                state.step_strategy.dt_max,
+                state.last_accepted_dt * state.step_strategy.growth,
+            )
+        )
+        temporal.queue_error_controlled_proposal(
+            dt=next_dt,
+            time=time,
+            macro_step=macro_step,
+        )
     temporal.transaction_stats = dict(state.transaction_stats)
     return temporal.checkpoint_json(time=time, macro_step=macro_step)
 

@@ -203,16 +203,14 @@ def test_program_graph_rejects_a_provider_for_a_different_history():
         )
 
 
-def test_unimplemented_history_interpolation_native_lowering_fails_closed():
-    from pops.codegen.program_codegen import emit_cpp_program
-
-    program = Program("native_refusal")
+def _interpolated_program(capability):
+    program = Program("native_history_interpolation")
     state = typed_state(program, "fluid", state_name="U")
-    program.keep_history(state, depth=2, interpolation=LinearInterpolation())
+    program.keep_history(state, depth=2, interpolation=capability)
     fast = Clock("fast", owner=program.owner_path)
     interpolated = program.synchronize(
         state.prev,
-        at=TimePoint(fast),
+        at=TimePoint(fast, step=-1),
         relation=InterpolateHistory(state.prev),
     )
     advanced = program.subcycle(
@@ -228,9 +226,33 @@ def test_unimplemented_history_interpolation_native_lowering_fails_closed():
         relation=SampleAndHold(),
     )
     program.commit(state.next, returned)
+    return program
 
-    with pytest.raises(NotImplementedError, match="has no native lowering"):
-        emit_cpp_program(program, model=None)
+
+def test_linear_history_interpolation_lowers_to_the_native_uniform_slot_kernel():
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    source = emit_cpp_program(
+        _interpolated_program(LinearInterpolation()),
+        model=None,
+        target="system",
+    )
+
+    assert "ctx.interpolate_history_linear" in source
+    assert "ctx.scratch_state" in source
+
+
+def test_dense_and_amr_history_interpolation_lowering_fail_closed():
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    with pytest.raises(NotImplementedError, match="supported capability"):
+        emit_cpp_program(_interpolated_program(DenseOutput(2)), model=None)
+    with pytest.raises(NotImplementedError, match="Uniform-only"):
+        emit_cpp_program(
+            _interpolated_program(LinearInterpolation()),
+            model=None,
+            target="amr_system",
+        )
 
 
 def test_validity_interval_cannot_mix_clocks_or_run_backwards():

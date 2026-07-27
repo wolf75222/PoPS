@@ -204,6 +204,110 @@ def _uniform_artifact(native_cxx, *, attempt_policy):
     return artifact
 
 
+def _linear_history_artifact(native_cxx):
+    """Compile a Uniform Program whose solution depends on the native interpolated slots."""
+    import pops
+    from pops.codegen import Production
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.layouts import Uniform
+    from pops.math import ddt, div
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+    from pops.numerics.spatial import FiniteVolume
+    from pops.numerics.terms import Flux, SourceTerm
+    from pops.physics import Model
+    from pops.time import (
+        Clock,
+        InterpolateHistory,
+        LinearInterpolation,
+        Program,
+        SampleAndHold,
+    )
+
+    n = 4
+    frame = Rectangle(
+        "linear-history-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("linear-history-model", frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "zero-flux",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+        waves={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+    )
+    source = model.source("unit-source", on=state, value=(1.0 + 0.0 * rho,))
+    rate = model.rate("rate", equation=ddt(state) == -div(flux) + source)
+    source_operator = model.module.operator_handle("unit_source")
+    case = pops.Case("linear-history-case")
+    block = case.block("blk", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+
+    program = Program("native_linear_history")
+    temporal = program.state(block[state])
+    program.keep_history(
+        temporal, depth=2, interpolation=LinearInterpolation())
+    fast = Clock("fast", owner=program.owner_path)
+    interpolated = program.synchronize(
+        temporal.prev,
+        at=TimePoint(fast, step=-1),
+        relation=InterpolateHistory(temporal.prev),
+        name="half_previous_interval",
+    )
+    fast_value = program.subcycle(
+        interpolated,
+        clock=fast,
+        within=program.clock,
+        count=2,
+        body_fn=lambda P, value: P.value("fast_copy", 1 * value),
+    )
+    returned = program.synchronize(
+        fast_value,
+        at=temporal.next.point,
+        relation=SampleAndHold(),
+    )
+    rhs = program.rhs(
+        state=temporal.n,
+        terms=[Flux(), SourceTerm(source_operator)],
+    )
+    candidate = program.value(
+        "candidate",
+        returned + program.dt * rhs,
+        at=temporal.next.point,
+    )
+    program.commit(temporal.next, candidate)
+    program.step_strategy(FixedDt(0.1))
+    case.program(program)
+    layout = Uniform(CartesianGrid(
+        frame=frame,
+        cells=(n, n),
+        periodic=PeriodicAxes(frame.axes),
+    ))
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include"), "cxx": native_cxx},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    return artifact
+
+
 def _bind_uniform_artifact(artifact):
     import pops
 
@@ -596,6 +700,9 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
         assert checkpoint_temporal["schedule_cursors"]
         assert checkpoint_temporal["history_cursors"]
         assert checkpoint_temporal["cache_cursors"]
+        assert checkpoint_temporal["event_queue"]
+        assert checkpoint_temporal["event_queue"][0]["kind"] \
+            == "error_controlled_dt.proposal"
         history_values = {
             (name, slot): np.array(stored["history_%s_%d" % (name, slot)])
             for name in history_names
@@ -604,6 +711,10 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
             ])
         }
         assert all("cache_value_%d" % node in stored.files for node in cache_nodes)
+        cache_values = {
+            node: np.array(stored["cache_value_%d" % node])
+            for node in cache_nodes
+        }
 
     resumed = fresh()
     resumed.restart(checkpoint)
@@ -611,6 +722,50 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
     for (name, slot), values in history_values.items():
         assert np.array_equal(
             np.asarray(resumed.history_global(name, slot)), values)
+    restored_native = resumed._executor._s
+    assert tuple(int(node) for node in restored_native.program_cache_nodes()) \
+        == cache_nodes
+    for node, values in cache_values.items():
+        assert np.array_equal(
+            np.asarray(restored_native.program_cache_global(node)), values)
+
+    # The sealed archive rejects corruption of every stateful continuation authority before
+    # mutating a fresh runtime: queue, retained history, and off-schedule cache.
+    with np.load(checkpoint, allow_pickle=False) as stored:
+        pristine = {
+            name: np.array(stored[name], copy=True)
+            for name in stored.files
+        }
+    corruptions = {
+        "queue": {
+            "temporal_restart_state": np.asarray(
+                str(pristine["temporal_restart_state"]).replace(
+                    "error_controlled_dt.proposal",
+                    "error_controlled_dt.corrupt",
+                )
+            ),
+        },
+        "history": {
+            "history_%s_%d" % next(iter(history_values)): (
+                next(iter(history_values.values())) + 1.0
+            ),
+        },
+        "cache": {
+            "cache_value_%d" % next(iter(cache_values)): (
+                next(iter(cache_values.values())) + 1.0
+            ),
+        },
+    }
+    for label, replacement in corruptions.items():
+        damaged = dict(pristine)
+        damaged.update(replacement)
+        path = tmp_path / ("adaptive-corrupt-%s.npz" % label)
+        np.savez_compressed(path, **damaged)
+        refused = fresh()
+        before = np.asarray(refused.state_global("blk")).copy()
+        with pytest.raises(ValueError, match="digest|identity|integrity"):
+            refused.restart(path)
+        assert np.array_equal(np.asarray(refused.state_global("blk")), before)
 
     # Build an exact historical fixture, then exercise the public offline migration.  The runtime
     # loader itself continues to reject v2; only the migrated current payload is restarted.
@@ -701,6 +856,8 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
     )
     assert resumed.program_report().temporal == split.program_report().temporal
     assert migrated_runtime.program_report().temporal == split.program_report().temporal
+    assert resumed.program_report().temporal["event_queue"] \
+        == split.program_report().temporal["event_queue"]
 
     remaining = total_steps - checkpoint_step - 1
     for runtime in (split, resumed, migrated_runtime):
@@ -711,6 +868,55 @@ def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
         assert runtime.macro_step() == reference.macro_step() == total_steps
         assert runtime.time() == reference.time()
         assert np.array_equal(np.asarray(runtime.state_global("blk")), expected)
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly(
+    native_cxx, tmp_path,
+):
+    import pops
+
+    artifact = _linear_history_artifact(native_cxx)
+
+    def fresh():
+        return _bind_uniform_artifact(artifact)
+
+    reference = fresh()
+    pops.run(reference, t_end=0.3, max_steps=3, console=False)
+    expected = np.full((1, 4, 4), 1.225, dtype=np.float64)
+    assert np.allclose(
+        np.asarray(reference.state_global("blk")),
+        expected,
+        rtol=0.0,
+        atol=4.0e-15,
+    )
+
+    split = fresh()
+    pops.run(split, t_end=0.2, max_steps=2, console=False)
+    checkpoint = Path(split.checkpoint(tmp_path / "linear-history"))
+    with np.load(checkpoint, allow_pickle=False) as stored:
+        name = str(stored["history_names"][0])
+        # The accepted ring carries U^1 and U^0. The next native step first stores live U^2
+        # into slot 0, then interpolates that slot with slot 1.
+        assert np.allclose(
+            stored["history_%s_1" % name], 1.1, rtol=0.0, atol=4.0e-15)
+        assert np.allclose(
+            stored["history_%s_2" % name], 1.0, rtol=0.0, atol=4.0e-15)
+        assert float(stored["history_slot_dt_%s" % name][1]) == pytest.approx(0.1)
+
+    resumed = fresh()
+    resumed.restart(checkpoint)
+    pops.run(split, t_end=0.3, max_steps=1, console=False)
+    pops.run(resumed, t_end=0.3, max_steps=1, console=False)
+    assert np.array_equal(
+        np.asarray(resumed.state_global("blk")),
+        np.asarray(split.state_global("blk")),
+    )
+    assert np.array_equal(
+        np.asarray(resumed.state_global("blk")),
+        np.asarray(reference.state_global("blk")),
+    )
 
 
 def test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state():

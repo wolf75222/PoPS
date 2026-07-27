@@ -325,7 +325,7 @@
   "tests/python/unit/runtime/test_spec5_destring_public.py": 0.5,
   "tests/python/unit/runtime/test_step_strategy.py": 1.0,
   "tests/python/unit/runtime/test_step_transaction_runtime.py": 1.0,
-  "tests/python/unit/runtime/test_temporal_restart_state.py": 30.0,
+  "tests/python/unit/runtime/test_temporal_restart_state.py": 75.0,
   "tests/python/unit/runtime/test_typed_bind_phase.py": 1.0,
   "tests/python/unit/runtime/test_v3_features.py": 132.5,
   "tests/python/unit/solvers/test_amr_composite_facade.py": 1.0,
