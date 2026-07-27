@@ -66,6 +66,7 @@
   "tests/python/integration/runtime/test_install_requirement_validation.py": 10.0,
   "tests/python/integration/runtime/test_isothermal_vacuum_floor_system.py": 0.5,
   "tests/python/integration/runtime/test_local_transform_runtime.py": 120.0,
+  "tests/python/integration/runtime/test_multiblock_implicit_phase.py": 34.5,
   "tests/python/integration/runtime/test_multi_layout_runtime.py": 60.0,
   "tests/python/integration/runtime/test_polar_system.py": 0.5,
   "tests/python/integration/runtime/test_print_readability_runtime.py": 0.5,
