@@ -277,3 +277,68 @@ TEST(CompositeFacNlevelTest, three_level_nested_mms_order2_and_conservation) {
     std::printf("OK test_composite_fac_nlevel\n");
   comm_finalize();
 }
+
+TEST(CompositeFacNlevelTest, three_level_periodic_full_tensor_mms_converges) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry coarse_geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse_boxes = BoxArray::from_domain(domain, n);
+  BCRec periodic;
+  periodic.xlo = periodic.xhi = periodic.ylo = periodic.yhi = BCType::Periodic;
+
+  const int level1_lo = n / 4;
+  const int level1_hi = 3 * n / 4 - 1;
+  const Box2D level1_box{{r * level1_lo, r * level1_lo},
+                         {r * level1_hi + r - 1, r * level1_hi + r - 1}};
+  const int level2_lo = 3 * n / 8;
+  const int level2_hi = 5 * n / 8 - 1;
+  const Box2D level2_box{{r * r * level2_lo, r * r * level2_lo},
+                         {r * r * level2_hi + r * r - 1,
+                          r * r * level2_hi + r * r - 1}};
+  CompositeFacPoisson fac(
+      coarse_geometry, coarse_boxes, periodic,
+      std::vector<BoxArray>{BoxArray(std::vector<Box2D>{level1_box}),
+                            BoxArray(std::vector<Box2D>{level2_box})},
+      r);
+
+  constexpr Real eps_x = Real(1.2);
+  constexpr Real eps_y = Real(0.8);
+  constexpr Real a_xy = Real(0.2);
+  constexpr Real a_yx = Real(-0.2);
+  const Real wave = Real(2) * Real(kPi);
+  const auto exact = [wave](Real x, Real y) {
+    return std::sin(wave * x) * std::sin(wave * y);
+  };
+  for (int level = 0; level < fac.n_levels(); ++level) {
+    const Geometry& geometry = fac.geom_level(level);
+    fac.eps_level(level).set_val(eps_x);
+    fac.eps_y_level(level).set_val(eps_y);
+    fac.a_xy_level(level).set_val(a_xy);
+    fac.a_yx_level(level).set_val(a_yx);
+    MultiFab& rhs = fac.rhs_level(level);
+    for (int local = 0; local < rhs.local_size(); ++local) {
+      Array4 values = rhs.fab(local).array();
+      const Box2D valid = rhs.box(local);
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+          values(i, j, 0) =
+              -(eps_x + eps_y) * wave * wave *
+              exact(static_cast<Real>(geometry.x_cell(i)),
+                    static_cast<Real>(geometry.y_cell(j)));
+    }
+  }
+  fac.use_variable_coefficient(true);
+  fac.use_anisotropic_coefficient(true);
+  fac.use_cross_terms(true);
+
+  const Real residual =
+      fac.solve(/*max_iters=*/160, /*fine_sweeps=*/100, /*rel_tol=*/1e-9,
+                /*abs_tol=*/1e-12);
+  EXPECT_TRUE(std::isfinite(static_cast<double>(residual)));
+  EXPECT_TRUE(fac.last_solve_report().solved())
+      << "three-level periodic tensor FAC status="
+      << fac.last_solve_report().status_name() << " residual=" << residual;
+  EXPECT_LT(residual, Real(1e-5));
+  comm_finalize();
+}
