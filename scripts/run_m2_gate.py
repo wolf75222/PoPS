@@ -20,6 +20,7 @@ EXPECTED_REQUIREMENTS = {
     "amr_step_transaction",
     "phase_pipeline", "program_graph", "schedules", "residual_operator",
     "solve_outcome", "native_multiblock_implicit_phase",
+    "normalized_program_execution",
     "step_transaction", "restart", "temporal_restart",
 }
 ALLOWED_PYTEST_TARGETS = {

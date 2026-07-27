@@ -118,6 +118,22 @@ target = "solve"
 nodeid = "tests/python/integration/runtime/test_multiblock_implicit_phase.py::test_multiblock_implicit_fixture_refuses_route_or_phase_multiplicity_drift"
 
 [[check]]
+issue = "ADC-668"
+requirement = "normalized_program_execution"
+polarity = "positive"
+kind = "pytest"
+target = "program_graph"
+nodeid = "tests/python/integration/native_loader/test_normalized_program_execution.py::test_manual_preset_ssprk2_and_imex_execute_through_same_program_graph_pipeline"
+
+[[check]]
+issue = "ADC-668"
+requirement = "normalized_program_execution"
+polarity = "refusal"
+kind = "pytest"
+target = "program_graph"
+nodeid = "tests/python/unit/time/test_field_solve_outcome.py::test_field_solve_is_unreadable_and_unconsumed_graph_is_rejected"
+
+[[check]]
 issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "positive"
