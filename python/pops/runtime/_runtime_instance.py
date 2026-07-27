@@ -1041,6 +1041,27 @@ class RuntimeInstance:
         *,
         at_end: Any = False,
     ) -> Any:
+        """Run one attempt controller inside the sole collective publication envelope."""
+        native = self._executor
+        missing = object()
+        previous = getattr(native, "_collective_step_envelope_active", missing)
+        if previous is True:
+            raise RuntimeError("nested collective step envelope")
+        native._collective_step_envelope_active = True
+        try:
+            return self._accepted_step_transaction_body(advance, at_end=at_end)
+        finally:
+            if previous is missing:
+                delattr(native, "_collective_step_envelope_active")
+            else:
+                native._collective_step_envelope_active = previous
+
+    def _accepted_step_transaction_body(
+        self,
+        advance: Any,
+        *,
+        at_end: Any = False,
+    ) -> Any:
         """Advance once and publish its due effects as one rollback boundary."""
         from pops.time import StepTransactionReport
 
