@@ -329,6 +329,9 @@ double* values(PopsFieldViewV1& view) {
 }
 
 TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
+  const PopsComponentStatusV1 malformed_component_action{sizeof(PopsComponentStatusV1), 0, 17,
+                                                         "malformed component action"};
+  EXPECT_FALSE(pops::component::component_status_is_well_formed(malformed_component_action));
   std::array<double, 2> left{2.0, 4.0}, right{6.0, 8.0}, normal{1.0, 0.0};
   const auto execution = abi::host_execution_context();
   EXPECT_NO_THROW(pops::component::validate_execution_context(execution));
@@ -992,7 +995,7 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   PopsFieldSolverApiV2 malformed_status_solver_api{
       abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
       +[](void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2* report) {
-        report->status = static_cast<PopsSolveStatusV2>(17);
+        report->status = 17;
         report->action = POPS_SOLVE_ACTION_REJECT_ATTEMPT_V2;
         report->iterations = 1;
         report->relative_residual = 1.0;
@@ -1002,6 +1005,21 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
         return 0;
       }};
   EXPECT_THROW(pops::component::solve_field(malformed_status_solver_api, nullptr, solver_request,
+                                            solve_report),
+               std::runtime_error);
+  PopsFieldSolverApiV2 malformed_action_solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2* report) {
+        report->status = POPS_SOLVE_ITERATION_LIMIT_V2;
+        report->action = 17;
+        report->iterations = 1;
+        report->relative_residual = 1.0;
+        report->reference_residual_norm = 1.0;
+        report->residual_norm = 1.0;
+        report->reason = "malformed action";
+        return 0;
+      }};
+  EXPECT_THROW(pops::component::solve_field(malformed_action_solver_api, nullptr, solver_request,
                                             solve_report),
                std::runtime_error);
   PopsFieldSolverApiV2 incoherent_ratio_solver_api{

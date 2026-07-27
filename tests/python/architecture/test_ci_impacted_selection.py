@@ -18,6 +18,7 @@ Ground-truth edges asserted below were verified by reading the source:
 import importlib.util
 import json
 import pathlib
+import re
 import sys
 from types import SimpleNamespace
 
@@ -460,20 +461,101 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
                     },
                 ],
             },
+            {
+                "name": "test_standalone_contract",
+                "properties": [
+                    {
+                        "name": "LABELS",
+                        "value": ["cmake", "integration", "cpp-standalone"],
+                    },
+                ],
+            },
         ],
     }))
 
+    standalone_regex = tmp_path / "standalone.regex"
     args = SimpleNamespace(
         ctest_json=str(inventory),
         targets=["test_one", "test_two", "test_three"],
+        standalone_regex_file=str(standalone_regex),
     )
     assert sel.verify_cpp_target_labels(args) == 0
+    pattern = standalone_regex.read_text().strip()
+    assert re.fullmatch(pattern, "test_standalone_contract")
+    assert not re.fullmatch(pattern, "Suite.One")
 
     for missing in ("test", "test_missing"):
         args.targets.append(missing)
         with pytest.raises(SystemExit, match=rf"cpp-target:{missing}"):
             sel.verify_cpp_target_labels(args)
         args.targets.pop()
+
+
+def test_cpp_target_label_fence_ignores_other_shards_but_rejects_ambiguous_owners(
+    tmp_path,
+):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest-invalid-owner.json"
+    payload = {
+        "tests": [
+            {
+                "name": "Suite.One",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_one"]},
+                ],
+            },
+            {
+                "name": "Suite.Other",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_other"]},
+                ],
+            },
+        ],
+    }
+    inventory.write_text(json.dumps(payload))
+    args = SimpleNamespace(ctest_json=str(inventory), targets=["test_one"])
+    assert sel.verify_cpp_target_labels(args) == 0
+
+    payload["tests"][1]["properties"][0]["value"] = [
+        "cpp-target:test_one",
+        "cpp-target:test_other",
+    ]
+    inventory.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit, match="multiple C\\+\\+ target owners"):
+        sel.verify_cpp_target_labels(args)
+
+
+def test_cpp_target_label_fence_rejects_implicit_or_double_standalone(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest-invalid-standalone.json"
+    payload = {
+        "tests": [
+            {
+                "name": "Suite.One",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_one"]},
+                ],
+            },
+            {
+                "name": "test_missing_owner",
+                "properties": [
+                    {"name": "LABELS", "value": ["cmake", "integration"]},
+                ],
+            },
+        ],
+    }
+    inventory.write_text(json.dumps(payload))
+    args = SimpleNamespace(ctest_json=str(inventory), targets=["test_one"])
+    with pytest.raises(SystemExit, match="neither one cpp-target"):
+        sel.verify_cpp_target_labels(args)
+
+    payload["tests"][1]["properties"][0]["value"] = [
+        "cpp-target:test_one",
+        "cpp-standalone",
+    ]
+    inventory.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit, match="cannot have both"):
+        sel.verify_cpp_target_labels(args)
 
 
 @pytest.mark.parametrize("encoded_labels", [
@@ -701,6 +783,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "compression-level: 0" in cpp_prewarm_block
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
     assert "scripts/ci_select_tests.py verify-cpp-target-labels" in cpp_shards_block
+    assert "--standalone-regex-file" in cpp_shards_block
+    assert "name: Standalone CTest contracts" in cpp_shards_block
+    assert 'standalone_regex=$(<"$standalone_regex_file")' in cpp_shards_block
+    assert '-R "$standalone_regex"' in cpp_shards_block
+    assert "installed_package_consumer|hdf5_without_mpi_rejected" not in cpp_shards_block
     assert '--targets "${cpp_targets[@]}"' in cpp_shards_block
     assert cpp_shards_block.index("verify-cpp-target-labels") < cpp_shards_block.index(
         "ctest --preset ci-kokkos -L"
@@ -811,12 +898,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 32" in openmp_prewarm_block
     assert "needs: set-mode" in openmp_prewarm_block
     assert "if: needs.set-mode.outputs.openmp_required == 'true'" in openmp_prewarm_block
-    assert (
-        "lane: [system, amr-base, amr-compressible]"
-        in openmp_prewarm_block
-    )
+    assert "lane: [system, amr-base, amr-compressible]" in openmp_prewarm_block
+    assert "graph: [cpp, python]" in openmp_prewarm_block
+    assert "if: matrix.graph == 'python'" in openmp_prewarm_block
+    assert "python-version: '3.12'" in openmp_prewarm_block
     assert "-DKokkos_ENABLE_OPENMP=ON" in openmp_prewarm_block
-    assert "cmake --preset ci-kokkos" in openmp_prewarm_block
+    assert 'cmake --preset "$preset"' in openmp_prewarm_block
     assert "scripts/ci_python_module_objects.py" in openmp_prewarm_block
     assert "--contract-file" in openmp_prewarm_block
     assert "Restore reusable OpenMP ccache" not in openmp_prewarm_block
@@ -828,17 +915,30 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."'
         in openmp_prewarm_block
     )
-    assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in openmp_prewarm_block
+    assert "preset=ci-kokkos-python" in openmp_prewarm_block
+    assert "build_dir=build-kokkos-py" in openmp_prewarm_block
+    assert "pool_option=POPS_HEAVY_MODULE_TU_POOL" in openmp_prewarm_block
+    assert "preset=ci-kokkos" in openmp_prewarm_block
+    assert "build_dir=build-kokkos" in openmp_prewarm_block
+    assert "pool_option=POPS_HEAVY_TEST_TU_POOL" in openmp_prewarm_block
+    assert '-D"${pool_option}=$lane_parallelism"' in openmp_prewarm_block
     assert (
-        'run_with_heartbeat "OpenMP prewarm ${{ matrix.lane }}" 24m'
+        'run_with_heartbeat "OpenMP ${{ matrix.graph }} prewarm '
+        '${{ matrix.lane }}" 24m'
         in openmp_prewarm_block
     )
     assert "compression-level: 0" in openmp_prewarm_block
     openmp_prewarm_upload = openmp_prewarm_block.split(
         "\n      - name: Upload OpenMP prewarm cache and compile contract", 1
     )[1]
-    assert "openmp-prewarm-ccache-${{ matrix.lane }}.tar" in openmp_prewarm_upload
-    assert "openmp-prewarm-contract-${{ matrix.lane }}.json" in openmp_prewarm_upload
+    assert (
+        "openmp-prewarm-${{ matrix.graph }}-ccache-${{ matrix.lane }}.tar"
+        in openmp_prewarm_upload
+    )
+    assert (
+        "openmp-prewarm-${{ matrix.graph }}-contract-${{ matrix.lane }}.json"
+        in openmp_prewarm_upload
+    )
     for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
         assert linked_artifact not in openmp_prewarm_upload
 
@@ -876,10 +976,17 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert '--shard-index "${{ matrix.shard }}"' in openmp_block
     assert '--shard-total "${{ matrix.shard_total }}"' in openmp_block
     assert "openmp-cpp-test-plan-shard-${{ matrix.shard }}" in openmp_block
-    assert "pattern: gate-openmp-prewarm-*" in openmp_block
+    assert "pattern: gate-openmp-prewarm-${{ matrix.kind }}-*" in openmp_block
+    assert openmp_block.count(
+        "matrix.kind == 'cpp' || "
+        "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
+    ) == 2
+    assert "openmp-prewarm-${{ matrix.kind }}-ccache-*.tar" in openmp_block
     assert "test \"${#cache_archives[@]}\" -eq 3" in openmp_block
-    assert "test \"${#compile_contracts[@]}\" -eq 3" in openmp_block
-    assert "--verify-contracts" in openmp_block
+    assert openmp_block.count("test \"${#compile_contracts[@]}\" -eq 3") == 2
+    assert openmp_block.count("--verify-contracts") == 2
+    assert "openmp-prewarm-cpp-contract-*.json" in openmp_block
+    assert "openmp-prewarm-python-contract-*.json" in openmp_block
     assert openmp_block.count("run_with_heartbeat() {") == 2
     openmp_cpp_build = openmp_block[
         openmp_block.index("- name: Configure + build (backend Kokkos OpenMP)"):
@@ -915,6 +1022,15 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=1" not in openmp_block
     assert "-DCMAKE_LINKER_TYPE=MOLD" in openmp_block
     assert '-DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."' in openmp_block
+    openmp_python_build = openmp_block.split(
+        "\n      - name: Build module Python `pops`", 1
+    )[1].split("\n      - name:", 1)[0]
+    assert "openmp-prewarm-python-contract-*.json" in openmp_python_build
+    assert "--build-dir build-kokkos-py" in openmp_python_build
+    assert "--verify-contracts" in openmp_python_build
+    assert openmp_python_build.index("--verify-contracts") < openmp_python_build.index(
+        'run_with_heartbeat "Kokkos OpenMP Python module build"'
+    )
     assert "name: Cache exact OpenMP Python module" in openmp_block
     assert "id: openmp-python-module-cache" in openmp_block
     assert "pops-module-openmp-${{ runner.os }}" in openmp_block
@@ -1084,6 +1200,81 @@ def test_openmp_native_scripts_share_the_fail_closed_requirement_policy(relative
     assert "require_native_or_skip" in source
     assert "if not cxx or not os.path.isdir(INCLUDE)" not in source
     assert "OK (rien a compiler)" not in source
+
+
+def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
+    workflow = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
+    prewarm = workflow.split("\n  quality-native-prewarm:\n", 1)[1].split(
+        "\n  # --- Warnings stricts", 1
+    )[0]
+    assert "timeout-minutes: 60" in prewarm
+    assert "profile: [warnings, asan, coverage]" in prewarm
+    assert "lane: [system, amr-base, amr-compressible]" in prewarm
+    assert "CCACHE_MAXSIZE: 2G" in prewarm
+    assert "scripts/ci_python_module_objects.py" in prewarm
+    assert "--contract-file" in prewarm
+    assert 'run_with_heartbeat \\\n            "quality ${{ matrix.profile }} prewarm' in prewarm
+    assert "50m" in prewarm
+    assert "compression-level: 0" in prewarm
+    upload = prewarm.split(
+        "\n      - name: Upload exact quality prewarm cache and contract", 1
+    )[1]
+    assert "name: quality-prewarm-${{ matrix.profile }}-${{ matrix.lane }}" in upload
+    assert (
+        "quality-${{ matrix.profile }}-prewarm-ccache-${{ matrix.lane }}.tar"
+        in upload
+    )
+    assert (
+        "quality-${{ matrix.profile }}-prewarm-contract-${{ matrix.lane }}.json"
+        in upload
+    )
+    artifact_names = {
+        f"quality-prewarm-{profile}-{lane}"
+        for profile in ("warnings", "asan", "coverage")
+        for lane in ("system", "amr-base", "amr-compressible")
+    }
+    assert len(artifact_names) == 9
+    for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
+        assert linked_artifact not in upload
+
+    job_markers = {
+        "warnings": ("\n  warnings:\n", "\n  # --- clang-tidy", "build-kokkos-warnings"),
+        "asan": ("\n  sanitizers:\n", "\n  # --- TSan", "build-kokkos-asan"),
+        "coverage": ("\n  coverage:\n", "\n  # --- CodeQL", "build-kokkos-coverage"),
+    }
+    for profile, (start, end, build_dir) in job_markers.items():
+        block = workflow.split(start, 1)[1].split(end, 1)[0]
+        assert "needs: [set-mode, quality-native-prewarm]" in block
+        assert "CCACHE_MAXSIZE: 2G" in block
+        assert f"pattern: quality-prewarm-{profile}-*" in block
+        assert "test \"${#cache_archives[@]}\" -eq 3" in block
+        assert "test \"${#compile_contracts[@]}\" -eq 3" in block
+        assert f"--build-dir {build_dir}" in block
+        assert "--verify-contracts" in block
+        assert block.index(f"cmake --preset ci-{profile}") < block.index(
+            "--verify-contracts"
+        )
+        assert block.index("--verify-contracts") < block.index(
+            f"cmake --build --preset ci-{profile}"
+        )
+
+    asan = workflow.split("\n  sanitizers:\n", 1)[1].split("\n  # --- TSan", 1)[0]
+    assert "shard: [0, 1, 2, 3]" in asan
+    assert "scripts/ci_select_tests.py cpp" in asan
+    assert "--force-all" in asan
+    assert "--shard-index ${{ matrix.shard }}" in asan
+    assert "--shard-total 4" in asan
+    assert 'read -r -a cpp_targets <<< "${{ steps.asan-plan.outputs.cpp_shard_targets }}"' in asan
+    assert 'cmake --build --preset ci-asan --target "${cpp_targets[@]}"' in asan
+    assert "verify-cpp-target-labels" in asan
+    assert "-L '${{ steps.asan-plan.outputs.cpp_shard_label_regex }}'" in asan
+    assert "ASAN_SHARD_TOTAL" not in asan
+    assert "shard_start=" not in asan
+    assert "asan-log-shard-${{ matrix.shard }}" in asan
+
+    tests_cmake = (REPO_ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert 'POPS_ENABLE_SANITIZERS AND name STREQUAL "test_polar_fluid_transport"' in tests_cmake
+    assert "pops_add_gtest_suite(NAME ${name} TIMEOUT 900)" in tests_cmake
 
 
 def test_ci_control_plane_inputs_force_full_functional_selection():

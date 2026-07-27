@@ -64,7 +64,8 @@ typedef enum PopsComponentActionV1 {
 typedef struct PopsComponentStatusV1 {
   uint32_t struct_size;
   int32_t code;
-  PopsComponentActionV1 action;
+  // Component-owned output: validate the fixed-width wire value before treating it as an action.
+  int32_t action;
   const char* reason;
 } PopsComponentStatusV1;
 
@@ -538,8 +539,10 @@ typedef enum PopsSolveActionV2 {
 
 typedef struct PopsSolveReportV2 {
   uint32_t struct_size;
-  PopsSolveStatusV2 status;
-  PopsSolveActionV2 action;
+  // Untrusted component output: retain the fixed-width wire representation until the consumer
+  // validates that it denotes one of the PopsSolveStatusV2/PopsSolveActionV2 constants.
+  int32_t status;
+  int32_t action;
   int32_t iterations;
   // residual_norm / reference_residual_norm, using denominator 1 only when the reference is zero.
   double relative_residual;

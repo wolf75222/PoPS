@@ -444,7 +444,7 @@ if(POPS_BUILD_TESTS)
       "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
       -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_serial_parent_mpi_target.cmake")
   set_tests_properties(test_serial_add_subdirectory_ignores_parent_mpi PROPERTIES
-    LABELS "cmake;integration;serial;mpi"
+    LABELS "cmake;integration;serial;mpi;cpp-standalone"
     TIMEOUT 30)
   add_test(
     NAME test_hdf5_mpi_binary_identity
@@ -455,7 +455,7 @@ if(POPS_BUILD_TESTS)
       "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
       -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_hdf5_mpi_binary_identity.cmake")
   set_tests_properties(test_hdf5_mpi_binary_identity PROPERTIES
-    LABELS "cmake;integration;hdf5;mpi"
+    LABELS "cmake;integration;hdf5;mpi;cpp-standalone"
     TIMEOUT 30)
 endif()
 
@@ -575,7 +575,7 @@ if(POPS_INSTALL)
         "-DPOPS_EXPECT_C_LOADED=${POPS_HAS_HDF5}"
         -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_installed_package_smoke.cmake")
     set_tests_properties(test_installed_package_consumer PROPERTIES
-      LABELS "cmake;integration;packaging"
+      LABELS "cmake;integration;packaging;cpp-standalone"
       TIMEOUT 120)
 
     if(POPS_HAS_MPI)
@@ -594,7 +594,7 @@ if(POPS_INSTALL)
           "-DPOPS_Kokkos_DIR=${CMAKE_SOURCE_DIR}/tests/cmake/mpi_abi_mismatch"
           -P "${CMAKE_SOURCE_DIR}/tests/cmake/run_installed_package_mpi_mismatch.cmake")
       set_tests_properties(test_installed_package_mpi_abi_mismatch PROPERTIES
-        LABELS "cmake;integration;packaging;mpi"
+        LABELS "cmake;integration;packaging;mpi;cpp-standalone"
         TIMEOUT 60)
     endif()
 
@@ -607,7 +607,7 @@ if(POPS_INSTALL)
           "-DPOPS_GENERATOR=${CMAKE_GENERATOR}"
           -P "${CMAKE_SOURCE_DIR}/tests/cmake/expect_hdf5_without_mpi_rejected.cmake")
       set_tests_properties(test_hdf5_without_mpi_rejected PROPERTIES
-        LABELS "cmake;integration;packaging"
+        LABELS "cmake;integration;packaging;cpp-standalone"
         TIMEOUT 30)
     endif()
   endif()
