@@ -158,6 +158,34 @@ static void register_ionization(AmrRuntime& rt, double k) {
                         prog_lens);
 }
 
+// Minimal native-Program harness for this direct AmrRuntime test: every level gets one complete
+// private candidate pack, then the group is published and the ordinary fine-to-coarse coverage
+// invariant is restored.  The production ProgramContext owns the same ordering; this helper only
+// keeps the low-level primitive test independent of the Python facade.
+static void apply_candidate_source_step(AmrRuntime& rt, Real dt) {
+  for (int level = 0; level < rt.nlev(); ++level) {
+    std::vector<MultiFab> candidates;
+    std::vector<MultiFab*> candidate_pack;
+    candidates.reserve(rt.n_blocks());
+    candidate_pack.reserve(rt.n_blocks());
+    for (std::size_t block = 0; block < rt.n_blocks(); ++block) {
+      MultiFab& accepted = rt.level_state(block, level);
+      candidates.emplace_back(accepted.box_array(), accepted.dmap(), accepted.ncomp(),
+                              accepted.n_grow());
+      lincomb(candidates.back(), Real(1), accepted, Real(0), accepted);
+      candidate_pack.push_back(&candidates.back());
+    }
+    rt.apply_coupling_operators_at_level(level, dt, candidate_pack);
+    for (std::size_t block = 0; block < rt.n_blocks(); ++block) {
+      MultiFab& accepted = rt.level_state(block, level);
+      lincomb(accepted, Real(0), accepted, Real(1), candidates[block]);
+    }
+  }
+  for (int level = rt.nlev() - 1; level >= 1; --level)
+    for (std::size_t block = 0; block < rt.n_blocks(); ++block)
+      rt.average_down_level(block, level);
+}
+
 TEST(test_amr_multiblock_coupled_source, Runs) {
 #if defined(POPS_HAS_KOKKOS)
   int argc = 0;
@@ -194,11 +222,22 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     const std::vector<double> accepted_ions = rt.density(0);
     const std::vector<double> accepted_neutrals = rt.density(1);
 
+    EXPECT_THROW(rt.step(dt), std::logic_error)
+        << "the retired native step must not hide a live-state coupling transaction";
     EXPECT_THROW(
         rt.apply_coupling_operators_at_level(
             0, dt, std::vector<MultiFab*>{&live_ions, &live_neutrals}),
         std::invalid_argument)
         << "accepted hierarchy states are never a hidden Program coupling workspace";
+    EXPECT_THROW(
+        rt.apply_coupling_operators_at_level(0, dt, std::vector<MultiFab*>{&candidate_ions}),
+        std::invalid_argument)
+        << "a Program coupling group must contain every block";
+    EXPECT_THROW(
+        rt.apply_coupling_operators_at_level(
+            0, dt, std::vector<MultiFab*>{&candidate_ions, &candidate_ions}),
+        std::invalid_argument)
+        << "two Program block identities cannot alias one candidate";
     EXPECT_EQ(rt.apply_coupling_operators_at_level(
                   0, dt, std::vector<MultiFab*>{&candidate_ions, &candidate_neutrals}),
               1U)
@@ -228,9 +267,9 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
 
   // ============================================================================================
   // (1) ECHANGE CONSERVATIF PAR CELLULE : la SOURCE SEULE (sans transport) conserve n_ions + n_neutrals
-  //     a la cellule pres. On appelle coupled_source_step(dt) DIRECTEMENT (pas step) : seul l'echange
-  //     additif agit, donc la somme des deux blocs ne doit PAS bouger, cellule par cellule. (2) ACTIVE :
-  //     chaque bloc, lui, CHANGE (la source n'est pas un no-op).
+  //     a la cellule pres. Le harness de Program applique la source aux candidats (sans transport) :
+  //     la somme des deux blocs ne doit PAS bouger, cellule par cellule. (2) ACTIVE : chaque bloc,
+  //     lui, CHANGE (la source n'est pas un no-op).
   // ============================================================================================
   {
     AmrRuntime rt =
@@ -238,7 +277,7 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     register_ionization(rt, k);
     const std::vector<double> ni0 = rt.density(0);  // ions, grossier
     const std::vector<double> ng0 = rt.density(1);  // neutrals, grossier
-    rt.coupled_source_step(dt);                     // SOURCE SEULE (pas de transport)
+    apply_candidate_source_step(rt, dt);            // SOURCE SEULE (pas de transport)
     const std::vector<double> ni1 = rt.density(0);
     const std::vector<double> ng1 = rt.density(1);
 
@@ -252,9 +291,9 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
   }
 
   // ============================================================================================
-  // (3) CONSERVATION GLOBALE sous macro-pas complets : apres K step() (transport AMR + source apres le
-  //     transport), la masse composite (somme leaf-aware par bloc) n_ions + n_neutrals est conservee
-  //     globalement a ~machine. Chaque masse de bloc, elle, DERIVE (la source transfere entre blocs).
+  // (3) CONSERVATION GLOBALE sous K applications Program de la source : la masse composite (somme
+  //     leaf-aware par bloc) n_ions + n_neutrals est conservee globalement a ~machine. Chaque masse
+  //     de bloc, elle, DERIVE (la source transfere entre blocs).
   // ============================================================================================
   {
     AmrRuntime rt =
@@ -263,7 +302,7 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     const Real tot0 = rt.mass(0) + rt.mass(1);
     const Real mi0 = rt.mass(0);
     for (int s = 0; s < K; ++s)
-      rt.step(dt);
+      apply_candidate_source_step(rt, dt);
     const std::vector<double> ni = rt.density(0);
     const std::vector<double> ng = rt.density(1);
     const Real tot1 = rt.mass(0) + rt.mass(1);
@@ -283,8 +322,8 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     AmrRuntime rt =
         make_two_block(N, L, B0, rho_ions, rho_neut, /*stride_ions=*/1, /*stride_neut=*/1);
     register_ionization(rt, k);
-    rt.coupled_source_step(
-        dt);  // SOURCE SEULE -> l'invariant de couverture vient de la cascade post-source
+    apply_candidate_source_step(
+        rt, dt);  // SOURCE SEULE -> l'invariant de couverture vient de la cascade post-source
     const MultiFab& Uc = rt.levels(0)[0].U;  // grossier (ions)
     const MultiFab& Uf = rt.levels(0)[1].U;  // patch fin (ions)
     // moyenne 2x2 des enfants fins vs valeur grossiere couverte, sur la box fine (mono-box replique).
@@ -307,9 +346,9 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
   }
 
   // ============================================================================================
-  // (5) MULTIRATE : la source reste conservative GLOBALEMENT avec un bloc neutrals stride=2 (tenu au
-  //     mac0, rattrape au mac1). La source est appliquee a chaque macro-pas APRES le transport ; meme
-  //     quand neutrals est tenu, l'echange +S/-S par cellule conserve la somme composite globale.
+  // (5) MULTIRATE : la source reste conservative GLOBALEMENT avec un bloc neutrals stride=2. Le
+  //     Program de splitting est applique au clock macro, independamment du stride de transport ;
+  //     l'echange +S/-S par cellule conserve la somme composite globale.
   // ============================================================================================
   {
     AmrRuntime rt =
@@ -317,7 +356,7 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     register_ionization(rt, k);
     const Real tot0 = rt.mass(0) + rt.mass(1);
     for (int s = 0; s < K; ++s)
-      rt.step(dt);
+      apply_candidate_source_step(rt, dt);
     EXPECT_TRUE(all_finite(rt.density(0)) && all_finite(rt.density(1))) << "multirate_state_finite";
     EXPECT_TRUE(std::fabs((rt.mass(0) + rt.mass(1)) - tot0) < 1e-9)
         << "multirate_composite_mass_conserved";
@@ -342,7 +381,7 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
     AmrRuntime rt_src = make_two_block(N, L, B0, rho_ions, rho_neut, 1, 1);
     register_ionization(rt_src, k);
     for (int s = 0; s < K; ++s)
-      rt_src.step(dt);
+      apply_candidate_source_step(rt_src, dt);
     EXPECT_TRUE(dmax_field(rt_src.density(0), a) > 1e-9) << "source_differs_from_no_source";
     EXPECT_EQ(rt_src.n_coupled_sources(), 1) << "one_coupled_source_registered";
   }

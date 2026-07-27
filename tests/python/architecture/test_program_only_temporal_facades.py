@@ -161,3 +161,5 @@ def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step(
     assert "cannot alias accepted live states" in uniform
     assert "cannot alias accepted live states" in amr
     assert "apply_coupling_operators_at_level(" in runtime
+    assert "void coupled_source_step(" not in runtime
+    assert "AmrRuntime::step cannot execute registered coupled sources" in runtime
