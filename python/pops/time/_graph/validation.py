@@ -4,7 +4,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from pops.time._graph.base import point_clocks
+from pops.time._graph.base import (
+    point_clocks,
+    strict_data,
+    validate_synchronization_relation_data,
+)
 from pops.time.points import Clock
 
 
@@ -204,6 +208,26 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
             solve_source = available[source.inputs[0].node_id]
             if index is None or index < 0 or index >= _solve_arity(solve_source):
                 raise ValueError("solve_outcome_component index is outside solve outcome arity")
+        if node.kind == "synchronize":
+            source = available[node.value.node_id]
+            source_contract = None
+            if getattr(source, "kind", None) == "program_value" \
+                    and source.op == "history":
+                source_contract = _payload_attrs(source.attrs.to_data()).get(
+                    "history_contract")
+            if source_contract is None \
+                    and node.relation.to_data().get("kind") == "history_interpolation":
+                raise ValueError(
+                    "history_interpolation requires a typed source history node"
+                )
+            validate_synchronization_relation_data(
+                node.relation.to_data(),
+                source_history_contract=source_contract,
+                source_clock=strict_data(
+                    node.source_clock.to_data(),
+                    where="Synchronize.source_clock",
+                ),
+            )
         for index, region in enumerate(_nested_regions(node)):
             _validate_region_boundary(
                 region, available, declared,

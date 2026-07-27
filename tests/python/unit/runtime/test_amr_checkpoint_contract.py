@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from pops.output._checkpoint_collective import restore_checkpoint_payload
 from pops.runtime._amr_checkpoint_contract import (
     contract_for,
     encode_contract,
     preflight_contract,
     validate_restored_contract,
 )
+from pops.runtime._checkpoint_manifest import require_exact_payload_version
 from pops.runtime._amr_checkpoint_v3 import (
     _checkpoint_amr_level_envelope,
     _live_amr_level_envelope,
@@ -173,7 +176,7 @@ def test_checkpoint_level_envelope_refuses_a_different_configured_depth():
         )
 
 
-def test_legacy_v3_level_envelope_uses_files_without_eager_keys_lookup():
+def test_incomplete_v3_level_envelope_is_an_offline_migration_input():
     class _FilesOnlyPayload:
         files = ("n_levels",)
 
@@ -183,13 +186,100 @@ def test_legacy_v3_level_envelope_uses_files_without_eager_keys_lookup():
             return np.array(3)
 
     sim = _Sim()
-    assert _checkpoint_amr_level_envelope(sim, _FilesOnlyPayload()) == (3, 3)
+    with pytest.raises(ValueError, match="historical checkpoints require offline migration"):
+        _checkpoint_amr_level_envelope(sim, _FilesOnlyPayload())
 
 
-def test_legacy_v3_level_envelope_requires_its_fixed_depth_to_match_configuration():
-    sim = _Sim()
-    with pytest.raises(ValueError, match="legacy v3.*installed configured depth"):
-        _checkpoint_amr_level_envelope(sim, {"n_levels": np.array(1)})
+@pytest.mark.parametrize(
+    ("runtime_kind", "key", "expected"),
+    [
+        ("Uniform", "pops_checkpoint_version", 3),
+        ("AMR", "pops_amr_checkpoint_version", 3),
+    ],
+)
+def test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars(
+    runtime_kind, key, expected,
+):
+    assert require_exact_payload_version(
+        {key: np.array(expected, dtype=np.int64)},
+        key=key,
+        expected=expected,
+        runtime_kind=runtime_kind,
+    ) == expected
+
+    for incompatible in (
+        np.array(True),
+        np.array(float(expected)),
+        np.array(str(expected)),
+        np.array([expected], dtype=np.int64),
+    ):
+        with pytest.raises(TypeError, match="exact integer scalar.*offline migration"):
+            require_exact_payload_version(
+                {key: incompatible},
+                key=key,
+                expected=expected,
+                runtime_kind=runtime_kind,
+            )
+
+    with pytest.raises(ValueError, match="missing payload version.*offline migration"):
+        require_exact_payload_version(
+            {},
+            key=key,
+            expected=expected,
+            runtime_kind=runtime_kind,
+        )
+    with pytest.raises(ValueError, match="expected exactly 3.*offline migration"):
+        require_exact_payload_version(
+            {key: np.array(expected - 1, dtype=np.int64)},
+            key=key,
+            expected=expected,
+            runtime_kind=runtime_kind,
+        )
+
+
+@pytest.mark.parametrize(
+    ("runtime_kind", "key"),
+    [
+        ("Uniform", "pops_checkpoint_version"),
+        ("AMR", "pops_amr_checkpoint_version"),
+    ],
+)
+def test_historical_version_refusal_happens_before_restart_transaction(runtime_kind, key):
+    calls = []
+
+    class _Executor:
+        def _prepare_checkpoint_restart(self, _payload):
+            calls.append("prepare")
+            require_exact_payload_version(
+                {key: np.array(2, dtype=np.int64)},
+                key=key,
+                expected=3,
+                runtime_kind=runtime_kind,
+            )
+
+        def _begin_checkpoint_restart(self):
+            calls.append("begin")
+
+        def _apply_checkpoint_restart(self, _prepared):
+            calls.append("apply")
+
+        def _commit_checkpoint_restart(self):
+            calls.append("commit")
+
+        def _finalize_checkpoint_restart(self):
+            calls.append("finalize")
+
+        def _rollback_checkpoint_restart(self):
+            calls.append("rollback")
+
+    owner = SimpleNamespace(
+        _execution_context=SimpleNamespace(
+            communicator=SimpleNamespace(identity="serial", handle=None)
+        )
+    )
+    with pytest.raises(ValueError, match="historical checkpoints require offline migration"):
+        restore_checkpoint_payload(owner, _Executor(), b"historical")
+    assert calls == ["prepare"]
 
 
 @pytest.mark.parametrize("phase", ["checkpoint capture", "restart"])

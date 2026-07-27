@@ -93,11 +93,17 @@ def _record_failure(engine: Any, error: BaseException, attempts: int) -> None:
     )
 
 
-def _native_attempt(engine: Any, native: Any, advance: Any) -> Any:
+def _native_attempt(
+    engine: Any, native: Any, advance: Any, *, queued_event: Any = None,
+) -> Any:
     temporal = getattr(engine, "_temporal_restart_state", None)
     before_time, before_step = native.time(), native.macro_step()
     if temporal is not None:
-        temporal.before_attempt(time=before_time, macro_step=before_step)
+        if queued_event is None:
+            temporal.before_attempt(time=before_time, macro_step=before_step)
+        else:
+            temporal.before_queued_attempt(
+                queued_event, time=before_time, macro_step=before_step)
     try:
         result = advance()
     except BaseException as error:
@@ -114,7 +120,9 @@ def _native_attempt(engine: Any, native: Any, advance: Any) -> Any:
     if temporal is not None:
         temporal.accept(
             before_time=before_time, before_step=before_step,
-            time=native.time(), macro_step=native.macro_step())
+            time=native.time(), macro_step=native.macro_step(),
+            consumed_event=queued_event,
+        )
     return result
 
 
@@ -177,24 +185,46 @@ class ErrorControlledDtController(StepController[ErrorControlledDt]):
     def restore_temporal_state(self, temporal: Any) -> None:
         if temporal is None or not getattr(temporal, "_restored_pending", False):
             return
-        last_hex = getattr(temporal, "controller_state", {}).get("last_accepted_dt")
-        if last_hex is None:
-            raise RuntimeError(
-                "ErrorControlledDt restart lacks the accepted dt needed for the next proposal")
-        self.next_dt = min(
-            self.strategy.dt_max,
-            float.fromhex(last_hex) * self.strategy.growth,
+        _event, proposal = temporal.queued_error_controlled_proposal(
+            time=float.fromhex(temporal.time_hex),
+            macro_step=temporal.macro_step,
         )
+        self.next_dt = proposal
 
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
         attempts = 0
         self.attempts = 0
         proposal = min(self.next_dt, self.strategy.dt_max, t_end - float(native.time()))
+        temporal = getattr(engine, "_temporal_restart_state", None)
+        if temporal is not None:
+            if temporal.event_queue:
+                queued_event, queued_dt = temporal.queued_error_controlled_proposal(
+                    time=native.time(), macro_step=native.macro_step())
+                if proposal.hex() != queued_dt.hex():
+                    queued_event = temporal.queue_error_controlled_proposal(
+                        dt=proposal,
+                        time=native.time(),
+                        macro_step=native.macro_step(),
+                        replace=True,
+                    )
+            else:
+                queued_event = temporal.queue_error_controlled_proposal(
+                    dt=proposal,
+                    time=native.time(),
+                    macro_step=native.macro_step(),
+                )
+        else:
+            queued_event = None
         while True:
             attempts += 1
             self.attempts = attempts
             try:
-                _native_attempt(engine, native, lambda proposal=proposal: native.step(proposal))
+                _native_attempt(
+                    engine,
+                    native,
+                    lambda proposal=proposal: native.step(proposal),
+                    queued_event=queued_event,
+                )
             except StepAttemptRejected:
                 if attempts > self.strategy.max_rejections:
                     raise
@@ -202,9 +232,22 @@ class ErrorControlledDtController(StepController[ErrorControlledDt]):
                 if reduced < self.strategy.dt_min:
                     raise
                 proposal = reduced
+                if temporal is not None:
+                    queued_event = temporal.queue_error_controlled_proposal(
+                        dt=proposal,
+                        time=native.time(),
+                        macro_step=native.macro_step(),
+                        replace=True,
+                    )
                 continue
             self.next_dt = min(
                 self.strategy.dt_max, proposal * self.strategy.growth)
+            if temporal is not None:
+                temporal.queue_error_controlled_proposal(
+                    dt=self.next_dt,
+                    time=native.time(),
+                    macro_step=native.macro_step(),
+                )
             return attempts
 
 
