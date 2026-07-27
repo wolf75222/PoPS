@@ -909,15 +909,17 @@ def _ctest_timeout(test: dict) -> float:
 
 
 def verify_cpp_target_labels(args: argparse.Namespace) -> int:
-    """Fail unless discovered CTests exactly separate into selected targets and standalones.
+    """Authenticate every CTest owner and require cases for every selected target.
 
     ``gtest_discover_tests`` names cases after their GTest suite rather than their
     CMake executable, so the C++ shards execute through exact ``cpp-target:*``
     labels.  Verifying the labels from CTest's JSON model before execution keeps
     a malformed CMake property list from turning a shard into a false-green
-    ``No tests were found`` run.  Top-level CMake/Python contract tests have no
-    build target by design; they are returned as one exact anchored regex so a
-    designated shard can execute them once rather than silently dropping them.
+    ``No tests were found`` run. Configure-time discovery exposes other shards'
+    independently owned cases too; those remain authenticated but are not selected.
+    Top-level CMake/Python contract tests have no build target by design; they are
+    returned as one exact anchored regex so a designated shard can execute them
+    once rather than silently dropping them.
     """
     targets = list(dict.fromkeys(args.targets))
     if not targets:
@@ -966,10 +968,11 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
             )
         owner_label = owner_labels[0]
         if owner_label not in expected:
-            raise SystemExit(
-                "CTest target-label contract failed; discovered test "
-                f"{test_name!r} belongs to unselected {owner_label}"
-            )
+            # Configure-time GoogleTest discovery deliberately registers the complete CTest
+            # catalogue even when this shard builds only its selected executables.  The owner is
+            # still authenticated above, but an independently owned, unselected target belongs to
+            # another shard and must not make this one fail.
+            continue
         hits[expected[owner_label]].append(test_name)
 
     missing = [target for target in targets if not hits[target]]

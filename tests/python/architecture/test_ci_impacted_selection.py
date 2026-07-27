@@ -491,7 +491,9 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
         args.targets.pop()
 
 
-def test_cpp_target_label_fence_rejects_ambiguous_or_unselected_owners(tmp_path):
+def test_cpp_target_label_fence_ignores_other_shards_but_rejects_ambiguous_owners(
+    tmp_path,
+):
     sel = _load("ci_select_tests")
     inventory = tmp_path / "ctest-invalid-owner.json"
     payload = {
@@ -512,8 +514,7 @@ def test_cpp_target_label_fence_rejects_ambiguous_or_unselected_owners(tmp_path)
     }
     inventory.write_text(json.dumps(payload))
     args = SimpleNamespace(ctest_json=str(inventory), targets=["test_one"])
-    with pytest.raises(SystemExit, match="unselected cpp-target:test_other"):
-        sel.verify_cpp_target_labels(args)
+    assert sel.verify_cpp_target_labels(args) == 0
 
     payload["tests"][1]["properties"][0]["value"] = [
         "cpp-target:test_one",
