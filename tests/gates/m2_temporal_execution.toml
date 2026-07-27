@@ -1,6 +1,6 @@
 schema_version = 1
 gate = "m2-temporal-execution"
-issues = ["ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666", "ADC-667"]
+issues = ["ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666", "ADC-667", "ADC-668"]
 deferred = []
 
 # Every requirement has one success proof and one refusal/rollback proof. Exact
@@ -100,6 +100,22 @@ polarity = "refusal"
 kind = "pytest"
 target = "solve"
 nodeid = "tests/python/unit/time/test_solve_outcome_contract.py::test_solve_outcome_refuses_implicit_invalid_and_double_consumption"
+
+[[check]]
+issue = "ADC-668"
+requirement = "native_multiblock_implicit_phase"
+polarity = "positive"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/integration/runtime/test_multiblock_implicit_phase.py::test_generated_native_multiblock_implicit_phase_uses_exact_name_routes"
+
+[[check]]
+issue = "ADC-668"
+requirement = "native_multiblock_implicit_phase"
+polarity = "refusal"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/integration/runtime/test_multiblock_implicit_phase.py::test_multiblock_implicit_fixture_refuses_route_or_phase_multiplicity_drift"
 
 [[check]]
 issue = "ADC-666"
