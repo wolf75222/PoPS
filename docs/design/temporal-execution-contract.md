@@ -23,7 +23,10 @@ T.commit(state.next, state_next)
 `subcycle` is structured IR. The child duration is exactly the enclosing duration divided by
 `count`; nested subcycles compose their ratios. Generated native code opens an exception-safe clock
 scope, checks every child iteration in order, and closes it only after the exact authored count.
-An unsupported synchronization provider is rejected during lowering, before a binary is published.
+Uniform programs additionally lower `InterpolateHistory(...LinearInterpolation())` against the
+native retained slots and their exact accepted `slot_dt` timestamps. Dense-output capabilities,
+AMR interpolation, and child-clock history ledgers are rejected during lowering until they have an
+equally exact native provider; no callback or sample-and-hold fallback is substituted.
 
 ## Qualified histories and schedules
 
@@ -44,6 +47,12 @@ The temporal restart payload schema v2 persists the exact program schedule and a
 clocks, subcycles, synchronization nodes, schedules, histories, held caches, the event queue,
 controller proposal state, and transaction statistics. Field/history/cache values remain in their
 native checkpoint sections, authenticated by this envelope.
+
+For `ErrorControlledDt`, the queue head is the exact next proposal: it determines the native `dt`,
+survives a rejected attempt until the controller explicitly replaces it with the typed reduced
+proposal, and is consumed exactly once by acceptance. The accepted boundary immediately publishes
+the following proposal, so restart replays the same next decision rather than recomputing it from a
+display-only field.
 
 A checkpoint is legal only at an accepted fully synchronized boundary. Rejection and failure leave
 all accepted cursors unchanged and make checkpointing ineligible. Restart compares the checkpointed
