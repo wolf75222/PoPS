@@ -119,7 +119,7 @@ def _ab2_program(model, name="adc631_ckpt_ab2"):
     return P
 
 
-def _state3_program(model, name="adc631_ckpt_state3"):
+def _state3_program(model, name="adc631_ckpt_state3", *, step_strategy=None):
     """A 3-slot STATE ring (max lag 2, Interval(2) -> stores slots {0,2}, replays slot 1).
 
     The commit is the strictly affine recurrence U^{n+1} = U^n + dt*_C*U^n -- it depends only on U^n,
@@ -137,7 +137,7 @@ def _state3_program(model, name="adc631_ckpt_state3"):
     # ring without breaking the single-step reconstructability of the replay.
     nxt = P.value("Un", U.n + P.dt * _C * U.n + 0.0 * U.prev(2), at=U.next.point)
     P.commit(U.next, nxt)
-    P.step_strategy(pops.time.FixedDt(DT))
+    P.step_strategy(pops.time.FixedDt(DT) if step_strategy is None else step_strategy)
     return P
 
 
@@ -442,11 +442,22 @@ def test_state5_multiple_anchor_gaps_replay_by_index_bit_identical():
 
 def test_amr_variable_dt_stride_checkpoint_closes_like_continuous_run():
     """A held AMR window restarts exactly and stores selective histories densely for safety."""
+    from pops.time import ExternalTimeGrid
+
     steps = tuple(0.01 * index for index in range(1, 13))
+    grid = (0.0,) + tuple(sum(steps[:index]) for index in range(1, len(steps) + 1))
+    controls = {"amr_checkpoint_test_grid": grid}
+
+    def variable_state3_program(model):
+        return _state3_program(
+            model,
+            name="adc631_ckpt_variable_state3",
+            step_strategy=ExternalTimeGrid("amr_checkpoint_test_grid"),
+        )
 
     def fresh():
         system, error = _build(
-            _state3_program,
+            variable_state3_program,
             regrid_every=0,
             program_cadence=(1, 3),
         )
@@ -460,15 +471,16 @@ def test_amr_variable_dt_stride_checkpoint_closes_like_continuous_run():
         )
 
     continuous = fresh()
-    for dt in steps:
-        continuous.step(dt)
+    continuous.run(t_end=grid[-1], max_steps=len(steps), controls=controls)
 
     interrupted = fresh()
-    for dt in steps[:10]:
-        interrupted.step(dt)
+    interrupted.run(t_end=grid[9], max_steps=9, controls=controls)
+    expected_window_start = interrupted.time()
+    interrupted.run(t_end=grid[10], max_steps=1, controls=controls)
+    expected_window_dt = interrupted.time() - expected_window_start
     assert interrupted._s.program_cadence_window_steps() == 1
-    assert interrupted._s.program_cadence_window_dt() == steps[9]
-    assert interrupted._s.program_cadence_window_start_time() == sum(steps[:9])
+    assert interrupted._s.program_cadence_window_dt() == expected_window_dt
+    assert interrupted._s.program_cadence_window_start_time() == expected_window_start
 
     with tempfile.TemporaryDirectory() as tmp:
         checkpoint = interrupted.checkpoint(os.path.join(tmp, "amr_variable_stride"))
@@ -484,10 +496,13 @@ def test_amr_variable_dt_stride_checkpoint_closes_like_continuous_run():
         restarted = fresh()
         restarted.restart(checkpoint)
         assert restarted._s.program_cadence_window_steps() == 1
-        assert restarted._s.program_cadence_window_dt() == steps[9]
-        assert restarted._s.program_cadence_window_start_time() == sum(steps[:9])
-        for dt in steps[10:]:
-            restarted.step(dt)
+        assert restarted._s.program_cadence_window_dt() == expected_window_dt
+        assert restarted._s.program_cadence_window_start_time() == expected_window_start
+        restarted.run(
+            t_end=grid[-1],
+            max_steps=len(steps) - 10,
+            controls=controls,
+        )
 
     assert restarted.macro_step() == continuous.macro_step() == len(steps)
     assert restarted.time() == continuous.time()

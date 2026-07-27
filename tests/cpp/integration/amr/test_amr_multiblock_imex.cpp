@@ -40,6 +40,7 @@
 #include <pops/runtime/amr_system.hpp>                      // facade AmrSystem
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 
 #include "amr_transfer_test_authority.hpp"
 
@@ -565,16 +566,10 @@ TEST(test_amr_multiblock_imex, Runs) {
     try {
       for (int s = 0; s < K; ++s)
         sim->step(dt);
-    } catch (const runtime::program::StepAttemptRejected& failure) {
-      if (failure.status() != SolveStatus::kInvalidEvaluation ||
-          failure.disposition() != runtime::program::StepAttemptDisposition::kReject ||
-          failure.reason_code() != 0x53544201u || failure.phase() != "stage")
-        throw;
-      explicit_rejected = true;
-    } catch (const FluxEvaluationFailure& failure) {
-      if (failure.status() != EvaluationStatus::kReject ||
-          failure.action() != TransactionFailureAction::kRejectStep ||
-          failure.reason_code() != 0x53544201u || failure.phase() != "compute_face_fluxes")
+    } catch (const runtime::program::StepAttemptRejected& rejection) {
+      if (rejection.status() != SolveStatus::kInvalidEvaluation ||
+          rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
+          rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
         throw;
       explicit_rejected = true;
     }
