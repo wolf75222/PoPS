@@ -6,6 +6,7 @@
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
 #include <algorithm>
+#include <cmath>
 
 namespace pops {
 
@@ -21,10 +22,10 @@ void require_cartesian_boundary_linearization(bool embedded_boundary_set, Geomet
 // Compiled time-program seam (epic ADC-399 / ADC-401): a generated problem.so installs its macro-step
 // body and reaches per-block storage through these accessors (Impl is private to this TU).
 void System::install_program_step(std::function<void(double)> step) {
-  p_->program_.step_ = std::move(step);
+  p_->program_.install_unverified_step(std::move(step));
 }
 // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the installed
-// program closure (cf. SystemStepper::step). Kept separate from install_program so the .so ABI is
+// program closure (cf. SystemProgramDriver::step). Kept separate from install_program so the .so ABI is
 // untouched. Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void System::set_program_cadence(int substeps, int stride) {
   require_assembling(p_->lifecycle_,
@@ -41,9 +42,59 @@ int System::program_substeps() const {
 int System::program_stride() const {
   return p_->program_.stride_;
 }
+double System::program_cadence_window_dt() const {
+  return p_->program_.cadence_window_dt_;
+}
+int System::program_cadence_window_steps() const {
+  return p_->program_.cadence_window_steps_;
+}
+double System::program_cadence_window_start_time() const {
+  return p_->program_.cadence_window_start_time_;
+}
+double System::program_last_dt() const {
+  return static_cast<double>(p_->program_.last_dt_);
+}
+void System::restore_program_cadence_window(double accumulated_dt, int held_steps,
+                                            double window_start_time, double accepted_last_dt,
+                                            double accepted_time, int macro_step) {
+  p_->program_.restore_cadence_window(accumulated_dt, held_steps, window_start_time,
+                                      accepted_last_dt, accepted_time, macro_step, "System");
+}
 int System::n_blocks() const {
   return static_cast<int>(p_->sp.size());
 }
+
+std::size_t System::apply_coupling_operators(Real dt,
+                                             const std::vector<MultiFab*>& candidate_states) {
+  if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
+    throw std::invalid_argument(
+        "System::apply_coupling_operators requires a finite non-negative dt");
+  if (candidate_states.size() != p_->sp.size())
+    throw std::invalid_argument(
+        "System::apply_coupling_operators requires one candidate state per block");
+  for (std::size_t block = 0; block < candidate_states.size(); ++block) {
+    const MultiFab* candidate = candidate_states[block];
+    if (candidate == nullptr)
+      throw std::invalid_argument(
+          "System::apply_coupling_operators received a null candidate state");
+    const MultiFab& live = p_->sp[block].U;
+    if (candidate->box_array().boxes() != live.box_array().boxes() ||
+        candidate->dmap().ranks() != live.dmap().ranks() || candidate->ncomp() != live.ncomp() ||
+        candidate->n_grow() != live.n_grow())
+      throw std::invalid_argument(
+          "System::apply_coupling_operators candidate layout differs from its block");
+    for (const auto& accepted : p_->sp)
+      if (candidate == &accepted.U)
+        throw std::invalid_argument(
+            "System::apply_coupling_operators cannot mutate accepted live states");
+    for (std::size_t other = 0; other < block; ++other)
+      if (candidate_states[other] == candidate)
+        throw std::invalid_argument(
+            "System::apply_coupling_operators cannot alias two block candidates");
+  }
+  return p_->coupling_.apply(dt, candidate_states);
+}
+
 MultiFab& System::block_state(int b) {
   return p_->sp[static_cast<std::size_t>(b)].U;
 }
@@ -287,7 +338,7 @@ Real System::block_max_speed(int b, const MultiFab& U) const {
   return p_->sp[static_cast<std::size_t>(b)].max_speed(U);
 }
 // MIN physical cell size of the grid: Cartesian min(dx, dy) / polar min(dr, r_min*dtheta), the exact
-// formula SystemStepper::cfl_grid_h uses for the native CFL (kept consistent so a Program dt bound and
+// formula SystemProgramDriver::cfl_grid_h uses for the native CFL (kept consistent so a Program dt bound and
 // the native CFL share the same hmin).
 Real System::cfl_min_dx() const {
   return p_->polar_ ? std::min(p_->pgeom_.dr(), p_->pgeom_.r_min * p_->pgeom_.dtheta())

@@ -1,15 +1,16 @@
-// IMEX (source implicite raide) sur le chemin "production" NATIF cote AMR (Gap 2 parite).
-// Pendant de tests/cpp/integration/native_loader/test_amr_riemann_native.cpp / test_amr_weno5_native.cpp : prouve que
-// time="imex" tourne la MEME hierarchie AMR (AmrCouplerMP<Model> + reflux + regrid), BIT-IDENTIQUE,
-// sur les trois chemins d'entree, et que l'IMEX est ACTIF (different de l'explicite, et stable la ou
-// l'explicite EXPLOSE sur une source raide).
+// IMEX (source implicite raide) porte par un ProgramGraph de test sur le chemin natif AMR.
+// Pendant de tests/cpp/integration/native_loader/test_amr_riemann_native.cpp /
+// test_amr_weno5_native.cpp : prouve que les trois chemins d'entree assemblent la MEME hierarchie
+// spatiale et donnent une trajectoire BIT-IDENTIQUE sous la MEME composition Program. Le test prouve
+// aussi que le traitement IMEX est actif (different de l'explicite et stable la ou l'explicite
+// explose sur une source raide).
 //
-// Le moteur AMR etait EXPLICITE seul : la source etait appliquee en Euler avant a chaque feuille/niveau
-// (mf_apply_source). En IMEX, le sous-pas applique (a) l'avance de transport sans source (deja portee
-// par compute_face_fluxes + reflux conservatif) PUIS (b) la source raide en IMPLICITE par
-// backward_euler_source (Newton local, foncteur device NOMME). C'est le pendant AMR de l'IMEX du System
-// (block_builder.hpp::AdvanceImex). La source restant CELLULE-LOCALE (hors flux de face), elle n'entre
-// PAS dans les registres de reflux : la conservation aux interfaces grossier-fin est intacte (prouve ici).
+// Le Program de test applique (a) une avance de transport sans source, dont les flux alimentent le
+// ledger conservatif, PUIS (b) la source raide en IMPLICITE par backward_euler_source (Newton local,
+// foncteur device nomme), le tout sur des candidats prives avant commit. La source restant
+// CELLULE-LOCALE (hors flux de face), elle n'entre pas dans le reflux : la conservation aux interfaces
+// grossier-fin est intacte (prouve ici). Ce helper est une preuve numerique de la primitive attendue ;
+// la facade publique continue de refuser une composition IMEX qui n'a pas ete lower-ee en Program.
 //
 // Deux modeles, pour couvrir les deux exigences sans toucher aux briques de production (write-set) :
 //
@@ -41,8 +42,11 @@
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, PotentialForce, BackgroundDensity
+#include <pops/numerics/time/integrators/implicit_stepper.hpp>
+#include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -51,6 +55,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -234,14 +239,50 @@ void configure_refined_execution(AmrSystem& system) {
   system.set_refinement(1.2);
 }
 
+template <class Model>
+void install_single_block_test_program(AmrSystem& system, Model model, bool implicit_source) {
+  system.set_program_block_map({0});
+  // Select and materialize the common spatial runtime before binding the typed Program context.
+  system.install_program_step([](double) {});
+  if (!system.uses_runtime_engine() || system.engine() == nullptr)
+    throw std::runtime_error("native IMEX fixture failed to materialize AmrRuntime");
+
+  auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
+  context->configure_primary_clock("test.amr.imex.macro");
+  context->install([context, model, implicit_source](double macro_dt) {
+    context->advance_hierarchy(macro_dt, [context, model, implicit_source](double level_dt) {
+      context->set_stage_time(0, 1);
+      (void)context->solve_fields();
+
+      MultiFab& live = context->state(0);
+      MultiFab& candidate = context->scratch_state(1000, 0, live);
+      MultiFab& rate = context->rhs_scratch(2000, 0, candidate);
+      context->lincomb(candidate, Real(1), live, Real(0), live);
+      if (implicit_source) {
+        context->neg_div_flux_default_into(0, candidate, rate, 3000);
+        context->axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});
+        backward_euler_source(model, context->aux(), candidate, Real(level_dt), NewtonOptions{},
+                              ImplicitMask<Model::n_vars>{}, nullptr);
+      } else {
+        context->rhs_into(0, candidate, rate, 3000);
+        context->axpy(candidate, Real(level_dt), rate, Real(level_dt), {{1, 1, 1}});
+      }
+      context->commit_many({{&live, &candidate}});
+    });
+  });
+  system.set_program_block_map({0});
+}
+
 // @p setup installe l'unique bloc (add_compiled_model ou add_block) ; le reste (Poisson, raffinement,
 // densite, avance) est commun. Construit son propre AmrSystem (pas de fuite).
-template <class Setup>
-Snap run(int n, const std::vector<double>& rho, int nsteps, double dt, Setup setup) {
+template <class Model, class Setup>
+Snap run(int n, const std::vector<double>& rho, int nsteps, double dt, Model model,
+         bool implicit_source, Setup setup) {
   AmrSystem s(make_cfg(n));
   setup(s);
   configure_refined_execution(s);
   s.set_density("gas", rho);
+  install_single_block_test_program(s, model, implicit_source);
   for (int k = 0; k < nsteps; ++k)
     s.step(dt);
   return Snap{s.density(), s.mass(), s.n_patches()};
@@ -274,10 +315,12 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
   const double dtA = 5e-3;  // regime ou IMEX differe nettement de l'explicite (PotentialForce fort)
 
   // (A1) add_compiled_model == add_block sous time="imex" : dmax==0 (chemin direct, tous backends).
-  Snap A_compiled = run(n, rho, nsteps, dtA, [](AmrSystem& s) {
-    add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
-  });
-  Snap A_block = run(n, rho, nsteps, dtA, [](AmrSystem& s) {
+  Snap A_compiled =
+      run(n, rho, nsteps, dtA, make_pot(), /*implicit_source=*/true, [](AmrSystem& s) {
+        add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex",
+                           kGamma);
+      });
+  Snap A_block = run(n, rho, nsteps, dtA, make_pot(), /*implicit_source=*/true, [](AmrSystem& s) {
     s.add_block("gas", make_pot_spec(), "minmod", "rusanov", "conservative", "imex", 1);
   });
   chk(maxabs(A_block.density) > 1e-6, "[A] densite IMEX non triviale");
@@ -289,10 +332,11 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
   std::printf("OK  [A] add_compiled_model == add_block sous IMEX (dmax==0)\n");
 
   // (A2) IMEX ACTIF : different de l'explicite sur le MEME etat (le pas implicite est bien pris).
-  Snap A_explicit = run(n, rho, nsteps, dtA, [](AmrSystem& s) {
-    add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "explicit",
-                       kGamma);
-  });
+  Snap A_explicit =
+      run(n, rho, nsteps, dtA, make_pot(), /*implicit_source=*/false, [](AmrSystem& s) {
+        add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "explicit",
+                           kGamma);
+      });
   chk(maxdiff(A_compiled.density, A_explicit.density) > 1e-9,
       "[A] IMEX != explicite sur le meme etat (pas implicite actif, non silencieux)");
   std::printf("OK  [A] IMEX != explicite (dmax=%.3e)\n",
@@ -306,6 +350,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
     configure_refined_execution(s);
     s.set_density("gas", rho);
+    install_single_block_test_program(s, make_pot(), /*implicit_source=*/true);
     const double m0 = s.mass();
     for (int k = 0; k < nsteps; ++k)
       s.step(dtA);
@@ -321,17 +366,19 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
   // Regime RAIDE (eps << dt) : explicite diverge, IMEX reste fini et borne.
   {
     const double eps = 1e-5, dtB = 1e-3;
-    Snap B_imex = run(n, rho, nsteps, dtB, [eps](AmrSystem& s) {
-      add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
-                         kGamma);
-    });
+    Snap B_imex =
+        run(n, rho, nsteps, dtB, make_stiff(eps), /*implicit_source=*/true, [eps](AmrSystem& s) {
+          add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
+                             kGamma);
+        });
     Snap B_expl;
     bool explicit_rejected_nonfinite = false;
     try {
-      B_expl = run(n, rho, nsteps, dtB, [eps](AmrSystem& s) {
-        add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative",
-                           "explicit", kGamma);
-      });
+      B_expl =
+          run(n, rho, nsteps, dtB, make_stiff(eps), /*implicit_source=*/false, [eps](AmrSystem& s) {
+            add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative",
+                               "explicit", kGamma);
+          });
     } catch (const FieldNullspaceInvalidEvaluation&) {
       // The final runtime is fail-closed: once the unstable explicit state becomes non-finite, the
       // next field solve rejects it before NaNs can be published as a completed step.
@@ -340,6 +387,13 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
       if (rejection.status() != SolveStatus::kInvalidEvaluation ||
           rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
           rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
+        throw;
+      explicit_rejected_nonfinite = true;
+    } catch (const std::runtime_error& error) {
+      // This section deliberately calls AmrRuntime below the facade transaction boundary, so the
+      // finite-volume kernel may expose its fail-closed reason directly instead of the facade's
+      // StepAttemptRejected wrapper.
+      if (std::string(error.what()).find("reason_code=0x53544201") == std::string::npos)
         throw;
       explicit_rejected_nonfinite = true;
     }
@@ -362,14 +416,16 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
   // en regime modere et borne pour add_compiled_model == add_compiled_model (idempotence du build).
   {
     const double eps = 1e-3, dtB = 2e-4;
-    Snap B1 = run(n, rho, nsteps, dtB, [eps](AmrSystem& s) {
-      add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
-                         kGamma);
-    });
-    Snap B2 = run(n, rho, nsteps, dtB, [eps](AmrSystem& s) {
-      add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
-                         kGamma);
-    });
+    Snap B1 =
+        run(n, rho, nsteps, dtB, make_stiff(eps), /*implicit_source=*/true, [eps](AmrSystem& s) {
+          add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
+                             kGamma);
+        });
+    Snap B2 =
+        run(n, rho, nsteps, dtB, make_stiff(eps), /*implicit_source=*/true, [eps](AmrSystem& s) {
+          add_compiled_model(s, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
+                             kGamma);
+        });
     chk(maxdiff(B1.density, B2.density) == 0.0,
         "[B] add_compiled_model deterministe sous IMEX (dmax==0)");
     chk(all_finite(B1.density), "[B] IMEX stable en regime modere");
@@ -403,6 +459,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
     configure_refined_execution(A);
     A.set_density("pot", rho);
+    install_single_block_test_program(A, make_pot(), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
       A.step(dtA);
 
@@ -410,6 +467,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
     configure_refined_execution(B);
     B.set_density("gas", rho);
+    install_single_block_test_program(B, make_pot(), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
       B.step(dtA);
 
@@ -425,6 +483,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
     configure_refined_execution(A);
     A.set_density(bname, rho);
+    install_single_block_test_program(A, make_stiff(eps), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
       A.step(dtB);
 
@@ -433,6 +492,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
                        kGamma);
     configure_refined_execution(B);
     B.set_density("gas", rho);
+    install_single_block_test_program(B, make_stiff(eps), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
       B.step(dtB);
 

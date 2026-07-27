@@ -186,7 +186,7 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         '    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
         '    _refresh_level_programs();\n'
         + installed_driver +
-        '  });\n'
+        '  }, ctx_owner, _refresh_level_programs);\n'
         '}\n'
         '// AMR counterpart of pops_program_dt_bound. The generated module owns the concrete\n'
         '// AmrProgramContext type; the runtime loader passes only its stable AmrSystem facade.\n'

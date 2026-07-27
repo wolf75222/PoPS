@@ -26,18 +26,56 @@ from pops._report import ReportTree
 #: deterministic function of ``(state, dt, params)`` -- there is no stochastic / RNG / wall-clock op
 #: in the language. An op OUTSIDE this set is treated as non-deterministic-unless-proven (fail-closed):
 #: the pass refuses a non-Dense policy whose replay reaches it, rather than risk a silent drift.
-_KNOWN_DETERMINISTIC_OPS = frozenset({
-    "state", "history", "store_history", "linear_combine", "project",
-    "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit",
-    "rhs", "apply", "source", "linear_source", "coupled_rate", "coupled_rate_out",
-    "divergence", "gradient", "laplacian", "apply_laplacian_coeff",
-    "apply_in", "apply_out", "cell_compare", "scalar_field", "rhs_jacvec",
-    "solve_linear", "solve_local_linear", "matrix_free_operator",
-    "solve_outcome", "solve_outcome_component",
-    "schur_coeffs", "schur_energy", "schur_reconstruct", "schur_explicit_flux", "schur_rhs",
-    "cfl", "hmin", "max_wave_speed", "record_scalar", "reduce", "scalar_op", "compare",
-    "while", "range", "subcycle", "branch", "synchronize", "solve_local_nonlinear",
-})
+_KNOWN_DETERMINISTIC_OPS = frozenset(
+    {
+        "state",
+        "history",
+        "store_history",
+        "linear_combine",
+        "project",
+        "solve_fields",
+        "solve_fields_from_blocks",
+        "solve_coupled_implicit",
+        "rhs",
+        "apply",
+        "source",
+        "linear_source",
+        "coupled_rate",
+        "coupled_rate_out",
+        "divergence",
+        "gradient",
+        "laplacian",
+        "apply_laplacian_coeff",
+        "apply_in",
+        "apply_out",
+        "cell_compare",
+        "scalar_field",
+        "rhs_jacvec",
+        "solve_linear",
+        "solve_local_linear",
+        "matrix_free_operator",
+        "solve_outcome",
+        "solve_outcome_component",
+        "schur_coeffs",
+        "schur_energy",
+        "schur_reconstruct",
+        "schur_explicit_flux",
+        "schur_rhs",
+        "cfl",
+        "hmin",
+        "max_wave_speed",
+        "record_scalar",
+        "reduce",
+        "scalar_op",
+        "compare",
+        "while",
+        "range",
+        "subcycle",
+        "branch",
+        "synchronize",
+        "solve_local_nonlinear",
+    }
+)
 
 #: The capability tag an external brick clears to declare it is NOT a deterministic function of its
 #: inputs (an RNG / stochastic source). A brick that supports it under a non-Dense policy is refused.
@@ -53,9 +91,14 @@ _OWNER_AFFINE_OPS = frozenset({"state", "linear_combine"})
 
 # ``history`` is accepted here only as bookkeeping for an exact-zero ``prev`` depth declaration;
 # `_effective_inputs` below proves that it is not load-bearing in the committed transition.
-_AFFINE_REPLAY_PROGRAM_OPS = frozenset({
-    "state", "history", "store_history", "linear_combine",
-})
+_AFFINE_REPLAY_PROGRAM_OPS = frozenset(
+    {
+        "state",
+        "history",
+        "store_history",
+        "linear_combine",
+    }
+)
 
 
 def _walk_ops(values):
@@ -64,8 +107,14 @@ def _walk_ops(values):
     for v in values:
         yield v
         attrs = getattr(v, "attrs", {}) or {}
-        for key in ("cond_block", "body_block", "true_block", "false_block",
-                    "apply_block", "residual_block"):
+        for key in (
+            "cond_block",
+            "body_block",
+            "true_block",
+            "false_block",
+            "apply_block",
+            "residual_block",
+        ):
             block = attrs.get(key)
             if block:
                 yield from _walk_ops(block)
@@ -80,7 +129,7 @@ def _op_is_nondeterministic(op):
     provably deterministic."""
     op_name = getattr(op, "op", None)
     if op_name not in _KNOWN_DETERMINISTIC_OPS:
-        return ("op %r is not on the vetted deterministic-op allow-list" % op_name)
+        return "op %r is not on the vetted deterministic-op allow-list" % op_name
     # An op may carry an external brick / operator descriptor in its attrs (a bound operator, a
     # custom source). If that descriptor DECLARES non-determinism, refuse (fail-closed on the
     # declaration; a brick that never declares it is trusted as deterministic by default).
@@ -91,7 +140,7 @@ def _op_is_nondeterministic(op):
             try:
                 supports = getattr(caps(), "supports", None)
                 if callable(supports) and supports(_NONDETERMINISM_TAG):
-                    return ("op %r references a brick declaring it is non-deterministic" % op_name)
+                    return "op %r references a brick declaring it is non-deterministic" % op_name
             except Exception:  # noqa: BLE001 -- a descriptor whose capabilities() raises is not our gate
                 continue
     return None
@@ -157,6 +206,11 @@ def _program_context_refusal(program):
         op = getattr(value, "op", None)
         if op not in _AFFINE_REPLAY_PROGRAM_OPS:
             return "the Program executes non-affine/context-dependent op %r" % op
+        if (getattr(value, "attrs", {}) or {}).get("schedule") is not None:
+            return (
+                "the Program executes scheduled op %r whose historical scheduler/cache "
+                "state is not stored per history slot" % op
+            )
     return None
 
 
@@ -176,14 +230,18 @@ def validate_history_persistence(program, report: ReportTree) -> ReportTree:
     persistence_names = set(persistence)
     for name in sorted(history_names - persistence_names):
         report = report.error(
-            "history_persistence", "missing_policy",
+            "history_persistence",
+            "missing_policy",
             "history %r has no compiled persistence policy" % name,
-            context={"history": name})
+            context={"history": name},
+        )
     for name in sorted(persistence_names - history_names):
         report = report.error(
-            "history_persistence", "orphan_policy",
+            "history_persistence",
+            "orphan_policy",
             "history persistence policy %r has no declared ring" % name,
-            context={"history": name})
+            context={"history": name},
+        )
     if not persistence:
         return report
     # Scan once: the first non-deterministic op (if any) is shared by every non-Dense ring's replay.
@@ -195,6 +253,7 @@ def validate_history_persistence(program, report: ReportTree) -> ReportTree:
             break
     context_reason = _program_context_refusal(program)
     from pops.time._history.persistence import HistoryPersistence
+
     # Selective native replay seeds the owner block with an exact older state sample and re-executes
     # the Program forward. Only keep_history establishes both facts: its stored value is U.n and its
     # store is ordered before the tail commit/rotate. A manual store_history may hold an RHS or a
@@ -208,78 +267,94 @@ def validate_history_persistence(program, report: ReportTree) -> ReportTree:
     for name, configured in sorted(persistence.items()):
         if not isinstance(configured, tuple) or len(configured) != 2:
             report = report.error(
-                "history_persistence", "invalid_policy_record",
+                "history_persistence",
+                "invalid_policy_record",
                 "history %r has an invalid compiled persistence record" % name,
-                context={"history": name})
+                context={"history": name},
+            )
             continue
         ring_slots, policy = configured
         declared_lag = histories.get(name)
         expected_slots = None if declared_lag is None else declared_lag + 1
         if expected_slots is not None and ring_slots != expected_slots:
             report = report.error(
-                "history_persistence", "depth_mismatch",
+                "history_persistence",
+                "depth_mismatch",
                 "history %r persistence slot count %r differs from declared max lag %r "
-                "(expected %r slots)"
-                % (name, ring_slots, declared_lag, expected_slots),
-                context={"history": name})
+                "(expected %r slots)" % (name, ring_slots, declared_lag, expected_slots),
+                context={"history": name},
+            )
             continue
         if not isinstance(policy, HistoryPersistence):
             report = report.error(
-                "history_persistence", "invalid_policy",
+                "history_persistence",
+                "invalid_policy",
                 "history %r persistence policy is not a typed HistoryPersistence" % name,
-                context={"history": name})
+                context={"history": name},
+            )
             continue
         try:
             policy.validate_for(ring_slots)
         except (ValueError, TypeError) as exc:
             report = report.error(
-                "history_persistence", "incoherent_policy",
-                "history %r: %s" % (name, exc), context={"history": name})
+                "history_persistence",
+                "incoherent_policy",
+                "history %r: %s" % (name, exc),
+                context={"history": name},
+            )
             continue
         if policy.degenerate_to_dense(ring_slots):
             continue  # Dense (or a budget-covers-all ring): no replay, never refused
         if name not in replay_provenance:
             report = report.error(
-                "history_persistence", "unqualified_replay_provenance",
+                "history_persistence",
+                "unqualified_replay_provenance",
                 "history %r uses %s but was not declared by keep_history; selective replay "
                 "requires a pre-commit owner-state sample with an authenticated outgoing-dt "
                 "ledger -- use keep_history for a state ring, or Dense() for a manual store"
                 % (name, policy.name),
-                context={"history": name})
+                context={"history": name},
+            )
         else:
             state = replay_provenance[name]
             if state.clock != getattr(program, "clock", None):
                 report = report.error(
-                    "history_persistence", "non_primary_clock_replay",
+                    "history_persistence",
+                    "non_primary_clock_replay",
                     "history %r uses %s on child clock %r, but selective replay executes one full "
                     "primary-clock Program step; use Dense() until a child-clock replay provider "
-                    "exists"
-                    % (name, policy.name, getattr(state.clock, "name", state.clock)),
-                    context={"history": name})
+                    "exists" % (name, policy.name, getattr(state.clock, "name", state.clock)),
+                    context={"history": name},
+                )
             reason = _owner_affine_refusal(program, state)
             if reason is not None:
                 report = report.error(
-                    "history_persistence", "non_affine_replay",
+                    "history_persistence",
+                    "non_affine_replay",
                     "history %r uses %s but native selective replay restores only one exact "
                     "owner-state anchor and proves only a strictly affine owner transition: %s; "
                     "use Dense() until a complete historical-context provider exists"
                     % (name, policy.name, reason),
-                    context={"history": name})
+                    context={"history": name},
+                )
             if context_reason is not None:
                 report = report.error(
-                    "history_persistence", "unrestored_replay_context",
+                    "history_persistence",
+                    "unrestored_replay_context",
                     "history %r uses %s but single-anchor replay cannot reproduce the complete "
                     "historical execution context: %s; use Dense() until that context has a typed "
-                    "checkpoint/replay provider"
-                    % (name, policy.name, context_reason),
-                    context={"history": name})
+                    "checkpoint/replay provider" % (name, policy.name, context_reason),
+                    context={"history": name},
+                )
         if nondet_reason is not None:
             report = report.error(
-                "history_persistence", "nondeterministic_replay",
+                "history_persistence",
+                "nondeterministic_replay",
                 "history %r uses %s which recomputes ring slots by deterministic replay, but the "
                 "Program step reaches a non-deterministic op (%s) -- use Dense() (store every slot) "
                 "or make the op deterministic" % (name, policy.name, nondet_reason),
-                context={"history": name})
+                context={"history": name},
+            )
     return report
 
 
@@ -290,8 +365,11 @@ def check_program(program):
     :func:`validate_history_persistence`, and raises via ``raise_if_error``. A Program with no
     non-Dense ring adds no cost (the scan short-circuits on an empty persistence map)."""
     report = ReportTree(
-        phase="validation", severity="info", code="validation.history_persistence.report",
-        source="history_persistence", owner=program,
+        phase="validation",
+        severity="info",
+        code="validation.history_persistence.report",
+        source="history_persistence",
+        owner=program,
     )
     report = validate_history_persistence(program, report)
     report.raise_if_error()

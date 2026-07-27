@@ -32,8 +32,8 @@ def _case():
     frame = domain.frame(Cartesian2D())
     model = pops.Model("transport", frame=frame)
     state = model.state(
-        "U", components=("u",), representation=Conservative(),
-        space=CellState(frame=frame))
+        "U", components=("u",), representation=Conservative(), space=CellState(frame=frame)
+    )
     case = pops.Case("consumer-authoring")
     block = case.block("tracer", model)
     return case, block, block[state]
@@ -44,20 +44,22 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     clock = Clock("macro", owner=case.owner_path)
     output_schedule = every(10, clock=clock)
     diagnostic = Integral(block=block, cadence=output_schedule)
-    graph = ConsumerGraph.from_consumers((
-        ScientificOutput(
-            format=HDF5(mode=ParallelMode.COLLECTIVE),
-            schedule=output_schedule,
-            fields=(state,),
-            diagnostics=(diagnostic,),
-            target="state/tracer",
-        ),
-        Checkpoint(
-            schedule=every(100, clock=clock),
-            target="checkpoints/restart",
-            bit_identical=True,
-        ),
-    ))
+    graph = ConsumerGraph.from_consumers(
+        (
+            ScientificOutput(
+                format=HDF5(mode=ParallelMode.COLLECTIVE),
+                schedule=output_schedule,
+                fields=(state,),
+                diagnostics=(diagnostic,),
+                target="state/tracer",
+            ),
+            Checkpoint(
+                schedule=every(100, clock=clock),
+                target="checkpoints/restart",
+                bit_identical=True,
+            ),
+        )
+    )
     case.consumers(graph)
     pops.validate(case)
 
@@ -73,29 +75,29 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
 
     assert resolved.is_resolved
-    output = next(node for node in resolved.nodes
-                  if node.kind is ConsumerKind.SCIENTIFIC_OUTPUT)
-    checkpoint = next(node for node in resolved.nodes
-                      if node.kind is ConsumerKind.CHECKPOINT)
+    output = next(node for node in resolved.nodes if node.kind is ConsumerKind.SCIENTIFIC_OUTPUT)
+    checkpoint = next(node for node in resolved.nodes if node.kind is ConsumerKind.CHECKPOINT)
     assert output.parallel_mode is ParallelMode.COLLECTIVE
     assert output.quantities[0].reference == case.resolve(state)
     assert output.quantities[0].levels == (0,)
     assert output.operation is None
     assert output.output_format_data["provider_id"] == "pops.output.hdf5.v1"
-    diagnostic_data, = output.to_data()["diagnostics"]
+    (diagnostic_data,) = output.to_data()["diagnostics"]
     assert diagnostic_data["references"] == [case.resolve(block).canonical_identity()]
     assert diagnostic_data["descriptor"]["scheme"] == "integral"
-    diagnostic_quantity, = output.diagnostic_quantities
+    (diagnostic_quantity,) = output.diagnostic_quantities
     assert diagnostic_quantity.reference == case.resolve(state)
     assert diagnostic_quantity.levels == (0,)
-    assert diagnostic_quantity.execution["operations"] == ({
-        "name": "integral",
-        "reduction": "sum",
-        "transform": "identity",
-        "metric_weighted": True,
-    },)
+    assert diagnostic_quantity.execution["operations"] == (
+        {
+            "name": "integral",
+            "reduction": "sum",
+            "transform": "identity",
+            "metric_weighted": True,
+        },
+    )
     assert checkpoint.output_format is None
-    assert checkpoint.operation_data["provider_id"] == "pops.restart.accepted-state-v3"
+    assert checkpoint.operation_data["provider_id"] == "pops.restart.accepted-state-v5"
     assert checkpoint.operation_data["bit_identical"] is True
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
 
@@ -104,10 +106,14 @@ def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
     case, block, _state = _case()
     clock = Clock("macro", owner=case.owner_path)
     schedule = every(7, clock=clock)
-    graph = ConsumerGraph.from_consumers((ConsoleMonitor(
-        schedule=schedule,
-        diagnostics=(StepChangeNorm(L2(), block=block),),
-    ),))
+    graph = ConsumerGraph.from_consumers(
+        (
+            ConsoleMonitor(
+                schedule=schedule,
+                diagnostics=(StepChangeNorm(L2(), block=block),),
+            ),
+        )
+    )
     case.consumers(graph)
     pops.validate(case)
     subjects = case.layout_subjects()
@@ -121,7 +127,7 @@ def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
     )
 
     resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
-    monitor, = resolved.nodes
+    (monitor,) = resolved.nodes
     assert monitor.kind is ConsumerKind.DIAGNOSTIC
     assert monitor.parallel_mode is ParallelMode.ROOT
     assert monitor.schedule == schedule
@@ -129,13 +135,15 @@ def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
     assert monitor.operation_data["provider_id"] == "pops.output.console-presentation.v1"
     assert monitor.operation_data["parallel_mode"] == "root"
     assert monitor.operation_data["supports_singleton_collective"] is True
-    quantity, = monitor.diagnostic_quantities
-    assert quantity.execution["operations"] == ({
-        "name": "step_change_l2",
-        "reduction": "step_change_l2",
-        "transform": "identity",
-        "metric_weighted": False,
-    },)
+    (quantity,) = monitor.diagnostic_quantities
+    assert quantity.execution["operations"] == (
+        {
+            "name": "step_change_l2",
+            "reduction": "step_change_l2",
+            "transform": "identity",
+            "metric_weighted": False,
+        },
+    )
 
 
 def test_console_monitor_can_be_removed_at_authoring_time():
@@ -258,16 +266,18 @@ def test_embedded_diagnostic_identity_is_qualified_by_its_consumer():
     clock = Clock("macro", owner=case.owner_path)
     schedule = every(10, clock=clock)
     diagnostic = Integral(block=block, cadence=schedule)
-    graph = ConsumerGraph.from_consumers(tuple(
-        ScientificOutput(
-            format=HDF5(),
-            schedule=schedule,
-            fields=(state,),
-            diagnostics=(diagnostic,),
-            target=target,
+    graph = ConsumerGraph.from_consumers(
+        tuple(
+            ScientificOutput(
+                format=HDF5(),
+                schedule=schedule,
+                fields=(state,),
+                diagnostics=(diagnostic,),
+                target=target,
+            )
+            for target in ("state/first", "state/second")
         )
-        for target in ("state/first", "state/second")
-    ))
+    )
     case.consumers(graph)
     pops.validate(case)
     subjects = case.layout_subjects()
@@ -301,8 +311,7 @@ def test_output_format_options_refuse_python_truthiness_coercion() -> None:
     assert serial_options["mode"] == "serial"
     assert serial_options["collection"] is True
     assert "series" not in serial_options
-    per_rank_options = ParaView(
-        mode=ParallelMode.PER_RANK).consumer_data()["options"]
+    per_rank_options = ParaView(mode=ParallelMode.PER_RANK).consumer_data()["options"]
     assert per_rank_options["mode"] == "per_rank"
     assert per_rank_options["collection"] is True
     assert per_rank_options["placement"]["mode"] == "mpi_relay_to_root"
@@ -325,22 +334,24 @@ def test_paraview_single_layout_contract_fails_during_resolution():
     frame = domain.frame(Cartesian2D())
     model = pops.Model("transport", frame=frame)
     state = model.state(
-        "U", components=("u",), representation=Conservative(),
-        space=CellState(frame=frame))
+        "U", components=("u",), representation=Conservative(), space=CellState(frame=frame)
+    )
     case = pops.Case("consumer-two-layouts")
     first_block = case.block("first", model)
     second_block = case.block("second", model)
     first_state = first_block[state]
     second_state = second_block[state]
     schedule = every(1, clock=Clock("macro", owner=case.owner_path))
-    paraview = ConsumerGraph.from_consumers((
-        ScientificOutput(
-            format=ParaView(),
-            schedule=schedule,
-            fields=(first_state, second_state),
-            target="state/two-layouts",
-        ),
-    ))
+    paraview = ConsumerGraph.from_consumers(
+        (
+            ScientificOutput(
+                format=ParaView(),
+                schedule=schedule,
+                fields=(first_state, second_state),
+                target="state/two-layouts",
+            ),
+        )
+    )
     case.consumers(paraview)
     pops.validate(case)
 
@@ -373,15 +384,17 @@ def test_paraview_single_layout_contract_fails_during_resolution():
             owner=case.owner_path.canonical(),
         )
 
-    mixed = ConsumerGraph.from_consumers((
-        ScientificOutput(
-            format=ParaView(),
-            schedule=schedule,
-            fields=(first_state,),
-            diagnostics=(Integral(block=second_block, cadence=schedule),),
-            target="state/mixed-layouts",
-        ),
-    ))
+    mixed = ConsumerGraph.from_consumers(
+        (
+            ScientificOutput(
+                format=ParaView(),
+                schedule=schedule,
+                fields=(first_state,),
+                diagnostics=(Integral(block=second_block, cadence=schedule),),
+                target="state/mixed-layouts",
+            ),
+        )
+    )
     with pytest.raises(
         ValueError,
         match="accepts one exact layout per consumer",
@@ -392,14 +405,16 @@ def test_paraview_single_layout_contract_fails_during_resolution():
             owner=case.owner_path.canonical(),
         )
 
-    hdf5 = ConsumerGraph.from_consumers((
-        ScientificOutput(
-            format=HDF5(),
-            schedule=schedule,
-            fields=(first_state, second_state),
-            target="state/two-layouts",
-        ),
-    ))
+    hdf5 = ConsumerGraph.from_consumers(
+        (
+            ScientificOutput(
+                format=HDF5(),
+                schedule=schedule,
+                fields=(first_state, second_state),
+                target="state/two-layouts",
+            ),
+        )
+    )
     assert hdf5.resolve(
         case.resolve,
         layout_plan,

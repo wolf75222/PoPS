@@ -161,6 +161,51 @@ inline std::vector<ProgramOperatorAuthority> read_program_operator_authorities(
   return authorities;
 }
 
+/// Read the exact history rings whose selective replay was proved at Program validation time.
+/// Older or handcrafted modules without either accessor receive no authority (safe Dense-only
+/// behavior); a partial family, malformed count, empty name, or duplicate fails before install.
+using ProgramHistoryReplayAuthority = std::pair<std::string, int>;
+
+inline std::vector<ProgramHistoryReplayAuthority> read_program_history_replay_authorities(
+    pops::dynlib::handle dl_handle) {
+  if (!pops::dynlib::valid(dl_handle))
+    throw std::runtime_error(
+        "compiled Program history replay authorities require a valid module handle");
+  using CountFn = int (*)();
+  using NameFn = const char* (*)(int);
+  using DepthFn = int (*)(int);
+  const auto count = reinterpret_cast<CountFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_history_replay_authority_count"));
+  const auto name = reinterpret_cast<NameFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_history_replay_authority_name"));
+  const auto depth = reinterpret_cast<DepthFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_history_replay_authority_depth"));
+  if (count == nullptr && name == nullptr && depth == nullptr)
+    return {};
+  if (count == nullptr || name == nullptr || depth == nullptr)
+    throw std::runtime_error(
+        "compiled Program history replay authority table is incomplete; regenerate the artifact");
+  const int n =
+      detail::require_module_count(dl_handle, "pops_program_history_replay_authority_count");
+  std::vector<ProgramHistoryReplayAuthority> authorities;
+  authorities.reserve(static_cast<std::size_t>(n));
+  std::set<ProgramHistoryReplayAuthority> unique;
+  for (int index = 0; index < n; ++index) {
+    std::string ring =
+        detail::require_module_string(name, "pops_program_history_replay_authority_name", index);
+    const int ring_depth = depth(index);
+    if (ring_depth < 2)
+      throw std::runtime_error("compiled Program history replay authority '" + ring +
+                               "' has invalid depth " + std::to_string(ring_depth));
+    ProgramHistoryReplayAuthority authority{std::move(ring), ring_depth};
+    if (!unique.insert(authority).second)
+      throw std::runtime_error("compiled Program contains duplicate history replay authority '" +
+                               authority.first + "' at depth " + std::to_string(authority.second));
+    authorities.push_back(std::move(authority));
+  }
+  return authorities;
+}
+
 /// Read and authenticate the complete GeneratedModule metadata from an already-open problem module.
 /// Every count/accessor family is mandatory; missing, empty, duplicated, or malformed metadata fails
 /// before the program can be installed.

@@ -15,7 +15,7 @@ from fractions import Fraction
 from typing import Any
 
 import json
-from pops.codegen._rhs_coherence import groupable_default_rhs, plan_rhs_coherence
+from pops.codegen._rhs_coherence import plan_rhs_coherence
 from pops.time.references import block_name
 
 
@@ -238,11 +238,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         row = history_manifest[name]
         interpolation = json.dumps(
             row["interpolation"], sort_keys=True, separators=(",", ":"))
-        lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
-                     % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
-                        -1 if owner_index is None else int(owner_index),
-                        json.dumps(state_identity), json.dumps(space_identity),
-                        json.dumps(row["clock"]), json.dumps(interpolation)))
+        prelude.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
+                       % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
+                          -1 if owner_index is None else int(owner_index),
+                          json.dumps(state_identity), json.dumps(space_identity),
+                          json.dumps(row["clock"]), json.dumps(interpolation)))
     values = list(program._values)
     index = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are

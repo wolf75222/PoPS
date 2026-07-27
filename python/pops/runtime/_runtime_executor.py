@@ -179,8 +179,8 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
 
         install_runtime_authorities(engine, plan)
         artifact = plan.artifact
-        if artifact.program is None:
-            raise ValueError("RuntimeInstance uniform execution requires the compiled Program")
+        assert artifact.program is not None, \
+            "resolved single-layout Uniform artifact lost its compiled Program"
         engine._install_compiled(
             artifact,
             instances=plan.instances,
@@ -210,8 +210,8 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         from pops.runtime._system import AmrSystem
 
         artifact = plan.artifact
-        if artifact.program is None:
-            raise ValueError("RuntimeInstance adaptive execution requires the compiled Program")
+        assert artifact.program is not None, \
+            "resolved single-layout AMR artifact lost its compiled Program"
         engine = AmrSystem(amr_config_from_layout(plan.layout, hierarchy=plan.resolved_hierarchy))
         engine._execution_context = plan.execution_context
         from pops.runtime._runtime_authorities import install_runtime_authorities

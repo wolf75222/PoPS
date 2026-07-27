@@ -7,8 +7,7 @@
 
 /// @file
 /// @brief SINGLE registry of spatial scheme tags (limiters + Riemann fluxes): shared source of
-///        truth for ALL dispatches (System make_block, AMR dispatch_amr_block /
-///        dispatch_amr_compiled, polar make_block_polar).
+///        truth for ALL dispatches (System make_block, AMR dispatch_amr_block, polar make_block_polar).
 ///
 /// Before this header each dispatch carried its OWN tag table (limiters x fluxes) and its OWN
 /// error message; the tables diverged silently (a weno5 case forgotten on an hllc/roe AMR branch

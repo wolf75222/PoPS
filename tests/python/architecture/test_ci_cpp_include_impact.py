@@ -266,7 +266,7 @@ def test_empty_change_selects_none(tmp_path):
 # --------------------------------------------------------------------------- #
 # Duration-balanced C++ matrix partition                                      #
 # --------------------------------------------------------------------------- #
-def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=6):
+def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=7):
     changed = tmp_path / f"changed-{shard_index}.txt"
     changed.write_text("".join(f"{c}\n" for c in changed_lines), encoding="utf-8")
     out = tmp_path / f"gh-out-{shard_index}.txt"
@@ -382,20 +382,33 @@ def test_amr_program_header_plan_covers_both_analytic_targets_exactly_once(tmp_p
 
 def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     build = sel.ci_shard_binpack.load_durations(sel.CPP_BUILD_DURATIONS_JSON)
+    tests = sel.ci_shard_binpack.load_durations(sel.CPP_DURATIONS_JSON)
     very_heavy = sorted(target for target, seconds in build.items() if seconds >= 240.0)
     assert len(very_heavy) >= 7, "cold-CI catalog lost the known five-minute AMR TUs"
 
-    shards = sel.cpp_target_shards(very_heavy, 6)
+    shards = sel.cpp_target_shards(very_heavy, 7)
     sel.ci_shard_binpack.verify_partition(very_heavy, shards, excluded=())
     assert max(len(shard) for shard in shards) == 2
-    assert sum(len(shard) == 2 for shard in shards) == len(very_heavy) - 6
+    assert sum(len(shard) == 2 for shard in shards) == len(very_heavy) - 7
 
-    # The unavoidable seventh five-minute TU shares one shard, but LPT must leave enough room
-    # around that pair: <= 650 s of target compilation plus the observed ~6 min shared runtime
-    # build stays comfortably inside the workflow's 38 min cold-build watchdog.
-    full_shards = sel.cpp_target_shards(sorted(build), 6)
-    build_loads = [sum(build[target] for target in shard) for shard in full_shards]
-    assert max(build_loads) <= 650.0
+    # Eleven five-minute TUs leave four paired shards. LPT must leave enough room around each pair:
+    # <= 650 s of modeled target build + parallel CTest load stays comfortably inside the
+    # workflow's 18 min build watchdog, while CTest alone must remain below its 7 min watchdog.
+    full_shards = sel.cpp_target_shards(sorted(build), 7)
+    weights = sel.cpp_target_weights(sorted(build))
+    modeled_loads = [
+        sum(weights[target] for target in shard) for shard in full_shards
+    ]
+    test_loads = [
+        sum(tests[target] for target in shard) / sel.CPP_CTEST_PARALLEL_JOBS
+        for shard in full_shards
+    ]
+    openmp_test_loads = [
+        sum(tests[target] for target in shard) / 2.0 for shard in full_shards
+    ]
+    assert max(modeled_loads) <= 650.0
+    assert max(test_loads) <= 7.0 * 60.0
+    assert max(openmp_test_loads) <= 7.0 * 60.0
 
 
 def test_cpp_ctest_selection_uses_target_labels_not_gtest_suite_names():
@@ -455,10 +468,10 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     )
 
 
-def test_full_cpp_plan_six_shards_preserves_every_cpp_target(tmp_path):
+def test_full_cpp_plan_seven_shards_preserves_every_cpp_target(tmp_path):
     outputs = [
         _run_plan_cpp_shard(tmp_path, ["CMakeLists.txt"], shard_index)
-        for shard_index in range(6)
+        for shard_index in range(7)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     sharded = [output["cpp_shard_targets"].split() for output in outputs]
@@ -479,11 +492,11 @@ def test_full_cpp_plan_six_shards_preserves_every_cpp_target(tmp_path):
     ), "the generated catalog is a pure-Python architecture test, not a C++ shard"
 
 
-def test_subset_cpp_plan_six_shards_preserves_selected_union(tmp_path):
+def test_subset_cpp_plan_seven_shards_preserves_selected_union(tmp_path):
     changed = ["include/pops/numerics/time/schemes/splitting.hpp"]
     outputs = [
         _run_plan_cpp_shard(tmp_path, changed, shard_index)
-        for shard_index in range(6)
+        for shard_index in range(7)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     flat = [

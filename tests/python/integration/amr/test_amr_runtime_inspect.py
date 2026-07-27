@@ -12,6 +12,7 @@ Honesty: a measure the native build cannot answer (per-level ghost depth, per-st
 is asserted to be reported as UNAVAILABLE, never a fabricated number. The reports are deterministic
 and array-free (sec.12.1).
 """
+
 import operator
 import sys
 
@@ -23,29 +24,47 @@ pops = pytest.importorskip("pops")
 import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 from pops.runtime.amr import (  # noqa: E402
-    AmrRuntimeView, PatchReport, RegridReport, GhostReport, RefluxReport, CheckpointReport,
-    HierarchySnapshot, RuntimeInspection)
+    AmrRuntimeView,
+    PatchReport,
+    RegridReport,
+    GhostReport,
+    RefluxReport,
+    CheckpointReport,
+    HierarchySnapshot,
+    RuntimeInspection,
+)
+from tests.python.support.compiled_program import CompiledProgramStub  # noqa: E402
+from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
 
 
 def _model():
     """A minimal scalar block whose zero elliptic RHS isolates AMR inspection."""
-    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
-                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
+    return engine.Model(
+        state=engine.Scalar(),
+        transport=engine.ExB(B0=1.0),
+        source=engine.NoSource(),
+        elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
+    )
 
 
 def _built_amr(regrid_every=2, n=32):
     """A small shared-hierarchy AmrSystem with one refined patch and live regrid counters."""
-    sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every, coarse_max_grid=16)
+    sim = AmrSystem(
+        n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every, coarse_max_grid=16
+    )
     sim.add_equation(
-        "ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
+        "ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
+    )
     sim.add_equation(
-        "ni", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
+        "ni", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
+    )
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.set_refinement(threshold=0.5)
     ne = np.ones((n, n))
-    ne[n // 3:2 * n // 3, n // 3:2 * n // 3] = 5.0
+    ne[n // 3 : 2 * n // 3, n // 3 : 2 * n // 3] = 5.0
     sim.set_density("ne", ne)
     sim.set_density("ni", np.ones((n, n)))
+    install_forward_euler_program(sim)
     for _ in range(3):
         sim.step_cfl(0.4)
     return sim
@@ -61,13 +80,20 @@ def test_amr_handle_is_an_inert_runtime_view():
     # The str is short and array-free (sec.12.1).
     text = str(view)
     assert "AmrRuntimeView" in text and "array(" not in text and len(text) < 200
-    mutators = [name for name in dir(view)
-                if not name.startswith("_")
-                and (name.startswith(("set_", "configure", "add_"))
-                     or "level" in name.lower() or "ratio" in name.lower())]
+    mutators = [
+        name
+        for name in dir(view)
+        if not name.startswith("_")
+        and (
+            name.startswith(("set_", "configure", "add_"))
+            or "level" in name.lower()
+            or "ratio" in name.lower()
+        )
+    ]
     assert not mutators, (
         "sim.amr is a read-only runtime view; it must expose no AMR-config mutator, found: %s"
-        % mutators)
+        % mutators
+    )
 
 
 def test_system_has_no_amr_handle_with_a_clear_error():
@@ -96,12 +122,12 @@ def test_amr_view_only_converts_the_exact_native_not_built_error():
         def block_names(self):
             raise RuntimeError(self.message)
 
-    unbuilt = AmrRuntimeView(type("Sim", (), {"_s": _Native(
-        "AmrSystem : call add_block first")})())
+    unbuilt = AmrRuntimeView(type("Sim", (), {"_s": _Native("AmrSystem : call add_block first")})())
     assert unbuilt._block_names() == []
 
-    failed = AmrRuntimeView(type("Sim", (), {"_s": _Native(
-        "native AMR block registry corruption")})())
+    failed = AmrRuntimeView(
+        type("Sim", (), {"_s": _Native("native AMR block registry corruption")})()
+    )
     with pytest.raises(RuntimeError, match="registry corruption"):
         failed._block_names()
 
@@ -115,8 +141,8 @@ def test_patch_table_on_built_hierarchy_reports_live_patches():
     # A real fine patch formed on the bump (live runtime, not config).
     assert rep.n_patches >= 1
     levels = {lvl["level"]: lvl for lvl in rep.per_level}
-    assert 0 in levels and levels[0]["level"] == 0          # base box reported
-    assert levels[1]["n_patches"] == rep.n_patches          # the fine patches live on level 1
+    assert 0 in levels and levels[0]["level"] == 0  # base box reported
+    assert levels[1]["n_patches"] == rep.n_patches  # the fine patches live on level 1
     assert levels[1]["cells"] > 0
     # Coarse box distribution comes from the live MPI diagnostic accessors.
     assert rep.coarse_local_boxes == 1 and rep.coarse_total_boxes == 1
@@ -205,7 +231,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
     assert rep.restartable is True and rep.violations == []
-    assert "bit-identical v3" in str(rep)
+    assert "bit-identical v5" in str(rep)
 
 
 def test_explain_checkpoint_supports_dynamic_regrid():
@@ -257,10 +283,7 @@ def test_inspect_before_build_reports_unbuilt_patches_honestly():
 
 def test_inspect_explicitly_refuses_field_coupled_rhs_jacvec_above_level_zero():
     report = AmrSystem(n=16, L=1.0, periodicity=(True, True)).amr.inspect()
-    rows = [
-        row for row in report.limitations
-        if row["feature"] == "amr:field_coupled_rhs_jacvec"
-    ]
+    rows = [row for row in report.limitations if row["feature"] == "amr:field_coupled_rhs_jacvec"]
 
     assert len(rows) == 1
     row = rows[0]
@@ -274,10 +297,24 @@ def test_inspect_explicitly_refuses_field_coupled_rhs_jacvec_above_level_zero():
 def test_compiled_model_has_no_competing_layout_inspector():
     # A tiny stub CompiledModel (no .so dlopen needed) exposes no retired AMR-specific inspector.
     from pops.codegen.loader import CompiledModel
+
     cm = CompiledModel(
-        so_path="<stub>", backend="production", cons_names=["rho"],
-        cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
-        caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
+        so_path="<stub>",
+        backend="production",
+        cons_names=["rho"],
+        cons_roles=["Density"],
+        prim_names=["rho"],
+        n_vars=1,
+        gamma=None,
+        n_aux=0,
+        params={},
+        caps={},
+        abi_key="k",
+        model_hash="h",
+        cxx="c++",
+        std="23",
+        target="amr_system",
+    )
     assert not hasattr(cm, "inspect_amr")
 
 
@@ -288,22 +325,37 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     from tests.python.support.resolved_amr_plan import resolved_amr_plan
 
     cm = CompiledModel(
-        so_path="<stub>", backend="production", cons_names=["rho"],
-        cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
-        caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
+        so_path="<stub>",
+        backend="production",
+        cons_names=["rho"],
+        cons_roles=["Density"],
+        prim_names=["rho"],
+        n_vars=1,
+        gamma=None,
+        n_aux=0,
+        params={},
+        caps={},
+        abi_key="k",
+        model_hash="h",
+        cxx="c++",
+        std="23",
+        target="amr_system",
+    )
     from pops.codegen._compiled_model_identity import compiled_model_identity
+
     cm.definition_identity = compiled_model_identity(model_hash="h")
     from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
+
     resolved = resolved_amr_plan(
         block_names=("ne",),
         cells=64,
         name="amr-runtime-inspect",
     )
+    program = CompiledProgramStub(target="amr_system", block_names=("ne",), abi_key=cm.abi_key)
     artifact = CompiledSimulationArtifact(
         plan=resolved,
-        program=None,
-        blocks=(CompiledBlockArtifact(
-            "ne", cm, resolved.blocks[0].spatial, ("U",)),),
+        program=program,
+        blocks=(CompiledBlockArtifact("ne", cm, resolved.blocks[0].spatial, ("U",)),),
     )
 
     assert not hasattr(artifact, "inspect_amr")

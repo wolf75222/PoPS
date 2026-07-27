@@ -27,6 +27,7 @@ checks) stays here.
 The emission-only tables (_MODEL_OPS / _ALLOWED_OPS / _PROFILE_SKIP_OPS / _AUX_OUTPUT_OPS)
 are module-level constants in ``program_emit_kernels``, re-exported here.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -200,19 +201,25 @@ def emit_cpp_program(
     program.validate()
     _check_lowerable(program, authority, field_plans or {}, target=target)
     prelude, body, operator_authorities = _emit_body(
-        program, authority, target=target, field_plans=field_plans or {})
+        program, authority, target=target, field_plans=field_plans or {}
+    )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
     # expression). Without a bound, has_dt_bound() returns false and the dt_bound function returns a
     # +inf sentinel (never reached: the loader stores the closure only when has_dt_bound() is true).
     has_dt_bound, dt_bound_body = _emit_dt_bound(program, authority)
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
-    field_boundaries = emit_field_boundaries(
-        program, authority, field_plans or {}, target)
+
+    field_boundaries = emit_field_boundaries(program, authority, field_plans or {}, target)
     return _PROGRAM_CPP_TEMPLATE.format(
-        name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
+        name=json.dumps(program.name),
+        hash=program._ir_hash(),
+        prelude=prelude,
+        body=body,
+        history_replay_authorities=_emit_history_replay_authorities(program),
         operator_authorities=_emit_operator_authorities(operator_authorities),
-        has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
+        has_dt_bound=has_dt_bound,
+        dt_bound_body=dt_bound_body,
         module_metadata=_emit_module_metadata(program, authority),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
@@ -223,10 +230,53 @@ def emit_cpp_program(
         prepared_native_component_includes=_prepared_native_component_includes(program),
         block_inverse_include=_block_inverse_include(program),
         amr_install=_emit_amr_install(
-            program, target, prelude, body,
-            _emit_amr_hierarchy_bodies(
-                program, authority, field_plans or {}) if target == "amr_system" else None,
-            dt_bound_body if target == "amr_system" else None))
+            program,
+            target,
+            prelude,
+            body,
+            _emit_amr_hierarchy_bodies(program, authority, field_plans or {})
+            if target == "amr_system"
+            else None,
+            dt_bound_body if target == "amr_system" else None,
+        ),
+    )
+
+
+def _emit_history_replay_authorities(program: Any) -> str:
+    """Export the exact rings whose selective replay passed Program validation.
+
+    The native loader treats absence of this table as no authority.  Keeping the allow-list in the
+    compiled artifact prevents a Python checkpoint adapter or a direct binding caller from changing
+    a Dense policy after compilation and thereby bypassing the owner-affine/context-free proof.
+    """
+    authorities = []
+    for name, (depth, policy) in sorted(
+        (getattr(program, "_history_persistence", None) or {}).items()
+    ):
+        if not policy.degenerate_to_dense(depth):
+            authorities.append((str(name), int(depth)))
+    name_cases = "".join(
+        "    case %d: return %s;\n" % (index, json.dumps(name))
+        for index, (name, _depth) in enumerate(authorities)
+    )
+    depth_cases = "".join(
+        "    case %d: return %d;\n" % (index, depth)
+        for index, (_name, depth) in enumerate(authorities)
+    )
+    return (
+        "// Selective-history replay authorities (fail-closed native allow-list).\n"
+        'extern "C" int pops_program_history_replay_authority_count() { return %d; }\n'
+        'extern "C" const char* pops_program_history_replay_authority_name(int i) {\n'
+        "  switch (i) {\n%s"
+        '    default: return "";\n'
+        "  }\n"
+        "}\n"
+        'extern "C" int pops_program_history_replay_authority_depth(int i) {\n'
+        "  switch (i) {\n%s"
+        "    default: return 0;\n"
+        "  }\n"
+        "}\n"
+    ) % (len(authorities), name_cases, depth_cases)
 
 
 def _emit_program_model_helpers(program: Any, authority: Any) -> str:
@@ -266,16 +316,14 @@ def _emit_system_install(target: str, prelude: str, body: str) -> str:
         return ""
     return (
         'extern "C" void pops_install_program(void* sys) {\n'
-        '  auto ctx_owner = std::make_shared<pops::runtime::program::ProgramContext>(sys);\n'
-        '  pops::runtime::program::ProgramContext& ctx = *ctx_owner;\n'
-        + prelude + '\n'
-        '  ctx.install([=](double dt) {\n'
-        '    pops::runtime::program::ProgramContext& ctx = *ctx_owner;\n'
-        '    (void)dt;\n'
-        '    ctx.begin_step(dt);\n'
-        + body + '\n'
-        '  });\n'
-        '}\n'
+        "  auto ctx_owner = std::make_shared<pops::runtime::program::ProgramContext>(sys);\n"
+        "  pops::runtime::program::ProgramContext& ctx = *ctx_owner;\n" + prelude + "\n"
+        "  ctx.install([=](double dt) {\n"
+        "    pops::runtime::program::ProgramContext& ctx = *ctx_owner;\n"
+        "    (void)dt;\n"
+        "    ctx.begin_step(dt);\n" + body + "\n"
+        "  });\n"
+        "}\n"
     )
 
 
@@ -295,14 +343,14 @@ def _emit_operator_authorities(authorities: tuple[tuple[int, ...], ...]) -> str:
     return (
         'extern "C" int pops_program_operator_authority_count() { return %d; }\n'
         'extern "C" std::uint64_t pops_program_operator_authority_word('
-        'int operator_index, int word_index) {\n'
-        '  if (operator_index < 0 || operator_index >= %d || word_index < 0 || word_index >= 4)\n'
-        '    return UINT64_C(0);\n'
-        '  %s\n'
-        '  %s\n'
-        '}\n'
-        % (len(rows), len(rows), table, lookup)
+        "int operator_index, int word_index) {\n"
+        "  if (operator_index < 0 || operator_index >= %d || word_index < 0 || word_index >= 4)\n"
+        "    return UINT64_C(0);\n"
+        "  %s\n"
+        "  %s\n"
+        "}\n" % (len(rows), len(rows), table, lookup)
     )
+
 
 def _emit_block_names(program: Any) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
@@ -316,15 +364,19 @@ def _emit_block_names(program: Any) -> str:
     order = program._block_indices()  # name -> index, declaration order
     names = sorted(order, key=order.get)
     cases = "".join(
-        '    case %d: return %s;\n' % (order[block], json.dumps(block_name(block)))
-        for block in names)
+        "    case %d: return %s;\n" % (order[block], json.dumps(block_name(block)))
+        for block in names
+    )
     return (
         "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"
         "// T.state declaration order. install_program matches each to a System block BY NAME (not\n"
         "// add-order) and builds the program-index -> system-index map ProgramContext resolves.\n"
-        'extern "C" int pops_program_block_count() { return %d; }\n' % len(names) +
-        'extern "C" const char* pops_program_block_name(int i) {\n'
-        '  switch (i) {\n%s    default: return "";\n  }\n}\n' % cases)
+        'extern "C" int pops_program_block_count() { return %d; }\n'
+        % len(names)
+        + 'extern "C" const char* pops_program_block_name(int i) {\n'
+        '  switch (i) {\n%s    default: return "";\n  }\n}\n' % cases
+    )
+
 
 def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     """Lower the optional dt bound (spec s18 / ADC-417) to ``(has_dt_bound, body)``: the bool literal
@@ -351,9 +403,12 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     return "true", body
 
 
-
 def _check_lowerable(
-    program: Any, model: Any = None, field_plans: Any = None, *, target: str | None = None,
+    program: Any,
+    model: Any = None,
+    field_plans: Any = None,
+    *,
+    target: str | None = None,
 ) -> None:
     """Raise NotImplementedError if the IR uses a construct the current codegen cannot lower yet,
     naming the offending construct (never a silent mis-lowering). @p model: the physical model that
@@ -372,7 +427,8 @@ def _check_lowerable(
             raise ValueError(
                 "commit of unknown block %r: no T.state(block[U]) declares it "
                 "(declared blocks: %s)"
-                % (block_name(block), sorted(block_name(item) for item in blocks)))
+                % (block_name(block), sorted(block_name(item) for item in blocks))
+            )
     _check_schedules_lowerable(program, target=target)
     for v in program._values:
         _check_op_lowerable(program, v, model, field_plans or {})
@@ -394,13 +450,13 @@ def _check_lowerable(
 # sim.profile_report(). Every other op that emits a statement is wrapped (rhs / solve_fields /
 # linear_combine / source / apply / reductions / loops / Schur kernels / ...).
 
+
 def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> None:
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
     node_model = (
         model_for_node(model, v)
-        if model is not None
-        and (v.block is not None or v.attrs.get("operator_handle") is not None)
+        if model is not None and (v.block is not None or v.attrs.get("operator_handle") is not None)
         else model
     )
     _validate_matrix_free_contract(v, node_model)
@@ -409,7 +465,8 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
             raise NotImplementedError(
                 "emit_cpp_program cannot lower op '%s' (value '%s') without the physical model "
                 "that declares its named source / linear source; pass model= "
-                "(compile_problem threads it through)" % (v.op, v.name))
+                "(compile_problem threads it through)" % (v.op, v.name)
+            )
         if v.op == "solve_local_nonlinear":  # recurse: the residual sub-block ops must lower too
             for w in v.attrs["residual_block"]:
                 _check_op_lowerable(program, w, model, field_plans)
@@ -418,7 +475,8 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         raise NotImplementedError(
             "emit_cpp_program cannot lower op '%s' (value '%s') yet; supported ops are %s "
             "(+ %s with a model; nested control flow / Krylov are later phases)"
-            % (v.op, v.name, sorted(_ALLOWED_OPS), sorted(_MODEL_OPS)))
+            % (v.op, v.name, sorted(_ALLOWED_OPS), sorted(_MODEL_OPS))
+        )
     if v.op in ("coupled_rate", "solve_coupled_implicit"):
         # A coupled_rate (collisions / ionization, Spec 3 criterion 27) lowers to ONE multi-state
         # for_each_cell kernel (see _emit_coupled_rate_kernel). The lowering reaches the operator
@@ -434,10 +492,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         # when that node is walked); nothing to validate here.
         return
     if v.op in ("while", "range", "branch"):  # recursively validate structured regions
-        keys = (
-            ("true_block", "false_block")
-            if v.op == "branch" else ("cond_block", "body_block")
-        )
+        keys = ("true_block", "false_block") if v.op == "branch" else ("cond_block", "body_block")
         for key in keys:
             for w in v.attrs.get(key, []):
                 _check_op_lowerable(program, w, model, field_plans)
@@ -445,8 +500,8 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
     if v.op == "matrix_free_operator":  # recurse into the apply sub-block (set by set_apply)
         if v.attrs.get("apply_block") is None:
             raise ValueError(
-                "matrix_free_operator '%s' has no apply; call P.set_apply before lowering"
-                % v.name)
+                "matrix_free_operator '%s' has no apply; call P.set_apply before lowering" % v.name
+            )
         for w in v.attrs["apply_block"]:
             _check_op_lowerable(program, w, model, field_plans)
         return
@@ -460,6 +515,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
         if field_ref is None:
             raise ValueError("field solve %r has no exact field identity" % v.name)
         from pops.codegen.program_emit_field_routes import resolved_field_route
+
         resolved_field_route(field_ref, field_plans)
         return
     if v.op == "rhs":
@@ -471,20 +527,23 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
             raise ValueError(
                 "rhs '%s' sets flux=False (source-only) but also requests named fluxes %r; a "
                 "source-only stage has no flux divergence -- drop fluxes= or set flux=True"
-                % (v.name, named_fluxes))
+                % (v.name, named_fluxes)
+            )
         if named_fluxes is not None:  # NAMED fluxes (ADC-419): need the model's flux_term coeffs
             if model is None:
                 raise NotImplementedError(
                     "emit_cpp_program cannot lower rhs '%s' with named fluxes %r without the "
                     "physical model that declares them (m.flux_term); pass model= "
-                    "(compile_problem threads it through)" % (v.name, named_fluxes))
+                    "(compile_problem threads it through)" % (v.name, named_fluxes)
+                )
             impl_f = _model_impl(node_model)
             ft = impl_f._flux_terms
             for f in named_fluxes:
                 if f not in ft:
                     raise ValueError(
                         "unknown flux_term '%s' in rhs '%s'; declared flux_terms: %s"
-                        % (f, v.name, sorted(ft)))
+                        % (f, v.name, sorted(ft))
+                    )
             # The named-flux path emits -div(selected fluxes) only (no ctx.rhs_into), so the model's
             # DEFAULT source would be silently dropped -- reject it (it must be requested as a named
             # source_term instead). The named sources below are still axpy'd on top.
@@ -492,7 +551,8 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
                 raise NotImplementedError(
                     "rhs with named fluxes %r needs a model whose default source is empty (no "
                     "m.source); rhs '%s' has a non-empty default source that the named-flux path "
-                    "would drop (declare it as a source_term instead)" % (named_fluxes, v.name))
+                    "would drop (declare it as a source_term instead)" % (named_fluxes, v.name)
+                )
         extra = [s for s in (v.attrs.get("sources") or []) if s != "default"]
         if not extra:
             return
@@ -502,7 +562,8 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
             raise NotImplementedError(
                 "emit_cpp_program cannot lower rhs '%s' with named sources %r without the "
                 "physical model that declares them (m.source_term); pass model= "
-                "(compile_problem threads it through)" % (v.name, extra))
+                "(compile_problem threads it through)" % (v.name, extra)
+            )
         impl = _model_impl(node_model)
         # ADC-425: the named sources are axpy'd on top of an EXPLICIT base. With "default" requested
         # the base is ctx.rhs_into (flux + the model's default/composite source); without it the base
@@ -513,4 +574,5 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
             if s not in impl._source_terms:
                 raise ValueError(
                     "unknown source_term '%s' in rhs '%s'; declared source_terms: %s"
-                    % (s, v.name, sorted(impl._source_terms)))
+                    % (s, v.name, sorted(impl._source_terms))
+                )

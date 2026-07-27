@@ -18,6 +18,10 @@ from tests.python.support.requirements import (
     require_native_or_skip,
 )
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import (
+    install_ssprk2_program,
+    install_ssprk3_program,
+)
 
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
@@ -130,6 +134,8 @@ def run_compiled_checks():
     # (2b) avance SSPRK3 : etat final bit-identique au bloc natif sur 12 pas a dt fixe.
     prod = build_prod("ssprk3")
     ref = build_ref_ssprk3()
+    install_ssprk3_program(prod)
+    install_ssprk3_program(ref)
     dt = 1e-3
     for _ in range(12):
         prod.step(dt)
@@ -143,6 +149,8 @@ def run_compiled_checks():
     # (3) NON-TRIVIALITE : production+SSPRK3 DIFFERE de production+SSPRK2 (ssprk3 bien selectionne).
     p2 = build_prod("ssprk2")
     p3 = build_prod("ssprk3")
+    install_ssprk2_program(p2)
+    install_ssprk3_program(p3)
     for _ in range(12):
         p2.step(dt)
         p3.step(dt)

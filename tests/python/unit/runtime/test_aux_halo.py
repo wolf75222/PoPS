@@ -30,6 +30,7 @@ from pops.runtime.doctor import capabilities
 
 from tests.python.support.requirements import repo_include
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 INCLUDE = repo_include()
 
 
@@ -145,6 +146,7 @@ def test_amr_halo():
             s.set_poisson(bc=Dirichlet())
             s.set_density("a", np.ones((n, n)))
             s.set_aux_field("a", "vx", vx, halo=halo)
+            install_forward_euler_program(s)
             s.step(1e-3)
             return np.array(s.density("a")).reshape(n, n)
 

@@ -312,7 +312,7 @@ void bind_system_assembly(py::class_<System>& cls) {
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
       .def("install_program", &System::install_program, py::arg("so_path"))
       // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the
-      // installed program closure (cf. SystemStepper::step). Separate from install_program so the .so
+      // installed program closure (cf. SystemProgramDriver::step). Separate from install_program so the .so
       // Internal compiled-kernel cadence seam; the public controller is Program.step_strategy().
       .def("set_program_cadence", &System::set_program_cadence, py::arg("substeps"),
            py::arg("stride"));
@@ -325,6 +325,16 @@ void bind_system_program(py::class_<System>& cls) {
       // Const getters (default 1/1 with no program); there was no Python-visible getter before.
       .def("program_substeps", &System::program_substeps)
       .def("program_stride", &System::program_stride)
+      // Exact partially accumulated GLOBAL stride window. These are persistence seams, not an
+      // alternative time controller: checkpoint captures both scalars and restart restores them
+      // immediately before set_clock so adaptive-dt catch-up is bit-identical.
+      .def("program_cadence_window_dt", &System::program_cadence_window_dt)
+      .def("program_cadence_window_steps", &System::program_cadence_window_steps)
+      .def("program_cadence_window_start_time", &System::program_cadence_window_start_time)
+      .def("program_last_dt", &System::program_last_dt)
+      .def("restore_program_cadence_window", &System::restore_program_cadence_window,
+           py::arg("accumulated_dt"), py::arg("held_steps"), py::arg("window_start_time"),
+           py::arg("accepted_last_dt"), py::arg("accepted_time"), py::arg("macro_step"))
       // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)
@@ -429,8 +439,8 @@ void bind_system_physics(py::class_<System>& cls) {
   cls
       // (System) -- see also AmrSystem.add_coupled_source below for the AMR counterpart.
       // GLOBAL time-step bound (step_cfl audit): fn() evaluated ONCE per step (host) by
-      // step_cfl / step_adaptive; dt <= fn() when fn() > 0 and finite. Hook for non
-      // cell-local constraints (coupling, Schur/Poisson, scheduler, user ramp). A Python
+      // step_cfl; dt <= fn() when fn() > 0 and finite. Hook for non cell-local constraints
+      // (coupling, Schur/Poisson, scheduler, user ramp). A Python
       // callback is acceptable here (never per cell).
       .def("add_dt_bound", &System::add_dt_bound, py::arg("label"), py::arg("fn"))
       // ACTIVE bound of the last step_cfl: "transport:<block>" | "source_frequency:<block>" |
@@ -814,9 +824,8 @@ void bind_system_stepping(py::class_<System>& cls) {
            "of block 'name' -- to locate a collapsing dt. On demand, off the hot path.",
            py::arg("name"))
       .def("step_adaptive", &System::step_adaptive,
-           "Advances by ONE MULTIRATE macro-step: the slowest block sets the macro-step, each "
-           "faster "
-           "block is sub-cycled n = ceil(w_block / w_min) times. Returns the macro-step.",
+           "Reserved fail-closed entry point. Requires an installed whole-system Program, then "
+           "raises until adaptive multirate subcycling has a ProgramGraph lowering.",
            py::arg("cfl"))
       // Explicit host inspection/state-transfer primitives.  Production time programs execute in
       // the prepared native runtime; these bulk copies exist for initialization, checkpoints,

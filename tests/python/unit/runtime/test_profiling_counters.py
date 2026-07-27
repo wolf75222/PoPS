@@ -17,6 +17,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 
 
 def _skip(msg):
@@ -52,6 +53,7 @@ sim.add_equation("gas",
               spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()), time=engine.Explicit())
 rho = np.ones((N, N), dtype=float)
 sim.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
+install_forward_euler_program(sim)
 
 sim.enable_profiling()
 sim.step(1e-3)
@@ -95,6 +97,7 @@ sim_off.add_equation("gas",
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit())
 sim_off.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
+install_forward_euler_program(sim_off)
 sim_off.step(1e-3)
 chk(sim_off.profile_report().find("kernels=") == -1, "disabled profiler counts no kernels")
 

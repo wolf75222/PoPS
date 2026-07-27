@@ -9,15 +9,19 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <initializer_list>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -81,6 +85,32 @@ TEST(test_amr_system_contract, Runs) {
   cfg.n = 16;
   cfg.L = 1.0;
   cfg.periodicity = {true, true};
+
+  // Every facade temporal entry refuses before the lazy hierarchy, a transaction snapshot, a field
+  // solve or either clock can be touched. Even advance(..., 0) is a temporal request and therefore
+  // requires the same explicit Program authority.
+  {
+    AmrSystem missing_program(cfg);
+    missing_program.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "euler", 1);
+    ASSERT_EQ(missing_program.engine(), nullptr);
+    const auto expect_program_required = [&](auto&& operation, const char* name) {
+      try {
+        operation();
+        ADD_FAILURE() << name << " accepted a program-less temporal operation";
+      } catch (const std::logic_error& error) {
+        EXPECT_NE(std::string(error.what()).find(name), std::string::npos);
+        EXPECT_NE(std::string(error.what()).find("installed whole-system Program"),
+                  std::string::npos);
+      }
+      EXPECT_EQ(missing_program.engine(), nullptr);
+      EXPECT_DOUBLE_EQ(missing_program.time(), 0.0);
+      EXPECT_EQ(missing_program.macro_step(), 0);
+      EXPECT_FALSE(missing_program.has_active_step_transaction());
+    };
+    expect_program_required([&] { missing_program.step(0.01); }, "AmrSystem::step");
+    expect_program_required([&] { missing_program.advance(0.01, 0); }, "AmrSystem::advance");
+    expect_program_required([&] { (void)missing_program.step_cfl(0.4); }, "AmrSystem::step_cfl");
+  }
 
   // The facade topology must reach the native level operator axis by axis. This x-periodic/y-open
   // run wraps only x and fills y physical ghosts by Foextrap; neither axis may inherit the other.
@@ -295,8 +325,7 @@ TEST(test_amr_system_contract, Runs) {
       magnetic_cfg.n = 8;
       magnetic_cfg.regrid_every = 0;
       AmrSystem s(magnetic_cfg);
-      if (block_count == 2)
-        s.set_temporal_relations({2}, {1}, {"integral_only"});
+      s.set_temporal_relations({2}, {1}, {"integral_only"});
       const std::size_t cells =
           static_cast<std::size_t>(magnetic_cfg.n) * static_cast<std::size_t>(magnetic_cfg.n);
       std::vector<double> state(3 * cells, 0.0);
@@ -310,34 +339,178 @@ TEST(test_amr_system_contract, Runs) {
         s.set_conservative_state(name, state);
       }
       s.set_magnetic_field(std::vector<double>(cells, magnetic_field));
+      s.set_refinement(1e29);  // request the deterministic central fine seed without later regrids
+      test::install_forward_euler_program(s);
       s.advance(0.01, 1);
-      std::vector<std::vector<double>> states;
+      std::vector<std::vector<std::vector<double>>> states;
       states.reserve(static_cast<std::size_t>(block_count));
-      for (int block = 0; block < block_count; ++block)
-        states.push_back(s.block_level_state_global("magnetic_" + std::to_string(block), 0));
+      EXPECT_EQ(s.n_levels(), 2) << "B_z Program proof must exercise the refined hierarchy";
+      for (int block = 0; block < block_count; ++block) {
+        std::vector<std::vector<double>> levels;
+        levels.reserve(static_cast<std::size_t>(s.n_levels()));
+        for (int level = 0; level < s.n_levels(); ++level)
+          levels.push_back(s.block_level_state_global("magnetic_" + std::to_string(block), level));
+        states.push_back(std::move(levels));
+      }
       return states;
     };
 
     const auto without_field = run(0.0);
     const auto with_field = run(2.0);
     for (int block = 0; block < block_count; ++block) {
-      const auto& baseline = without_field[static_cast<std::size_t>(block)];
-      const auto& actual = with_field[static_cast<std::size_t>(block)];
-      ASSERT_EQ(actual.size(), baseline.size());
-      const std::size_t cells = actual.size() / 3;
-      double max_delta = 0.0;
-      double transverse_delta = 0.0;
-      for (std::size_t cell = 0; cell < cells; ++cell) {
-        for (int component = 0; component < 3; ++component) {
-          const std::size_t index = static_cast<std::size_t>(component) * cells + cell;
-          ASSERT_TRUE(std::isfinite(actual[index]));
-          max_delta = std::max(max_delta, std::fabs(actual[index] - baseline[index]));
+      const auto& baseline_levels = without_field[static_cast<std::size_t>(block)];
+      const auto& actual_levels = with_field[static_cast<std::size_t>(block)];
+      ASSERT_EQ(actual_levels.size(), baseline_levels.size());
+      ASSERT_EQ(actual_levels.size(), 2u);
+      for (std::size_t level = 0; level < actual_levels.size(); ++level) {
+        const auto& baseline = baseline_levels[level];
+        const auto& actual = actual_levels[level];
+        ASSERT_EQ(actual.size(), baseline.size());
+        ASSERT_FALSE(actual.empty()) << "the B_z Program proof requires an owned level state";
+        const std::size_t cells = actual.size() / 3;
+        double max_delta = 0.0;
+        double transverse_delta = 0.0;
+        for (std::size_t cell = 0; cell < cells; ++cell) {
+          for (int component = 0; component < 3; ++component) {
+            const std::size_t index = static_cast<std::size_t>(component) * cells + cell;
+            ASSERT_TRUE(std::isfinite(actual[index]));
+            max_delta = std::max(max_delta, std::fabs(actual[index] - baseline[index]));
+          }
+          transverse_delta += actual[2 * cells + cell] - baseline[2 * cells + cell];
         }
-        transverse_delta += actual[2 * cells + cell] - baseline[2 * cells + cell];
+        transverse_delta /= static_cast<double>(cells);
+        EXPECT_GT(max_delta, 1e-3)
+            << "B_z must change the native block trajectory at level " << level;
+        EXPECT_LT(transverse_delta, -1e-3)
+            << "positive B_z must rotate +m_x toward negative m_y at level " << level;
       }
-      transverse_delta /= static_cast<double>(cells);
-      EXPECT_GT(max_delta, 1e-3) << "B_z must change the native block trajectory";
-      EXPECT_LT(transverse_delta, -1e-3) << "positive B_z must rotate +m_x toward negative m_y";
     }
+  }
+}
+
+TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+
+  AmrSystem system(cfg);
+  system.add_block("tracer", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
+  std::vector<double> times;
+  std::vector<double> steps;
+  std::vector<int> macro_steps;
+  system.install_program_step([&](double h) {
+    times.push_back(system.time());
+    steps.push_back(h);
+    macro_steps.push_back(system.macro_step());
+  });
+  system.set_program_cadence(/*substeps=*/3, /*stride=*/2);
+
+  system.step(0.1);
+  EXPECT_TRUE(times.empty());
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+
+  system.step(0.2);
+  ASSERT_EQ(times.size(), 3u);
+  EXPECT_NEAR(times[0], 0.0, 1.0e-14);
+  EXPECT_NEAR(times[1], 0.1, 1.0e-14);
+  EXPECT_NEAR(times[2], 0.2, 1.0e-14);
+  ASSERT_EQ(steps.size(), 3u);
+  for (const double h : steps)
+    EXPECT_NEAR(h, 0.1, 1.0e-14);
+  EXPECT_DOUBLE_EQ(times.back() + steps.back(), 0.1 + 0.2);
+  EXPECT_EQ(macro_steps, (std::vector<int>{0, 0, 0}));
+  EXPECT_NEAR(system.time(), 0.3, 1.0e-14);
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+}
+
+TEST(test_amr_system_contract, CadenceRestoreRejectsClockDriftWithoutMutatingAcceptedState) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+
+  AmrSystem system(cfg);
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+  system.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
+                                        /*window_start_time=*/0.0, /*accepted_last_dt=*/0.075,
+                                        /*accepted_time=*/0.1,
+                                        /*macro_step=*/1);
+
+  // The candidate stays staged until set_clock authenticates the exact accepted pair.
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.0);
+  EXPECT_THROW(system.set_clock(std::nextafter(0.1, 1.0), /*macro_step=*/1), std::runtime_error);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+
+  // The failed clock consumed the staged token; the exact retry can stage and commit cleanly.
+  system.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
+                                        /*window_start_time=*/0.0, /*accepted_last_dt=*/0.075,
+                                        /*accepted_time=*/0.1,
+                                        /*macro_step=*/1);
+  system.set_clock(/*t=*/0.1, /*macro_step=*/1);
+  EXPECT_DOUBLE_EQ(system.time(), 0.1);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.075);
+}
+
+TEST(test_amr_system_contract,
+     NonAssociativeCadenceClosesTheSerializedAcceptedClockAtTheFacadeEndpoint) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+
+  AmrSystem system(cfg);
+  system.add_block("tracer", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
+  system.set_clock(0.1, 0);
+  test::install_forward_euler_program(system);
+  system.set_program_cadence(/*substeps=*/3, /*stride=*/3);
+
+  const double after_first = 0.1 + 0.1;
+  const double after_second = after_first + 0.1;
+  const double accepted_endpoint = after_second + 0.3;
+  const double reconstructed_endpoint = 0.1 + ((0.1 + 0.1) + 0.3);
+  ASSERT_NE(std::bit_cast<std::uint64_t>(accepted_endpoint),
+            std::bit_cast<std::uint64_t>(reconstructed_endpoint))
+      << "fixture must exercise floating-point non-associativity";
+
+  system.step(0.1);
+  system.step(0.1);
+  system.step(0.3);
+
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(system.time()),
+            std::bit_cast<std::uint64_t>(accepted_endpoint));
+  const runtime::program::AmrProgramAcceptedState accepted =
+      runtime::program::deserialize_amr_program_accepted_state(system.program_accepted_state());
+  ASSERT_FALSE(accepted.level_clocks.empty());
+  for (const auto& clock : accepted.level_clocks) {
+    EXPECT_EQ(std::bit_cast<std::uint64_t>(clock.physical_time),
+              std::bit_cast<std::uint64_t>(system.time()));
+    EXPECT_EQ(clock.macro_step, system.macro_step());
   }
 }

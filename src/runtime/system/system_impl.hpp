@@ -22,7 +22,7 @@
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver (direct polar Poisson, REUSED)
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/runtime/system/system_field_solver.hpp>  // SystemFieldSolver: elliptic solve + field derivation (Batch B)
-#include <pops/runtime/system/system_stepper.hpp>  // SystemStepper: time advance (step/advance/step_cfl/step_adaptive) (Batch B)
+#include <pops/runtime/system/system_program_driver.hpp>  // Program cadence + native CFL bound
 #include <pops/runtime/system/system_block_store.hpp>  // SystemBlockStore: block management (BlockState + registry + index/copy/write) (Batch B.3)
 #include <pops/runtime/system/system_diagnostics_registry.hpp>  // SystemDiagnosticsRegistry: block/stage options + Newton reports (ADC-578)
 #include <pops/runtime/system/system_coupling_registry.hpp>  // SystemCouplingRegistry: couplings + dt bounds + frequency bounds (ADC-578)
@@ -116,8 +116,7 @@ inline EffectiveBlockOptions make_system_block_options(
     const std::string& time, const std::string& method, bool imex, int substeps, bool evolve,
     int stride, const std::vector<std::string>& implicit_vars,
     const std::vector<std::string>& implicit_roles, const NewtonOptions& newton,
-    bool newton_diagnostics, double positivity_floor, bool wave_speed_cache,
-    double weno_epsilon) {
+    bool newton_diagnostics, double positivity_floor, bool wave_speed_cache, double weno_epsilon) {
   EffectiveBlockOptions out;
   out.name = name;
   out.route = route;
@@ -161,8 +160,8 @@ struct System::Impl {
   // by-name access (index / find) and the state marshaling (copy_comp0 / copy_state / write_state) now
   // live there. See include/pops/runtime/system_block_store.hpp.
   //
-  // COMPATIBILITY ALIASES. The already-extracted header templates (SystemFieldSolver, SystemStepper,
-  // native_loader) iterate `owner_->sp` / `P->sp` and name `Impl::Species`; we keep these two
+  // COMPATIBILITY ALIASES. The already-extracted header templates (SystemFieldSolver,
+  // SystemProgramDriver, native_loader) iterate `owner_->sp` / `P->sp` and name `Impl::Species`; we keep these two
   // access points identical (zero churn outside this file):
   //  - `Species` = the block type carried by the store (init via positional aggregate unchanged);
   //  - `sp` = a REFERENCE to the store registry (same object, same iteration, same indexing).
@@ -170,10 +169,11 @@ struct System::Impl {
 
   // GEOMETRY / LAYOUT + SHARED aux + embedded-boundary domain, EXTRACTED into SystemDomain (ADC-578,
   // include/pops/runtime/system/system_domain.hpp). domain_ is constructed FIRST (before fields_ /
-  // stepper_) so its exact historical init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_,
+  // program_driver_) so its exact historical init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_,
   // aux) runs before any back-pointer reads it. Every member is re-exposed under its exact
-  // historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom): SystemStepper /
-  // SystemFieldSolver / native_loader read them via owner_-> / P-> unchanged, and the block closures
+  // historical name via a REFERENCE ALIAS (the proven `sp = blocks_.blocks` idiom):
+  // SystemProgramDriver / SystemFieldSolver / native_loader read them via owner_-> / P-> unchanged,
+  // and the block closures
   // capture a stable `&aux == &domain_.aux` -> those headers and the MockImpl stay byte-unchanged.
   pops::runtime::system::SystemDomain domain_;
   SystemConfig& cfg = domain_.cfg;
@@ -251,31 +251,30 @@ struct System::Impl {
   // Python bind flow calls it LAST, after every install call). When frozen (Bound / Checkpointed /
   // Finalized) the structural setters reject; the runtime-data setters stay allowed. It is the
   // authoritative NATIVE lifecycle source the Python freeze gates query. NOT referenced by
-  // SystemStepper -> no MockImpl impact (MockImpl never had bound_); Assembling for a direct engine
+  // SystemProgramDriver -> no MockImpl impact (MockImpl never had bound_); Assembling for a direct engine
   // script that never binds (the low-level C++ tests) -> historical behavior unchanged. See
   // include/pops/runtime/system/system_lifecycle.hpp.
   pops::runtime::system::SystemLifecycle lifecycle_;
   // INTER-SPECIES COUPLING SUBSYSTEM, EXTRACTED into SystemCouplingRegistry (ADC-578,
   // include/pops/runtime/system/system_coupling_registry.hpp): the splitting-source operators, the
   // GLOBAL host dt bounds, the constant / per-cell coupled-source frequency bounds, and the typed
-  // coupling-operator inspect views. The stepper reads couplings / dt_bounds_ / coupled_freqs_ /
+  // coupling-operator inspect views. The Program driver reads dt_bounds_ / coupled_freqs_ /
   // coupled_freq_exprs_, so those keep their exact names via REFERENCE ALIASES into the registry
-  // (SAME objects) -> system_stepper.hpp and the MockImpl stay byte-unchanged. coupled_operators_ is
-  // METADATA ONLY (never stepper-read) -> accessed registry-direct. The GlobalDtBound / CoupledFreq /
+  // (SAME objects). coupled_operators_ is METADATA ONLY -> accessed registry-direct. The GlobalDtBound / CoupledFreq /
   // CoupledFreqExpr struct types now live in the registry header; the `using` aliases below keep the
   // `Impl::GlobalDtBound{...}` construction sites in this TU unchanged.
   pops::runtime::system::SystemCouplingRegistry coupling_;
   using GlobalDtBound = pops::runtime::system::GlobalDtBound;
   using CoupledFreq = pops::runtime::system::CoupledFreq;
   using CoupledFreqExpr = pops::runtime::system::CoupledFreqExpr;
-  std::vector<std::function<void(Real)>>& couplings = coupling_.operators;
+  std::vector<pops::runtime::system::PreparedCouplingOperator>& couplings = coupling_.operators;
   std::vector<GlobalDtBound>& dt_bounds_ = coupling_.dt_bounds;
   std::vector<CoupledFreq>& coupled_freqs_ = coupling_.coupled_freqs;
   std::vector<CoupledFreqExpr>& coupled_freq_exprs_ = coupling_.coupled_freq_exprs;
 
-  // stride_due (hold-then-catch-up cadence filter) EXTRACTED into stepper_ (SystemStepper, Batch B):
-  // it serves exclusively the time advance. macro_step_ (above) stays a SHARED member of Impl
-  // (read by time() indirectly via t, incremented by stepper_ via owner_->macro_step_).
+  // stride_due (hold-then-catch-up Program cadence filter) lives in program_driver_.
+  // macro_step_ (above) stays a SHARED member of Impl (read by time() indirectly via t,
+  // incremented by program_driver_ via owner_->macro_step_).
 
   // Elliptic solve + field derivation EXTRACTED into fields_ (SystemFieldSolver, Batch B,
   // cf. docs/SYSTEM_CPP_EXTRACTION_PLAN.md section 2): the Poisson configuration (p_rhs/p_solver/
@@ -301,9 +300,10 @@ struct System::Impl {
 
   // domain_ (SystemDomain) is constructed FIRST from the config: it owns the exact historical
   // geometry/layout init-list (cfg, geom, polar_, pgeom_, ba, dm, bc_, dom, per_, aux) so
-  // fields_ / stepper_ back-pointers read a fully-built layout. The reference aliases above then bind
-  // to domain_.*, and fields_(this) / stepper_(this) capture Impl (bit-identical addresses).
-  explicit Impl(const SystemConfig& c) : domain_(c), fields_(this), stepper_(this) {}
+  // fields_ / program_driver_ back-pointers read a fully-built layout. The reference aliases above
+  // then bind to domain_.*, and fields_(this) / program_driver_(this) capture Impl (bit-identical
+  // addresses).
+  explicit Impl(const SystemConfig& c) : domain_(c), fields_(this), program_driver_(this) {}
 
   // Elliptic solve + field derivation (Batch B). OWNS the solvers (ell_/pell_), the Poisson
   // config, the coefficient fields and the aux application buffers (B_z, T_e). owner_ = this: the
@@ -312,12 +312,13 @@ struct System::Impl {
   // ordering dependency. See include/pops/runtime/system_field_solver.hpp.
   field_solver::SystemFieldSolver<Impl> fields_;
 
-  // Time advance (Batch B). ORCHESTRATES step / advance / step_cfl / step_adaptive, the cadence filter
-  // (stride_due) and the couplings (apply_couplings). owner_ = this: the stepper reads the SHARED sp /
-  // fields_ / aux / couplings / t / macro_step_ / geom / pgeom_ / polar_
-  // of Impl via its back-pointer. Pure back-pointer at construction (no dereferencing) ->
-  // init at end of list without ordering dependency. See include/pops/runtime/system_stepper.hpp.
-  stepper::SystemStepper<Impl> stepper_;
+  // Program-only time advance. The driver computes native CFL bounds and wraps the installed
+  // whole-system Program in its declared cadence; it has no native transport/coupling fallback.
+  // owner_ = this: the driver reads the SHARED sp / fields_ / t / macro_step_ / geom / pgeom_ /
+  // polar_ of Impl via its back-pointer. Pure back-pointer at construction (no dereferencing) ->
+  // init at end of list without ordering dependency. See
+  // include/pops/runtime/system/system_program_driver.hpp.
+  pops::runtime::system::SystemProgramDriver<Impl> program_driver_;
 
   // Guarantees an aux width >= ncomp (SHARED channel). Reallocating the aux KEEPS its address (member:
   // the block closures capture &aux via grid_ctx) and re-applies B_z. No-op if already wide enough.
@@ -383,10 +384,8 @@ struct System::Impl {
   const Species& find(const std::string& name) const { return blocks_.find(name); }
   int index(const std::string& name) const { return blocks_.index(name); }
 
-  // apply_couplings (inter-species coupling sources by splitting, AFTER transport) is extracted into
-  // stepper_ (SystemStepper, Batch B) and invoked by step / step_cfl / step_adaptive. It reads the
-  // SHARED state via owner_->. The
-  // couplings list (above) stays a member of Impl (populated by add_ionization / add_collision / ...).
+  // Coupled-source closures remain registered spatial operators and stability metadata. The facade
+  // never schedules them implicitly; an installed Program must lower the coupling it owns.
 
   // --- elliptic solver (system Poisson) -----------------------------
   // poisson_bc / wall_active / ensure_elliptic / apply_epsilon_field / apply_epsilon_anisotropic_field
@@ -522,11 +521,9 @@ struct System::Impl {
   // (SystemFieldSolver, Batch B). Pure delegation: the Cartesian/polar dispatch, the device_fence and
   // the order of fill_ghosts/fill_boundary now live in the header (bit-identical).
   //
-  // PROFILER kernel count (ADC-459, Spec 3 section 29): the elliptic field solve is the per-step
-  // kernel-dispatch chokepoint the NATIVE step actually hits (SystemStepper::step calls P->solve_fields
-  // once per Lie step / three times per Strang step), so counting here moves "kernels" on the native
-  // host path -- no SystemStepper edit (Profiler stays an Impl member the stepper never reads). The
-  // count() is a single predictable branch when profiling is off (zero hot-path cost).
+  // PROFILER kernel count (ADC-459, Spec 3 section 29): the elliptic field solve is a Program
+  // kernel-dispatch chokepoint, reached through ProgramContext at the authored stages. The count()
+  // is a single predictable branch when profiling is off (zero hot-path cost).
   SolveReport solve_fields() {
     program_.profiler_.count("kernels");
     return fields_.solve_fields();
@@ -607,6 +604,16 @@ struct System::Impl {
     double time;
     int macro_step;
     Real last_program_dt;
+    double cadence_window_dt;
+    int cadence_window_steps;
+    double cadence_window_start_time;
+    bool cadence_clock_restore_pending;
+    double cadence_clock_restore_dt;
+    int cadence_clock_restore_steps;
+    double cadence_clock_restore_start_time;
+    double cadence_clock_restore_last_dt;
+    double cadence_clock_restore_accepted_time;
+    int cadence_clock_restore_macro_step;
     std::map<std::string, Real> program_diagnostics;
     pops::runtime::program::CacheManager cache;
     pops::runtime::program::HistoryManager history;
@@ -620,11 +627,21 @@ struct System::Impl {
           time(impl.t),
           macro_step(impl.macro_step_),
           last_program_dt(impl.program_.last_dt_),
+          cadence_window_dt(impl.program_.cadence_window_dt_),
+          cadence_window_steps(impl.program_.cadence_window_steps_),
+          cadence_window_start_time(impl.program_.cadence_window_start_time_),
+          cadence_clock_restore_pending(impl.program_.cadence_clock_restore_pending_),
+          cadence_clock_restore_dt(impl.program_.cadence_clock_restore_dt_),
+          cadence_clock_restore_steps(impl.program_.cadence_clock_restore_steps_),
+          cadence_clock_restore_start_time(impl.program_.cadence_clock_restore_start_time_),
+          cadence_clock_restore_last_dt(impl.program_.cadence_clock_restore_last_dt_),
+          cadence_clock_restore_accepted_time(impl.program_.cadence_clock_restore_accepted_time_),
+          cadence_clock_restore_macro_step(impl.program_.cadence_clock_restore_macro_step_),
           program_diagnostics(impl.program_.diagnostics_),
           cache(impl.program_.cache_),
           history(impl.program_.hist_),
           profiler(impl.program_.profiler_),
-          last_dt_reason(impl.stepper_.last_dt_reason()) {
+          last_dt_reason(impl.program_driver_.last_dt_reason()) {
       states.reserve(impl.sp.size());
       for (const auto& block : impl.sp)
         states.emplace_back(block.U);
@@ -641,6 +658,16 @@ struct System::Impl {
       impl.t = time;
       impl.macro_step_ = macro_step;
       impl.program_.last_dt_ = last_program_dt;
+      impl.program_.cadence_window_dt_ = cadence_window_dt;
+      impl.program_.cadence_window_steps_ = cadence_window_steps;
+      impl.program_.cadence_window_start_time_ = cadence_window_start_time;
+      impl.program_.cadence_clock_restore_pending_ = cadence_clock_restore_pending;
+      impl.program_.cadence_clock_restore_dt_ = cadence_clock_restore_dt;
+      impl.program_.cadence_clock_restore_steps_ = cadence_clock_restore_steps;
+      impl.program_.cadence_clock_restore_start_time_ = cadence_clock_restore_start_time;
+      impl.program_.cadence_clock_restore_last_dt_ = cadence_clock_restore_last_dt;
+      impl.program_.cadence_clock_restore_accepted_time_ = cadence_clock_restore_accepted_time;
+      impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       impl.program_.diagnostics_ = program_diagnostics;
       impl.program_.cache_ = cache;
       impl.program_.hist_ = history;
@@ -650,7 +677,7 @@ struct System::Impl {
         if (report && saved != newton_reports.end())
           *report = saved->second;
       }
-      impl.stepper_.restore_last_dt_reason(last_dt_reason);
+      impl.program_driver_.restore_last_dt_reason(last_dt_reason);
     }
   };
 
@@ -675,9 +702,9 @@ struct System::Impl {
           const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
                                        ? runtime::program::StepAttemptDisposition::kRetry
                                        : runtime::program::StepAttemptDisposition::kReject;
-          throw runtime::program::StepAttemptRejected(
-              SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
-              failure.what());
+          throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation, disposition,
+                                                      failure.reason_code(), "stage",
+                                                      failure.what());
         }
         throw;
       } catch (...) {
@@ -695,9 +722,8 @@ struct System::Impl {
         const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
                                      ? runtime::program::StepAttemptDisposition::kRetry
                                      : runtime::program::StepAttemptDisposition::kReject;
-        throw runtime::program::StepAttemptRejected(
-            SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
-            failure.what());
+        throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation, disposition,
+                                                    failure.reason_code(), "stage", failure.what());
       }
       throw;
     } catch (...) {

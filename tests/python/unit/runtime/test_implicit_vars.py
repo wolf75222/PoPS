@@ -1,32 +1,21 @@
 #!/usr/bin/env python3
-"""Test du MASQUE IMPLICITE par bloc (System-pipeline P3) : engine.IMEX / engine.SourceImplicit acceptent
-implicit_vars=[noms] et/ou implicit_roles=[roles physiques] pour choisir QUELLES variables conservees
-sont traitees en implicite dans le pas de source IMEX (les autres restent explicites, Euler avant).
+"""Contrat fail-closed du masque IMEX prive apres le cutover Program-only.
 
-DECISION DE CONCEPTION : le masque vit cote POLITIQUE TEMPORELLE / BLOC (et NON le modele) -> le MEME
-modele se reutilise avec des traitements implicites differents. Defaut (pas de masque) = defaut modele
-(Model::is_implicit, ou tout implicite a defaut de trait) -> numeriquement BIT-IDENTIQUE a avant.
+``engine.IMEX`` et ``engine.SourceImplicit`` conservent leurs champs d'auteur historiques afin de
+valider les noms et roles au chargement d'un bloc natif. Ils ne constituent toutefois plus une
+autorite temporelle : aucun ``System.advance`` ne peut deduire un backward-Euler, un masque partiel
+ou un solveur Newton de ces descripteurs. Un vrai ``pops.Program`` portant la primitive implicite
+doit etre installe ; cette primitive n'existe pas encore pour le masque partiel natif.
 
-Modele d'epreuve : electron Euler compressible (4 var : rho, rho_u, rho_v, E ; roles density, momentum_x,
-momentum_y, energy) avec source PotentialForce raide (force (q/m) rho E sur la qte de mvt + travail sur
-l'energie). La source de l'energie depend de la qte de mvt -> le couplage rend le RESULTAT sensible au
-choix du set implicite (energie implicite = qte de mvt AVANCEE ; energie explicite = qte de mvt d'entree).
-
-Verifie :
-  1. implicit_vars=["rho_u","rho_v"] -> seules ces composantes implicites ; resultat DIFFERENT du defaut
-     (tout implicite) -> le masque est bien APPLIQUE (et non ignore).
-  2. implicit_roles=["MomentumX","MomentumY"] resout aux MEMES indices que implicit_vars=["rho_u","rho_v"]
-     -> bit-identique (role -> index correct). Idem set complet par roles == par noms.
-  3. Defaut (aucun masque) BIT-IDENTIQUE a la valeur de reference sans argument de masque.
-  4. Erreur CLAIRE si un nom (implicit_vars) ou un role (implicit_roles) est absent du bloc.
-  5. implicit_vars / implicit_roles sur une politique non-IMEX (Explicit) ou sur un backend compile
-     -> erreur explicite (pas d'ignore silencieux).
+Le test verifie donc les seules promesses executables actuelles :
+  1. normalisation stable des noms et roles portes par les descripteurs ;
+  2. toutes les variantes IMEX refusent d'avancer sans Program, sans fallback temporel cache ;
+  3. les noms/roles absents et un masque attache a ``Explicit`` restent rejetes clairement.
 """
 
 import sys
-import numpy as np
+
 import pops.runtime._engine_descriptors as engine
-from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -40,29 +29,41 @@ def chk(cond, label):
         fails += 1
 
 
-def meshx(n):
-    return (np.arange(n) + 0.5) / n
-
-
 def electron_model():
-    # Euler compressible (4 var) + force du potentiel RAIDE (charge forte) : source non triviale sur
-    # qte de mvt (depend de rho) et energie (depend de la qte de mvt).
     return engine.Model(state=engine.FluidState("compressible", gamma=1.4),
                      transport=engine.CompressibleFlux(),
                      source=engine.PotentialForce(charge=-50.0),
                      elliptic=engine.ChargeDensity(charge=-1.0))
 
 
-def run(policy, n=24, dt=0.002, nsteps=4):
-    """Avance le bloc electron avec la politique temporelle @p policy ; renvoie l'etat final (4, n, n)."""
-    s = System(n=n, periodicity=(False, False))
+def system_with(policy):
+    system = System(n=16, periodicity=(False, False))
+    system.add_equation(
+        "ne",
+        electron_model(),
+        spatial=engine.Spatial(minmod=True),
+        time=policy,
+    )
+    return system
+
+
+def expect_program_required(policy, label):
+    system = system_with(policy)
+    try:
+        system.advance(0.002, 1)
+    except RuntimeError as error:
+        message = str(error)
+        chk(
+            "installed whole-system Program" in message,
+            f"{label}: avance refusee sans Program explicite",
+        )
+        return
+    chk(False, f"{label}: un moteur temporel cache a avance sans Program")
+
+
+def add_policy(policy):
+    s = System(n=16, periodicity=(False, False))
     s.add_equation("ne", electron_model(), spatial=engine.Spatial(minmod=True), time=policy)
-    s.set_poisson(bc=Dirichlet())
-    xs = meshx(n)
-    rho_e = 1.0 + 0.2 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, n))
-    s.set_density("ne", rho_e)
-    s.advance(dt, nsteps)
-    return np.array(s.get_state("ne")).copy()
 
 
 # ---- 0. attributs portes par la politique (masque cote bloc, pas modele) -------
@@ -79,46 +80,23 @@ chk(si.implicit_vars == ["E"], "SourceImplicit.implicit_vars stocke les noms")
 chk(engine.IMEX().implicit_vars == [] and engine.IMEX().implicit_roles == [],
     "IMEX() sans masque : listes vides (defaut)")
 
-# ---- 1. le masque est APPLIQUE : implicit_vars change la numerique ------------
-print("== 1. implicit_vars=['rho_u','rho_v'] : seules ces composantes implicites ==")
-ref_full = run(engine.IMEX(substeps=2))                                  # defaut : tout implicite
-masked_mom = run(engine.IMEX(substeps=2, implicit_vars=["rho_u", "rho_v"]))  # qte de mvt seule
-diff = float(np.max(np.abs(masked_mom - ref_full)))
-chk(diff > 0.0,
-    "masque qte de mvt != defaut tout-implicite (le masque est applique, diff=%g)" % diff)
+# ---- 1. aucune politique de bloc ne remplace un Program -----------------------
+print("== 1. les politiques IMEX de bloc ne sont pas des moteurs temporels ==")
+expect_program_required(engine.IMEX(substeps=2), "IMEX sans masque")
+expect_program_required(
+    engine.IMEX(substeps=2, implicit_vars=["rho_u", "rho_v"]),
+    "IMEX masque par noms",
+)
+expect_program_required(
+    engine.IMEX(substeps=2, implicit_roles=["MomentumX", "MomentumY"]),
+    "IMEX masque par roles",
+)
+expect_program_required(engine.SourceImplicit(substeps=2), "SourceImplicit")
 
-# ---- 2. implicit_roles resout aux MEMES indices que implicit_vars -------------
-print("== 2. implicit_roles -> memes indices que implicit_vars (role -> index) ==")
-masked_roles = run(engine.IMEX(substeps=2, implicit_roles=["MomentumX", "MomentumY"]))
-d_role_name = float(np.max(np.abs(masked_roles - masked_mom)))
-chk(d_role_name == 0.0,
-    "implicit_roles=[MomentumX,MomentumY] == implicit_vars=[rho_u,rho_v] (bit-identique, diff=%g)"
-    % d_role_name)
-
-# set complet (qte de mvt + energie) par roles == par noms (3 composantes)
-full3_names = run(engine.IMEX(substeps=2, implicit_vars=["rho_u", "rho_v", "E"]))
-full3_roles = run(engine.IMEX(substeps=2, implicit_roles=["MomentumX", "MomentumY", "Energy"]))
-d3 = float(np.max(np.abs(full3_roles - full3_names)))
-chk(d3 == 0.0,
-    "implicit_roles=[MomentumX,MomentumY,Energy] == implicit_vars=[rho_u,rho_v,E] (diff=%g)" % d3)
-# et ce set (qui exclut rho dont la source est nulle) differe du masque qte-de-mvt-seule
-chk(float(np.max(np.abs(full3_names - masked_mom))) > 0.0,
-    "ajouter 'E' au set implicite change le resultat (energie implicite vs explicite)")
-
-# ---- 3. defaut (aucun masque) BIT-IDENTIQUE -----------------------------------
-print("== 3. defaut sans masque : bit-identique ==")
-ref_full_b = run(engine.IMEX(substeps=2))
-chk(float(np.max(np.abs(ref_full_b - ref_full))) == 0.0,
-    "IMEX(substeps=2) sans masque : reproductible et bit-identique a la reference")
-# SourceImplicit sans masque == IMEX sans masque (meme chemin C++)
-si_ref = run(engine.SourceImplicit(substeps=2))
-chk(float(np.max(np.abs(si_ref - ref_full))) == 0.0,
-    "SourceImplicit(substeps=2) sans masque == IMEX(substeps=2) (bit-identique)")
-
-# ---- 4. erreur claire si nom / role absent du bloc ----------------------------
-print("== 4. erreur explicite sur un nom / role absent ==")
+# ---- 2. erreur claire si nom / role absent du bloc ----------------------------
+print("== 2. erreur explicite sur un nom / role absent ==")
 try:
-    run(engine.IMEX(implicit_vars=["rho_w"]))   # 'rho_w' n'existe pas (le bloc a rho,rho_u,rho_v,E)
+    add_policy(engine.IMEX(implicit_vars=["rho_w"]))
     chk(False, "implicit_vars=['rho_w'] doit lever (nom absent)")
 except Exception as e:
     msg = str(e)
@@ -126,7 +104,7 @@ except Exception as e:
         "nom absent -> erreur mentionnant 'rho_w' et 'implicit_vars'")
 
 try:
-    run(engine.IMEX(implicit_roles=["Pressure"]))  # role absent des conservatives Euler
+    add_policy(engine.IMEX(implicit_roles=["Pressure"]))
     chk(False, "implicit_roles=['Pressure'] doit lever (role absent)")
 except Exception as e:
     msg = str(e)
@@ -134,14 +112,14 @@ except Exception as e:
         "role absent -> erreur mentionnant 'implicit_roles'")
 
 try:
-    run(engine.IMEX(implicit_roles=["NotARole"]))  # role inconnu (mappe sur Custom)
+    add_policy(engine.IMEX(implicit_roles=["NotARole"]))
     chk(False, "implicit_roles=['NotARole'] doit lever (role inconnu)")
 except Exception as e:
     chk("implicit_roles" in str(e),
         "role inconnu -> erreur explicite")
 
-# ---- 5. masque interdit hors IMEX (explicite) ---------------------------------
-print("== 5. masque rejete sur une politique non-IMEX ==")
+# ---- 3. masque interdit hors IMEX (explicite) ---------------------------------
+print("== 3. masque rejete sur une politique non-IMEX ==")
 # ``Explicit`` ne porte pas de masque par construction. Pour exercer la validation native sans
 # appeler ``_s`` directement, on attache volontairement un attribut de masque a la valeur de
 # politique puis on passe par ``System.add_equation`` : le runtime doit refuser ce contrat incoherent

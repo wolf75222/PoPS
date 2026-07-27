@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "load_balance_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 
@@ -126,11 +127,11 @@ TEST(test_amr_system_twoblock, Runs) {
     std::vector<AmrRuntimeBlock> blocks;
     // bloc 0 : ions q=+1, schema none/rusanov.
     blocks.push_back(detail::dispatch_amr_block(exb_model(q0, B0), "none", "rusanov", S, "ions",
-                                                rho0, /*has_density=*/true, 1.4, 1, false, false));
+                                                rho0, /*has_density=*/true, 1.4, 1, false));
     // bloc 1 : electrons q=-1, schema minmod/rusanov (DIFFERENT du bloc 0).
     blocks.push_back(detail::dispatch_amr_block(exb_model(q1, B0), "minmod", "rusanov", S,
                                                 "electrons", rho1, /*has_density=*/true, 1.4, 1,
-                                                false, false));
+                                                false));
 
     AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                   S.replicated_coarse, S.wall);
@@ -161,13 +162,9 @@ TEST(test_amr_system_twoblock, Runs) {
     EXPECT_GT(norm_inf(ref), Real(1e-6)) << "twoblock_poisson_rhs_nonzero";
     EXPECT_GT(norm_inf(rt.phi()), Real(1e-8)) << "twoblock_poisson_phi_nonzero";
 
-    // (c) masse de CHAQUE bloc conservee a travers un pas (reflux + average_down, PAR BLOC).
-    const Real m0a = rt.mass(0), m1a = rt.mass(1);
-    rt.step(Real(0.01));
-    rt.step(Real(0.01));
-    const Real m0b = rt.mass(0), m1b = rt.mass(1);
-    EXPECT_LT(std::fabs(m0b - m0a), Real(1e-11)) << "twoblock_block0_mass_conserved";
-    EXPECT_LT(std::fabs(m1b - m1a), Real(1e-11)) << "twoblock_block1_mass_conserved";
+    // Temporal evolution is exercised below through an explicitly authored Program on AmrSystem.
+    // This direct-engine section owns only the co-located elliptic assembly contract; it must not
+    // invoke the retired AmrRuntime temporal engine as a second authority.
   }
 
   // ============================================================================================
@@ -196,6 +193,7 @@ TEST(test_amr_system_twoblock, Runs) {
     const double m0_before = sim.mass("ions");
     const double m1_before = sim.mass("electrons");
 
+    test::install_forward_euler_program(sim);
     sim.advance(0.01, 5);
 
     const std::vector<double> d0_after = sim.density("ions");
@@ -263,6 +261,7 @@ TEST(test_amr_system_twoblock, Runs) {
                     "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", rho0);
+      test::install_forward_euler_program(sim);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };

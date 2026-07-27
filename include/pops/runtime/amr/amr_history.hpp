@@ -32,6 +32,7 @@
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime (befriends detail::AmrHistoryOps)
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <stdexcept>
@@ -40,7 +41,31 @@
 #include <vector>
 
 namespace pops {
+class AmrSystem;
+
 namespace detail {
+
+/// Capability issued only by AmrSystem after matching the installed artifact's exact
+/// (owner-qualified ring name, compiled depth) replay authority. Direct callers cannot forge
+/// cadence/proof metadata and invoke the low-level engine callback route.
+class AuthenticatedHistoryReplayToken {
+ public:
+  AuthenticatedHistoryReplayToken(const AuthenticatedHistoryReplayToken&) = default;
+  AuthenticatedHistoryReplayToken& operator=(const AuthenticatedHistoryReplayToken&) = default;
+
+ private:
+  AuthenticatedHistoryReplayToken(std::string name, int depth)
+      : name_(std::move(name)), depth_(depth) {
+    if (name_.empty() || depth_ < 2)
+      throw std::invalid_argument("authenticated history replay authority is malformed");
+  }
+
+  friend class ::pops::AmrSystem;
+  friend struct AmrHistoryOps;
+
+  std::string name_;
+  int depth_ = 0;
+};
 
 /// Static operations over the AmrRuntime history-ring members (a friend of AmrRuntime). No state of
 /// its own: every method takes the engine by reference, so the engine stays movable and the ring data
@@ -379,10 +404,13 @@ struct AmrHistoryOps {
                                "' (restore its slots first)");
     if (slot < 0)
       throw std::runtime_error("AmrRuntime::restore_history_slot_dt: slot must be >= 0");
+    const Real native_dt = static_cast<Real>(dt);
+    if (!std::isfinite(dt) || dt < 0.0 || !std::isfinite(static_cast<double>(native_dt)))
+      throw std::runtime_error("AmrRuntime::restore_history_slot_dt: dt must be finite and >= 0");
     std::vector<Real>& dts = eng.hist_slot_dt_[name];
     if (slot >= static_cast<int>(dts.size()))
       dts.resize(static_cast<std::size_t>(slot) + 1, Real(0));
-    dts[static_cast<std::size_t>(slot)] = static_cast<Real>(dt);
+    dts[static_cast<std::size_t>(slot)] = native_dt;
   }
 
   // --- regrid / rebuild-hierarchy remap hook ------------------------------------------------------
@@ -531,8 +559,9 @@ struct AmrHistoryOps {
   // Reconstruct a clean-window ring by re-stepping the installed Program independently between each
   // pair of stored anchors. A scheduled regrid is refused: stored anchors already live on the
   // checkpoint hierarchy, so replaying a historical remap from that future layout is not exact.
-  static ReplayOutcome rebuild_slots(AmrRuntime& eng, const std::string& name,
-                                     const std::vector<int>& stored_slots, int m,
+  static ReplayOutcome rebuild_slots(AuthenticatedHistoryReplayToken authenticated, AmrRuntime& eng,
+                                     const std::string& name, const std::vector<int>& stored_slots,
+                                     int m, int program_substeps, int program_stride,
                                      const std::function<void(double, int)>& program_step) {
     auto it = eng.hist_rings_.find(name);
     if (it == eng.hist_rings_.end())
@@ -543,6 +572,10 @@ struct AmrHistoryOps {
           "replayed (install_program before restart, or checkpoint the ring with Dense())");
     std::vector<std::vector<MultiFab>>& ring = it->second;
     const int d = static_cast<int>(ring.size());
+    if (authenticated.name_ != name || authenticated.depth_ != d)
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_history_slots: authenticated history replay authority does not "
+          "match the requested ring name and depth");
     std::vector<int> anchors = stored_slots;
     std::sort(anchors.begin(), anchors.end());
     anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
@@ -558,6 +591,11 @@ struct AmrHistoryOps {
           "policy must store the newest slot).");
     if (static_cast<int>(anchors.size()) == d)
       return {};  // Dense: nothing to recompute.
+    if (program_substeps != 1 || program_stride != 1)
+      throw std::runtime_error(
+          "AmrRuntime::rebuild_history_slots: selective replay requires Program cadence "
+          "(substeps=1, stride=1); checkpoint this ring with Dense() for a subcycled or held "
+          "Program");
 
     // Resolve the structural schedule defensively even when a handcrafted caller bypasses Python.
     ReplayOutcome outcome;
@@ -584,6 +622,17 @@ struct AmrHistoryOps {
     if (sd_it != saved.history_slot_dt.end())
       for (int k = 0; k < d && k < static_cast<int>(sd_it->second.size()); ++k)
         dts[static_cast<std::size_t>(k)] = sd_it->second[static_cast<std::size_t>(k)];
+    for (std::size_t anchor = 0; anchor + 1 < anchors.size(); ++anchor) {
+      const int newer = anchors[anchor];
+      const int older = anchors[anchor + 1];
+      for (int j = older - 1; j > newer; --j) {
+        const Real replay_dt = dts[static_cast<std::size_t>(j + 1)];
+        if (!std::isfinite(static_cast<double>(replay_dt)) || replay_dt <= Real(0))
+          throw std::runtime_error(
+              "AmrRuntime::rebuild_history_slots: every replayed outgoing dt must be finite and "
+              "> 0 before Program execution");
+      }
+    }
 
     // Reconstruct every gap independently from its exact older stored anchor.  The Program's own
     // store/rotate operations are replay side effects, not the output: trusting their final rotated

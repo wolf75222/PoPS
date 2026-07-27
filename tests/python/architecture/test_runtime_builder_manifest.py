@@ -32,7 +32,7 @@ GENERATED_CATALOG = (
     REPO_ROOT / "python" / "pops" / "runtime" / "_generated_component_routes.py"
 )
 
-# The 19 (transport, flux) leaf TUs that USED to be hand-written and are now generated. They must NOT
+# The 13 (transport, flux) leaf TUs that USED to be hand-written and are now generated. They must NOT
 # reappear as tracked source files; regenerating them into the source tree would defeat the manifest.
 GENERATED_LEAF_PATHS = (
     "system/base/system_exb.cpp",
@@ -48,18 +48,11 @@ GENERATED_LEAF_PATHS = (
     "amr/block/compressible/amr_block_compressible_hll.cpp",
     "amr/block/compressible/amr_block_compressible_hllc.cpp",
     "amr/block/compressible/amr_block_compressible_roe.cpp",
-    "amr/compiled/base/amr_compiled_exb.cpp",
-    "amr/compiled/base/amr_compiled_isothermal.cpp",
-    "amr/compiled/compressible/amr_compiled_compressible_rusanov.cpp",
-    "amr/compiled/compressible/amr_compiled_compressible_hll.cpp",
-    "amr/compiled/compressible/amr_compiled_compressible_hllc.cpp",
-    "amr/compiled/compressible/amr_compiled_compressible_roe.cpp",
 )
 
-# The two hand-written riemann dispatchers have unique control flow (one per transport) and stay.
+# The hand-written AMR riemann dispatcher has unique control flow and stays.
 HAND_WRITTEN_KEPT = {
     "src/runtime/builders/amr/block/compressible/amr_block_compressible.cpp",
-    "src/runtime/builders/amr/compiled/compressible/amr_compiled_compressible.cpp",
 }
 
 # A manifest row is a quoted string of exactly 7 non-empty |-separated fields starting with a template
@@ -159,10 +152,9 @@ def _has_seam_leaf_signature(text):
     instantiators)."""
     stripped = "\n".join(re.sub(r"//.*$", "", ln) for ln in text.splitlines())
     instantiates = ("build_block_for_make" in stripped
-                    or "build_amr_block_for_flux" in stripped
-                    or "build_amr_compiled_for_flux" in stripped)
+                    or "build_amr_block_for_flux" in stripped)
     maker = re.search(r"make_block_[a-z]+\s*\(", stripped) or re.search(
-        r"dispatch_amr_(?:block|compiled)_[a-z]+\s*\(", stripped)
+        r"dispatch_amr_block_[a-z]+\s*\(", stripped)
     return instantiates and bool(maker)
 
 

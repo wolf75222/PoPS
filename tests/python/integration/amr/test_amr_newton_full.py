@@ -1,162 +1,142 @@
 #!/usr/bin/env python3
-"""Vague 3 (solde) : options et diagnostics Newton CABLES sur AMR.
+"""AMR source-Newton requests fail closed until a typed Program primitive exists.
 
-Couvre les deux chantiers du solde (docs/GENERICITY_2026-06.md, points NON generalises #1) :
-
-  (a) OPTIONS NEWTON MONO-BLOC : un bloc AMR UNIQUE en IMEX avec des options Newton non-defaut
-      (newton_max_iters, rel_tol) tourne fini et NE LEVE PLUS au build. Les options sont threadees
-      au coupleur AmrCouplerMP (cpl->step -> advance_amr -> subcycle_level_mp ->
-      mf_apply_source_treatment -> backward_euler_source), la ou avant elles etaient rejetees.
-
-  (b) NEWTON_DIAGNOSTICS MULTI-BLOCS : newton_diagnostics=True sur un bloc IMEX d'un systeme
-      multi-blocs -> AmrSystem.newton_report('bloc') rend un dict coherent (converged bool,
-      max_residual fini, n_failed==0 sur un cas doux). Le rapport est AGREGE par AmrRuntime
-      (reset en tete d'avance, max/somme sur niveaux et sous-pas, all_reduce MPI).
-
-  (c) NO-DEFAULT-CHANGE (mono-bloc) : les options Newton par DEFAUT explicites (newton_max_iters=2,
-      rel_tol=0, abs_tol=0, fd_eps=1e-7, damping=1.0) donnent une trajectoire BIT-IDENTIQUE a celle
-      sans options (engine.IMEX()). On compare deux runs de memes graines : dmax == 0 (vrai test de
-      non-regression : le chemin a options par defaut == chemin historique a iters figes).
-
-  (d) GARDE PRE-LOADER : les metadonnees detachees d'un package AMR declenchent le rejet explicite
-      des options et diagnostics Newton que l'ABI plate ne transporte pas. Ce sous-test ne pretend
-      pas executer un package natif ; la vraie route compilee est couverte par
-      ``integration/native_loader/test_dsl_production_amr.py``.
-
-Invariants par assert ; imprime "OK test_amr_newton_full" en cas de succes.
+The AMR block descriptor may still carry the canonical ``IMEX`` authoring token,
+but the spatial runtime owns neither a local implicit step nor a Newton report.
+Non-default Newton controls, diagnostics, and partial masks must therefore be
+rejected instead of being accepted and ignored.
 """
-from pops.numerics.reconstruction.limiters import Minmod
+
 import sys
 
-import numpy as np
-
 import pops.runtime._engine_descriptors as engine
-from pops.runtime._engine_descriptors import Periodic
 from pops.codegen.abi import module_header_signature
 from pops.codegen.loader import CompiledModel
-from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem
 
 fails = 0
 
 
-def chk(cond, label):
+def chk(condition, label):
     global fails
-    print(f"  [{'OK ' if cond else 'XX '}] {label}")
-    if not cond:
+    print(f"  [{'OK ' if condition else 'XX '}] {label}")
+    if not condition:
         fails += 1
 
 
-def iso_model(charge=1.0):
-    """Isotherme 3-var (rho, rho_u, rho_v) avec source electrostatique (PotentialForce) : la source
-    raide non triviale qu'attaque le Newton de l'IMEX (le pas implicite a quelque chose a resoudre)."""
-    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
-                     transport=engine.IsothermalFlux(),
-                     source=engine.PotentialForce(charge=charge),
-                     elliptic=engine.BackgroundDensity(alpha=charge, n0=1.0))
+def iso_model():
+    return engine.Model(
+        state=engine.FluidState("isothermal", cs2=0.5),
+        transport=engine.IsothermalFlux(),
+        source=engine.NoSource(),
+        elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
+    )
 
 
-def gaussian(n):
-    x = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(x, x, indexing="xy")
-    rho = 1.0 + 0.4 * np.exp(-60.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
-    return rho + (1.0 - rho.mean())
+def fresh_amr():
+    system = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
+    system.set_temporal_relations([2], [1], ["integral_only"])
+    return system
 
 
-def mono_imex(time):
-    """Construit un AmrSystem MONO-BLOC IMEX (iso_model) avec le traitement temporel @p time, seede
-    d'une gaussienne, et avance d'un pas. Renvoie la densite grossiere apres le pas."""
-    s = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
-    s.set_temporal_relations([2], [1], ["integral_only"])
-    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    s.set_refinement(1e30)
-    s.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()), time=time)
-    s.set_density("e", gaussian(16))
-    s.step(2e-3)
-    return np.asarray(s.density("e")).reshape(16, 16)
+def expect_native_rejection(label, time, *, newton=False):
+    system = fresh_amr()
+    try:
+        system.add_equation("gas", iso_model(), spatial=engine.Spatial(), time=time)
+    except (RuntimeError, ValueError) as error:
+        message = str(error)
+        chk(
+            "Newton" in message or "implicit" in message,
+            f"{label}: rejet explicite et actionnable",
+        )
+        if newton:
+            chk(
+                "LocalLinear" in message and "uniform System" in message,
+                f"{label}: alternatives executables indiquees",
+            )
+        return
+    chk(False, f"{label}: la requete non executable aurait du etre rejetee")
 
 
 def compiled_amr_metadata():
-    """Metadonnees detachees exactes pour tester uniquement la garde Python pre-loader."""
+    """Detached metadata used to prove the Python pre-loader guard."""
     return CompiledModel(
-        so_path="/inexistant_amr.so", backend="production",
-        cons_names=["rho", "rho_u", "rho_v"], cons_roles=["Density", "MomentumX", "MomentumY"],
-        prim_names=["rho", "u", "v"], n_vars=3, gamma=1.4, n_aux=3, params={}, caps={},
+        so_path="/inexistant_amr.so",
+        backend="production",
+        cons_names=["rho", "rho_u", "rho_v"],
+        cons_roles=["Density", "MomentumX", "MomentumY"],
+        prim_names=["rho", "u", "v"],
+        n_vars=3,
+        gamma=1.4,
+        n_aux=3,
+        params={},
+        caps={},
         abi_key=f"{module_header_signature()}|c++|c++23",
         model_hash="amr-newton-preloader-guard",
-        cxx="c++", std="c++23", target="amr_system")
+        cxx="c++",
+        std="c++23",
+        target="amr_system",
+    )
 
 
-# ---- (a) OPTIONS NEWTON MONO-BLOC : tourne fini, ne leve plus -----------------------------------
-print("== (a) mono-bloc IMEX + options Newton non-defaut : tourne fini (plus de rejet) ==")
-d_a = mono_imex(engine.IMEX(newton_max_iters=5, newton_rel_tol=1e-12))
-chk(np.all(np.isfinite(d_a)),
-    "mono-bloc IMEX(newton_max_iters=5, rel_tol=1e-12) avance fini (options threadees au coupleur)")
+print("== AMR source Newton: current unsupported requests fail closed ==")
 
-# ---- (b) NEWTON_DIAGNOSTICS MULTI-BLOCS : newton_report dict coherent ---------------------------
-print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') coherent ==")
-amr = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
-amr.set_temporal_relations([2], [1], ["integral_only"])
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-amr.set_refinement(1e30)
-amr.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
-                 time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True))
-amr.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()),
-                 time=engine.Explicit())
-amr.set_density("e1", gaussian(16))
-amr.set_density("e2", gaussian(16))
-amr.advance(2e-3, 3)
-rep = amr.newton_report("e1")
-chk(rep["enabled"] is True, "newton_report : enabled (au moins une avance IMEX jouee)")
-chk(isinstance(rep["converged"], bool), f"newton_report : converged est un bool ({rep['converged']})")
-chk(np.isfinite(rep["max_residual"]) and rep["max_residual"] >= 0.0,
-    f"newton_report : max_residual fini et >= 0 ({rep['max_residual']:.3e})")
-chk(rep["max_iters_used"] <= 4.0,
-    f"newton_report : max_iters_used <= budget (4) (recu {rep['max_iters_used']})")
-chk(rep["n_failed"] == 0, f"newton_report : aucune cellule en echec sur le cas doux ({rep['n_failed']})")
-chk(rep["failed_cell"] is None and rep["failed_component"] == -1,
-    "newton_report : pas de cellule fautive (failed_cell None, failed_component -1)")
-chk(isinstance(rep["diagnostics"], list), "newton_report : diagnostics structures exposes")
-# Un bloc EXPLICITE (e2) ou un bloc sans diagnostics n'expose pas de rapport (erreur claire).
-try:
-    amr.newton_report("e2")
-    chk(False, "newton_report('e2') (explicite, sans diagnostics) aurait du lever")
-except RuntimeError as e:
-    chk("diagnostics" in str(e), f"newton_report sur bloc sans diagnostics rejete : {str(e)[:60]}")
-# Un nom de bloc inconnu leve aussi.
-try:
-    amr.newton_report("inconnu")
-    chk(False, "newton_report('inconnu') aurait du lever")
-except RuntimeError as e:
-    chk("inconnu" in str(e), f"newton_report bloc inconnu rejete : {str(e)[:60]}")
+# The default token remains valid authoring metadata. It does not claim that the
+# spatial runtime executed a hidden backward-Euler/Newton step.
+default_system = fresh_amr()
+default_system.add_equation("gas", iso_model(), spatial=engine.Spatial(), time=engine.IMEX())
+chk(True, "IMEX par defaut reste un descripteur d'auteur valide")
 
-# ---- (c) NO-DEFAULT-CHANGE (mono-bloc) : defauts explicites == chemin sans options --------------
-print("== (c) mono-bloc : options par defaut explicites == sans options (dmax == 0, bit-identique) ==")
-d_base = mono_imex(engine.IMEX())  # chemin historique (aucune option)
-d_def = mono_imex(engine.IMEX(newton_max_iters=2, newton_rel_tol=0.0, newton_abs_tol=0.0,
-                           newton_fd_eps=1e-7, newton_damping=1.0))  # defauts EXPLICITES
-dmax = float(np.max(np.abs(d_def - d_base)))
-chk(dmax == 0.0, f"options Newton par defaut explicites : dmax == 0 (bit-identique ; recu {dmax:.3e})")
+newton_knobs = (
+    ("newton_max_iters", {"newton_max_iters": 5}),
+    ("newton_rel_tol", {"newton_rel_tol": 1e-12}),
+    ("newton_abs_tol", {"newton_abs_tol": 1e-12}),
+    ("newton_fd_eps", {"newton_fd_eps": 2e-7}),
+    ("newton_damping", {"newton_damping": 0.5}),
+    ("newton_fail_policy", {"newton_fail_policy": "warn"}),
+)
 
-# ---- (d) GARDE PRE-LOADER SUR METADONNEES DETACHEES : rejet explicite ---------------------------
-print("== (d) garde pre-loader AMR : options/diagnostics Newton rejetes explicitement ==")
-sim_opt = AmrSystem(n=16, periodicity=(True, True))
-sim_opt.set_temporal_relations([2], [1], ["integral_only"])
-try:
-    sim_opt.add_equation("gas", compiled_amr_metadata(), spatial=engine.Spatial(),
-                         time=engine.IMEX(newton_max_iters=5))
-    chk(False, "la garde metadonnees IMEX(newton_max_iters=5) doit lever ValueError")
-except ValueError as ex:
-    chk("Newton" in str(ex) and "production" in str(ex),
-        "options Newton sur metadonnees AMR : ValueError claire (Newton/production)")
-sim_diag = AmrSystem(n=16, periodicity=(True, True))
-sim_diag.set_temporal_relations([2], [1], ["integral_only"])
-try:
-    sim_diag.add_equation("gas", compiled_amr_metadata(), spatial=engine.Spatial(),
-                          time=engine.IMEX(newton_diagnostics=True))
-    chk(False, "la garde metadonnees IMEX(newton_diagnostics=True) doit lever ValueError")
-except ValueError as ex:
-    chk("Newton" in str(ex) and "production" in str(ex),
-        "newton_diagnostics sur metadonnees AMR : ValueError claire (Newton/production)")
+for knob, values in newton_knobs:
+    expect_native_rejection(
+        f"option Newton native non-defaut {knob}",
+        engine.IMEX(**values),
+        newton=True,
+    )
+expect_native_rejection(
+    "diagnostics Newton natifs",
+    engine.IMEX(newton_diagnostics=True),
+    newton=True,
+)
+expect_native_rejection(
+    "masque implicite natif",
+    engine.IMEX(implicit_vars=["rho_u"]),
+)
+
+compiled_requests = tuple(
+    (f"option Newton du package {knob}", engine.IMEX(**values)) for knob, values in newton_knobs
+) + (("diagnostics Newton du package", engine.IMEX(newton_diagnostics=True)),)
+
+for label, time in compiled_requests:
+    system = fresh_amr()
+    try:
+        system.add_equation("gas", compiled_amr_metadata(), spatial=engine.Spatial(), time=time)
+    except ValueError as error:
+        message = str(error)
+        chk(
+            "Newton" in message and "production" in message,
+            f"{label}: garde pre-loader claire",
+        )
+        chk(
+            "LocalLinear" in message and "uniform System" in message,
+            f"{label}: alternatives executables indiquees",
+        )
+    else:
+        chk(False, f"{label}: la garde pre-loader aurait du rejeter")
+
+chk(
+    not hasattr(default_system, "newton_report"),
+    "aucun faux rapport Newton n'est expose par le runtime spatial AMR",
+)
 
 print("FAIL test_amr_newton_full" if fails else "OK test_amr_newton_full")
 sys.exit(1 if fails else 0)

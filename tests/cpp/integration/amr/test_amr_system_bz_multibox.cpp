@@ -13,10 +13,9 @@
 //       Verifie aussi aux bords de boite / ghosts (la ou un decoupage casse l'indexation naive).
 //   (B) PRESERVATION par solve_fields sur toutes les boites (field_postprocess n'ecrit que comp 0..2 ;
 //       l'injection coarse->fine est re-ecrasee par le re-fill fin). B_z inchange partout.
-//   (C) LA SOURCE LIT B_z PAR BOITE : source S = B_z*u, flux nul. Apres un pas, une cellule grossiere
-//       NON couverte (dans chaque boite grossiere) croit de u0*(1+dt*B_z_local) et une cellule fine
-//       (dans chaque patch) de u0*(1+(dt/2)*B_z_fin)^2 (r=2 sous-pas), chacune avec le B_z DE SA BOITE.
-//   (D) SETTER set_bz : meme resultat multi-box que par le ctor.
+//   (C) SETTER set_bz : meme resultat multi-box que par le ctor.
+//   (D) CONSOMMATION SPATIALE : le residu de production lit B_z sur chaque boite locale des niveaux
+//       grossier et fin ; ProgramGraph reste l'unique autorite temporelle.
 //
 // La grille AMR est PARTAGEE par tous les blocs (contrat du coupleur : meme BoxArray par niveau) ;
 // un bloc lit B_z (n_aux=4, S=B_z*u), un bloc de base (n_aux=3) l'ignore. Grossier DE-REPLIQUE
@@ -40,6 +39,7 @@
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -96,6 +96,40 @@ Real read_bz(const MultiFab& A, int li, int i, int j) {
   return A.fab(li).const_array()(i, j, kAuxBaseComps);
 }
 
+template <class Model>
+Real max_bz_source_residual_error(const Model& model, const MultiFab& U, const MultiFab& aux,
+                                  Real dx, Real dy) {
+  std::vector<Box2D> xfaces;
+  std::vector<Box2D> yfaces;
+  xfaces.reserve(U.box_array().size());
+  yfaces.reserve(U.box_array().size());
+  for (const Box2D& box : U.box_array().boxes()) {
+    xfaces.push_back(xface_box(box));
+    yfaces.push_back(yface_box(box));
+  }
+
+  MultiFab Fx(BoxArray(std::move(xfaces)), U.dmap(), Model::n_vars, 0);
+  MultiFab Fy(BoxArray(std::move(yfaces)), U.dmap(), Model::n_vars, 0);
+  MultiFab residual(U.box_array(), U.dmap(), Model::n_vars, 0);
+  Fx.set_val(Real(0));
+  Fy.set_val(Real(0));
+  mf_eval_rhs(model, U, aux, Fx, Fy, dx, dy, residual);
+  device_fence();
+
+  Real error = Real(0);
+  for (int li = 0; li < U.local_size(); ++li) {
+    const Box2D valid = U.box(li);
+    const ConstArray4 state = U.fab(li).const_array();
+    const ConstArray4 auxiliary = aux.fab(li).const_array();
+    const ConstArray4 rhs = residual.fab(li).const_array();
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        error = std::max(error,
+                         std::fabs(rhs(i, j, 0) - auxiliary(i, j, kAuxBaseComps) * state(i, j, 0)));
+  }
+  return static_cast<Real>(all_reduce_max(static_cast<double>(error)));
+}
+
 }  // namespace
 
 TEST(test_amr_system_bz_multibox, Runs) {
@@ -147,11 +181,10 @@ TEST(test_amr_system_bz_multibox, Runs) {
 
     ChargeDensityRhs charge{{{Real(0), 0}, {Real(0), 0}}};  // charges nulles -> phi = 0
     using Sim = AmrSystemCoupler<decltype(system), ChargeDensityRhs>;
-    auto sim = std::make_unique<Sim>(system, geom, ba_coarse, BCRec{}, charge, std::move(bl),
-                                     Periodicity{true, true},
-                                     /*replicated_coarse=*/false,  // grossier multi-box reparti
-                                     PoissonCadence::OncePerStep, ActiveRegionProvider2D{},
-                                     use_setter ? ScalarFieldProvider2D{} : bz_user);
+    auto sim = std::make_unique<Sim>(
+        system, geom, ba_coarse, BCRec{}, charge, std::move(bl), Periodicity{true, true},
+        /*replicated_coarse=*/false,  // grossier multi-box reparti
+        ActiveRegionProvider2D{}, use_setter ? ScalarFieldProvider2D{} : bz_user);
     if (use_setter)
       sim->set_bz(bz_user);
     return sim;
@@ -205,59 +238,27 @@ TEST(test_amr_system_bz_multibox, Runs) {
     EXPECT_TRUE(bz_all_boxes_ok(sim->aux(1), gf))
         << "fine_Bz_preserved_after_solve_fields_all_boxes";
 
-    // --- (C) la source lit B_z PAR BOITE -----------------------------------------------------
-    const Real u0 = Real(2), dt = Real(0.05);
-    sim->step(dt);  // tout explicite, phi gele (OncePerStep)
-    device_fence();
-
-    // GROSSIER : le coin b.lo de CHAQUE boite grossiere LOCALE. Les patchs fins couvrent les cellules
-    // grossieres [2..5]^2 et [10..13]^2 ; le coin lo des 4 boites (0,0)/(8,0)/(0,8)/(8,8) est NON
-    // couvert -> source pure du grossier u <- u0*(1 + dt*B_z(cellule)), avec le B_z DE LA BOITE.
-    // Sous MPI les boites se repartissent sur les rangs : chaque rang verifie ses boites locales, le
-    // compte total est reduit globalement (un rang peut n'avoir aucune boite a un np donne).
-    const MultiFab& Ug = sim->levels(0)[0].U;
-    int checked_coarse = 0;
-    for (int li = 0; li < Ug.local_size(); ++li) {
-      const Box2D b = Ug.box(li);
-      const int ci = b.lo[0], cj = b.lo[1];  // coin lo, garanti non couvert par les patchs fins
-      const Real bz = bz_field(geom.x_cell(ci), geom.y_cell(cj));
-      const Real expect = u0 * (Real(1) + dt * bz);
-      const Real got = Ug.fab(li).const_array()(ci, cj, 0);
-      EXPECT_TRUE(std::fabs(got - expect) < Real(1e-12)) << "coarse_source_reads_boxlocal_Bz";
-      EXPECT_TRUE(std::fabs(got - u0) > Real(1e-3)) << "coarse_Bz_actually_read";
-      ++checked_coarse;
-    }
-    // au moins une boite grossiere verifiee GLOBALEMENT (tous rangs confondus).
-    EXPECT_GE(static_cast<int>(all_reduce_sum(static_cast<double>(checked_coarse))), 1)
-        << "at_least_one_coarse_box_checked_global";
-
-    // FIN : une cellule au coin bas-gauche de CHAQUE patch fin local. r=2 sous-pas Euler avant de
-    // dt/2 -> u0*(1+(dt/2)*B_z_fin)^2, avec le B_z DU PATCH (centres fins distincts entre patchs).
-    const MultiFab& Uf = sim->levels(0)[1].U;
-    const Real half = dt / 2;
-    int checked_fine = 0;
-    for (int li = 0; li < Uf.local_size(); ++li) {
-      const Box2D b = Uf.box(li);
-      const int fi = b.lo[0], fj = b.lo[1];  // coin bas-gauche du patch
-      const Real bzf = bz_field(gf.x_cell(fi), gf.y_cell(fj));
-      const Real expect = u0 * (Real(1) + half * bzf) * (Real(1) + half * bzf);
-      const Real got = Uf.fab(li).const_array()(fi, fj, 0);
-      EXPECT_TRUE(std::fabs(got - expect) < Real(1e-12)) << "fine_source_reads_boxlocal_Bz";
-      ++checked_fine;
-    }
-    // au moins un patch fin verifie GLOBALEMENT (2 patchs ; a np=4 certains rangs n'en ont aucun).
-    EXPECT_GE(static_cast<int>(all_reduce_sum(static_cast<double>(checked_fine))), 1)
-        << "at_least_one_fine_patch_checked_global";
+    // B_z must be consumed by the production spatial residual on every local box and both
+    // hierarchy levels; ProgramGraph owns the time integration of this residual.
+    const auto& grow_levels = sim->levels(0);
+    EXPECT_LT(max_bz_source_residual_error(BzGrowMB{}, grow_levels[0].U, sim->aux(0),
+                                           grow_levels[0].dx, grow_levels[0].dy),
+              Real(1e-12))
+        << "coarse_multibox_residual_consumes_Bz";
+    EXPECT_LT(max_bz_source_residual_error(BzGrowMB{}, grow_levels[1].U, sim->aux(1),
+                                           grow_levels[1].dx, grow_levels[1].dy),
+              Real(1e-12))
+        << "fine_multibox_residual_consumes_Bz";
   }
 
-  // --- (D) setter set_bz : meme resultat multi-box que par le ctor -------------------------
+  // --- (C) setter set_bz : meme resultat multi-box que par le ctor -------------------------
   {
     auto sim = build(bz_provider(), /*use_setter=*/true, /*u0g=*/Real(2));
     EXPECT_TRUE(bz_all_boxes_ok(sim->aux(0), geom)) << "set_bz_populates_coarse_all_boxes";
     EXPECT_TRUE(bz_all_boxes_ok(sim->aux(1), gf)) << "set_bz_populates_fine_all_boxes";
   }
 
-  // --- (E) garde : sans bz fourni, la composante B_z reste 0 sur toutes les boites ----------
+  // --- (D) garde : sans bz fourni, la composante B_z reste 0 sur toutes les boites ----------
   {
     auto sim = build({}, /*use_setter=*/false, /*u0g=*/Real(2));
     sim->solve_fields();

@@ -14,7 +14,7 @@
 /// Extracted from three inline `std::map`s that lived on `System::Impl`. It groups the metadata a
 /// runtime report reads back: the effective numerical/physical block options captured at
 /// configuration time and the OPT-IN Newton (IMEX) per-block reports. None of these are read by
-/// SystemStepper -> MockImpl-invisible.
+/// SystemProgramDriver -> MockImpl-invisible.
 ///
 /// OWNERSHIP CONTRACT
 ///  - block_options: FROZEN AT BIND. Populated only by structural block installation, refused once

@@ -38,9 +38,9 @@ What a version bump is allowed to break is exactly this surface:
   that version participates in the catalog digest, so a binary built against another common layout
   is rejected before any table is prepared or invoked.
 - Consumable generic C++ concepts and component interfaces documented for external implementations.
-  Concrete runtime engines (`System`, `AmrSystem`, AMR couplers), their builders, and their stepping
-  or block-registration methods are internal seams behind the Python lifecycle and carry no SemVer
-  guarantee.
+  Concrete native facades (`System`, `AmrSystem`, AMR spatial couplers), their builders, and their
+  installation or dispatch methods are internal seams behind the Python lifecycle and carry no
+  SemVer guarantee. They do not constitute alternate temporal authoring APIs.
 - Consumable CMake: the `pops::pops` target, `find_package(pops)`, and the documented options
   (`POPS_USE_MPI`, `POPS_USE_HDF5`, `POPS_USE_KOKKOS`, ...) and presets.
 

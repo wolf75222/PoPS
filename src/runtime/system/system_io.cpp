@@ -5,11 +5,23 @@
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
+#include <cmath>
+#include <exception>
+#include <optional>
+
 namespace pops {
 
 void System::set_clock(double t, int macro_step) {
-  if (macro_step < 0)
-    throw std::runtime_error("System::set_clock : macro_step >= 0 (restart)");
+  try {
+    if (macro_step < 0)
+      throw std::runtime_error("System::set_clock : macro_step >= 0 (restart)");
+    if (!std::isfinite(t))
+      throw std::runtime_error("System::set_clock : time must be finite");
+    p_->program_.consume_cadence_clock_restore(t, macro_step, "System");
+  } catch (...) {
+    p_->program_.cancel_cadence_clock_restore();
+    throw;
+  }
   p_->t = t;
   p_->macro_step_ = macro_step;
 }
@@ -139,8 +151,7 @@ void System::set_history_initialized(const std::string& name, bool initialized) 
     throw std::runtime_error("System::set_history_initialized: unknown history '" + name +
                              "' (restore its slots first)");
   it->second = initialized;
-  p_->program_.hist_.fill_count[name] =
-      initialized ? p_->program_.hist_.depth.at(name) : 0;
+  p_->program_.hist_.fill_count[name] = initialized ? p_->program_.hist_.depth.at(name) : 0;
   p_->program_.hist_.store_pending[name] = false;
 }
 void System::restore_history_fill_count(const std::string& name, int fill_count) {
@@ -171,8 +182,7 @@ double System::history_slot_dt(const std::string& name, int slot) const {
                              " out of range for history '" + name + "' (depth " +
                              std::to_string(it->second.size()) + ")");
   auto dt_it = p_->program_.hist_.slot_dt.find(name);
-  if (dt_it == p_->program_.hist_.slot_dt.end() ||
-      slot >= static_cast<int>(dt_it->second.size()))
+  if (dt_it == p_->program_.hist_.slot_dt.end() || slot >= static_cast<int>(dt_it->second.size()))
     return 0.0;  // a never-stepped ring: no dt recorded yet (the dense/zero-fill case)
   return static_cast<double>(dt_it->second[static_cast<std::size_t>(slot)]);
 }
@@ -185,10 +195,16 @@ void System::restore_history_slot_dt(const std::string& name, int slot, double d
   if (slot < 0)
     throw std::runtime_error("System::restore_history_slot_dt: slot=" + std::to_string(slot) +
                              " must be >= 0 for history '" + name + "'");
+  const Real native_dt = static_cast<Real>(dt);
+  if (!std::isfinite(dt) || dt < 0.0 || !std::isfinite(static_cast<double>(native_dt)))
+    throw std::runtime_error(
+        "System::restore_history_slot_dt: dt must be finite and >= 0 for "
+        "history '" +
+        name + "'");
   std::vector<Real>& dts = p_->program_.hist_.slot_dt[name];
   if (slot >= static_cast<int>(dts.size()))
     dts.resize(static_cast<std::size_t>(slot) + 1, Real(0));
-  dts[static_cast<std::size_t>(slot)] = static_cast<Real>(dt);
+  dts[static_cast<std::size_t>(slot)] = native_dt;
 }
 
 int System::rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots) {
@@ -204,7 +220,8 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
     throw std::runtime_error("System::rebuild_history_slots: unknown history '" + name + "'");
   if (!p_->program_.step_)
     throw std::runtime_error(
-        "System::rebuild_history_slots: no compiled Program is installed; the ring cannot be replayed "
+        "System::rebuild_history_slots: no compiled Program is installed; the ring cannot be "
+        "replayed "
         "(install_program before restart, or checkpoint the ring with Dense())");
   std::vector<MultiFab>& ring = it->second;
   const int depth = static_cast<int>(ring.size());
@@ -212,10 +229,10 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
   std::sort(anchors.begin(), anchors.end());
   anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
   if (anchors.empty() || anchors.back() != depth - 1)
-    throw std::runtime_error(
-        "System::rebuild_history_slots: the oldest slot " + std::to_string(depth - 1) +
-        " of history '" + name + "' is not stored; the ring is unreconstructable (nothing older to "
-        "replay it from). The persistence policy must store the oldest slot.");
+    throw std::runtime_error("System::rebuild_history_slots: the oldest slot " +
+                             std::to_string(depth - 1) + " of history '" + name +
+                             "' is not stored; the ring is unreconstructable (nothing older to "
+                             "replay it from). The persistence policy must store the oldest slot.");
   if (anchors.front() != 0)
     throw std::runtime_error(
         "System::rebuild_history_slots: the newest slot 0 of history '" + name +
@@ -225,6 +242,16 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
   const std::size_t stored_count = anchors.size();
   if (static_cast<int>(stored_count) == depth)
     return 0;
+  if (p_->program_.substeps_ != 1 || p_->program_.stride_ != 1)
+    throw std::runtime_error(
+        "System::rebuild_history_slots: selective replay requires Program cadence "
+        "(substeps=1, stride=1); checkpoint this ring with Dense() for a subcycled or held "
+        "Program");
+  if (!p_->program_.authorizes_history_replay(name, depth))
+    throw std::runtime_error(
+        "System::rebuild_history_slots: selective replay for history '" + name +
+        "' lacks the installed Program's validated native authority; compile this ring with a "
+        "selective checkpoint policy or use Dense()");
   const auto owner_it = p_->program_.hist_.owner.find(name);
   if (owner_it == p_->program_.hist_.owner.end() || owner_it->second < 0 ||
       owner_it->second >= static_cast<int>(p_->sp.size()))
@@ -233,16 +260,19 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
         "keep_history ring (legacy/unowned history '" +
         name + "' must use Dense())");
   const std::size_t owner = static_cast<std::size_t>(owner_it->second);
-  // SAVE bracket: deep-copy every block state, the scheduler cache, and the WHOLE history subsystem
-  // (rings + slot_dt + initialized) so the replay's own store_history / rotate_histories side effects
-  // are fully undone -- the live state U and cache_ are identity after replay, and only the missing
-  // ring slots we place by index below survive.
+  // SAVE bracket: deep-copy every block state, the scheduler cache, the WHOLE history subsystem
+  // (rings + slot_dt + initialized), and the accepted Program last-dt ledger. The replay overwrites
+  // last_dt_ before every historical call so its own store_history records the proper outgoing
+  // interval; that temporary value must not become the accepted runtime's next-store provenance.
+  // After restoration the live state U, cache_ and last_dt_ are identities, and only the missing ring
+  // slots placed by index below survive.
   std::vector<MultiFab> saved_states;
   saved_states.reserve(p_->sp.size());
   for (auto& block : p_->sp)
     saved_states.push_back(block.U);  // deep copy
   const pops::runtime::program::CacheManager saved_cache = p_->program_.cache_;
   const pops::runtime::program::HistoryManager saved_hist = p_->program_.hist_;
+  const Real saved_last_dt = p_->program_.last_dt_;
 
   // The per-slot outgoing dt, captured from the SAVED snapshot into a stable local vector.
   // CRITICAL: the replay's own store_history / rotate_histories MUTATE p_->program_.hist_.slot_dt, so
@@ -255,6 +285,17 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
     for (int k = 0; k < depth && k < static_cast<int>(sd.size()); ++k)
       dts[static_cast<std::size_t>(k)] = sd[static_cast<std::size_t>(k)];
   }
+  for (std::size_t anchor = 0; anchor + 1 < anchors.size(); ++anchor) {
+    const int newer = anchors[anchor];
+    const int older = anchors[anchor + 1];
+    for (int j = older - 1; j > newer; --j) {
+      const Real replay_dt = dts[static_cast<std::size_t>(j + 1)];
+      if (!std::isfinite(static_cast<double>(replay_dt)) || replay_dt <= Real(0))
+        throw std::runtime_error(
+            "System::rebuild_history_slots: every replayed outgoing dt must be finite and > 0 "
+            "before Program execution");
+    }
+  }
 
   // Reconstruct the owner state trajectory: for each gap between adjacent anchors (older anchor at a
   // LARGER index, newer at a SMALLER one; time increases as the index decreases), restore the same
@@ -266,11 +307,12 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
       p_->sp[b].U = saved_states[b];
     p_->program_.cache_ = saved_cache;
     p_->program_.hist_ = saved_hist;
+    p_->program_.last_dt_ = saved_last_dt;
   };
   try {
     for (std::size_t a = 0; a + 1 < anchors.size(); ++a) {
       const int older = anchors[a + 1];  // larger index = further back in time
-      const int newer = anchors[a];       // smaller index = closer to now
+      const int newer = anchors[a];      // smaller index = closer to now
       restore_saved();
       // Seed the qualified owner with the older stored slot's state.
       pops::lincomb(p_->sp[owner].U, Real(1),
@@ -290,7 +332,7 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
     throw;
   }
 
-  // RESTORE bracket: undo every replay side effect (block states, cache, whole history subsystem).
+  // RESTORE bracket: undo every replay side effect (block states, cache, history and last_dt_).
   restore_saved();
 
   // Place ONLY the recomputed slots (the anchors keep their restored values). Re-fetch the ring after
@@ -317,7 +359,8 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
 // mismatch, then call pops_install_program(this), which wraps the System in a ProgramContext and
 // installs the macro-step closure. The .so stays loaded for the process lifetime.
 POPS_EXPORT void System::install_program(const std::string& so_path) {
-  require_assembling(p_->lifecycle_, "install_program");  // frozen once pops.bind completes (ADC-592)
+  require_assembling(p_->lifecycle_,
+                     "install_program");  // frozen once pops.bind completes (ADC-592)
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
   pops::dynlib::handle h = pops::dynlib::open(so_path);
@@ -363,8 +406,8 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   }
   // Route registry guard: the manifest is mandatory and must match before any installer is called.
   {
-    auto manifest_fn = reinterpret_cast<const char* (*)()>(
-        pops::dynlib::sym(h, "pops_program_route_manifest"));
+    auto manifest_fn =
+        reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_route_manifest"));
     if (!manifest_fn) {
       pops::dynlib::close(h);
       throw std::runtime_error(
@@ -382,9 +425,10 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     }
   }
   std::vector<pops::runtime::program::ProgramOperatorAuthority> operator_authorities;
+  std::vector<pops::runtime::program::ProgramHistoryReplayAuthority> history_replay_authorities;
   try {
-    operator_authorities =
-        pops::runtime::program::read_program_operator_authorities(h);
+    operator_authorities = pops::runtime::program::read_program_operator_authorities(h);
+    history_replay_authorities = pops::runtime::program::read_program_history_replay_authorities(h);
   } catch (...) {
     pops::dynlib::close(h);
     throw;
@@ -434,14 +478,33 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       // verbatim spec message names the field operator and the required solver.
       const std::string need_solver = pops::runtime::program::required_solver(op.requirements);
       if (!need_solver.empty() && need_solver != configured_solver) {
-        throw std::runtime_error("field operator '" + op.name + "' requires solver '" + need_solver +
-                                 "'");
+        throw std::runtime_error("field operator '" + op.name + "' requires solver '" +
+                                 need_solver + "'");
       }
     }
   } catch (...) {
     pops::dynlib::close(h);
     throw;
   }
+  // Resolve every optional scalar ABI before the first facade mutation. A module that declares a
+  // dt bound but omits its target entry is malformed; silently falling back to native CFL would
+  // execute different numerics from the authored Program.
+  using has_dt_t = bool (*)();
+  using dt_bound_t = pops::Real (*)(pops::runtime::program::ProgramContext*, pops::Real);
+  auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
+  auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound"));
+  const bool program_has_dt_bound = has_dt && has_dt();
+  if (program_has_dt_bound && !dt_bound) {
+    pops::dynlib::close(h);
+    throw std::runtime_error(
+        "System::install_program: Program declares a dt bound but pops_program_dt_bound is "
+        "missing; regenerate the System artifact");
+  }
+  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
+  const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
+  auto install_boundaries =
+      reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_field_boundaries"));
+
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled Program numbers its blocks in
   // P.state declaration order (the .so's pops_program_block_name table); the System numbers its blocks
   // in add order (block_names). They need NOT agree -- bind by NAME, not add-order. Read the .so's
@@ -452,6 +515,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   // must be regenerated; the historical positional convention is no longer a binding contract.
   // Built BEFORE install() so the step closure (which captures a ProgramContext) sees the map on its
   // first run.
+  std::vector<int> program_block_map;
   {
     using count_t = int (*)();
     using name_t = const char* (*)(int);
@@ -468,7 +532,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     }
     const std::vector<std::string> sys_names = block_names();
     const int n = block_count();
-    std::vector<int> prog_to_sys(static_cast<std::size_t>(n), -1);
+    program_block_map.assign(static_cast<std::size_t>(n), -1);
     for (int p = 0; p < n; ++p) {
       const std::string want = block_name(p);
       int found = -1;
@@ -482,9 +546,8 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
         throw std::runtime_error("Program requires block instance '" + want +
                                  "', but simulation did not instantiate it");
       }
-      prog_to_sys[static_cast<std::size_t>(p)] = found;
+      program_block_map[static_cast<std::size_t>(p)] = found;
     }
-    set_program_block_map(prog_to_sys);
   }
   // RUNTIME PARAMETERS (ADC-510, Spec 5 C5). A Program whose physics reads dsl.Param(..., kind="runtime")
   // exports a pops_program_param_* table: per flat parameter, its PROGRAM block index, its stable index
@@ -495,6 +558,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   // count symbol absent or 0) seeds nothing -> the param store stays empty (program_params returns
   // count 0, the lowered kernels read no param). Built BEFORE install() so the step closure (which
   // captures a ProgramContext) reads the seeded value on its first run.
+  std::map<int, std::vector<double>> program_param_defaults;
   {
     using count_t = int (*)();
     using ival_t = int (*)(int);
@@ -505,56 +569,64 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_program_param_default"));
     if (pcount && pblock && pindex && pdef) {
       const int np = pcount();
-      std::map<int, std::vector<double>> defaults_by_block;  // program block -> defaults in index order
       for (int i = 0; i < np; ++i) {
         const int blk = pblock(i);
         const int idx = pindex(i);
-        std::vector<double>& d = defaults_by_block[blk];
+        std::vector<double>& d = program_param_defaults[blk];
         if (static_cast<int>(d.size()) <= idx)
           d.resize(static_cast<std::size_t>(idx) + 1, 0.0);
         d[static_cast<std::size_t>(idx)] = pdef(i);
       }
-      for (const auto& kv : defaults_by_block)
-        seed_program_params(kv.first, kv.second);
     }
   }
   // Dynamic field-boundary launchers are installed from the same problem.so that owns their direct
   // function pointers.  Static-boundary artifacts export no entry and keep the historical fast path.
   // Install only after ABI/requirements/block/parameter preflight has completed.
-  const auto previous_operator_authorities = p_->program_.operator_authorities_;
-  p_->program_.operator_authorities_ = operator_authorities;
+  auto previous_install = p_->program_.capture_artifact_step_install();
+  using FieldInstallSnapshot =
+      typename field_solver::SystemFieldSolver<Impl>::ProgramInstallSnapshot;
+  std::optional<FieldInstallSnapshot> previous_fields;
   try {
-    if (auto install_boundaries = reinterpret_cast<void (*)(void*)>(
-            pops::dynlib::sym(h, "pops_install_field_boundaries")))
-      install_boundaries(static_cast<void*>(this));
+    previous_fields.emplace(p_->fields_.begin_program_install());
+    p_->program_.reset_artifact_candidate_state();
+    // The generated prelude may resolve blocks and parameters before ctx.install() publishes the
+    // closure. Install the candidate image first; install_unverified_step then revokes it, and the
+    // authenticated image is republished only after the exact one-step witness succeeds.
+    p_->program_.block_map_ = program_block_map;
+    p_->program_.block_params_.clear();
+    for (const auto& [block, defaults] : program_param_defaults)
+      seed_program_params(block, defaults);
+    p_->program_.operator_authorities_ = operator_authorities;
     install(static_cast<void*>(this));
+    p_->program_.require_exact_artifact_step_install(previous_install, "System::install_program:");
+
+    p_->program_.block_map_ = std::move(program_block_map);
+    for (const auto& [block, defaults] : program_param_defaults)
+      seed_program_params(block, defaults);
+    p_->program_.operator_authorities_ = std::move(operator_authorities);
+    p_->program_.history_replay_authorities_ = std::move(history_replay_authorities);
+    p_->program_.installed_hash_ = installed_hash;
+    if (program_has_dt_bound) {
+      System* self = this;
+      p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real {
+        pops::runtime::program::ProgramContext ctx(self);
+        return dt_bound(&ctx, cfl);
+      };
+    }
+    p_->program_.artifact_backed_ = true;
+
+    // Dynamic field kernels are installed last. Their structural snapshot is restored before the
+    // DSO is closed if any generated setter fails.
+    if (install_boundaries)
+      install_boundaries(static_cast<void*>(this));
+    p_->fields_.commit_program_install();
   } catch (...) {
-    p_->program_.operator_authorities_ = previous_operator_authorities;
-    throw;
-  }
-  // Record the program's IR hash (ADC-406b): the optional pops_program_hash export (a stable IR key,
-  // cf. _PROGRAM_CPP_TEMPLATE) is serialized in the checkpoint so a restart against a DIFFERENT
-  // compiled Program is rejected fail-loud. Missing symbol (older module) -> empty hash, no guard.
-  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
-  p_->program_.installed_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
-  // OPTIONAL dt bound (epic ADC-399 / ADC-417, spec s18). A Program may export a SECOND ABI pair --
-  // pops_program_has_dt_bound() and pops_program_dt_bound(ProgramContext*, Real cfl) -- alongside
-  // pops_install_program. When present AND has_dt_bound() is true, store a closure that builds a
-  // ProgramContext over THIS System and runs the .so's lowered dt_bound expression for a given cfl;
-  // step_cfl tightens dt to min(native CFL, program dt bound). A Program WITHOUT a dt bound (older
-  // module / has_dt_bound() == false) clears the closure -> the native CFL is used UNCHANGED.
-  using has_dt_t = bool (*)();
-  using dt_bound_t = pops::Real (*)(pops::runtime::program::ProgramContext*, pops::Real);
-  auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
-  auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound"));
-  if (has_dt && dt_bound && has_dt()) {
-    System* self = this;
-    p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real {
-      pops::runtime::program::ProgramContext ctx(self);
-      return dt_bound(&ctx, cfl);
-    };
-  } else {
-    p_->program_.dt_bound_ = nullptr;  // no program dt bound -> native CFL unchanged
+    const std::exception_ptr failure = std::current_exception();
+    if (previous_fields)
+      p_->fields_.restore_program_install_snapshot(std::move(*previous_fields));
+    p_->program_.rollback_artifact_step_install(std::move(previous_install));
+    pops::dynlib::close(h);
+    std::rethrow_exception(failure);
   }
   // .so left loaded for the duration of the process (the installed closure points to code in it).
 }
@@ -562,7 +634,9 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
 // the facade (sim.checkpoint / sim.restart) gathers and restores it DIRECTLY -- reusing the SAME global
 // gather (gather_global, via copy_state) / scatter (write_state) machinery as the block state and the
 // history rings, so the round-trip is MPI-safe and bit-identical under np>1. Mirrors the history seam.
-std::vector<int> System::program_cache_nodes() const { return p_->program_.cache_.node_ids(); }
+std::vector<int> System::program_cache_nodes() const {
+  return p_->program_.cache_.node_ids();
+}
 std::string System::program_cache_name(int node_id) const {
   return p_->program_.cache_.name_of(node_id);
 }
@@ -572,8 +646,12 @@ int System::program_cache_last_update_step(int node_id) const {
 double System::program_cache_accumulated_dt(int node_id) const {
   return static_cast<double>(p_->program_.cache_.accumulated_dt_of(node_id));
 }
-int System::program_cache_ncomp(int node_id) const { return p_->program_.cache_.ncomp_of(node_id); }
-int System::program_cache_ngrow(int node_id) const { return p_->program_.cache_.ngrow_of(node_id); }
+int System::program_cache_ncomp(int node_id) const {
+  return p_->program_.cache_.ncomp_of(node_id);
+}
+int System::program_cache_ngrow(int node_id) const {
+  return p_->program_.cache_.ngrow_of(node_id);
+}
 std::vector<double> System::program_cache_global(int node_id) const {
   // Reuse the Impl multi-box gather (copy_state -> gather_global): the cache value is co-distributed
   // with block 0's storage (ba/dm), so this is the SAME component-major gather state_global / history_
@@ -586,7 +664,8 @@ void System::restore_program_cache(int node_id, int ncomp, int ngrow, int last_u
                                    const std::vector<double>& values) {
   if (p_->sp.empty())
     throw std::runtime_error(
-        "System::restore_program_cache: no block exists yet; the cache value is co-distributed with "
+        "System::restore_program_cache: no block exists yet; the cache value is co-distributed "
+        "with "
         "block 0's storage (replay the composition before restart)");
   // Allocate a value co-distributed with block 0 (ba/dm, @p ncomp comps, @p ngrow ghosts -- the SAME
   // ghost width the slot was cached with: 1 for the aux, the block-state width for a held scratch) and
@@ -597,7 +676,7 @@ void System::restore_program_cache(int node_id, int ncomp, int ngrow, int last_u
   value.set_val(Real(0));
   p_->write_state(value, ncomp, values);
   p_->program_.cache_.restore_slot(node_id, std::move(value), last_update_step,
-                                  static_cast<Real>(accumulated_dt), name);
+                                   static_cast<Real>(accumulated_dt), name);
 }
 
 }  // namespace pops

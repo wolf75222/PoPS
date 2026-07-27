@@ -1,15 +1,13 @@
 #pragma once
 
-#include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>  // mf_advance_faces, mf_apply_source*, mf_average_down, fill_cf_ghost_cell, mf_fill_fine_ghosts_t
-#include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, FluxRegister, CoverageMask, SubcyclingSchedule, CoarseFineInterface, fill_periodic_local, mf_fill_fine_ghosts_multi, mf_average_down_multi
-#include <pops/numerics/time/amr/levels/amr_subcycling.hpp>  // AmrLevelMP, RegMP, mf_find_box, coarsen_grown, mf_fill_fine_ghosts_mb, mf_average_down_mb, amr_step_2level_multipatch, detail::subcycle_level_mp, detail::amr_step_multilevel_multipatch
-#include <pops/numerics/time/amr/advance/amr_advance.hpp>  // OwnershipPolicy, LevelHierarchy, advance_amr
+#include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>  // mf_eval_rhs, average-down and coarse/fine interpolation
+#include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, FluxRegister, CoverageMask, CoarseFineInterface, fill_periodic_local, mf_fill_fine_ghosts_multi, mf_average_down_multi
+#include <pops/numerics/time/amr/levels/amr_subcycling.hpp>  // AmrLevelMP, prepared fill/reflux/average-down storage
 
 /// @file
 /// @brief Umbrella for the AMR MultiFab stack: includes the numerics/time sub-headers in
-///        dependency order (flux_helpers -> patch_range -> subcycling -> advance).
+///        dependency order (flux_helpers -> patch_range -> hierarchy/reflux storage).
 ///
 /// Layer: `include/pops/numerics/time`.
 /// Role: single entry point for the AMR MultiFab/multi-patch stack. Every existing includer of
-///        this header keeps compiling without modification after the split into sub-headers;
-///        the public production API stays advance_amr (see amr_advance.hpp).
+///        this header exposes spatial AMR building blocks only. ProgramGraph owns time integration.

@@ -388,8 +388,9 @@ def _build_arguments(
             "state_identity": handle_data(state_ref),
         }
     if not instances:
-        # AMR without a whole-system Program advances every native InstallPlan block. The plan, not
-        # the first returned CompiledModel, is therefore the complete instance authority.
+        # A spatial-only AMR InstallPlan still owns every block even though it has no temporal
+        # authority and cannot advance. The plan, not the first returned CompiledModel, is therefore
+        # the complete instance authority for memory inspection.
         for row in model_rows:
             name = row.block_name or "block"
             instances[name] = {

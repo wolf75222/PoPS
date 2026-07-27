@@ -93,10 +93,9 @@ AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = fal
   params.poisson.bc = BCRec{};
   const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 1);
   std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(
-      detail::dispatch_amr_block(exb_model(), "minmod", "rusanov", layout, "transport",
-                                 std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0),
-                                 true, 1.4, 1, false, false, 1));
+  blocks.push_back(detail::dispatch_amr_block(
+      exb_model(), "minmod", "rusanov", layout, "transport",
+      std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1));
   blocks.back().state_identity = "test://amr-transfer/bootstrap/transport/state/U";
   if (install_prepared_boundary) {
     auto& block = blocks.front();

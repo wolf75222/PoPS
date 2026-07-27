@@ -13,6 +13,7 @@
 //       seed central -> les deux layouts DIFFERENT, preuve que la composante lue a change.
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/physics/fluids/euler.hpp>   // Euler::conservative_vars (rho, rho_u, rho_v, E)
 #include <pops/core/state/variables.hpp>   // VariableSet, VariableRole, VariableKind
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox (signature index-espace des patchs fins)
@@ -103,6 +104,7 @@ static std::vector<PatchBox> run_case(int N, double thr, const std::string& vari
   sim.set_refinement(thr, variable, role);
   sim.set_conservative_state("gas0", s0);
   sim.set_conservative_state("gas1", make_state(N, 1.0, 2.0, 0, 1.0, 0, 0));  // uniforme
+  test::install_forward_euler_program(sim);
   for (int s = 0; s < 4; ++s)
     sim.step(1e-3);
   return sim.patch_boxes();

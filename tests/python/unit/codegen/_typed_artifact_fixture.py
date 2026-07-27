@@ -6,6 +6,7 @@ from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimul
 from pops.identity import make_identity
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
+from pops.time import Program
 from tests.python.support.resolved_amr_plan import resolved_amr_plan
 from tests.python.support.layout_plan import resolved_layout_contract
 
@@ -65,7 +66,7 @@ class CompiledComponent:
 
 
 def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=None,
-                     amr_program=False, parameters=(), tag_parameter=None):
+                     parameters=(), tag_parameter=None):
     if target == "amr_system":
         if bind_schema is not None:
             raise TypeError(
@@ -83,9 +84,8 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
             for name, component, resolved in zip(
                 block_names, components, plan.blocks, strict=True)
         )
-        program = CompiledComponent("program", target=target) if amr_program else None
-        if program is not None:
-            program.program_block_routes = tuple(enumerate(block_names))
+        program = CompiledComponent("program", target=target)
+        program.program_block_routes = tuple(enumerate(block_names))
         return CompiledSimulationArtifact(plan=plan, program=program, blocks=blocks)
 
     source_models = tuple(CanonicalValue("source-" + name) for name in block_names)
@@ -106,7 +106,7 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         layout_targets={
             row.handle.qualified_id: target for row in layout_plan.layouts
         },
-        time=None if target == "amr_system" and not amr_program else CanonicalValue("rk2"),
+        time=Program("rk2"),
         blocks=tuple(
             ResolvedBlock(
                 name, model, block_spatial, "production", ("U",),
@@ -127,8 +127,6 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         CompiledBlockArtifact(name, component, resolved.spatial, resolved.state_spaces)
         for name, component, resolved in zip(block_names, components, plan.blocks, strict=True)
     )
-    program = None if target == "amr_system" and not amr_program \
-        else CompiledComponent("program", target=target)
-    if program is not None:
-        program.program_block_routes = tuple(enumerate(block_names))
+    program = CompiledComponent("program", target=target)
+    program.program_block_routes = tuple(enumerate(block_names))
     return CompiledSimulationArtifact(plan=plan, program=program, blocks=blocks)

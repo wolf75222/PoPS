@@ -247,6 +247,12 @@ class ResolvedSimulationPlan:
             raise TypeError("ResolvedSimulationPlan backend must be a resolved non-empty string")
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("ResolvedSimulationPlan.layout_plan must be an exact LayoutPlan")
+        from pops.time import Program
+        if type(self.time) is not Program:
+            raise TypeError(
+                "ResolvedSimulationPlan.time must be the exact whole-system pops.Program "
+                "accepted by pops.resolve"
+            )
         targets = _string_mapping(
             self.layout_targets, where="ResolvedSimulationPlan.layout_targets")
         expected_targets = tuple(row.handle.qualified_id for row in self.layout_plan.layouts)
@@ -373,7 +379,7 @@ class ResolvedSimulationPlan:
             "layout": _evidence(self.layout, where="plan.layout"),
             "layout_plan": _evidence(self.layout_plan, where="plan.layout_plan"),
             "layout_targets": dict(self.layout_targets),
-            "time": _evidence(self.time, where="plan.time") if self.time is not None else None,
+            "time": _evidence(self.time, where="plan.time"),
             "blocks": [{
                 "name": block.name,
                 "backend": block.backend,

@@ -4,9 +4,8 @@ inline le gabarit en-tete pops::add_compiled_model(AmrSystem&, ...), puis branch
 via AmrSystem.add_native_block (symbole pops_install_native_amr, distinct du chemin System).
 
 A la difference du chemin System (grille plate mono-niveau), le bloc est l'UNIQUE modele porte sur la
-hierarchie AMR (AmrCouplerMP<Model> + reflux conservatif + regrid), MEME chemin que AmrSystem.add_block
-(dispatch d'une ModelSpec, qui passe par detail::dispatch_amr_compiled = le pendant natif de
-add_compiled_model). On verifie :
+hierarchie AMR (AmrRuntimeBlock + reflux conservatif + regrid), MEME chemin que AmrSystem.add_block
+(dispatch d'une ModelSpec via detail::dispatch_amr_block). On verifie :
 
   1) PARITE STRICTE (transport pur, elliptic_rhs nul => zero bruit FP elliptique) : la densite
      grossiere apres plusieurs pas est BIT-IDENTIQUE (dmax == 0) entre le bloc "production" (loader
@@ -43,6 +42,7 @@ from pops.codegen.loader import CompiledModel
 from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.initial_states import bubble_amr as _bubble
 from tests.python.support.requirements import (
     default_cxx,
@@ -117,6 +117,7 @@ def _amr(n, L, branch, refine=1.2):
     rho = np.asarray(_bubble(n), dtype=float)
     rho += 1.0 - float(rho.mean())
     s.set_density("gas", rho)
+    install_forward_euler_program(s)
     return s
 
 
@@ -323,6 +324,7 @@ def main():
                        spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         E.set_refinement(1.2)
         E.set_density("gas", _bubble(n))
+        install_forward_euler_program(E)
         for _ in range(4):
             E.step(dt)
         assert np.isfinite(np.array(E.density())).all() and E.mass() > 1e-6

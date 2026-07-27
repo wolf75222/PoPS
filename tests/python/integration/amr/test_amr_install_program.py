@@ -55,6 +55,7 @@ def test_resolved_amr_program_emits_only_the_amr_install_entry() -> None:
     assert "ctx.program_resource_topology_generation()" in amr_source
     assert "_refresh_level_programs();" in amr_source
     assert "ctx.advance_hierarchy(dt, _advance_level)" in amr_source
+    assert "}, ctx_owner, _refresh_level_programs);" in amr_source
     level_advance = amr_source.split("auto _advance_level", 1)[1].split("};", 1)[0]
     assert level_advance.index("_refresh_level_programs();") < level_advance.index(
         "_level_programs->at"

@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_system_program.hpp"
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
 
@@ -100,6 +101,7 @@ void build_exb(System& s, double R_wall) {
   // donne un phi non trivial -> vitesse ExB. Le mur elliptique et le disque de transport partagent le
   // meme centre (L/2, L/2) et la meme convention de level set.
   s.set_poisson("charge_density", "geometric_mg", "dirichlet", "circle", R_wall, 1.0);
+  test::install_forward_euler_program(s);
 }
 
 // max|diff| composante a composante entre deux champs de meme taille.
@@ -328,6 +330,7 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
   topology.add_block("n", periodic_exb_model(), "none");
   topology.set_density("n", rho0);
   topology.set_analytic_level_set({"x", "constant", "sub"}, {0.0, 0.25, 0.0}, "cutcell");
+  test::install_forward_euler_program(topology);
 
   System explicit_wrap(SystemConfig{n, 1.0, Periodicity{true, true}});
   explicit_wrap.add_block("n", periodic_exb_model(), "none");
@@ -336,6 +339,7 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
       {"x", "constant", "lt", "x", "constant", "add", "constant", "sub", "x", "constant", "sub",
        "where"},
       {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.0, 0.0, 0.25, 0.0, 0.0}, "cutcell");
+  test::install_forward_euler_program(explicit_wrap);
 
   ASSERT_EQ(topology.disc_mask(), explicit_wrap.disc_mask());
   topology.step(2e-4);

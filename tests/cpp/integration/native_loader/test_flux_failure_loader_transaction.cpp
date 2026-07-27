@@ -2,6 +2,7 @@
 
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
+#include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/system.hpp>
 
@@ -16,6 +17,35 @@
 #include <vector>
 
 namespace {
+
+void install_ssprk2_subcycled_program(pops::System& system) {
+  system.set_program_block_map({0});
+
+  pops::runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("test.clock.macro");
+  context.install([context](double dt) {
+    context.begin_step(dt);
+    context.set_stage_time(0, 1);
+
+    pops::MultiFab& state = context.state(0);
+    pops::MultiFab& initial = context.scratch_state(1000, 0, state);
+    pops::MultiFab& residual = context.rhs_scratch(1001, 0, state);
+    pops::MultiFab& stage = context.scratch_state(1002, 0, state);
+    context.lincomb(initial, pops::Real(1), state, pops::Real(0), state);
+
+    context.rhs_into(0, state, residual, 1003);
+    context.lincomb(stage, pops::Real(1), state, pops::Real(dt), residual);
+
+    context.set_stage_time(1, 1);
+    context.rhs_into(0, stage, residual, 1004);
+    context.axpy(stage, pops::Real(dt), residual);
+    context.lincomb(state, pops::Real(0.5), initial, pops::Real(0.5), stage);
+  });
+  system.set_program_block_map({0});
+
+  // Preserve the package contract under test explicitly: two SSPRK2 substeps in one facade step.
+  system.set_program_cadence(/*substeps=*/2, /*stride=*/1);
+}
 
 std::string package_source() {
   return R"CPP(
@@ -131,6 +161,7 @@ int exercise_attempt(const std::string& library, double mode,
                           /*substeps=*/2, true, 1, {mode});
   const std::vector<double> accepted(static_cast<std::size_t>(n) * n, 1.0);
   system.set_state("scalar", accepted);
+  install_ssprk2_subcycled_program(system);
 
   bool caught = false;
   try {

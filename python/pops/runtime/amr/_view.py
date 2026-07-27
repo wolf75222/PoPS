@@ -169,7 +169,7 @@ class AmrRuntimeView:
     def explain_checkpoint(self) -> Any:
         """Return a :class:`CheckpointReport` of the live system's restartability (sec.8.11)."""
         constraints = ["same bound composition and compiled Program",
-                       "authenticated v3 accepted-state payload",
+                       "authenticated v5 accepted-state payload",
                        "same native rank count for exact rank-local ownership and Program state"]
         violations = []
         try:
@@ -179,7 +179,7 @@ class AmrRuntimeView:
         if n_blocks == 0:
             violations.append("no block is installed, so there is no accepted hierarchy to persist")
         notes = [
-            "v3 persists every block/level, owner-rank map, aux and qualified field warm start.",
+            "v5 persists every block/level, owner-rank map, aux and qualified field warm start.",
             "active regridding is supported: topology epoch, regrid count, exact level clocks, "
             "history identities and lagged conservative flux publications are restored.",
             "the public restart guarantee is bit-identical accepted-state continuation; there is "

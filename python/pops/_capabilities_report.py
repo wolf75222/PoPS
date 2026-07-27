@@ -9,6 +9,7 @@ Split out of ``_capabilities`` for the 500-line cap; ``pops._capabilities``
 re-exports every name here. ``_pops`` is imported LAZILY so this module stays
 importable without a compiled extension.
 """
+
 from __future__ import annotations
 
 import json
@@ -60,7 +61,8 @@ def _module_capabilities(target: str = "module") -> Any:
     fn = getattr(mod, "module_capabilities", None)
     if not callable(fn):
         raise NativeCapabilityReportError(
-            "loaded _pops extension does not expose callable module_capabilities()")
+            "loaded _pops extension does not expose callable module_capabilities()"
+        )
     try:
         payload = fn(target)
         if not isinstance(payload, Mapping):
@@ -80,7 +82,8 @@ def _native_capability_report_from_extension(target: str = "module") -> Any:
     fn = getattr(mod, "capability_report", None)
     if not callable(fn):
         raise NativeCapabilityReportError(
-            "loaded _pops extension does not expose callable capability_report()")
+            "loaded _pops extension does not expose callable capability_report()"
+        )
     try:
         payload = fn(target)
         if not isinstance(payload, Mapping):
@@ -92,8 +95,9 @@ def _native_capability_report_from_extension(target: str = "module") -> Any:
         ) from exc
 
 
-def native_capability_report(target: str = "module", *, flags: Any = None,
-                             source: Any = None) -> Any:
+def native_capability_report(
+    target: str = "module", *, flags: Any = None, source: Any = None
+) -> Any:
     """Return the structured native capability report (ADC-591).
 
     With a current ``_pops`` build, the native envelope comes from C++
@@ -119,8 +123,15 @@ def native_capability_report(target: str = "module", *, flags: Any = None,
     rows = _support_rows(flags, source) + _inventory_rows(flags, source)
     caps = dict(flags or {})
     return NativeCapabilityReport(
-        schema_version=0, abi_version=int(caps.get("abi_version", 0) or 0), target=target,
-        abi_key=None, platform="unknown", capabilities=caps, runtime={}, routes=rows)
+        schema_version=0,
+        abi_version=int(caps.get("abi_version", 0) or 0),
+        target=target,
+        abi_key=None,
+        platform="unknown",
+        capabilities=caps,
+        runtime={},
+        routes=rows,
+    )
 
 
 def _feature_layout(feature: str) -> str:
@@ -147,21 +158,40 @@ def _feature_platform(feature: str) -> str:
 
 def _flag_error_message(feature: str) -> str:
     requests = {
-        "supports_amr": ("layout=AMR", "layout=Uniform or backend='production' target='amr_system'",
-                         "use layout=Uniform or compile with backend='production' target='amr_system'"),
-        "supports_mpi": ("platform=MPI", "serial/OpenMP build", "rebuild _pops with POPS_USE_MPI=ON"),
-        "supports_gpu": ("platform=GPU", "host CPU platform",
-                         "use the delivered host/serial route or a separately proved CUDA/HIP artifact"),
-        "supports_stride": ("strided cell access", "backend='production'",
-                            "compile with backend='production'"),
-        "supports_partial_imex_mask": ("partial IMEX mask", "full source implicit / split routes",
-                                       "use IMEX/IMEXRK/Split without partial masks"),
-        "supports_custom_communicator": ("communicator != MPI_COMM_WORLD",
-                                         "MPI_COMM_WORLD or serial",
-                                         "use ExecutionContext.mpi_world() or a serial context"),
+        "supports_amr": (
+            "layout=AMR",
+            "layout=Uniform or backend='production' target='amr_system'",
+            "use layout=Uniform or compile with backend='production' target='amr_system'",
+        ),
+        "supports_mpi": (
+            "platform=MPI",
+            "serial/OpenMP build",
+            "rebuild _pops with POPS_USE_MPI=ON",
+        ),
+        "supports_gpu": (
+            "platform=GPU",
+            "host CPU platform",
+            "use the delivered host/serial route or a separately proved CUDA/HIP artifact",
+        ),
+        "supports_stride": (
+            "strided cell access",
+            "backend='production'",
+            "compile with backend='production'",
+        ),
+        "supports_partial_imex_mask": (
+            "partial IMEX mask",
+            "typed local implicit Program primitive where implemented",
+            "author an explicit typed Program; AMR currently has no implicit-source primitive",
+        ),
+        "supports_custom_communicator": (
+            "communicator != MPI_COMM_WORLD",
+            "MPI_COMM_WORLD or serial",
+            "use ExecutionContext.mpi_world() or a serial context",
+        ),
     }
     requested, available, alternative = requests.get(
-        feature, (feature, "no route in this build", None))
+        feature, (feature, "no route in this build", None)
+    )
     return _unsupported_error(requested=requested, available=available, alternative=alternative)
 
 
@@ -174,8 +204,18 @@ class NativeCapabilityReport:
     validators do not parse formatted strings.
     """
 
-    def __init__(self, *, schema_version: Any, abi_version: Any, target: Any, abi_key: Any,
-                 platform: Any, capabilities: Any, runtime: Any, routes: Any) -> None:
+    def __init__(
+        self,
+        *,
+        schema_version: Any,
+        abi_version: Any,
+        target: Any,
+        abi_key: Any,
+        platform: Any,
+        capabilities: Any,
+        runtime: Any,
+        routes: Any,
+    ) -> None:
         self.schema_version = int(schema_version)
         self.abi_version = int(abi_version)
         self.target = target
@@ -190,13 +230,16 @@ class NativeCapabilityReport:
         routes = [_route_from_native_dict(row) for row in payload.get("routes", [])]
         return cls(
             schema_version=payload.get("schema_version", 0),
-            abi_version=payload.get("abi_version", payload.get("capabilities", {}).get("abi_version", 0)),
+            abi_version=payload.get(
+                "abi_version", payload.get("capabilities", {}).get("abi_version", 0)
+            ),
             target=payload.get("target", "module"),
             abi_key=payload.get("abi_key"),
             platform=payload.get("platform"),
             capabilities=payload.get("capabilities", {}),
             runtime=payload.get("runtime", {}),
-            routes=routes)
+            routes=routes,
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -225,17 +268,29 @@ class NativeCapabilityReport:
         raise KeyError(feature)
 
     def __repr__(self) -> str:
-        return ("NativeCapabilityReport(schema=%r, abi=%r, target=%r, routes=%d)"
-                % (self.schema_version, self.abi_version, self.target, len(self.routes)))
+        return "NativeCapabilityReport(schema=%r, abi=%r, target=%r, routes=%d)" % (
+            self.schema_version,
+            self.abi_version,
+            self.target,
+            len(self.routes),
+        )
 
     def __str__(self) -> str:
-        lines = ["native capability report (schema=%s, abi=%s, target=%s)"
-                 % (self.schema_version, self.abi_version, self.target)]
+        lines = [
+            "native capability report (schema=%s, abi=%s, target=%s)"
+            % (self.schema_version, self.abi_version, self.target)
+        ]
         lines.append("  platform : %s" % self.platform)
         lines.append("  abi_key  : %s" % ((self.abi_key or "")[:12] or "none"))
-        lines.append("  runtime  : dimension=%s amr_refinement_ratio=%s precision=%s communicator=%s"
-                     % (self.runtime.get("dimension"), self.runtime.get("amr_refinement_ratio"),
-                        self.runtime.get("precision"), self.runtime.get("communicator")))
+        lines.append(
+            "  runtime  : dimension=%s amr_refinement_ratio=%s precision=%s communicator=%s"
+            % (
+                self.runtime.get("dimension"),
+                self.runtime.get("amr_refinement_ratio"),
+                self.runtime.get("precision"),
+                self.runtime.get("communicator"),
+            )
+        )
         lines.append("  routes   : %d structured row(s)" % len(self.routes))
         for row in self.routes:
             if row.status != "available":
@@ -252,7 +307,8 @@ def _route_from_native_dict(raw: Any) -> Any:
     error = raw.get("error_message") or ""
     if status == "unavailable" and not error:
         error = _unsupported_error(
-            requested=requested, available=available_route, alternative=alternative)
+            requested=requested, available=available_route, alternative=alternative
+        )
     return CapabilityRouteRow(
         raw.get("feature") or raw.get("route_id"),
         layout=raw.get("layout", "any"),
@@ -266,14 +322,27 @@ def _route_from_native_dict(raw: Any) -> Any:
         source=raw.get("source", "native"),
         axis=raw.get("axis"),
         available_route=raw.get("available_route", ""),
-        alternative=raw.get("alternative", ""))
+        alternative=raw.get("alternative", ""),
+    )
 
 
-def _row(feature: str, *, layout: str = "any", backend: str = "any",
-         platform: str = "host", flags: Any = None, flag: Any = None, mpi: Any = False,
-         gpu: Any = False, limitation: str = "", requested: Any = None,
-         available_route: Any = None, alternative: Any = None, source: str = "native",
-         status: Any = None) -> Any:
+def _row(
+    feature: str,
+    *,
+    layout: str = "any",
+    backend: str = "any",
+    platform: str = "host",
+    flags: Any = None,
+    flag: Any = None,
+    mpi: Any = False,
+    gpu: Any = False,
+    limitation: str = "",
+    requested: Any = None,
+    available_route: Any = None,
+    alternative: Any = None,
+    source: str = "native",
+    status: Any = None,
+) -> Any:
     if status is None:
         status = _status_from_flag(flags, flag) if flag else "available"
     err = ""
@@ -281,11 +350,22 @@ def _row(feature: str, *, layout: str = "any", backend: str = "any",
         err = _unsupported_error(
             requested=requested or feature,
             available=available_route or "no native route",
-            alternative=alternative)
+            alternative=alternative,
+        )
     return CapabilityRouteRow(
-        feature, layout=layout, backend=backend, platform=platform, mpi=mpi, gpu=gpu,
-        status=status, limitation=limitation, error_message=err, source=source,
-        available_route=available_route or "", alternative=alternative or "")
+        feature,
+        layout=layout,
+        backend=backend,
+        platform=platform,
+        mpi=mpi,
+        gpu=gpu,
+        status=status,
+        limitation=limitation,
+        error_message=err,
+        source=source,
+        available_route=available_route or "",
+        alternative=alternative or "",
+    )
 
 
 def _python_contract_rows(flags: Any, source: str) -> list[Any]:
@@ -313,50 +393,136 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             ),
             source=source,
         ),
+        _row(
+            "amr:source_implicit_program",
+            layout="amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "AMR has no typed local implicit-source/Newton Program primitive; block IMEX "
+                "descriptors are metadata and the spatial runtime has no temporal fallback"
+            ),
+            requested="local implicit source solve on AMR",
+            available_route="explicit AMR Program primitives",
+            alternative="implement and install the typed AMR implicit-source Program primitive",
+            source=source,
+        ),
     ]
 
 
 def _support_rows(flags: Any, source: Any) -> list:
     return [
-        _row("supports_uniform", layout="uniform", backend="module", platform="host",
-             flags=flags, flag="supports_uniform", limitation="single-level Uniform layout",
-             requested="layout=Uniform", available_route="layout=Uniform", source=source),
-        _row("supports_amr", layout="amr", backend="production", platform="host",
-             flags=flags, flag="supports_amr",
-             limitation="hierarchy depth is resource-policy controlled; native ratio=2",
-             requested="layout=AMR", available_route="backend='production' target='amr_system'",
-             alternative="use Uniform or an AMR hierarchy with 2:1 transitions", source=source),
-        _row("supports_mpi", layout="uniform|amr", backend="production", platform="mpi",
-             flags=flags, flag="supports_mpi", mpi=bool(_flag_value(flags, "supports_mpi")),
-             limitation="MPI is available only when _pops is built with POPS_USE_MPI=ON",
-             requested="platform=MPI", available_route="serial/OpenMP build",
-             alternative="rebuild with -DPOPS_USE_MPI=ON", source=source),
-        _row("supports_gpu", layout="uniform|amr", backend="production", platform="gpu",
-             flags=flags, flag="supports_gpu", gpu=bool(_flag_value(flags, "supports_gpu")),
-             limitation="GPU is available only for a Kokkos CUDA/HIP device build",
-             requested="platform=GPU", available_route="host CPU platform",
-             alternative=("use the delivered host/serial route or a separately proved CUDA/HIP "
-                          "artifact"), source=source),
-        _row("supports_stride", layout="uniform|amr", backend="production", platform="host",
-             flags=flags, flag="supports_stride",
-             limitation="real cell stride is carried only by the production/native route",
-             requested="strided cell access", available_route="backend='production'",
-             alternative="compile with backend='production'", source=source),
-        _row("supports_named_fields", layout="uniform|amr", backend="production", platform="host",
-             flags=flags, flag="supports_named_fields",
-             limitation="named aux-field transport", requested="named aux fields",
-             available_route="native named-field transport", source=source),
-        _row("supports_partial_imex_mask", layout="uniform|amr", backend="production",
-             platform="host", flags=flags, flag="supports_partial_imex_mask",
-             limitation="no C++ route backs a partial IMEX mask",
-             requested="partial IMEX mask", available_route="full source implicit / split routes",
-             alternative="use IMEX/IMEXRK/Split without partial masks", source=source),
-        _row("supports_custom_communicator", layout="uniform|amr", backend="none",
-             platform="mpi", flags=flags, flag="supports_custom_communicator",
-             limitation="no C++ route accepts a caller-provided MPI_Comm",
-             requested="communicator != MPI_COMM_WORLD",
-             available_route="MPI_COMM_WORLD or serial",
-             alternative="use ExecutionContext.mpi_world() or a serial context", source=source),
+        _row(
+            "supports_uniform",
+            layout="uniform",
+            backend="module",
+            platform="host",
+            flags=flags,
+            flag="supports_uniform",
+            limitation="single-level Uniform layout",
+            requested="layout=Uniform",
+            available_route="layout=Uniform",
+            source=source,
+        ),
+        _row(
+            "supports_amr",
+            layout="amr",
+            backend="production",
+            platform="host",
+            flags=flags,
+            flag="supports_amr",
+            limitation="hierarchy depth is resource-policy controlled; native ratio=2",
+            requested="layout=AMR",
+            available_route="backend='production' target='amr_system'",
+            alternative="use Uniform or an AMR hierarchy with 2:1 transitions",
+            source=source,
+        ),
+        _row(
+            "supports_mpi",
+            layout="uniform|amr",
+            backend="production",
+            platform="mpi",
+            flags=flags,
+            flag="supports_mpi",
+            mpi=bool(_flag_value(flags, "supports_mpi")),
+            limitation="MPI is available only when _pops is built with POPS_USE_MPI=ON",
+            requested="platform=MPI",
+            available_route="serial/OpenMP build",
+            alternative="rebuild with -DPOPS_USE_MPI=ON",
+            source=source,
+        ),
+        _row(
+            "supports_gpu",
+            layout="uniform|amr",
+            backend="production",
+            platform="gpu",
+            flags=flags,
+            flag="supports_gpu",
+            gpu=bool(_flag_value(flags, "supports_gpu")),
+            limitation="GPU is available only for a Kokkos CUDA/HIP device build",
+            requested="platform=GPU",
+            available_route="host CPU platform",
+            alternative=(
+                "use the delivered host/serial route or a separately proved CUDA/HIP artifact"
+            ),
+            source=source,
+        ),
+        _row(
+            "supports_stride",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            flags=flags,
+            flag="supports_stride",
+            limitation="real cell stride is carried only by the production/native route",
+            requested="strided cell access",
+            available_route="backend='production'",
+            alternative="compile with backend='production'",
+            source=source,
+        ),
+        _row(
+            "supports_named_fields",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            flags=flags,
+            flag="supports_named_fields",
+            limitation="named aux-field transport",
+            requested="named aux fields",
+            available_route="native named-field transport",
+            source=source,
+        ),
+        _row(
+            "supports_partial_imex_mask",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            flags=flags,
+            flag="supports_partial_imex_mask",
+            limitation="no executable C++ Program primitive backs a partial IMEX mask",
+            requested="partial IMEX mask",
+            available_route="typed local implicit Program primitive where implemented",
+            alternative=(
+                "author an explicit typed Program; AMR currently has no implicit-source primitive"
+            ),
+            source=source,
+        ),
+        _row(
+            "supports_custom_communicator",
+            layout="uniform|amr",
+            backend="none",
+            platform="mpi",
+            flags=flags,
+            flag="supports_custom_communicator",
+            limitation="no C++ route accepts a caller-provided MPI_Comm",
+            requested="communicator != MPI_COMM_WORLD",
+            available_route="MPI_COMM_WORLD or serial",
+            alternative="use ExecutionContext.mpi_world() or a serial context",
+            source=source,
+        ),
     ]
 
 
@@ -364,209 +530,525 @@ def _inventory_rows(flags: Any, source: Any) -> list:
     mpi = bool(_flag_value(flags, "supports_mpi"))
     gpu = bool(_flag_value(flags, "supports_gpu"))
     return [
-        _row("layout:Uniform", layout="uniform", backend="module", platform="host",
-             mpi=mpi, gpu=gpu, limitation="2D single-level Cartesian/Polar layout", source=source),
-        _row("layout:AMR", layout="amr", backend="production", platform="host",
-             flags=flags, flag="supports_amr", mpi=mpi, gpu=gpu,
-             limitation="resource-policy-controlled depth and native ratio=2",
-             requested="AMR hierarchy with a non-2:1 transition", available_route="AMR hierarchy with 2:1 transitions",
-             alternative="use Uniform or the native AMR envelope", source=source),
-        _row("spatial:finite_volume", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="2D finite-volume production route", source=source),
-        _row("riemann:rusanov", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="requires model max_wave_speed", source=source),
-        _row("riemann:hll", layout="uniform|amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu, limitation="requires physical_flux and wave_speeds", source=source),
-        _row("riemann:hllc", layout="uniform|amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu,
-             limitation="generic-only (ADC-590): requires HLLC model capability; polar unavailable",
-             source=source),
-        _row("riemann:roe", layout="uniform|amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu,
-             limitation="generic-only (ADC-590): requires Roe dissipation; polar unavailable",
-             source=source),
-        _row("riemann:euler_hllc", layout="uniform|amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu,
-             limitation="explicit canonical Euler 2D (4 vars rho/mx/my/E + pressure); polar unavailable",
-             source=source),
-        _row("riemann:euler_roe", layout="uniform|amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu,
-             limitation="explicit canonical Euler 2D (4 vars rho/mx/my/E + pressure); polar unavailable",
-             source=source),
+        _row(
+            "layout:Uniform",
+            layout="uniform",
+            backend="module",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="2D single-level Cartesian/Polar layout",
+            source=source,
+        ),
+        _row(
+            "layout:AMR",
+            layout="amr",
+            backend="production",
+            platform="host",
+            flags=flags,
+            flag="supports_amr",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="resource-policy-controlled depth and native ratio=2",
+            requested="AMR hierarchy with a non-2:1 transition",
+            available_route="AMR hierarchy with 2:1 transitions",
+            alternative="use Uniform or the native AMR envelope",
+            source=source,
+        ),
+        _row(
+            "spatial:finite_volume",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="2D finite-volume production route",
+            source=source,
+        ),
+        _row(
+            "riemann:rusanov",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="requires model max_wave_speed",
+            source=source,
+        ),
+        _row(
+            "riemann:hll",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="requires physical_flux and wave_speeds",
+            source=source,
+        ),
+        _row(
+            "riemann:hllc",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="generic-only (ADC-590): requires HLLC model capability; polar unavailable",
+            source=source,
+        ),
+        _row(
+            "riemann:roe",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="generic-only (ADC-590): requires Roe dissipation; polar unavailable",
+            source=source,
+        ),
+        _row(
+            "riemann:euler_hllc",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="explicit canonical Euler 2D (4 vars rho/mx/my/E + pressure); polar unavailable",
+            source=source,
+        ),
+        _row(
+            "riemann:euler_roe",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="explicit canonical Euler 2D (4 vars rho/mx/my/E + pressure); polar unavailable",
+            source=source,
+        ),
         # ADC-552: the typed wave-speed provider families a model can bind HLL to. Descriptor-level
         # (WaveSpeedProvider), so source is descriptor; the five signed families feed HLL, the
         # majorant family is the Rusanov spectral radius (HLL refuses it).
-        _row("wave_speeds:explicit_pair", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="signed pair from typed Model.wave_speeds(...); HLL signed-wave source",
-             source=source),
-        _row("wave_speeds:jacobian", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="signed pair from flux-jacobian eigenvalues (m.wave_speeds_from_jacobian)",
-             source=source),
-        _row("wave_speeds:pressure_derived", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="signed pair from primitive 'p' + eigenvalues (historical path)",
-             source=source),
-        _row("wave_speeds:einfeldt", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="Einfeldt signed-speed estimate hook", source=source),
-        _row("wave_speeds:davis", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="Davis signed-speed estimate hook", source=source),
-        _row("wave_speeds:max_wave_speed", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="unsigned Rusanov majorant (spectral radius); refused by HLL, feeds Rusanov",
-             source=source),
-        _row("reconstruction:firstorder", layout="uniform|amr", backend="production",
-             limitation="ghost_depth=1", source=source),
-        _row("reconstruction:muscl", layout="uniform|amr", backend="production",
-             limitation="ghost_depth=2; native limiters minmod/vanleer", source=source),
         _row(
-            "reconstruction:weno5", layout="uniform|amr", backend="production",
-            limitation=("ghost_depth=3; ratio-2 2D AMR selects the conservative order-5 "
-                        "cell-average provider from resolved spatial capabilities"),
-            source=source),
-        _row("limiter:mc", layout="uniform|amr", backend="none", status="unavailable",
-             limitation="catalogued but no native C++ limiter symbol exists",
-             requested="limiter=MC()", available_route="Minmod() or VanLeer()",
-             alternative="use pops.numerics.reconstruction.limiters.Minmod()", source=source),
-        _row("limiter:superbee", layout="uniform|amr", backend="none", status="unavailable",
-             limitation="catalogued but no native C++ limiter symbol exists",
-             requested="limiter=Superbee()", available_route="Minmod() or VanLeer()",
-             alternative="use pops.numerics.reconstruction.limiters.VanLeer()", source=source),
-        _row("elliptic:geometric_mg", layout="uniform|amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu, limitation="native multigrid route; supports variable epsilon",
-             source=source),
-        _row("elliptic:fft", layout="uniform", backend="production", platform="host", mpi=mpi,
-             gpu=gpu, limitation="periodic, constant coefficient, power-of-two uniform grid only",
-             source=source),
-        _row("elliptic:fft_direct_dft_fallback", layout="uniform", backend="production",
-             platform="host", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("non-power-of-two Nx/Ny remain correct by falling back to direct O(n^2) "
-                         "DFT; fallback_diagnostics_report exposes the policy and count"),
-             source=source),
-        _row("elliptic:mg_fac_defaults", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("geometric MG/FAC defaults and debug diagnostics are still header-local; "
-                         "central SolverDefaults/logger follow-up is required"),
-             source=source),
-        _row("elliptic:fft_amr", layout="amr", backend="none", status="unavailable",
-             limitation="FFT requires a single uniform periodic mesh, not AMR",
-             requested="solver=FFT() with layout=AMR", available_route="GeometricMG() on AMR",
-             alternative="use pops.solvers.elliptic.GeometricMG()", source=source),
-        _row("mesh:2d_storage_arithmetic", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("native mesh/storage/arithmetic primitives are Box2D/Fab2D/MultiFab 2D; "
-                         "Dim!=2 is rejected by validate_dimension() before runtime"),
-             source=source),
-        _row("amr:refinement_ratio", layout="amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu, status="partial",
-             limitation=("AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "
-                         "validate_amr_refinement_ratio() rejects other ratios"),
-             source=source),
-        _row("amr:transition_envelope", layout="amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu, status="partial",
-             limitation=("transitions are 2D isotropic ratio-(2,2); every transition must share "
-                         "one isotropic buffer and one lookahead value"),
-             source=source),
-        _row("amr:hierarchy_policy_routes", layout="amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("native hierarchy route is shared_n_level with berger_rigoutsos "
-                         "clustering, box_array patch generation, and the resolved prepared "
-                         "load-balance provider (space-filling curve by default)"),
-             source=source),
-        _row("amr:transfer_contracts", layout="amr", backend="production", platform="host",
-             mpi=mpi, gpu=gpu, status="partial",
-             limitation=("physical transfer routes are exact dense cell/face_x/face_y/node "
-                         "contracts; restriction, coarse-fine fill and temporal interpolation "
-                         "currently accept cell-centered state only; derived fields recompute "
-                         "through elliptic_solve and caches rebuild through patch_topology"),
-             source=source),
-        _row("parallel:mpi_world_communicator", layout="uniform|amr", backend="production",
-             platform="mpi", mpi=mpi, status="available" if mpi else "unavailable",
-             limitation=(
-                 "exact MPI_COMM_WORLD execution is proved by the native module and ExecutionContext"
-                 if mpi else
-                 "this native module was not built with POPS_USE_MPI=ON"
-             ),
-             requested="ExecutionContext.mpi_world()",
-             available_route=(
-                 "ExecutionContext.mpi_world()" if mpi else "serial ExecutionContext"
-             ),
-             alternative=None if mpi else "rebuild with -DPOPS_USE_MPI=ON",
-             source=source),
-        _row("parallel:custom_communicator", layout="uniform|amr", backend="none",
-             platform="mpi", mpi=mpi, status="unavailable",
-             limitation="no native route accepts a caller-provided MPI_Comm",
-             requested="communicator != MPI_COMM_WORLD",
-             available_route="MPI_COMM_WORLD or serial",
-             alternative="use ExecutionContext.mpi_world() or a serial context", source=source),
-        _row("precision:single_or_mixed", layout="uniform|amr", backend="none",
-             platform="host", status="unavailable",
-             limitation=("PrecisionPolicy is representable, but the native providers currently "
-                         "instantiate pops::Real as binary64 only"),
-             requested="precision=single or precision=mixed",
-             available_route="precision=double",
-             alternative="use double precision or implement a non-binary64 native provider",
-             source=source),
-        _row("runtime:kokkos_lifecycle", layout="uniform|amr", backend="production",
-             platform="host|gpu", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("Kokkos is lazily initialized by PoPS on first allocation/kernel unless "
-                         "the caller already initialized it; runtime_environment_report() exposes "
-                         "ownership and initialized/finalized state"),
-             source=source),
-        _row("runtime:allocator_lifetime", layout="uniform|amr", backend="production",
-             platform="host|gpu", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("Kokkos builds use a process-lifetime ManagedArena; blocks are released "
-                         "by a Kokkos finalize hook and the arena tables intentionally survive "
-                         "process teardown"),
-             source=source),
-        _row("krylov:cg_bicgstab_gmres_richardson", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu,
-             limitation="matrix-free Krylov over native MultiFab primitives", source=source),
-        _row("program:hierarchy_scoped_solve", layout="uniform|amr", backend="production",
-             platform="host", mpi=mpi, gpu=gpu, status="partial",
-             limitation=("Program.solve and its provider protocol are physics-independent; AMR "
-                         "hierarchy lowering currently supports one top-level linear solve with "
-                         "CompositeTensorFAC()"),
-             source=source),
-        _row("program_context:system", layout="uniform", backend="production", platform="host",
-             mpi=mpi, gpu=gpu, limitation="compiled ProgramContext install on System",
-             source=source),
-        _row("program_context:amr", layout="amr", backend="production", platform="host",
-             flags=flags, flag="supports_amr", mpi=mpi, gpu=gpu,
-             limitation="AMR program install requires target='amr_system'", source=source),
-        _row("output:scientific_v1", layout="uniform|amr", backend="runtime",
-             platform="host|mpi", mpi=mpi,
-             limitation=("typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format "
-                         "advertises its exact supported modes"),
-             source=source),
-        _row("checkpoint:accepted_state_v3", layout="uniform|amr", backend="runtime",
-             platform="host|mpi", mpi=mpi,
-             limitation=("single-file strict accepted-state checkpoint; MPI_COMM_WORLD uses one "
-                         "rank-0 publication with collective capture and consensus"),
-             source=source),
-        _row("checkpoint:parallel_hdf5", layout="uniform|amr", backend="none",
-             platform="mpi", status="unavailable",
-             limitation="parallel HDF5 checkpoint is not a native checkpoint route",
-             requested="restartable checkpoint encoded as parallel HDF5",
-             available_route="strict accepted-state v3 NPZ checkpoint",
-             alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
-             source=source),
-        _row("checkpoint:amr_dynamic_regrid", layout="amr", backend="runtime", platform="host",
-             flags=flags, flag="supports_amr", mpi=mpi,
-             limitation=("strict v3 accepted-state restart; exact rank-local AMR ownership and "
-                         "compiled-Program publications keep the native rank count"),
-             source=source),
+            "wave_speeds:explicit_pair",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="signed pair from typed Model.wave_speeds(...); HLL signed-wave source",
+            source=source,
+        ),
+        _row(
+            "wave_speeds:jacobian",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="signed pair from flux-jacobian eigenvalues (m.wave_speeds_from_jacobian)",
+            source=source,
+        ),
+        _row(
+            "wave_speeds:pressure_derived",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="signed pair from primitive 'p' + eigenvalues (historical path)",
+            source=source,
+        ),
+        _row(
+            "wave_speeds:einfeldt",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="Einfeldt signed-speed estimate hook",
+            source=source,
+        ),
+        _row(
+            "wave_speeds:davis",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="Davis signed-speed estimate hook",
+            source=source,
+        ),
+        _row(
+            "wave_speeds:max_wave_speed",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="unsigned Rusanov majorant (spectral radius); refused by HLL, feeds Rusanov",
+            source=source,
+        ),
+        _row(
+            "reconstruction:firstorder",
+            layout="uniform|amr",
+            backend="production",
+            limitation="ghost_depth=1",
+            source=source,
+        ),
+        _row(
+            "reconstruction:muscl",
+            layout="uniform|amr",
+            backend="production",
+            limitation="ghost_depth=2; native limiters minmod/vanleer",
+            source=source,
+        ),
+        _row(
+            "reconstruction:weno5",
+            layout="uniform|amr",
+            backend="production",
+            limitation=(
+                "ghost_depth=3; ratio-2 2D AMR selects the conservative order-5 "
+                "cell-average provider from resolved spatial capabilities"
+            ),
+            source=source,
+        ),
+        _row(
+            "limiter:mc",
+            layout="uniform|amr",
+            backend="none",
+            status="unavailable",
+            limitation="catalogued but no native C++ limiter symbol exists",
+            requested="limiter=MC()",
+            available_route="Minmod() or VanLeer()",
+            alternative="use pops.numerics.reconstruction.limiters.Minmod()",
+            source=source,
+        ),
+        _row(
+            "limiter:superbee",
+            layout="uniform|amr",
+            backend="none",
+            status="unavailable",
+            limitation="catalogued but no native C++ limiter symbol exists",
+            requested="limiter=Superbee()",
+            available_route="Minmod() or VanLeer()",
+            alternative="use pops.numerics.reconstruction.limiters.VanLeer()",
+            source=source,
+        ),
+        _row(
+            "elliptic:geometric_mg",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="native multigrid route; supports variable epsilon",
+            source=source,
+        ),
+        _row(
+            "elliptic:fft",
+            layout="uniform",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="periodic, constant coefficient, power-of-two uniform grid only",
+            source=source,
+        ),
+        _row(
+            "elliptic:fft_direct_dft_fallback",
+            layout="uniform",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "non-power-of-two Nx/Ny remain correct by falling back to direct O(n^2) "
+                "DFT; fallback_diagnostics_report exposes the policy and count"
+            ),
+            source=source,
+        ),
+        _row(
+            "elliptic:mg_fac_defaults",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "geometric MG/FAC defaults and debug diagnostics are still header-local; "
+                "central SolverDefaults/logger follow-up is required"
+            ),
+            source=source,
+        ),
+        _row(
+            "elliptic:fft_amr",
+            layout="amr",
+            backend="none",
+            status="unavailable",
+            limitation="FFT requires a single uniform periodic mesh, not AMR",
+            requested="solver=FFT() with layout=AMR",
+            available_route="GeometricMG() on AMR",
+            alternative="use pops.solvers.elliptic.GeometricMG()",
+            source=source,
+        ),
+        _row(
+            "mesh:2d_storage_arithmetic",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "native mesh/storage/arithmetic primitives are Box2D/Fab2D/MultiFab 2D; "
+                "Dim!=2 is rejected by validate_dimension() before runtime"
+            ),
+            source=source,
+        ),
+        _row(
+            "amr:refinement_ratio",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "
+                "validate_amr_refinement_ratio() rejects other ratios"
+            ),
+            source=source,
+        ),
+        _row(
+            "amr:transition_envelope",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "transitions are 2D isotropic ratio-(2,2); every transition must share "
+                "one isotropic buffer and one lookahead value"
+            ),
+            source=source,
+        ),
+        _row(
+            "amr:hierarchy_policy_routes",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "native hierarchy route is shared_n_level with berger_rigoutsos "
+                "clustering, box_array patch generation, and the resolved prepared "
+                "load-balance provider (space-filling curve by default)"
+            ),
+            source=source,
+        ),
+        _row(
+            "amr:transfer_contracts",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "physical transfer routes are exact dense cell/face_x/face_y/node "
+                "contracts; restriction, coarse-fine fill and temporal interpolation "
+                "currently accept cell-centered state only; derived fields recompute "
+                "through elliptic_solve and caches rebuild through patch_topology"
+            ),
+            source=source,
+        ),
+        _row(
+            "parallel:mpi_world_communicator",
+            layout="uniform|amr",
+            backend="production",
+            platform="mpi",
+            mpi=mpi,
+            status="available" if mpi else "unavailable",
+            limitation=(
+                "exact MPI_COMM_WORLD execution is proved by the native module and ExecutionContext"
+                if mpi
+                else "this native module was not built with POPS_USE_MPI=ON"
+            ),
+            requested="ExecutionContext.mpi_world()",
+            available_route=("ExecutionContext.mpi_world()" if mpi else "serial ExecutionContext"),
+            alternative=None if mpi else "rebuild with -DPOPS_USE_MPI=ON",
+            source=source,
+        ),
+        _row(
+            "parallel:custom_communicator",
+            layout="uniform|amr",
+            backend="none",
+            platform="mpi",
+            mpi=mpi,
+            status="unavailable",
+            limitation="no native route accepts a caller-provided MPI_Comm",
+            requested="communicator != MPI_COMM_WORLD",
+            available_route="MPI_COMM_WORLD or serial",
+            alternative="use ExecutionContext.mpi_world() or a serial context",
+            source=source,
+        ),
+        _row(
+            "precision:single_or_mixed",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            status="unavailable",
+            limitation=(
+                "PrecisionPolicy is representable, but the native providers currently "
+                "instantiate pops::Real as binary64 only"
+            ),
+            requested="precision=single or precision=mixed",
+            available_route="precision=double",
+            alternative="use double precision or implement a non-binary64 native provider",
+            source=source,
+        ),
+        _row(
+            "runtime:kokkos_lifecycle",
+            layout="uniform|amr",
+            backend="production",
+            platform="host|gpu",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "Kokkos is lazily initialized by PoPS on first allocation/kernel unless "
+                "the caller already initialized it; runtime_environment_report() exposes "
+                "ownership and initialized/finalized state"
+            ),
+            source=source,
+        ),
+        _row(
+            "runtime:allocator_lifetime",
+            layout="uniform|amr",
+            backend="production",
+            platform="host|gpu",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "Kokkos builds use a process-lifetime ManagedArena; blocks are released "
+                "by a Kokkos finalize hook and the arena tables intentionally survive "
+                "process teardown"
+            ),
+            source=source,
+        ),
+        _row(
+            "krylov:cg_bicgstab_gmres_richardson",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="matrix-free Krylov over native MultiFab primitives",
+            source=source,
+        ),
+        _row(
+            "program:hierarchy_scoped_solve",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "Program.solve and its provider protocol are physics-independent; AMR "
+                "hierarchy lowering currently supports one top-level linear solve with "
+                "CompositeTensorFAC()"
+            ),
+            source=source,
+        ),
+        _row(
+            "program_context:system",
+            layout="uniform",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="compiled ProgramContext install on System",
+            source=source,
+        ),
+        _row(
+            "program_context:amr",
+            layout="amr",
+            backend="production",
+            platform="host",
+            flags=flags,
+            flag="supports_amr",
+            mpi=mpi,
+            gpu=gpu,
+            limitation="AMR program install requires target='amr_system'",
+            source=source,
+        ),
+        _row(
+            "output:scientific_v1",
+            layout="uniform|amr",
+            backend="runtime",
+            platform="host|mpi",
+            mpi=mpi,
+            limitation=(
+                "typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format "
+                "advertises its exact supported modes"
+            ),
+            source=source,
+        ),
+        _row(
+            "checkpoint:accepted_state_v5",
+            layout="uniform|amr",
+            backend="runtime",
+            platform="host|mpi",
+            mpi=mpi,
+            limitation=(
+                "single-file strict accepted-state checkpoint; MPI_COMM_WORLD uses one "
+                "rank-0 publication with collective capture and consensus"
+            ),
+            source=source,
+        ),
+        _row(
+            "checkpoint:parallel_hdf5",
+            layout="uniform|amr",
+            backend="none",
+            platform="mpi",
+            status="unavailable",
+            limitation="parallel HDF5 checkpoint is not a native checkpoint route",
+            requested="restartable checkpoint encoded as parallel HDF5",
+            available_route="strict accepted-state v5 NPZ checkpoint",
+            alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
+            source=source,
+        ),
+        _row(
+            "checkpoint:amr_dynamic_regrid",
+            layout="amr",
+            backend="runtime",
+            platform="host",
+            flags=flags,
+            flag="supports_amr",
+            mpi=mpi,
+            limitation=(
+                "strict v5 accepted-state restart; exact rank-local AMR ownership and "
+                "compiled-Program publications keep the native rank count"
+            ),
+            source=source,
+        ),
     ] + _python_contract_rows(flags, source)
 
 
-def native_capability_matrix(*, owner: str = "module", layout: str = "module",
-                             target: str = "module", flags: Any = None,
-                             source: Any = None) -> Any:
+def native_capability_matrix(
+    *,
+    owner: str = "module",
+    layout: str = "module",
+    target: str = "module",
+    flags: Any = None,
+    source: Any = None,
+) -> Any:
     """Return the ADC-549 native route matrix.
 
     ``flags`` can be supplied by a compiled artifact manifest. When absent, the built module's
@@ -575,6 +1057,12 @@ def native_capability_matrix(*, owner: str = "module", layout: str = "module",
     """
     report = native_capability_report(target, flags=flags, source=source)
     return CapabilityRouteMatrix(
-        owner, layout, report.routes, schema_version=report.schema_version,
-        abi_version=report.abi_version, target=report.target, abi_key=report.abi_key,
-        platform=report.platform)
+        owner,
+        layout,
+        report.routes,
+        schema_version=report.schema_version,
+        abi_version=report.abi_version,
+        target=report.target,
+        abi_key=report.abi_key,
+        platform=report.platform,
+    )

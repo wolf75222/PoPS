@@ -21,7 +21,7 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
   bool saw_precision = false;
   bool saw_custom_comm = false;
   bool saw_kokkos_lifecycle = false;
-  bool saw_checkpoint_v3 = false;
+  bool saw_checkpoint_v5 = false;
   bool saw_dynamic_regrid_checkpoint = false;
   bool saw_mpi_world = false;
   bool saw_weno5 = false;
@@ -43,10 +43,10 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
     } else if (row.route_id == "runtime:kokkos_lifecycle") {
       saw_kokkos_lifecycle = true;
       EXPECT_TRUE(row.status == "partial") << "kokkos_lifecycle_partial";
-    } else if (row.route_id == "checkpoint:accepted_state_v3") {
-      saw_checkpoint_v3 = true;
-      EXPECT_TRUE(row.status == "available") << "checkpoint_v3_available";
-      EXPECT_TRUE(row.layout == "uniform|amr") << "checkpoint_v3_layouts";
+    } else if (row.route_id == "checkpoint:accepted_state_v5") {
+      saw_checkpoint_v5 = true;
+      EXPECT_TRUE(row.status == "available") << "checkpoint_v5_available";
+      EXPECT_TRUE(row.layout == "uniform|amr") << "checkpoint_v5_layouts";
     } else if (row.route_id == "checkpoint:amr_dynamic_regrid") {
       saw_dynamic_regrid_checkpoint = true;
       EXPECT_TRUE(row.status == "available") << "dynamic_regrid_checkpoint_available";
@@ -68,7 +68,7 @@ TEST(CapabilityReport, ReportsSchemaAbiAndRouteVocabulary) {
   EXPECT_TRUE(saw_precision) << "saw_precision";
   EXPECT_TRUE(saw_custom_comm) << "saw_custom_comm";
   EXPECT_TRUE(saw_kokkos_lifecycle) << "saw_kokkos_lifecycle";
-  EXPECT_TRUE(saw_checkpoint_v3) << "saw_checkpoint_v3";
+  EXPECT_TRUE(saw_checkpoint_v5) << "saw_checkpoint_v5";
   EXPECT_TRUE(saw_dynamic_regrid_checkpoint) << "saw_dynamic_regrid_checkpoint";
   EXPECT_TRUE(saw_mpi_world) << "saw_mpi_world";
   EXPECT_TRUE(saw_weno5) << "saw_weno5";

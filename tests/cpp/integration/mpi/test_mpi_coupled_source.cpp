@@ -1,18 +1,15 @@
-// Source COUPLEE generique (System::add_coupled_source, DSL P5 phase 1) sous MPI np={1,2,4}.
+// Autorite temporelle explicite avec une source couplee enregistree sous MPI np={1,2,4}.
 //
 // System repartit UNE box unique en round-robin (DistributionMapping(1, n_ranks())), donc a np>1 un
-// seul rang la possede ; les autres ont local_size()==0. La source couplee s'applique APRES le transport
-// (P->couplings, splitting explicite). Les couplages NOMMES historiques (add_ionization/...) dereferencent
-// fab(0) EN DUR : ils crasheraient cote hote sur un rang sans box locale. La source GENERIQUE itere sur
-// local_size() (no-op sur un rang vide) -> ce test verrouille la SAFETY MPI du nouveau chemin et l'INVARIANCE
-// du resultat au nombre de rangs.
+// seul rang la possede ; les autres ont local_size()==0. Le Program abaisse explicitement l'ionisation
+// sur les trois etats. La valeur attendue correspond exactement a UNE application par pas : elle
+// verrouille a la fois le chemin MPI du Program et l'absence d'un second replay cache du CoupledSource.
 //
 // On code l'IONISATION en bytecode (d_t n_e = +k n_e n_g, d_t n_i = +k n_e n_g, d_t n_g = -k n_e n_g) :
 //   regs : ne=0, ni=1, ng=2, k=3 (constante)
 //   e/i : PushReg(k) PushReg(ne) Mul PushReg(ng) Mul          -> k*ne*ng
 //   g   : ... Neg                                              -> -(k*ne*ng)
-// Densites UNIFORMES -> transport nul -> seule la source agit ; on compare aux invariants physiques
-// (n_i+n_g conserve, n_e-n_i conserve, e/i croissent, g decroit) et a la valeur attendue, INVARIANTE en np.
+// Densites UNIFORMES -> transport nul ; la recurrence source doit etre identique sous np=1/2/4.
 
 #include <gtest/gtest.h>
 
@@ -21,6 +18,7 @@
 #include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalaire 1 var, role Density)
 #include <pops/physics/bricks/source.hpp>      // NoSource
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes, miroir Python)
@@ -28,6 +26,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -46,6 +45,29 @@ struct NoEll {
   }  // pas de charge -> phi=0 -> derive nulle
 };
 using Dens = CompositeModel<ExBVelocity, NoSource, NoEll>;  // densite scalaire, transport E x B
+
+static void install_ionization_program(System& system) {
+  system.set_program_block_map({0, 1, 2});
+  runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("test.clock.macro");
+  context.install([context](double step) {
+    context.begin_step(step);
+    MultiFab& electrons = context.state(0);
+    MultiFab& ions = context.state(1);
+    MultiFab& neutrals = context.state(2);
+    MultiFab& next_electrons = context.scratch_state(100, 0, electrons);
+    MultiFab& next_ions = context.scratch_state(101, 0, ions);
+    MultiFab& next_neutrals = context.scratch_state(102, 0, neutrals);
+    context.lincomb(next_electrons, Real(1), electrons, Real(0), electrons);
+    context.lincomb(next_ions, Real(1), ions, Real(0), ions);
+    context.lincomb(next_neutrals, Real(1), neutrals, Real(0), neutrals);
+    context.apply_coupling_operators(Real(step),
+                                     {{0, &next_electrons}, {1, &next_ions}, {2, &next_neutrals}});
+    context.commit_many(
+        {{&electrons, &next_electrons}, {&ions, &next_ions}, {&neutrals, &next_neutrals}});
+  });
+  system.set_program_block_map({0, 1, 2});
+}
 
 static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
   comm_init(&argc, &argv);
@@ -113,15 +135,24 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
   prog.prog_args = args;
   prog.prog_lens = lens;
   sys.add_coupled_source(prog);
+  chk(sys.coupled_operators().size() == 1, "coupled_source_metadata_registered");
+  bool live_state_rejected = false;
+  try {
+    sys.apply_coupling_operators(Real(dt),
+                                 {&sys.block_state(0), &sys.block_state(1), &sys.block_state(2)});
+  } catch (const std::invalid_argument&) {
+    live_state_rejected = true;
+  }
+  chk(live_state_rejected, "accepted_live_states_are_not_coupling_workspace");
+  install_ionization_program(sys);
 
-  // REFERENCE forward-Euler (etat uniforme -> scalaire) : MEME recurrence que l'etage C++.
   double ne = ne0, ni = ni0, ng = ng0;
   for (int s = 0; s < nsteps; ++s) {
-    sys.step(dt);  // transport (nul, etat uniforme) + apply_couplings (la source)
-    const double r = k * ne * ng;
-    ne += dt * r;
-    ni += dt * r;
-    ng += dt * (-r);
+    sys.step(dt);
+    const double rate = k * ne * ng;
+    ne += dt * rate;
+    ni += dt * rate;
+    ng -= dt * rate;
   }
 
   if (owns) {
@@ -146,12 +177,10 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
     for (std::size_t q = 0; q < nn; ++q)
       uniform = uniform && std::fabs(de[q] - ge) < 1e-12 && std::fabs(dg[q] - gg) < 1e-12;
     chk(uniform, "etat_uniforme");
-    // == reference ODE (meme recurrence). Invariant en np : la box vit sur rang 0, la source l'avance
-    // identiquement quel que soit le nombre de rangs (les rangs vides ne touchent rien).
-    chk(std::fabs(ge - ne) < 1e-10, "n_e == ref");
-    chk(std::fabs(gi - ni) < 1e-10, "n_i == ref");
-    chk(std::fabs(gg - ng) < 1e-10, "n_g == ref");
-    // physique + conservation
+    // UNE recurrence source exactement : un replay implicite du registre natif doublerait le taux.
+    chk(std::fabs(ge - ne) < 1e-10, "n_e == explicit Program reference");
+    chk(std::fabs(gi - ni) < 1e-10, "n_i == explicit Program reference");
+    chk(std::fabs(gg - ng) < 1e-10, "n_g == explicit Program reference");
     chk(ge > ne0 + 1e-6 && gi > ni0 + 1e-6 && gg < ng0 - 1e-6, "e/i croissent, g decroit");
     chk(std::fabs((gi + gg) - (ni0 + ng0)) < 1e-9, "n_i+n_g conserve");
     chk(std::fabs((ge - gi) - (ne0 - ni0)) < 1e-9, "n_e-n_i conserve");

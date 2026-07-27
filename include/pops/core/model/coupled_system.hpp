@@ -66,9 +66,9 @@ namespace detail {
 /// NAMED no-op probe for the CoupledSystemLike concept. A generic lambda in the
 // requires-clause (s.for_each_block([](auto&){})) trips the nvcc/EDG frontend: an
 // extended lambda in an UNEVALUATED context is not instantiable on the device side -> the
-// AmrSystemCoupler<CoupledSystemLike System> facade does not instantiate under Cuda (the B_z-AMR
-// device path then went through advance_amr directly). A NAMED FUNCTOR works around this (same recipe
-// as the named functors in block_builder.hpp, #64) without changing the host-side semantics.
+// AmrSystemCoupler<CoupledSystemLike System> facade does not instantiate under Cuda. A NAMED
+// FUNCTOR works around this (same recipe as the named functors in block_builder.hpp, #64) without
+// changing the host-side semantics.
 struct ForEachBlockProbe {
   template <class B>
   void operator()(B&) const {}

@@ -30,16 +30,16 @@ System::~System() = default;
 System::System(System&&) noexcept = default;
 System& System::operator=(System&&) noexcept = default;
 
-// Time advance EXTRACTED into stepper_ (SystemStepper, Batch B). Pure delegation: the Cartesian/polar
-// dispatch of the physical step h, the per-block CFL formula (substeps/stride), the
-// hold-then-catch-up semantics of the macro-step counter, the condensed source stage and the couplings live
-// now in the header (bit-identical). The public API stays unchanged.
+// Program cadence and native CFL-bound evaluation live in program_driver_. The public facade keeps
+// the accepted-step transaction and profiling boundary.
 void System::step(double dt) {
+  p_->program_.require_step_installed("System::step");
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "step");
   p_->program_.profiler_.count("steps");
-  p_->execute_step_transaction([&] { p_->stepper_.step(dt); });
+  p_->execute_step_transaction([&] { p_->program_driver_.step(dt); });
 }
 void System::advance(double dt, int nsteps) {
+  p_->program_.require_step_installed("System::advance");
   for (int i = 0; i < nsteps; ++i)
     step(dt);
 }
@@ -96,11 +96,16 @@ void System::rollback_step_transaction() {
   p_->external_step_transaction_committed_ = false;
 }
 double System::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
+  p_->program_.require_step_installed("System::step_cfl");
   return p_->execute_step_transaction(
-      [&] { return p_->stepper_.step_cfl(cfl, speed_floor, max_dt, min_dt); });
+      [&] { return p_->program_driver_.step_cfl(cfl, speed_floor, max_dt, min_dt); });
 }
 double System::step_adaptive(double cfl) {
-  return p_->execute_step_transaction([&] { return p_->stepper_.step_adaptive(cfl); });
+  p_->program_.require_step_installed("System::step_adaptive");
+  (void)cfl;
+  throw std::logic_error(
+      "System::step_adaptive has no ProgramGraph lowering; express multirate subcycling in the "
+      "installed whole-system Program");
 }
 
 // System clock (IO v1, audit wave 2): macro_step is REQUIRED by the restart (the
@@ -114,7 +119,7 @@ int System::macro_step() const {
 // never trips require_assembling. A second call throws (a composition binds exactly once).
 // lifecycle_state() reports "assembling" (not bound), "bound" (bound, no macro-step advanced),
 // "running" (bound AND macro_step_ > 0) -- the running edge is derived from the macro-step counter, so
-// it needs no extra state (and SystemStepper never reads lifecycle_ -> no MockImpl impact). The new
+// it needs no extra state (and SystemProgramDriver never reads lifecycle_ -> no MockImpl impact). The new
 // checkpointed / finalized phases (SystemLifecycle) are reachable only through explicit transitions
 // with no current caller, so the observable strings above are preserved bit-for-bit.
 void System::mark_bound() {

@@ -16,14 +16,17 @@
 #include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/program/program_context.hpp>      // ProgramContext (the seam under test)
+#include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -101,11 +104,6 @@ static void add_sourced_gas(System& system, double gamma) {
                      "none", "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_imex_sourced_gas(System& system, double gamma) {
-  add_compiled_model(system, "gas", SourcedGasModel{Euler{gamma}, UnitDensitySource{}, NoEll{}},
-                     "none", "rusanov", "conservative", "imex", gamma);
-}
-
 static void add_projecting_gas(System& system, double gamma) {
   ProjectingEuler transport;
   transport.gamma = gamma;
@@ -113,15 +111,425 @@ static void add_projecting_gas(System& system, double gamma) {
                      "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_ssprk3_gas(System& system, double gamma) {
-  add_compiled_model(system, "gas", GasModel{Euler{gamma}, NoSource{}, NoEll{}}, "none", "rusanov",
-                     "conservative", "ssprk3", gamma);
-}
-
 static void add_diffusive_gas(System& system, double gamma) {
   DiffusiveGasModel model;
   model.hyp.gamma = gamma;
   add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
+}
+
+TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
+  runtime::program::ProgramRuntimeState state;
+  state.history_replay_authorities_ = {{"gas.previous", 3}};
+
+  EXPECT_FALSE(state.authorizes_history_replay("gas.previous", 3))
+      << "a table without an authenticated artifact marker is not replay authority";
+
+  state.artifact_backed_ = true;
+  state.operator_authorities_ = {{{1, 2, 3, 4}}};
+  state.installed_hash_ = "old-artifact";
+  state.block_map_ = {0};
+  state.seed_params(0, {2.0});
+  state.dt_bound_ = [](Real cfl) { return cfl; };
+  EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+  EXPECT_FALSE(state.authorizes_history_replay("gas.previous", 2));
+  EXPECT_FALSE(state.authorizes_history_replay("other.previous", 3));
+
+  state.install_unverified_step([](double) {});
+  EXPECT_FALSE(state.artifact_backed_);
+  EXPECT_TRUE(state.operator_authorities_.empty());
+  EXPECT_TRUE(state.history_replay_authorities_.empty());
+  EXPECT_TRUE(state.installed_hash_.empty());
+  EXPECT_TRUE(state.block_map_.empty());
+  EXPECT_TRUE(state.block_params_.empty());
+  EXPECT_FALSE(state.dt_bound_);
+  EXPECT_FALSE(state.authorizes_history_replay("gas.previous", 3))
+      << "a direct native step must revoke every earlier artifact authority";
+}
+
+TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
+  runtime::program::ProgramRuntimeState state;
+  int old_steps = 0;
+  int new_steps = 0;
+  state.install_unverified_step([&](double) { ++old_steps; });
+  state.operator_authorities_ = {{{1, 2, 3, 4}}};
+  state.history_replay_authorities_ = {{"gas.previous", 3}};
+  state.installed_hash_ = "accepted-artifact";
+  state.block_map_ = {2};
+  state.seed_params(0, {3.0});
+  state.dt_bound_ = [](Real cfl) { return Real(0.5) * cfl; };
+  state.artifact_backed_ = true;
+  const auto accepted_generation = state.step_install_generation_;
+
+  auto interrupted = state.capture_artifact_step_install();
+  state.operator_authorities_ = {{{9, 8, 7, 6}}};
+  state.install_unverified_step([&](double) { ++new_steps; });
+  state.rollback_artifact_step_install(std::move(interrupted));
+  state.step_(0.1);
+  EXPECT_EQ(old_steps, 1);
+  EXPECT_EQ(new_steps, 0);
+  EXPECT_EQ(state.step_install_generation_, accepted_generation);
+  EXPECT_EQ(state.operator_authorities_,
+            (std::vector<std::array<std::uint64_t, 4>>{{{1, 2, 3, 4}}}));
+  EXPECT_EQ(state.installed_hash_, "accepted-artifact");
+  EXPECT_EQ(state.block_map_, (std::vector<int>{2}));
+  EXPECT_EQ(state.block_params_.size(), 1u);
+  ASSERT_TRUE(state.dt_bound_);
+  EXPECT_DOUBLE_EQ(state.dt_bound_(0.4), 0.2);
+  EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+
+  const auto no_op = state.capture_artifact_step_install();
+  EXPECT_THROW(state.require_exact_artifact_step_install(no_op, "test"), std::runtime_error);
+
+  auto exact = state.capture_artifact_step_install();
+  state.install_unverified_step([&](double) { ++new_steps; });
+  EXPECT_NO_THROW(state.require_exact_artifact_step_install(exact, "test"));
+  state.rollback_artifact_step_install(std::move(exact));
+  EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+
+  auto duplicate = state.capture_artifact_step_install();
+  state.install_unverified_step([&](double) { ++new_steps; });
+  state.install_unverified_step([&](double) { ++new_steps; });
+  EXPECT_THROW(state.require_exact_artifact_step_install(duplicate, "test"), std::runtime_error);
+  state.rollback_artifact_step_install(std::move(duplicate));
+  EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+
+  const auto generation_before_empty = state.step_install_generation_;
+  EXPECT_THROW(state.install_unverified_step({}), std::invalid_argument);
+  EXPECT_EQ(state.step_install_generation_, generation_before_empty);
+  EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+}
+
+TEST(ProgramRuntime, FacadeTemporalOperationsRequireProgramBeforeMutation) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  System system(SystemConfig{8, 1.0, Periodicity{true, true}});
+  system.enable_profiling();
+  const double initial_time = system.time();
+  const int initial_step = system.macro_step();
+  const std::string initial_profile = system.profile_report();
+
+  const auto expect_program_required = [&](auto&& operation, const char* name) {
+    try {
+      operation();
+      ADD_FAILURE() << name << " accepted a program-less temporal operation";
+    } catch (const std::logic_error& error) {
+      EXPECT_NE(std::string(error.what()).find(name), std::string::npos);
+      EXPECT_NE(std::string(error.what()).find("installed whole-system Program"),
+                std::string::npos);
+    }
+    EXPECT_DOUBLE_EQ(system.time(), initial_time);
+    EXPECT_EQ(system.macro_step(), initial_step);
+    EXPECT_EQ(system.profile_report(), initial_profile);
+  };
+
+  expect_program_required([&] { system.step(0.01); }, "System::step");
+  expect_program_required([&] { system.advance(0.01, 0); }, "System::advance");
+  expect_program_required([&] { (void)system.step_cfl(0.4); }, "System::step_cfl");
+  expect_program_required([&] { (void)system.step_adaptive(0.4); }, "System::step_adaptive");
+
+  int program_calls = 0;
+  system.install_program_step([&](double) { ++program_calls; });
+  EXPECT_THROW((void)system.step_adaptive(0.4), std::logic_error);
+  EXPECT_EQ(program_calls, 0);
+  EXPECT_DOUBLE_EQ(system.time(), initial_time);
+  EXPECT_EQ(system.macro_step(), initial_step);
+}
+
+TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System subcycled(config);
+  subcycled.set_clock(1.0, 10);
+  runtime::program::ProgramContext subcycled_context(&subcycled);
+  std::vector<double> subcycled_times;
+  std::vector<int> subcycled_macro_steps;
+  subcycled_context.install([&](double) {
+    subcycled_times.push_back(static_cast<double>(subcycled_context.physical_time()));
+    subcycled_macro_steps.push_back(subcycled.macro_step());
+  });
+  subcycled.set_program_cadence(/*substeps=*/2, /*stride=*/1);
+  subcycled.step(0.2);
+
+  ASSERT_EQ(subcycled_times.size(), 2u);
+  EXPECT_NEAR(subcycled_times[0], 1.0, 1.0e-14);
+  EXPECT_NEAR(subcycled_times[1], 1.1, 1.0e-14);
+  EXPECT_EQ(subcycled_macro_steps, (std::vector<int>{10, 10}));
+  EXPECT_NEAR(subcycled.time(), 1.2, 1.0e-14);
+  EXPECT_EQ(subcycled.macro_step(), 11);
+
+  System catchup(config);
+  runtime::program::ProgramContext catchup_context(&catchup);
+  catchup_context.configure_primary_clock("macro");
+  std::vector<double> catchup_times;
+  std::vector<double> catchup_steps;
+  std::vector<int> catchup_macro_steps;
+  std::vector<bool> catchup_every_one_due;
+  catchup_context.install([&](double h) {
+    catchup_times.push_back(static_cast<double>(catchup_context.physical_time()));
+    catchup_steps.push_back(h);
+    catchup_macro_steps.push_back(catchup.macro_step());
+    catchup_every_one_due.push_back(catchup_context.schedule_is_due(
+        41, 1, runtime::program::ScheduleDomainKind::kAcceptedStep, "macro", "", -1));
+  });
+  catchup.set_program_cadence(/*substeps=*/3, /*stride=*/2);
+
+  catchup.step(0.1);
+  EXPECT_TRUE(catchup_times.empty());
+  EXPECT_NEAR(catchup.time(), 0.1, 1.0e-14);
+  EXPECT_EQ(catchup.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(catchup.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(catchup.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(catchup.program_cadence_window_start_time(), 0.0);
+
+  catchup.step(0.2);
+  ASSERT_EQ(catchup_times.size(), 3u);
+  EXPECT_NEAR(catchup_times[0], 0.0, 1.0e-14);
+  EXPECT_NEAR(catchup_times[1], 0.1, 1.0e-14);
+  EXPECT_NEAR(catchup_times[2], 0.2, 1.0e-14);
+  ASSERT_EQ(catchup_steps.size(), 3u);
+  for (const double h : catchup_steps)
+    EXPECT_NEAR(h, 0.1, 1.0e-14);
+  EXPECT_DOUBLE_EQ(catchup_times.back() + catchup_steps.back(), 0.1 + 0.2);
+  EXPECT_EQ(catchup_macro_steps, (std::vector<int>{0, 0, 0}));
+  EXPECT_EQ(catchup_every_one_due, (std::vector<bool>{true, true, true}));
+  EXPECT_NEAR(catchup.time(), 0.3, 1.0e-14);
+  EXPECT_EQ(catchup.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(catchup.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(catchup.program_cadence_window_steps(), 0);
+  EXPECT_DOUBLE_EQ(catchup.program_cadence_window_start_time(), 0.0);
+}
+
+TEST(ProgramRuntime,
+     CadenceUsesThePreparedFacadeEndpointWhenFloatingPointAdditionIsNonAssociative) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  system.set_clock(0.1, 0);
+  runtime::program::ProgramContext context(&system);
+  std::vector<double> starts;
+  std::vector<double> steps;
+  context.install([&](double h) {
+    starts.push_back(static_cast<double>(context.physical_time()));
+    steps.push_back(h);
+  });
+  system.set_program_cadence(/*substeps=*/3, /*stride=*/3);
+
+  const double after_first = 0.1 + 0.1;
+  const double after_second = after_first + 0.1;
+  const double accepted_endpoint = after_second + 0.3;
+  const double effective_dt = (0.1 + 0.1) + 0.3;
+  const double reconstructed_endpoint = 0.1 + effective_dt;
+  const double numerical_dt = accepted_endpoint - 0.1;
+  ASSERT_NE(std::bit_cast<std::uint64_t>(accepted_endpoint),
+            std::bit_cast<std::uint64_t>(reconstructed_endpoint))
+      << "fixture must exercise floating-point non-associativity";
+  ASSERT_NE(std::bit_cast<std::uint64_t>(numerical_dt), std::bit_cast<std::uint64_t>(effective_dt))
+      << "fixture must distinguish dt provenance from the representable facade interval";
+
+  system.step(0.1);
+  system.step(0.1);
+  EXPECT_TRUE(starts.empty());
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1 + 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 2);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.1);
+
+  system.step(0.3);
+  ASSERT_EQ(starts.size(), 3u);
+  ASSERT_EQ(steps.size(), 3u);
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(starts.front()), std::bit_cast<std::uint64_t>(0.1));
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(starts.back() + steps.back()),
+            std::bit_cast<std::uint64_t>(accepted_endpoint));
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(system.time()),
+            std::bit_cast<std::uint64_t>(accepted_endpoint));
+  EXPECT_NE(std::bit_cast<std::uint64_t>(system.time()),
+            std::bit_cast<std::uint64_t>(reconstructed_endpoint));
+  EXPECT_EQ(system.macro_step(), 3);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+}
+
+TEST(ProgramRuntime, CadenceWindowRestartAndRejectedDueStepAreTransactional) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  std::vector<double> accepted_steps;
+  bool reject = true;
+  system.install_program_step([&](double h) {
+    if (reject)
+      throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "cadence",
+                                                  "fault injection in due stride window");
+    accepted_steps.push_back(h);
+  });
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+  system.step(0.1);
+
+  EXPECT_THROW(system.step(0.2), runtime::program::StepAttemptRejected);
+  EXPECT_DOUBLE_EQ(system.time(), 0.1);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.1);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+
+  reject = false;
+  system.step(0.2);
+  ASSERT_EQ(accepted_steps.size(), 1u);
+  EXPECT_NEAR(accepted_steps[0], 0.3, 1.0e-14);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+
+  System restarted(config);
+  std::vector<double> restarted_times;
+  restarted.install_program_step([&](double) { restarted_times.push_back(restarted.time()); });
+  restarted.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+  restarted.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
+                                           /*window_start_time=*/0.0, /*accepted_last_dt=*/0.07,
+                                           /*accepted_time=*/0.1,
+                                           /*macro_step=*/1);
+  restarted.set_clock(/*t=*/0.1, /*macro_step=*/1);
+  EXPECT_DOUBLE_EQ(restarted.program_last_dt(), 0.07);
+  restarted.step(0.2);
+  EXPECT_EQ(restarted_times, (std::vector<double>{0.0}));
+  EXPECT_NEAR(restarted.time(), 0.3, 1.0e-14);
+  EXPECT_EQ(restarted.macro_step(), 2);
+}
+
+TEST(ProgramRuntime, CadenceRestoreCommitsOnlyForTheExactAcceptedClockPair) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  system.install_program_step([](double) {});
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+
+  // The accepted time is part of the native restore preflight. A malformed image cannot touch the
+  // accepted window or arm a transaction.
+  EXPECT_THROW(system.restore_program_cadence_window(
+                   /*accumulated_dt=*/0.1, /*held_steps=*/1, /*window_start_time=*/0.1,
+                   /*accepted_last_dt=*/0.075, /*accepted_time=*/0.1, /*macro_step=*/1),
+               std::runtime_error);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
+  EXPECT_THROW(system.restore_program_cadence_window(
+                   /*accumulated_dt=*/0.1, /*held_steps=*/1, /*window_start_time=*/0.0,
+                   /*accepted_last_dt=*/std::numeric_limits<double>::quiet_NaN(),
+                   /*accepted_time=*/0.1, /*macro_step=*/1),
+               std::runtime_error);
+  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.0);
+
+  // A valid image is only staged. One-ulp clock drift rejects and discards the transaction while the
+  // accepted facade clock and cadence image remain byte-for-byte unchanged.
+  system.restore_program_cadence_window(/*accumulated_dt=*/0.1, /*held_steps=*/1,
+                                        /*window_start_time=*/0.0, /*accepted_last_dt=*/0.075,
+                                        /*accepted_time=*/0.1,
+                                        /*macro_step=*/1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.0);
+  EXPECT_THROW(system.set_clock(std::nextafter(0.1, 1.0), /*macro_step=*/1), std::runtime_error);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+
+  // The mismatch did not strand a pending token: a direct clean-boundary restore remains usable.
+  system.set_clock(/*t=*/0.25, /*macro_step=*/0);
+  system.restore_program_cadence_window(/*accumulated_dt=*/0.25, /*held_steps=*/1,
+                                        /*window_start_time=*/0.25, /*accepted_last_dt=*/0.075,
+                                        /*accepted_time=*/0.5,
+                                        /*macro_step=*/1);
+  system.set_clock(/*t=*/0.5, /*macro_step=*/1);
+  EXPECT_DOUBLE_EQ(system.time(), 0.5);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.25);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.25);
+  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.075);
+
+  // Replacing a non-empty accepted window is transactional too: a bad replacement leaves both that
+  // window and the facade cursor intact, and ordinary stepping remains possible afterwards.
+  system.restore_program_cadence_window(/*accumulated_dt=*/0.4, /*held_steps=*/1,
+                                        /*window_start_time=*/1.0, /*accepted_last_dt=*/0.2,
+                                        /*accepted_time=*/1.4,
+                                        /*macro_step=*/3);
+  EXPECT_THROW(system.set_clock(std::nextafter(1.4, 2.0), /*macro_step=*/3), std::runtime_error);
+  EXPECT_DOUBLE_EQ(system.time(), 0.5);
+  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.25);
+  EXPECT_EQ(system.program_cadence_window_steps(), 1);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.25);
+  EXPECT_DOUBLE_EQ(system.program_last_dt(), 0.075);
+  system.step(0.25);
+  EXPECT_DOUBLE_EQ(system.time(), 0.75);
+  EXPECT_EQ(system.macro_step(), 2);
+  EXPECT_DOUBLE_EQ(system.program_cadence_window_dt(), 0.0);
+  EXPECT_EQ(system.program_cadence_window_steps(), 0);
+}
+
+TEST(ProgramRuntime, CadenceRejectsDtAbsorbedByThePhysicalClock) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  int calls = 0;
+  system.install_program_step([&](double) { ++calls; });
+  system.set_clock(1.0e16, 0);
+
+  EXPECT_THROW(system.step(0.5), std::overflow_error);
+  EXPECT_DOUBLE_EQ(system.time(), 1.0e16);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_EQ(calls, 0);
+}
+
+TEST(ProgramRuntime, CadenceFailsBeforeMutationWhenSubstepsCollapseTheRepresentableInterval) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  int calls = 0;
+  system.install_program_step([&](double) { ++calls; });
+  system.set_program_cadence(/*substeps=*/3, /*stride=*/1);
+  system.set_clock(1.0, 0);
+  const double one_ulp = std::nextafter(1.0, 2.0) - 1.0;
+
+  EXPECT_THROW(system.step(one_ulp), std::overflow_error);
+  EXPECT_DOUBLE_EQ(system.time(), 1.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_EQ(calls, 0);
 }
 
 TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsKernels) {
@@ -169,6 +577,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
       ctx.axpy(U, Real(h), R);  // U <- U + h * R  (Forward Euler)
     }
   });
+  sim.set_program_block_map({0});
 
   // Profiling counters (ADC-459, Spec 3 section 29): enable the System Profiler, so the ProgramContext
   // seam ops the step body calls (solve_fields, rhs_into, axpy) bump "kernels" and rhs_scratch_like
@@ -244,6 +653,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextHonorsEmbeddedBoundaryResidualMet
       context.rhs_into(0, state, residual, 0);
       context.axpy(state, Real(step), residual);
     });
+    system.set_program_block_map({0});
   };
 
   System cartesian(cfg);
@@ -346,6 +756,7 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
       context.source_default_into(0, state, source);
       context.axpy(state, Real(step), source);
     });
+    system.set_program_block_map({0});
   };
 
   System cartesian(cfg);
@@ -389,7 +800,7 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
   EXPECT_GT(inactive_cells, 0);
 }
 
-TEST(ProgramRuntime, NativeImexSourcePreservesEmbeddedBoundaryInactiveCells) {
+TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
@@ -405,10 +816,21 @@ TEST(ProgramRuntime, NativeImexSourcePreservesEmbeddedBoundaryInactiveCells) {
   fill_ic(initial, n, gamma);
 
   System system(cfg);
-  add_imex_sourced_gas(system, gamma);
+  add_sourced_gas(system, gamma);
   system.set_state("gas", initial);
   system.set_disc_domain(0.5, 0.5, 0.31, "staircase");
   const auto mask = system.disc_mask();
+  system.set_program_block_map({0});
+  runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("macro");
+  context.install([context](double step) {
+    context.begin_step(step);
+    MultiFab& state = context.state(0);
+    MultiFab source = context.rhs_scratch_like(state);
+    context.source_default_into(0, state, source);
+    context.axpy(state, Real(step), source);
+  });
+  system.set_program_block_map({0});
   system.step(dt);
   const auto result = system.get_state("gas");
 
@@ -612,7 +1034,7 @@ TEST(ProgramRuntime, PointwiseDomainUsesThePreparedBlockMaskForValidation) {
   }
 }
 
-TEST(ProgramRuntime, Ssprk3AndProgramAlgebraPreserveInactiveBits) {
+TEST(ProgramRuntime, Ssprk3ProgramAlgebraPreservesInactiveBits) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
@@ -627,30 +1049,42 @@ TEST(ProgramRuntime, Ssprk3AndProgramAlgebraPreserveInactiveBits) {
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
 
-  System native(cfg);
-  add_ssprk3_gas(native, gamma);
-  native.set_disc_domain(0.5, 0.5, 0.32, "staircase");
-  const auto mask = native.disc_mask();
+  System program(cfg);
+  add_gas(program, gamma, "none");
+  program.set_disc_domain(0.5, 0.5, 0.32, "staircase");
+  const auto mask = program.disc_mask();
   for (std::size_t cell = 0; cell < cells; ++cell)
     if (mask[cell] < 0.5)
       for (int component = 0; component < 4; ++component)
         initial[static_cast<std::size_t>(component) * cells + cell] = inactive_value;
-  native.set_state("gas", initial);
-  native.step(1.0e-4);
-  const auto native_result = native.get_state("gas");
-
-  System program(cfg);
-  add_gas(program, gamma, "none");
   program.set_state("gas", initial);
-  program.set_disc_domain(0.5, 0.5, 0.32, "staircase");
   program.set_program_block_map({0});
   runtime::program::ProgramContext context(&program);
   context.configure_primary_clock("macro");
-  context.install([context](double) {
+  context.install([context](double step) {
+    context.begin_step(step);
     MultiFab& state = context.state(0);
-    MultiFab identical = state;
-    context.lincomb(state, Real(1) / Real(3), state, Real(2) / Real(3), identical);
+    MultiFab initial_state = state;
+    MultiFab stage = state;
+    MultiFab residual = context.rhs_scratch_like(state);
+
+    context.set_stage_time(0, 1);
+    context.rhs_into(0, state, residual, 100);
+    context.axpy(stage, Real(step), residual);
+
+    context.set_stage_time(1, 1);
+    residual.set_val(Real(0));
+    context.rhs_into(0, stage, residual, 101);
+    context.axpy(stage, Real(step), residual);
+    context.lincomb(stage, Real(3) / Real(4), initial_state, Real(1) / Real(4), stage);
+
+    context.set_stage_time(1, 2);
+    residual.set_val(Real(0));
+    context.rhs_into(0, stage, residual, 102);
+    context.axpy(stage, Real(step), residual);
+    context.lincomb(state, Real(1) / Real(3), initial_state, Real(2) / Real(3), stage);
   });
+  program.set_program_block_map({0});
   program.step(1.0e-4);
   const auto program_result = program.get_state("gas");
 
@@ -661,8 +1095,6 @@ TEST(ProgramRuntime, Ssprk3AndProgramAlgebraPreserveInactiveBits) {
     ++inactive_cells;
     for (int component = 0; component < 4; ++component) {
       const std::size_t index = static_cast<std::size_t>(component) * cells + cell;
-      EXPECT_EQ(std::bit_cast<std::uint64_t>(native_result[index]),
-                std::bit_cast<std::uint64_t>(initial[index]));
       EXPECT_EQ(std::bit_cast<std::uint64_t>(program_result[index]),
                 std::bit_cast<std::uint64_t>(initial[index]));
     }
@@ -716,6 +1148,7 @@ TEST(ProgramRuntime, PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells) 
       context.begin_step(step);
       context.apply_projection(0, context.state(0));
     });
+    system.set_program_block_map({0});
   };
 
   System cartesian(cfg);
@@ -814,6 +1247,7 @@ TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock
     throw runtime::program::StepAttemptRejected(SolveStatus::kIterationLimit, "solve",
                                                 "fault injection after provisional publications");
   });
+  sim.set_program_block_map({0});
 
   EXPECT_THROW(sim.step(1e-3), runtime::program::StepAttemptRejected);
   EXPECT_EQ(sim.macro_step(), 0);

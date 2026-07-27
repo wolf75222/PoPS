@@ -32,6 +32,7 @@ from pops._ir.lowering import diff
 from pops._ir.ops import left, right, sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
@@ -327,6 +328,8 @@ try:
                        spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
                        time=engine.Explicit())
     s_ref.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
+    install_forward_euler_program(s_hand)
+    install_forward_euler_program(s_ref)
 
     for _ in range(8):
         s_hand.step(2e-4)

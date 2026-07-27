@@ -19,6 +19,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.mesh import PolarMesh
 from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_ssprk3_program
 
 RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 48
 L_MODE = 4
@@ -56,6 +57,7 @@ def test_polar_diocotron_mode_grows_and_conserves():
         spatial=engine.Spatial(weno5=True), time=engine.Explicit(method="ssprk3"))
     sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _hollow_ring_density())
+    install_ssprk3_program(sim)
 
     m0 = sim.mass("ne")
     a0 = _mode_amplitude(sim, L_MODE)

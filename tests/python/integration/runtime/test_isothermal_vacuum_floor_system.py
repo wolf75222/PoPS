@@ -15,6 +15,7 @@ from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.variables import Conservative
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
+from tests.python.support.explicit_program import install_forward_euler_program
 
 import numpy as np
 
@@ -56,6 +57,7 @@ def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
     u = 0.5 * np.sin(np.pi * X / L) * np.sin(np.pi * Y / L)
     v = -0.3 * np.sin(2.0 * np.pi * X / L) * np.sin(np.pi * Y / L)
     sim.set_primitive_state("ions", rho=rho, u=u, v=v)
+    install_forward_euler_program(sim)
     for _ in range(nsteps):
         sim.step(dt)
     return np.array(sim.get_state("ions")).reshape(3, n, n)

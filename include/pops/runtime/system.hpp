@@ -646,8 +646,8 @@ class System {
                                        std::function<Real(const MultiFab&)> source_frequency,
                                        std::function<Real(const MultiFab&)> stability_dt);
 
-  /// Adds a GLOBAL time-step bound, evaluated ONCE per step (host) by step_cfl /
-  /// step_adaptive: dt <= fn() when fn() > 0 and finite (otherwise the bound does not constrain this step).
+  /// Adds a GLOBAL time-step bound, evaluated ONCE per step_cfl (host):
+  /// dt <= fn() when fn() > 0 and finite (otherwise the bound does not constrain this step).
   /// It is the hook for NON cell-local constraints: multi-block coupling, Schur/Poisson
   /// stage, AMR/scheduler, or a user policy (startup ramp...). @p label
   /// names the bound in last_dt_bound() ("global:<label>"). A Python callback is acceptable HERE
@@ -664,14 +664,14 @@ class System {
   // the generic coupled source and register through add_coupling_operator with a declared conservation
   // contract. A new coupling needs no new public C++ method.
 
-  /// Adds a GENERIC inter-species COUPLED SOURCE described by a BYTECODE (pops.dsl.CoupledSource,
-  /// P5 phase 1, EXPLICIT forward-Euler splitting after transport). Unlike the named couplings
+  /// Registers a GENERIC inter-species COUPLED SOURCE described by a BYTECODE
+  /// (pops.dsl.CoupledSource, P5 phase 1). Unlike the named couplings
   /// (add_ionization / add_collision / add_thermal_exchange) which freeze a formula, this one reads
   /// (block, role) fields as INPUT and writes source terms (block, role) computed by symbolic
   /// EXPRESSIONS compiled to postfix bytecode (stack machine, evaluated in the same
-  /// for_each_cell device; no per-cell Python callback). Reuses EXACTLY the coupling
-  /// application seam (P->couplings); MPI-safe (iteration over the local fabs,
-  /// local_size()==0 -> no-op).
+  /// for_each_cell device; no per-cell Python callback). Registration validates the bytecode and
+  /// exposes its typed metadata and stability bounds. It does not schedule a hidden post-transport
+  /// split: the installed whole-system Program must lower the coupling explicitly.
   ///
   /// FLAT ABI (no C++ object crosses the boundary):
   /// @param prog      bytecode description of the coupling grouped in a POD (ADC-214; cf.
@@ -684,17 +684,16 @@ class System {
   ///                  constant frequency only, bit-identical). These arrays were a long list
   ///                  of `std::vector` of the same type, interchangeable at the call site.
   /// @param frequency  declared CONSTANT frequency mu [1/s] of the coupling (audit wave 3,
-  ///                   CoupledSource.frequency): step bound dt <= cfl / mu aggregated by step_cfl /
-  ///                   step_adaptive (the couplings apply ONCE per macro-step, the bound
-  ///                   is on the macro-dt, without a substeps/stride factor). <= 0 (default) = no
+  ///                   CoupledSource.frequency): step bound dt <= cfl / mu aggregated by step_cfl
+  ///                   on the Program macro-dt, without a block substeps/stride factor. <= 0 (default) = no
   ///                   bound, bit-identical. Stays flat (a double, outside the homogeneous family).
   /// @param label      name of the coupling (reason "coupled_source:<label>" of last_dt_bound). Stays
   ///                   flat (a string, outside the homogeneous family). When prog.freq_prog_ops/_args are
-  ///                   non-empty, step_cfl / step_adaptive reduces the MAX of mu over the cells
+  ///                   non-empty, step_cfl reduces the MAX of mu over the cells
   ///                   (global all_reduce_max) and bounds dt <= cfl / max(mu) (reason
   ///                   "coupled_source:<label>"). max(mu) <= 0 = no bound this step.
   /// Unknown blocks / roles, an exceeded capacity or a malformed program raise an EXPLICIT
-  /// error (before any step). Without a call, the default path stays BIT-IDENTICAL.
+  /// error before any step.
   void add_coupled_source(const CoupledSourceProgram& prog, double frequency = 0.0,
                           const std::string& label = "coupled_source");
 
@@ -711,6 +710,14 @@ class System {
   /// couplings as typed operators instead of reading raw bytecode. A raw add_coupled_source registers an
   /// "unchecked" entry (empty contract). Empty until the first coupling is added.
   const std::vector<CouplingOperatorView>& coupled_operators() const;
+
+  /// Apply every registered coupling operator to one complete simultaneous candidate-state pack.
+  /// The pack is indexed by System block identity and must match every block's exact distributed
+  /// layout.  This is the native Program primitive for operator splitting: generated Programs pass
+  /// their uncommitted endpoint candidates, then project and atomically commit them.  The accepted
+  /// live states are therefore never a hidden coupling workspace.
+  POPS_EXPORT std::size_t apply_coupling_operators(Real dt,
+                                                   const std::vector<MultiFab*>& candidate_states);
 
   POPS_EXPORT SolveReport
   solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
@@ -788,8 +795,9 @@ class System {
   /// On demand, off the hot path (step/step_cfl unchanged).
   std::array<double, 3> dt_hotspot(const std::string& name);
 
-  /// Advances one MULTIRATE macro-step: the slowest block sets the macro-step, each block
-  /// that is faster is sub-cycled n = ceil(w_block / w_min) times. @return the macro-step.
+  /// Reserved multirate entry point. The historical native scheduler has been retired from the
+  /// facade; this currently throws even with a Program installed until multirate subcycling has an
+  /// explicit ProgramGraph lowering.
   double step_adaptive(double cfl);
 
   /// @name Profiling (Spec 3 section 29-30, ADC-459)
@@ -853,14 +861,15 @@ class System {
   /// -- it composes these primitives (solve_fields(); ProgramContext::rhs_into(b, U, R, rate_id);
   /// saxpy(U, dt, R)). The authored rate identity is mandatory at the native boundary.
   /// @{
-  /// Install the macro-step body. When set, SystemStepper::step calls it instead of the historical
-  /// path (and keeps t / macro_step coherent). Pass an empty std::function to clear it.
+  /// Install the mandatory macro-step body. System::step, advance, step_cfl and step_adaptive reject
+  /// before mutation while it is absent. An empty std::function is rejected: there is no public
+  /// temporal route that silently clears the whole-system Program.
   /// POPS_EXPORT: a generated problem.so resolves these across the dlopen boundary from the globally
   /// promoted host; without default visibility the .so could not find them (_pops is built with
   /// hidden visibility). The generated package itself remains RTLD_LOCAL.
   POPS_EXPORT void install_program_step(std::function<void(double)> step);
   /// Set the compiled-Program macro-step cadence (ADC-411): SYSTEM-level @p substeps and @p stride
-  /// around the installed program closure (cf. SystemStepper::step). @p substeps subdivides each
+  /// around the installed program closure (cf. SystemProgramDriver::step). @p substeps subdivides each
   /// effective step into @p substeps calls program_.step_(eff_dt/substeps); @p stride runs the whole
   /// program once per @p stride macro-steps with eff_dt = stride*dt (GLOBAL hold-then-catch-up, the
   /// clock still ticks every macro-step). Both must be >= 1 (throws std::invalid_argument otherwise).
@@ -868,13 +877,26 @@ class System {
   /// install_program so the generated .so ABI is untouched (the cadence is runtime metadata).
   /// NOTE: substeps > 1 is bit-exact vs native substeps ONLY for an UNCOUPLED / transport-only program
   /// (program_.step_ re-runs the whole program, solve_fields included); stride is GLOBAL (whole-system),
-  /// equal to native per-block stride only for a single-block system. See SystemStepper::step.
+  /// equal to native per-block stride only for a single-block system. See SystemProgramDriver::step.
   POPS_EXPORT void set_program_cadence(int substeps, int stride);
   /// Installed GLOBAL macro-step cadence (ADC-594): the current @c substeps / @c stride the compiled
   /// Program runs at (default 1/1 with no cadence set). Const, side-effect-free -- the structured
   /// ProgramRuntimeReport reads them; there was no Python-visible getter before.
   POPS_EXPORT int program_substeps() const;
   POPS_EXPORT int program_stride() const;
+  /// Exact duration, accepted public-step count and physical start currently held by the GLOBAL
+  /// Program stride window. All are zero at a stride boundary and form mandatory checkpoint state.
+  POPS_EXPORT double program_cadence_window_dt() const;
+  POPS_EXPORT int program_cadence_window_steps() const;
+  POPS_EXPORT double program_cadence_window_start_time() const;
+  /// Exact accepted Program interval provenance. Zero means no Program invocation has been accepted.
+  POPS_EXPORT double program_last_dt() const;
+  /// Stage the exact held-window image before set_clock during strict restart. The image must match
+  /// the exact accepted (@p accepted_time, @p macro_step) cursor, @p accepted_last_dt and installed
+  /// stride; malformed, missing or mismatched state is rejected without mutating accepted state.
+  POPS_EXPORT void restore_program_cadence_window(double accumulated_dt, int held_steps,
+                                                  double window_start_time, double accepted_last_dt,
+                                                  double accepted_time, int macro_step);
   /// Number of blocks (species) installed.
   POPS_EXPORT int n_blocks() const;
   /// The conservative state MultiFab of block @p b (zero-copy, non-owning reference).
@@ -967,7 +989,7 @@ class System {
   /// the generated problem.so across the dlopen boundary, like the other seam accessors.
   POPS_EXPORT Real block_max_speed(int b, const MultiFab& U) const;
   /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) --
-  /// the SAME hmin the native CFL uses (SystemStepper::cfl_grid_h). A compiled time Program reads it
+  /// the SAME hmin the native CFL uses (SystemProgramDriver::cfl_grid_h). A compiled time Program reads it
   /// (ProgramContext::hmin) to express its own dt bound (epic ADC-399 / ADC-417, spec s18). POPS_EXPORT:
   /// resolved by the generated problem.so across the dlopen boundary.
   POPS_EXPORT Real cfl_min_dx() const;
@@ -1232,16 +1254,18 @@ class System {
   /// @name Diagnostics
   /// @{
   int nx() const;
-  /// MACRO-STEP counter (0-indexed; incremented by step / step_cfl / step_adaptive). Necessary
+  /// MACRO-STEP counter (0-indexed; incremented by step / step_cfl). Necessary
   /// for checkpoint/restart: the stride cadence (hold-then-catch-up) depends on macro_step % stride,
-  /// not only on the time t (accepted-state v3). POPS_EXPORT: a scheduled (every(N)/hold) program
+  /// not only on the time t (accepted-state restart). POPS_EXPORT: a scheduled (every(N)/hold) program
   /// `.so` calls it for the cadence decision, so it must be in the loader's flat ABI like the other
   /// seam accessors (grid_context / solve_fields_from_state); without it the held-schedule `.so`
   /// fails to dlopen ("symbol not found in flat namespace"), caught by the Spec 3 runtime e2e test.
   POPS_EXPORT int macro_step() const;
   /// RESTORES the clock (t, macro_step) -- reserved for the RESTART (sim.restart). Restoring macro_step
   /// is MANDATORY to resume the stride cadence exactly; a restart that would only restore
-  /// t would desynchronize the blocks at stride > 1. @throws if macro_step < 0.
+  /// t would desynchronize the blocks at stride > 1. A mid-window cursor also requires an immediately
+  /// preceding restore_program_cadence_window; its start and accumulated variable-dt duration cannot
+  /// be inferred from the clock. @throws if macro_step < 0 or the stride-window state is invalid.
   POPS_EXPORT void set_clock(double t, int macro_step);
   /// Extent of the SLOW axis of the field (rows of the (ny, nx) row-major array returned by density / potential
   /// / get_state). Cartesian: ny() == nx() == n (square, UNCHANGED). Polar (ring): ny() == ntheta
@@ -1261,9 +1285,9 @@ class System {
   double mass(const std::string& name) const;
   std::vector<double> density(const std::string& name) const;  ///< ny*nx row-major (j slow, i fast)
   std::vector<double> potential();  ///< phi, ny*nx row-major (j slow, i fast)
-  /// RESTORES the potential phi (accepted-state v3, reserved for restart): without it the multigrid would restart
-  /// from a blank phi and the resume would not be bit-identical (warm start lost). Field ny*nx
-  /// row-major (same layout as potential()).
+  /// RESTORES the potential phi (accepted-state restart): without it the multigrid would restart from
+  /// a blank phi and the resume would not be bit-identical (warm start lost). Field ny*nx row-major
+  /// (same layout as potential()).
   void set_potential(const std::vector<double>& phi);
   std::vector<std::string> field_provider_slots() const;
   void set_field_potential(const std::string& provider_slot, const std::vector<double>& phi);

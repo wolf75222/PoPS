@@ -14,6 +14,7 @@ import numpy as np
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import System
+from tests.python.support.explicit_program import install_forward_euler_program
 
 fails = 0
 
@@ -49,6 +50,7 @@ def make_sim(n=32):
         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
         time=engine.Explicit(),
     )
+    install_forward_euler_program(sim)
     return sim
 
 

@@ -1,6 +1,5 @@
-// AMR MULTI-BLOCS MULTIRATE (capstone iv) : la FACADE RUNTIME (AmrSystem -> AmrRuntime) honore les
-// SUBSTEPS et le STRIDE PAR BLOC, en mirroir du moteur compile-time AmrSystemCoupler::step (#140), et
-// AmrSystem::step_cfl devient SUBSTEPS/STRIDE-AWARE comme System::step_cfl.
+// AMR MULTI-BLOCS MULTIRATE (capstone iv / ADC-700): un Program explicite porte les SUBSTEPS et le
+// STRIDE PAR BLOC; AmrRuntime reste le moteur spatial et le service de bornes CFL.
 //
 // Ce que le test verrouille (cf. tache capstone iv) :
 //   (1) SUBSTEPS reellement exerces : deux blocs EXPLICITES sur UNE hierarchie partagee, bloc A
@@ -12,19 +11,19 @@
 //       les DEUX blocs a chaque pas (RHS non trivial), meme quand le bloc lent est tenu.
 //   (3) step_cfl SUBSTEPS/STRIDE-AWARE : pour une config connue, le dt renvoye vaut
 //       cfl*h*min_b(substeps_b/(stride_b*w_b)) a la tolerance fp pres.
-//   (4) MONO-BLOC BIT-IDENTIQUE : step et step_cfl d'un bloc unique sont inchanges (dmax==0 entre deux
-//       runs), garantissant que le routage facade laisse le mono-bloc sur AmrCouplerMP.
+//   (3bis) CADENCE DE CHAMP PROGRAMMEE : placer solve_fields une fois hors d'une boucle de quatre
+//       etages produit exactement 1 solve, le placer dans la boucle en produit exactement 4.
+//   (4) MONO-BLOC DETERMINISTE : deux Programs identiques produisent les memes steps et step_cfl.
 //
-// On travaille surtout au niveau du MOTEUR AmrRuntime + build_amr_block (les briques de cette PR), ou
-// l'on accede aux niveaux/masses/RHS des blocs ; les regressions mono-bloc passent par la facade.
+// Toutes les avances passent par AmrSystem + Program. Le test n'appelle AmrRuntime que pour inspecter
+// les niveaux, masses, RHS et bornes spatiales.
 
 #include <gtest/gtest.h>
 
-#include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel + ExB/NoSource/ChargeDensity bricks
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
+#include "explicit_amr_program.hpp"
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
@@ -35,8 +34,11 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <memory>
+#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -44,13 +46,6 @@
 #endif
 
 using namespace pops;
-
-// Modele ExB scalaire (1 var) a charge q : advection pilotee par grad phi, densite de charge q n pour le
-// Poisson de systeme. La charge q (signe inclus) distingue electrons / ions.
-using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
-static ExBModel exb_model(double q, double B0) {
-  return ExBModel{ExBVelocity{Real(B0)}, NoSource{}, ChargeDensity{Real(q)}};
-}
 
 static ModelSpec exb_spec(double q, double B0) {
   ModelSpec s;
@@ -102,34 +97,73 @@ static double dmax_field(const std::vector<double>& a, const std::vector<double>
   return d;
 }
 
-// Construit un AmrRuntime a DEUX blocs ExB (charges q0/q1, schemas potentiellement differents) sur une
-// hierarchie figee N x N, avec substeps/stride par bloc. Renvoie le runtime (les densites initiales
-// rho0/rho1 sont posees sur le grossier de chaque bloc).
-static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B0,
-                                 const std::vector<double>& rho0, const std::vector<double>& rho1,
-                                 const std::string& lim0, const std::string& lim1, int sub0,
-                                 int sub1, int stride0, int stride1) {
-  AmrBuildParams bp;
-  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-  bp.mesh.periodicity = Periodicity{true, true};
-  bp.mesh.n = N;
-  bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};   // periodique
-  const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
-  std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::dispatch_amr_block(exb_model(q0, B0), lim0, "rusanov", S, "A", rho0,
-                                              /*has_density=*/true, 1.4, sub0, false, false,
-                                              stride0));
-  blocks.push_back(detail::dispatch_amr_block(exb_model(q1, B0), lim1, "rusanov", S, "B", rho1,
-                                              /*has_density=*/true, 1.4, sub1, false, false,
-                                              stride1));
-  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                     S.replicated_coarse, S.wall);
-  test::install_second_order_amr_transfer_authorities(runtime, 2);
-  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
-      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
-  return runtime;
+// Test-only authored Program with per-block cadence. The old AmrRuntime::step owned this loop
+// implicitly; ADC-700 makes it explicit: each block's stride decides whether it is due, and its
+// substeps determine the Euler intervals evaluated by the Program over every hierarchy clock.
+static void install_multirate_forward_euler_program(AmrSystem& system, std::vector<int> substeps,
+                                                    std::vector<int> strides) {
+  if (substeps.size() != strides.size() ||
+      substeps.size() != static_cast<std::size_t>(system.n_blocks()))
+    throw std::invalid_argument("multirate test Program requires one cadence per block");
+  for (std::size_t block = 0; block < substeps.size(); ++block)
+    if (substeps[block] < 1 || strides[block] < 1)
+      throw std::invalid_argument("multirate test Program cadences must be positive");
+
+  std::vector<int> block_map(substeps.size());
+  std::iota(block_map.begin(), block_map.end(), 0);
+  system.set_program_block_map(block_map);
+  system.install_program_step([](double) {});
+  if (!system.uses_runtime_engine() || system.engine() == nullptr)
+    throw std::runtime_error("multirate test Program requires the materialized AMR engine");
+
+  auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
+  context->configure_primary_clock("test.clock.macro");
+  context->install(
+      [context, substeps = std::move(substeps), strides = std::move(strides)](double macro_dt) {
+        context->advance_hierarchy(macro_dt, [context, &substeps, &strides](double level_dt) {
+          (void)context->solve_fields();
+          for (int block = 0; block < context->n_blocks(); ++block) {
+            const auto index = static_cast<std::size_t>(block);
+            if ((context->macro_step() + 1) % strides[index] != 0)
+              continue;
+            const double effective_dt = level_dt * static_cast<double>(strides[index]);
+            const double substep_dt = effective_dt / static_cast<double>(substeps[index]);
+            for (int substep = 0; substep < substeps[index]; ++substep) {
+              context->set_stage_time(substep, substeps[index]);
+              MultiFab& state = context->state(block);
+              MultiFab& residual = context->rhs_scratch(1000 + block, 0, state);
+              context->rhs_into(block, state, residual, 3000 + block);
+              context->axpy(state, Real(substep_dt), residual, Real(substep_dt), {{1, 1, 1}});
+            }
+          }
+        });
+      });
+  system.set_program_block_map(block_map);
+}
+
+// Construit une facade AmrSystem a DEUX blocs ExB sur une hierarchie partagee et installe le Program
+// multirate explicite ci-dessus. AmrRuntime reste uniquement le moteur spatial inspecte par le test.
+static std::unique_ptr<AmrSystem> make_two_block(int N, double L, double q0, double q1, double B0,
+                                                 const std::vector<double>& rho0,
+                                                 const std::vector<double>& rho1,
+                                                 const std::string& lim0, const std::string& lim1,
+                                                 int sub0, int sub1, int stride0, int stride1) {
+  AmrSystemConfig cfg;
+  cfg.n = N;
+  cfg.L = L;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  auto system = std::make_unique<AmrSystem>(cfg);
+  system->add_block("A", exb_spec(q0, B0), lim0, "rusanov", "conservative", "euler",
+                    /*substeps=*/sub0, /*stride=*/stride0);
+  system->add_block("B", exb_spec(q1, B0), lim1, "rusanov", "conservative", "euler",
+                    /*substeps=*/sub1, /*stride=*/stride1);
+  system->set_poisson("charge_density", "geometric_mg", "periodic");
+  system->set_density("A", rho0);
+  system->set_density("B", rho1);
+  system->set_temporal_relations({2}, {1}, {"integral_only"});
+  install_multirate_forward_euler_program(*system, {sub0, sub1}, {stride0, stride1});
+  return system;
 }
 
 // Minimal compiled model used to make the native clock partition numerically observable.  Mode 0
@@ -164,27 +198,44 @@ struct TemporalContractModel {
   }
 };
 
-static AmrRuntime make_temporal_contract_runtime(int mode,
-                                                 const amr::ParentChildClockRelation& relation) {
+static std::unique_ptr<AmrSystem> make_temporal_contract_system(
+    int mode, const amr::ParentChildClockRelation& relation) {
   constexpr int n = 8;
-  AmrBuildParams bp;
-  bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
-  bp.mesh.periodicity = Periodicity{true, true};
-  bp.mesh.n = n;
-  bp.mesh.L = 1.0;
-  bp.mesh.regrid_every = 0;
-  bp.poisson.bc = BCRec{};
-  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(bp);
   const std::vector<double> initial(static_cast<std::size_t>(n) * n, 1.0);
-  std::vector<AmrRuntimeBlock> blocks;
-  blocks.push_back(detail::build_amr_block<TemporalContractModel, NoSlope, RusanovFlux>(
-      TemporalContractModel{mode}, layout, "clocked", initial, /*has_density=*/true, 1.4,
-      /*substeps=*/1, /*recon_prim=*/false, /*imex=*/false));
-  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
-                     layout.base_per, layout.replicated_coarse, layout.wall);
-  test::install_second_order_amr_transfer_authorities(runtime, 1);
-  runtime.set_parent_child_temporal_relations({relation});
-  return runtime;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.level_count = 2;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+  auto system = std::make_unique<AmrSystem>(cfg);
+  AmrCompiledBlockBuilder builder =
+      [mode](const detail::SharedAmrLayout& layout, const std::string& name,
+             const std::vector<double>& density, bool has_density, const std::vector<double>& state,
+             bool has_state, double gamma, int substeps, bool recon_prim, bool imex, int stride,
+             const std::vector<std::string>& implicit_vars,
+             const std::vector<std::string>& implicit_roles, double pos_floor, double weno_epsilon,
+             bool wave_speed_cache) {
+        if (imex || !implicit_vars.empty() || !implicit_roles.empty())
+          throw std::invalid_argument("temporal-contract test block is explicit");
+        return detail::build_amr_block<TemporalContractModel, NoSlope, RusanovFlux>(
+            TemporalContractModel{mode}, layout, name, density, has_density, gamma, substeps,
+            recon_prim, stride, has_state ? &state : nullptr, pos_floor, weno_epsilon,
+            wave_speed_cache);
+      };
+  system->set_compiled_block(TemporalContractModel::n_vars, 1.4, /*substeps=*/1, std::move(builder),
+                             "clocked");
+  system->set_density("clocked", initial);
+  system->set_poisson("charge_density", "geometric_mg", "periodic");
+  // A configured (but never re-evaluated) criterion selects the two-level hierarchy template.
+  system->set_refinement(1e29);
+  const amr::Rational ratio = relation.temporal_ratio();
+  system->set_temporal_relations({ratio.numerator}, {ratio.denominator},
+                                 {relation.remainder_policy() == amr::RemainderPolicy::IntegralOnly
+                                      ? "integral_only"
+                                      : "explicit_final_substep"});
+  test::install_forward_euler_program(*system);
+  return system;
 }
 
 TEST(test_amr_multiblock_substeps, Runs) {
@@ -205,14 +256,80 @@ TEST(test_amr_multiblock_substeps, Runs) {
   const int K = 6;  // macro-pas
 
   // ============================================================================================
+  // (3bis) AuthoredFieldSolveCadenceCountsOneVsFour.
+  //     Les deux runs ont la meme hierarchie AMR a deux niveaux et le meme probleme de Poisson.
+  //     Seule la position de solve_fields dans le Program differe : une fois par macro-pas, ou dans
+  //     une boucle explicite de quatre etages. Les appels du corps au niveau fin sont des cache hits ;
+  //     le compteur du runtime mesure donc exactement l'intention ecrite : 1 contre 4 vrais solves.
+  // ============================================================================================
+  {
+    auto make_field_cadence_system = [&](bool per_stage) {
+      AmrSystemConfig cfg;
+      cfg.n = N;
+      cfg.L = L;
+      cfg.level_count = 2;
+      cfg.regrid_every = 0;
+      cfg.periodicity = {true, true};
+      auto system = std::make_unique<AmrSystem>(cfg);
+      system->add_block("A", exb_spec(q0, B0), "minmod", "rusanov", "conservative", "euler", 1);
+      system->add_block("B", exb_spec(q1, B0), "minmod", "rusanov", "conservative", "euler", 1);
+      system->set_poisson("charge_density", "geometric_mg", "periodic");
+      system->set_density("A", rho0);
+      system->set_density("B", rho1);
+      system->set_refinement(1e29);
+      system->set_temporal_relations({2}, {1}, {"integral_only"});
+      system->set_program_block_map({0, 1});
+      system->install_program_step([](double) {});
+      if (!system->uses_runtime_engine() || system->engine() == nullptr)
+        throw std::runtime_error("field-cadence test requires the materialized AMR engine");
+
+      auto context =
+          std::make_shared<runtime::program::AmrProgramContext>(system->engine(), system.get());
+      context->configure_primary_clock("test.clock.field-cadence");
+      context->install([context, per_stage](double macro_dt) {
+        context->advance_hierarchy(macro_dt, [context, per_stage](double) {
+          if (!per_stage) {
+            context->set_stage_time(0, 1);
+            (void)context->solve_fields();
+            return;
+          }
+          for (int stage = 0; stage < 4; ++stage) {
+            context->set_stage_time(stage, 4);
+            (void)context->solve_fields();
+          }
+        });
+      });
+      system->set_program_block_map({0, 1});
+      return system;
+    };
+
+    auto once = make_field_cadence_system(false);
+    AmrRuntime& once_runtime = *once->engine();
+    ASSERT_EQ(once_runtime.nlev(), 2);
+    const int once_before = once_runtime.solve_count();
+    once->step(dt);
+    EXPECT_EQ(once_runtime.solve_count() - once_before, 1)
+        << "solve_fields authored outside the stage loop must solve exactly once";
+
+    auto per_stage = make_field_cadence_system(true);
+    AmrRuntime& per_stage_runtime = *per_stage->engine();
+    ASSERT_EQ(per_stage_runtime.nlev(), 2);
+    const int per_stage_before = per_stage_runtime.solve_count();
+    per_stage->step(dt);
+    EXPECT_EQ(per_stage_runtime.solve_count() - per_stage_before, 4)
+        << "solve_fields authored inside four stages must solve exactly four times";
+  }
+
+  // ============================================================================================
   // (1) SUBSTEPS exerces : A substeps=4, B substeps=1. Etat fini, masse conservee, et A(sub=4) != A(sub=1).
   // ============================================================================================
   {
-    AmrRuntime rt = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
-                                   /*sub0=*/4, /*sub1=*/1, /*stride0=*/1, /*stride1=*/1);
+    auto sim = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
+                              /*sub0=*/4, /*sub1=*/1, /*stride0=*/1, /*stride1=*/1);
+    AmrRuntime& rt = *sim->engine();
     const Real mA0 = rt.mass(0), mB0 = rt.mass(1);
     for (int s = 0; s < K; ++s)
-      rt.step(dt);
+      sim->step(dt);
     const std::vector<double> dA4 = rt.density(0);
     const std::vector<double> dB = rt.density(1);
     const Real mA1 = rt.mass(0), mB1 = rt.mass(1);
@@ -223,10 +340,11 @@ TEST(test_amr_multiblock_substeps, Runs) {
     EXPECT_TRUE(std::fabs(mB1 - mB0) < 1e-10) << "subA4_blockB_mass_conserved";
 
     // Reference : MEME config mais A substeps=1. Le resultat de A doit DIFFERER (le sous-cyclage agit).
-    AmrRuntime rt1 = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
-                                    /*sub0=*/1, /*sub1=*/1, /*stride0=*/1, /*stride1=*/1);
+    auto sim1 = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
+                               /*sub0=*/1, /*sub1=*/1, /*stride0=*/1, /*stride1=*/1);
+    AmrRuntime& rt1 = *sim1->engine();
     for (int s = 0; s < K; ++s)
-      rt1.step(dt);
+      sim1->step(dt);
     const std::vector<double> dA1 = rt1.density(0);
     EXPECT_TRUE(all_finite(dA1)) << "subA1_state_finite";
     EXPECT_TRUE(dmax_field(dA4, dA1) > 1e-9)
@@ -240,21 +358,23 @@ TEST(test_amr_multiblock_substeps, Runs) {
   // (1b) RENVERSE : A substeps=1, B substeps=4. B(sub=4) doit differer de B(sub=1).
   // ============================================================================================
   {
-    AmrRuntime rt = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
-                                   /*sub0=*/1, /*sub1=*/4, /*stride0=*/1, /*stride1=*/1);
+    auto sim = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
+                              /*sub0=*/1, /*sub1=*/4, /*stride0=*/1, /*stride1=*/1);
+    AmrRuntime& rt = *sim->engine();
     const Real mA0 = rt.mass(0), mB0 = rt.mass(1);
     for (int s = 0; s < K; ++s)
-      rt.step(dt);
+      sim->step(dt);
     const std::vector<double> dB4 = rt.density(1);
     const Real mA1 = rt.mass(0), mB1 = rt.mass(1);
     EXPECT_TRUE(all_finite(dB4)) << "revB4_state_finite";
     EXPECT_TRUE(std::fabs(mA1 - mA0) < 1e-10) << "revB4_blockA_mass_conserved";
     EXPECT_TRUE(std::fabs(mB1 - mB0) < 1e-10) << "revB4_blockB_mass_conserved";
 
-    AmrRuntime rt1 = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
-                                    /*sub0=*/1, /*sub1=*/1, /*stride0=*/1, /*stride1=*/1);
+    auto sim1 = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
+                               /*sub0=*/1, /*sub1=*/1, /*stride0=*/1, /*stride1=*/1);
+    AmrRuntime& rt1 = *sim1->engine();
     for (int s = 0; s < K; ++s)
-      rt1.step(dt);
+      sim1->step(dt);
     const std::vector<double> dB1 = rt1.density(1);
     EXPECT_TRUE(dmax_field(dB4, dB1) > 1e-9) << "revB4_differs_from_subB1";
   }
@@ -266,14 +386,15 @@ TEST(test_amr_multiblock_substeps, Runs) {
   //     chaque pas (RHS non trivial), meme quand B est tenu.
   // ============================================================================================
   {
-    AmrRuntime rt = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
-                                   /*sub0=*/1, /*sub1=*/1, /*stride0=*/1, /*stride1=*/2);
+    auto sim = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
+                              /*sub0=*/1, /*sub1=*/1, /*stride0=*/1, /*stride1=*/2);
+    AmrRuntime& rt = *sim->engine();
     const std::vector<double> dA_init = rt.density(0);
     const std::vector<double> dB_init = rt.density(1);
     const Real mB_init = rt.mass(1);
 
     // macro-pas 0 : A avance, B TENU.
-    rt.step(dt);
+    sim->step(dt);
     const std::vector<double> dA_0 = rt.density(0);
     const std::vector<double> dB_0 = rt.density(1);
     EXPECT_TRUE(dmax_field(dA_0, dA_init) > 1e-9) << "stride_blockA_advances_at_mac0";
@@ -283,7 +404,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
     EXPECT_TRUE(norm_inf(rt.poisson_rhs()) > 1e-6) << "stride_poisson_sum_active_mac0";
 
     // macro-pas 1 : B RATTRAPE (pas effectif 2*dt).
-    rt.step(dt);
+    sim->step(dt);
     const std::vector<double> dB_1 = rt.density(1);
     EXPECT_TRUE(dmax_field(dB_1, dB_init) > 1e-9) << "stride_blockB_catchup_at_mac1";
     EXPECT_TRUE(std::fabs(rt.mass(1) - mB_init) < 1e-10) << "stride_blockB_mass_conserved";
@@ -298,23 +419,23 @@ TEST(test_amr_multiblock_substeps, Runs) {
   //     avec w = rt.max_speed() (max sur blocs identiques = w commun) et h = dx_coarse = L/N.
   // ============================================================================================
   {
-    AmrRuntime rt = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
-                                   /*sub0=*/4, /*sub1=*/1, /*stride0=*/1, /*stride1=*/2);
+    auto sim = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
+                              /*sub0=*/4, /*sub1=*/1, /*stride0=*/1, /*stride1=*/2);
+    AmrRuntime& rt = *sim->engine();
     const Real h = Real(L) / Real(N);  // dx_coarse
     const Real cfl = Real(0.4);
     const Real w = rt.max_speed();  // solve_fields + max sur les blocs (identiques -> w commun)
     EXPECT_TRUE(w > Real(0)) << "cfl_wave_speed_positive";
     // min(substeps/(stride*w)) sur {(4,1),(1,2)} = min(4, 0.5)/w = 0.5/w.
     const Real expected = cfl * h * Real(0.5) / w;
-    const Real got = rt.step_cfl(cfl, h);
+    const Real got = static_cast<Real>(sim->step_cfl(cfl));
     EXPECT_TRUE(std::fabs(got - expected) <= Real(1e-12) * std::fabs(expected) + Real(1e-15))
         << "cfl_dt_is_substeps_stride_aware";
   }
 
   // ============================================================================================
-  // (4) MONO-BLOC BIT-IDENTIQUE : step ET step_cfl d'un bloc unique inchanges (dmax==0 entre deux
-  //     runs). Garantit que le routage facade laisse le mono-bloc sur AmrCouplerMP (jamais AmrRuntime,
-  //     qui differe sur l'ordre des operations flottantes).
+  // (4) MONO-BLOC DETERMINISTE : deux executions du meme Program donnent exactement le meme step et
+  //     step_cfl. Il n'existe plus de selection implicite d'un second moteur temporel mono-bloc.
   // ============================================================================================
   {
     const std::vector<double> periodic_state = bump(N, 0.0, 0.40);
@@ -330,6 +451,8 @@ TEST(test_amr_multiblock_substeps, Runs) {
       sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
+      sim.set_temporal_relations({2}, {1}, {"integral_only"});
+      test::install_forward_euler_program(sim);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };
@@ -347,6 +470,8 @@ TEST(test_amr_multiblock_substeps, Runs) {
       sim.add_block("ne", exb_spec(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       sim.set_density("ne", periodic_state);
+      sim.set_temporal_relations({2}, {1}, {"integral_only"});
+      test::install_forward_euler_program(sim);
       double last = 0;
       for (int s = 0; s < 5; ++s)
         last = sim.step_cfl(0.4);
@@ -367,8 +492,9 @@ TEST(test_amr_multiblock_substeps, Runs) {
   {
     const amr::ParentChildClockRelation ratio_five_halves(
         0, 1, amr::Rational(5, 2), amr::RemainderPolicy::ExplicitFinalSubstep);
-    AmrRuntime rational = make_temporal_contract_runtime(/*mode=*/0, ratio_five_halves);
-    rational.step(Real(0.2));
+    auto rational_system = make_temporal_contract_system(/*mode=*/0, ratio_five_halves);
+    AmrRuntime& rational = *rational_system->engine();
+    rational_system->step(Real(0.2));
     const auto rational_fine = rational.block_level_state_global(0, 1);
     const Real rational_max =
         static_cast<Real>(*std::max_element(rational_fine.begin(), rational_fine.end()));
@@ -378,8 +504,9 @@ TEST(test_amr_multiblock_substeps, Runs) {
 
     const amr::ParentChildClockRelation ratio_two(0, 1, amr::Rational(2, 1),
                                                   amr::RemainderPolicy::IntegralOnly);
-    AmrRuntime integral = make_temporal_contract_runtime(/*mode=*/0, ratio_two);
-    integral.step(Real(0.2));
+    auto integral_system = make_temporal_contract_system(/*mode=*/0, ratio_two);
+    AmrRuntime& integral = *integral_system->engine();
+    integral_system->step(Real(0.2));
     const auto integral_fine = integral.block_level_state_global(0, 1);
     const Real integral_max =
         static_cast<Real>(*std::max_element(integral_fine.begin(), integral_fine.end()));
@@ -387,12 +514,15 @@ TEST(test_amr_multiblock_substeps, Runs) {
     EXPECT_GT(std::fabs(rational_max - integral_max), Real(1e-4))
         << "an installed temporal ratio must change the real native trajectory";
 
-    // Strong preparation guarantee: the rejected candidate neither replaces the accepted chain nor
-    // changes any level state.
+    // Strong preparation guarantee: validating a rejected candidate neither replaces the accepted
+    // chain nor changes any level state. Runtime installation is deliberately separate from clock
+    // partition validation, so exercise the relation's fail-closed partition contract directly.
     const auto before_rejected_set = rational.block_level_state_global(0, 1);
-    EXPECT_THROW(rational.set_parent_child_temporal_relations({amr::ParentChildClockRelation(
-                     0, 1, amr::Rational(5, 2), amr::RemainderPolicy::IntegralOnly)}),
-                 std::runtime_error);
+    const amr::ParentChildClockRelation rejected_relation(0, 1, amr::Rational(5, 2),
+                                                          amr::RemainderPolicy::IntegralOnly);
+    const amr::ClockWindow parent_window{{0, 0, amr::Rational(0, 1), 0.0},
+                                         {0, 0, amr::Rational(1, 1), 1.0}};
+    EXPECT_THROW(rejected_relation.partition(parent_window), std::runtime_error);
     EXPECT_EQ(rational.block_level_state_global(0, 1), before_rejected_set);
     ASSERT_EQ(rational.checkpoint_temporal_relations().size(), 1u);
     EXPECT_EQ(rational.checkpoint_temporal_relations()[0].temporal_ratio(), amr::Rational(5, 2));
@@ -412,24 +542,28 @@ TEST(test_amr_multiblock_substeps, Runs) {
         0, 1, amr::Rational(3, 2), amr::RemainderPolicy::ExplicitFinalSubstep);
     constexpr Real spike = Real(16);
 
-    AmrRuntime transport = make_temporal_contract_runtime(/*mode=*/1, ratio_three_halves);
+    auto transport_system = make_temporal_contract_system(/*mode=*/1, ratio_three_halves);
+    AmrRuntime& transport = *transport_system->engine();
     transport.set_block_level_state(0, 1, fine_state_spike(spike));
     EXPECT_NEAR(transport.cfl_dt(cfl, h), cfl * (h / Real(2)) * Real(1.5) / spike, 2e-15);
     EXPECT_EQ(transport.last_dt_bound(), "transport:clocked");
 
-    AmrRuntime source_bound = make_temporal_contract_runtime(/*mode=*/2, ratio_three_halves);
+    auto source_bound_system = make_temporal_contract_system(/*mode=*/2, ratio_three_halves);
+    AmrRuntime& source_bound = *source_bound_system->engine();
     source_bound.set_block_level_state(0, 1, fine_state_spike(spike));
     EXPECT_NEAR(source_bound.cfl_dt(cfl, h), cfl * Real(1.5) / spike, 2e-15);
     EXPECT_EQ(source_bound.last_dt_bound(), "source_frequency:clocked");
 
-    AmrRuntime direct_bound = make_temporal_contract_runtime(/*mode=*/3, ratio_three_halves);
+    auto direct_bound_system = make_temporal_contract_system(/*mode=*/3, ratio_three_halves);
+    AmrRuntime& direct_bound = *direct_bound_system->engine();
     direct_bound.set_block_level_state(0, 1, fine_state_spike(spike));
     EXPECT_NEAR(direct_bound.cfl_dt(cfl, h), Real(1.5) / spike, 2e-15);
     EXPECT_EQ(direct_bound.last_dt_bound(), "stability_dt:clocked");
 
     // A coupled frequency is a macro-step authority, but its field expression must still scan every
     // active AMR level. The coarse state remains one while the fine-only spike sets the global max.
-    AmrRuntime coupled_bound = make_temporal_contract_runtime(/*mode=*/0, ratio_three_halves);
+    auto coupled_bound_system = make_temporal_contract_system(/*mode=*/0, ratio_three_halves);
+    AmrRuntime& coupled_bound = *coupled_bound_system->engine();
     coupled_bound.set_block_level_state(0, 1, fine_state_spike(spike));
     coupled_bound.add_coupled_frequency_expr("fine_frequency", {"clocked"}, {"scalar"}, {},
                                              {static_cast<int>(CsOp::PushReg)}, {0});

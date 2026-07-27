@@ -3,7 +3,7 @@
 # WHY THIS FILE EXISTS
 #   The _pops extension used to carry ~20 hand-written .cpp files, one per
 #   (side, transport, flux) numeric combination (system/isothermal/*, system/compressible/*,
-#   amr/block/**, amr/compiled/**). Each was a 10-29 line function that instantiates ONE leaf of
+#   amr/block/**). Each was a 10-29 line function that instantiates ONE leaf of
 #   the template product in its own translation unit -- a deliberate BUILD-MEMORY mitigation
 #   (ADC-335 / ADC-342 / ADC-359): the full product (~1700 leaves) in one TU exceeds 7 GB at -O3
 #   under Kokkos, so per-flux TUs parallelize and cap peak memory. That mitigation is correct and
@@ -27,7 +27,7 @@
 # ROW FORMAT (fields separated by "|", one row per string in the list):
 #   template | side | transport | flux | symbol | out_subdir | out_name
 #     template   template stem under src/runtime/builders/templates/<template>.cpp.in
-#     side       system | amr_block | amr_compiled (audit category; documentation only)
+#     side       system | amr_block (audit category; documentation only)
 #     transport  exb | isothermal | compressible (must be a brick_catalog transport id)
 #     flux       -                       for a transport-only seam (whole make_block dispatcher)
 #                rusanov|hll|hllc|roe     for a flux-subdivided seam (must be a routes.py riemann id)
@@ -40,13 +40,9 @@
 #   system_flux_seam        build_block_for_make(<ctor>, ..., make_block_<flux>(...))    [iso/comp x flux]
 #   amr_block_transport_seam    build_amr_block_for(<ctor>, ...)                         [iso, exb]
 #   amr_block_flux_seam         build_amr_block_for_flux(<ctor>, ..., dispatch_amr_block_<flux>)   [comp x flux]
-#   amr_compiled_transport_seam build_amr_compiled_for(<ctor>, ...)                      [iso, exb]
-#   amr_compiled_flux_seam      build_amr_compiled_for_flux(<ctor>, ..., dispatch_amr_compiled_<flux>) [comp x flux]
-#
 # NOT generated (kept hand-written -- unique shapes, classified in docs/design/pybind-binding-audit.md):
 #   src/runtime/system/system_polar.cpp     verbatim polar visitor body (not a template leaf)
 #   amr/block/compressible/amr_block_compressible.cpp        thin riemann DISPATCHER (one per transport)
-#   amr/compiled/compressible/amr_compiled_compressible.cpp  thin riemann DISPATCHER (one per transport)
 
 set(POPS_SEAM_COMBINATIONS
     # --- System side -------------------------------------------------------------------------------
@@ -64,13 +60,6 @@ set(POPS_SEAM_COMBINATIONS
     "amr_block_flux_seam|amr_block|compressible|hll|build_amr_block_compressible_hll|amr/block/compressible|amr_block_compressible_hll.cpp"
     "amr_block_flux_seam|amr_block|compressible|hllc|build_amr_block_compressible_hllc|amr/block/compressible|amr_block_compressible_hllc.cpp"
     "amr_block_flux_seam|amr_block|compressible|roe|build_amr_block_compressible_roe|amr/block/compressible|amr_block_compressible_roe.cpp"
-    # --- AMR single-block compiled side ------------------------------------------------------------
-    "amr_compiled_transport_seam|amr_compiled|exb|-|build_amr_compiled_exb|amr/compiled/base|amr_compiled_exb.cpp"
-    "amr_compiled_transport_seam|amr_compiled|isothermal|-|build_amr_compiled_isothermal|amr/compiled/base|amr_compiled_isothermal.cpp"
-    "amr_compiled_flux_seam|amr_compiled|compressible|rusanov|build_amr_compiled_compressible_rusanov|amr/compiled/compressible|amr_compiled_compressible_rusanov.cpp"
-    "amr_compiled_flux_seam|amr_compiled|compressible|hll|build_amr_compiled_compressible_hll|amr/compiled/compressible|amr_compiled_compressible_hll.cpp"
-    "amr_compiled_flux_seam|amr_compiled|compressible|hllc|build_amr_compiled_compressible_hllc|amr/compiled/compressible|amr_compiled_compressible_hllc.cpp"
-    "amr_compiled_flux_seam|amr_compiled|compressible|roe|build_amr_compiled_compressible_roe|amr/compiled/compressible|amr_compiled_compressible_roe.cpp"
 )
 
 # Expand one manifest row into a generated seam .cpp under @p out_root, appending the generated path to
@@ -88,14 +77,12 @@ function(pops_generate_seam row out_root out_var)
   list(GET _cols 6 _name)
 
   # The object the transport ctor reads its ModelSpec fields off, VERBATIM from the deleted originals:
-  # the System-side seams read `model`, the AMR multi-block seams read `a.spec`, the AMR compiled seams
-  # read `spec`. Keyed by the file shape (template stem), never guessed.
+  # the System-side seams read `model`, while the AMR multi-block seams read `a.spec`.
+  # Keyed by the file shape (template stem), never guessed.
   if(_tmpl MATCHES "^system_")
     set(_spec "model")
   elseif(_tmpl STREQUAL "amr_block_transport_seam" OR _tmpl STREQUAL "amr_block_flux_seam")
     set(_spec "a.spec")
-  elseif(_tmpl STREQUAL "amr_compiled_transport_seam" OR _tmpl STREQUAL "amr_compiled_flux_seam")
-    set(_spec "spec")
   else()
     message(FATAL_ERROR "pops_generate_seam: unknown template '${_tmpl}' in row: ${row}")
   endif()

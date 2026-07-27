@@ -4,7 +4,7 @@ L'AMR sous-cycle (Berger-Oliger) avec reflux conservatif aux interfaces grossier
 cable comme METHODE TEMPORELLE optionnelle (engine.Explicit(ssprk3=True) -> time.kind == "ssprk3"),
 mono-bloc (coupleur AmrCouplerMP) ET multi-blocs (moteur AmrRuntime). Le reflux enregistre le FLUX
 EFFECTIF du pas SSP, Feff = 1/6 F(U0) + 1/6 F(U1) + 2/3 F(U2) : la correction grossier-fin reste
-exactement conservative pour le pas d'ordre 3 (cf. subcycle_level_mp / ssprk3_advance_level).
+exactement conservative pour le pas d'ordre 3 porte par le ProgramGraph AMR.
 
 On verifie cote Python :
   (a) AMR ssprk3 MONO-BLOC et MULTI-BLOCS tournent (etat fini) AVEC patchs fins actifs, et la MASSE
@@ -20,6 +20,7 @@ couvertes par ``integration/native_loader/test_ssprk3_production.py``.
 
 Test PUR Python (aucune compilation .so) : ne gate sur rien, toujours execute.
 """
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
@@ -29,6 +30,11 @@ import pytest
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import (
+    install_forward_euler_program,
+    install_ssprk2_program,
+    install_ssprk3_program,
+)
 
 
 def _bump(n, amp):
@@ -52,12 +58,16 @@ def _scalar_charge(q, B0=1.0):
 def _check_mono(n=32):
     sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=4)
     sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.add_equation("ne", _scalar_charge(+1.0),
-                  spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
-                  time=engine.Explicit(ssprk3=True))  # SSPRK3 mono-bloc (chemin AmrCouplerMP)
+    sim.add_equation(
+        "ne",
+        _scalar_charge(+1.0),
+        spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
+        time=engine.Explicit(ssprk3=True),
+    )  # SSPRK3 mono-bloc (ProgramGraph, AmrRuntime spatial)
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(1.05)  # seuil bas -> le bump tague et raffine (patchs fins actifs)
     sim.set_density("ne", _bump(n, 0.40))
+    install_ssprk3_program(sim)
     m0 = sim.mass()
     sim.advance(0.002, 12)
     d1 = np.asarray(sim.density())
@@ -66,23 +76,32 @@ def _check_mono(n=32):
     assert sim.n_patches() >= 1, "mono-bloc ssprk3 : aucun patch fin actif"
     drift = abs(m1 - m0) / (abs(m0) + 1.0)
     assert drift < 1e-9, "mono-bloc ssprk3 : masse non conservee (drift relatif=%.2e)" % drift
-    print("OK  (a) mono-bloc ssprk3 : fini, %d patch(s) fin(s), masse conservee (drift=%.2e)"
-          % (sim.n_patches(), drift))
+    print(
+        "OK  (a) mono-bloc ssprk3 : fini, %d patch(s) fin(s), masse conservee (drift=%.2e)"
+        % (sim.n_patches(), drift)
+    )
 
 
 def _check_multi(n=32):
     sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=4)
     sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.add_equation("ions", _scalar_charge(+1.0),
-                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                  time=engine.Explicit(ssprk3=True))     # SSPRK3 multi-blocs (moteur AmrRuntime)
-    sim.add_equation("electrons", _scalar_charge(-1.0),
-                  spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
-                  time=engine.Explicit(ssprk3=True))     # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
+    sim.add_equation(
+        "ions",
+        _scalar_charge(+1.0),
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(ssprk3=True),
+    )  # SSPRK3 multi-blocs (ProgramGraph, AmrRuntime spatial)
+    sim.add_equation(
+        "electrons",
+        _scalar_charge(-1.0),
+        spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
+        time=engine.Explicit(ssprk3=True),
+    )  # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(1.05)  # union des tags -> patchs fins actifs
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
+    install_ssprk3_program(sim)
     m0i, m0e = sim.mass("ions"), sim.mass("electrons")
     sim.advance(0.002, 12)
     d1i = np.asarray(sim.density("ions"))
@@ -94,8 +113,10 @@ def _check_multi(n=32):
     de = abs(m1e - m0e) / (abs(m0e) + 1.0)
     assert di < 1e-9, "multi-blocs ssprk3 : masse ions non conservee (drift=%.2e)" % di
     assert de < 1e-9, "multi-blocs ssprk3 : masse electrons non conservee (drift=%.2e)" % de
-    print("OK  (a) multi-blocs ssprk3 : 2 blocs schemas differents, fini, %d patch(s), masse par "
-          "bloc conservee (di=%.2e, de=%.2e)" % (sim.n_patches(), di, de))
+    print(
+        "OK  (a) multi-blocs ssprk3 : 2 blocs schemas differents, fini, %d patch(s), masse par "
+        "bloc conservee (di=%.2e, de=%.2e)" % (sim.n_patches(), di, de)
+    )
 
 
 # --- (b) defaut bit-identique : defaut == preset SSPRK2 explicite -------------------------------
@@ -109,6 +130,7 @@ def _check_default_ssprk2_bit_identical(n=32):
         s.add_equation("ne", _scalar_charge(+1.0), **kwargs)
         s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
+        install_ssprk2_program(s)
         s.advance(0.002, 10)
         return np.asarray(s.density())
 
@@ -125,12 +147,24 @@ def _build_advect(n, kind):
     temporelle (time) change entre les runs -> l'erreur mesuree est purement TEMPORELLE."""
     s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
     s.set_temporal_relations([2], [1], ["integral_only"])
-    s.add_equation("ne", _scalar_charge(+1.0),
-                spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),  # MEME schema spatial pour tous
-                time=(engine.Explicit(method="ssprk3") if kind == "ssprk3"
-                      else engine.Explicit(method="euler")))
+    s.add_equation(
+        "ne",
+        _scalar_charge(+1.0),
+        spatial=engine.Spatial(
+            limiter=FirstOrder(), flux=Rusanov()
+        ),  # MEME schema spatial pour tous
+        time=(
+            engine.Explicit(method="ssprk3")
+            if kind == "ssprk3"
+            else engine.Explicit(method="euler")
+        ),
+    )
     s.set_poisson(bc=Periodic())
     s.set_density("ne", _bump(n, 0.40))
+    if kind == "ssprk3":
+        install_ssprk3_program(s)
+    else:
+        install_forward_euler_program(s)
     return s
 
 
@@ -156,16 +190,21 @@ def _check_order(n=32):
     sr.advance(dt / k, nsteps * k)  # reference temps-convergee
 
     ref = np.asarray(sr.density())
-    err_euler = float(np.abs(np.asarray(se.density()) - ref).mean())   # L1 (moyenne) vs reference
+    err_euler = float(np.abs(np.asarray(se.density()) - ref).mean())  # L1 (moyenne) vs reference
     err_ssprk3 = float(np.abs(np.asarray(ss.density()) - ref).mean())
     assert np.isfinite(err_euler) and np.isfinite(err_ssprk3), "erreurs L1 non finies"
     # erreur euler non triviale (sinon comparaison de bruit) ET ssprk3 plus precise (inegalite nette).
-    assert err_euler > 1e-12, "erreur euler trop petite (%.2e) : dt insuffisant pour isoler le temps" % err_euler
+    assert err_euler > 1e-12, (
+        "erreur euler trop petite (%.2e) : dt insuffisant pour isoler le temps" % err_euler
+    )
     assert err_ssprk3 < err_euler, (
         "ssprk3 pas plus precis qu'euler (L1 ssprk3=%.3e, euler=%.3e, ratio=%.2f)"
-        % (err_ssprk3, err_euler, err_ssprk3 / max(err_euler, 1e-300)))
-    print("OK  (c) ordre : L1 temporelle ssprk3=%.3e < euler=%.3e (dt=%.3e, ratio=%.1fx)"
-          % (err_ssprk3, err_euler, dt, err_euler / max(err_ssprk3, 1e-300)))
+        % (err_ssprk3, err_euler, err_ssprk3 / max(err_euler, 1e-300))
+    )
+    print(
+        "OK  (c) ordre : L1 temporelle ssprk3=%.3e < euler=%.3e (dt=%.3e, ratio=%.1fx)"
+        % (err_ssprk3, err_euler, dt, err_euler / max(err_ssprk3, 1e-300))
+    )
 
 
 # --- (d) imex + ssprk3 : combinaison rejetee explicitement ---
@@ -174,21 +213,43 @@ def _check_imex_ssprk3_rejected(n=16):
     # System) : la facade standard ne peut PAS les combiner. On le prouve via le binding bas niveau --
     # demander le traitement IMEX de la source (masque implicite implicit_vars, OU rapport Newton
     # newton_diagnostics) AVEC time='ssprk3' est REJETE : ssprk3 = transport explicite, exclusif de
-    # l'IMEX. (Le moteur subcycle_level_mp porte en plus une garde de defense en profondeur ssprk3+imex.)
+    # l'IMEX. La normalisation du Program refuse cette composition avant execution.
     model = _scalar_charge(+1.0)
 
     def add(time, **kw):
         s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
         s.set_temporal_relations([2], [1], ["integral_only"])
-        kwargs = dict(implicit_vars=[], implicit_roles=[], newton_max_iters=2, newton_rel_tol=0.0,
-                      newton_abs_tol=0.0, newton_fd_eps=1e-7, newton_damping=1.0,
-                      newton_fail_policy="none", newton_diagnostics=False)
+        kwargs = dict(
+            implicit_vars=[],
+            implicit_roles=[],
+            newton_max_iters=2,
+            newton_rel_tol=0.0,
+            newton_abs_tol=0.0,
+            newton_fd_eps=1e-7,
+            newton_damping=1.0,
+            newton_fail_policy="none",
+            newton_diagnostics=False,
+        )
         kwargs.update(kw)
-        s._s.add_block("b", model, "minmod", "rusanov", "conservative", time, 1, 1,
-                       kwargs["implicit_vars"], kwargs["implicit_roles"], kwargs["newton_max_iters"],
-                       kwargs["newton_rel_tol"], kwargs["newton_abs_tol"], kwargs["newton_fd_eps"],
-                       kwargs["newton_damping"], kwargs["newton_fail_policy"],
-                       kwargs["newton_diagnostics"])
+        s._s.add_block(
+            "b",
+            model,
+            "minmod",
+            "rusanov",
+            "conservative",
+            time,
+            1,
+            1,
+            kwargs["implicit_vars"],
+            kwargs["implicit_roles"],
+            kwargs["newton_max_iters"],
+            kwargs["newton_rel_tol"],
+            kwargs["newton_abs_tol"],
+            kwargs["newton_fd_eps"],
+            kwargs["newton_damping"],
+            kwargs["newton_fail_policy"],
+            kwargs["newton_diagnostics"],
+        )
         return s
 
     # ssprk3 SEUL accepte (transport explicite), imex SEUL accepte (source implicite) : chacun valide.

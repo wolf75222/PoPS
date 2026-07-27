@@ -35,6 +35,7 @@ _CHILD = textwrap.dedent(
     from pops.runtime._engine_descriptors import Dirichlet
     import pops.runtime._engine_descriptors as engine
     from pops.runtime._system import System  # ADC-545 advanced runtime seam
+    from tests.python.support.explicit_program import install_ssprk2_program
 
     RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 64  # nr != ntheta : declencheur du debordement de tampon
 
@@ -62,6 +63,7 @@ _CHILD = textwrap.dedent(
         spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", steep_gaussian())
+    install_ssprk2_program(sim)
 
     # Quelques pas a GROS dt fixe -> le profil raide devient instable (NaN/Inf), comme le run signale.
     for _ in range(20):

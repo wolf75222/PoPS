@@ -69,13 +69,6 @@ int run_dynamic_active_depth(int n, int me, int np) {
   block.name = "moving";
   block.state_identity = "test://mpi-active-depth/block/moving/state/U";
   block.levels = levels;
-  block.advance = [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
-                     PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
-                     PreparedAmrAdvanceScratchPlan*) {};
-  block.advance_with_temporal_plan = [](std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity,
-                                        bool, const detail::PreparedAmrTemporalPlan&,
-                                        PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
-                                        PreparedAmrAdvanceScratchPlan*) {};
   block.add_elliptic_rhs = [](const MultiFab&, MultiFab&) {};
   block.max_speed = [](const MultiFab&, const MultiFab&) { return Real(0); };
   block.mass = [levels, geometry] {
@@ -110,7 +103,8 @@ int run_dynamic_active_depth(int n, int me, int np) {
   const bool removed = runtime.nlev() == 1 && runtime.max_levels() == 3 && runtime.n_patches() == 0;
   const double removed_mass = runtime.mass(0);
 
-  runtime.step(Real(1e-4));
+  // The active-depth test owns hierarchy removal/regrowth, not temporal evolution. The old no-op
+  // native step was used only as a separator and must not remain a second clock authority.
   test::install_prepared_threshold_decisions(
       runtime, {{0, 0, Real(1.05), test::PreparedThresholdRelation::Above}},
       {{0, 0, Real(1.05), test::PreparedThresholdRelation::Below}},

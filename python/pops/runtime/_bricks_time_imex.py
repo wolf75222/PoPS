@@ -8,6 +8,7 @@ re-imports every name; private native-engine adapters consume them through
 graphs; reusable public factories live under ``pops.lib.time``. These records are lowering values,
 not alternate public presets.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -32,13 +33,19 @@ def _cadence(label: str, substeps: Any, stride: Any) -> tuple[int, int]:
 
 
 def _newton_controls(
-    label: str, max_iters: Any, rel_tol: Any, abs_tol: Any, fd_eps: Any,
-    diagnostics: Any, damping: Any, fail_policy: Any,
+    label: str,
+    max_iters: Any,
+    rel_tol: Any,
+    abs_tol: Any,
+    fd_eps: Any,
+    diagnostics: Any,
+    damping: Any,
+    fail_policy: Any,
 ) -> tuple[Any, ...]:
     if not isinstance(fail_policy, str) or fail_policy not in ("none", "warn", "throw"):
         raise ValueError(
-            "%s.newton_fail_policy must be 'none'|'warn'|'throw' (got %r)"
-            % (label, fail_policy))
+            "%s.newton_fail_policy must be 'none'|'warn'|'throw' (got %r)" % (label, fail_policy)
+        )
     return (
         positive_int(max_iters, where=label + ".newton_max_iters"),
         exact_real(rel_tol, where=label + ".newton_rel_tol", minimum=0),
@@ -46,8 +53,8 @@ def _newton_controls(
         exact_real(fd_eps, where=label + ".newton_fd_eps", minimum=0, minimum_open=True),
         strict_bool(diagnostics, where=label + ".newton_diagnostics"),
         exact_real(
-            damping, where=label + ".newton_damping", minimum=0, minimum_open=True,
-            maximum=1),
+            damping, where=label + ".newton_damping", minimum=0, minimum_open=True, maximum=1
+        ),
         fail_policy,
     )
 
@@ -81,6 +88,7 @@ def _norm_implicit(label: Any, implicit_vars: Any, implicit_roles: Any) -> Any:
     POLICY / block side (and NOT the model): the SAME model is reused with distinct implicit treatments.
     The RESOLUTION of names/roles -> indices and the validation (name/role absent from the block) lives
     on the C++ side (System::add_block), the only source of truth for the block names/roles."""
+
     def as_list(x: Any, what: Any) -> Any:
         if x is None:
             return []
@@ -90,20 +98,22 @@ def _norm_implicit(label: Any, implicit_vars: Any, implicit_roles: Any) -> Any:
             out = [str(v) for v in x]
         except TypeError:
             raise ValueError(
-                "%s: %s must be a list of strings (received %r)" % (label, what, x)) from None
+                "%s: %s must be a list of strings (received %r)" % (label, what, x)
+            ) from None
         return out
+
     names = as_list(implicit_vars, "implicit_vars")
     roles = [_role_to_stable(r) for r in as_list(implicit_roles, "implicit_roles")]
     return names, roles
 
 
 class IMEX:
-    """IMEX: explicit transport (SSPRK) + stiff implicit source (backward-Euler, local Newton).
+    """Describe explicit transport plus a stiff local implicit source.
 
-    PARTIAL treatment: only the SOURCE is implicit (backward-Euler, local cell Newton,
-    via backward_euler_source / ImplicitSourceStepper on the C++ side). The TRANSPORT stays explicit
-    (advanced by the SSPRK core). This is NOT a global implicit solver (flux + source + Poisson
-    solved implicitly / Newton-Krylov) -- that work is a distinct future phase.
+    This is immutable authoring metadata, not an executor. A target must lower it into a typed
+    Program containing explicit transport and a local implicit source solve. Unsupported targets
+    fail closed; there is no fallback to a private C++ time engine. It does not describe a global
+    implicit PDE solve coupling flux, source and Poisson.
 
     - ``substeps=N``: substeps per macro-step (cf. Explicit). Default 1.
     - ``stride=M``: block cadence, hold-then-catch-up semantics (cf. Explicit): the block is held
@@ -113,8 +123,8 @@ class IMEX:
     - ``implicit_vars``: names of the conserved variables to treat IMPLICITLY in the source step;
       the others stay explicit (forward Euler). The mask is CARRIED BY THIS POLICY / the block,
       NOT by the model -> the SAME model is reused with different implicit treatments.
-      Default [] (+ implicit_roles []) = model default (Model::is_implicit, or all implicit by
-      default), BIT-IDENTICAL. Resolved on the C++ side against the block names (an absent name raises an error).
+      Default [] (+ implicit_roles []) = the model/Program default. A lowering that supports this
+      route resolves names against the block descriptor; an absent name raises an error.
       E.g. the private engine record ``IMEX(implicit_vars=["rho_u", "rho_v"])``.
     - ``implicit_roles``: same mask but by physical ROLE ("density", "momentum_x", "energy", ...)
       instead of the name (cf. System.variable_roles). Union with implicit_vars. E.g.
@@ -123,45 +133,63 @@ class IMEX:
     - ``newton_rel_tol`` / ``newton_abs_tol``: per-cell stopping criterion
       ||F||_inf <= abs_tol + rel_tol*||F0||_inf (0/0 = disabled, bit-identical historical loop).
     - ``newton_fd_eps``: step of the finite-difference Jacobian (default 1e-7 = historical).
-    - ``newton_diagnostics``: enables the Newton report (sim.newton_report(name) -> dict
-      {enabled, converged, max_residual, max_iters_used, n_failed}), aggregated over the last advance
-      of the block. OPT-IN: default False = zero extra cost.
+    - ``newton_diagnostics``: requests a Newton report from the typed implicit Program primitive.
+      A target that cannot produce that report rejects the request.
 
-    NOMENCLATURE (audit 2026-06): the wired scheme is exactly ForwardEuler(transport without
-    source) + local backward-Euler on the source ("SourceImplicitBE"). It is NOT an
-    IMEX-RK / ARK family (no choice of Butcher tableau, ``method=`` of the explicit does not apply
-    to the IMEX half-step); a true IMEXRK family would be a distinct future work.
+    NOMENCLATURE: the requested scheme is ForwardEuler transport without source plus local
+    backward-Euler on the source (``SourceImplicitBE``). It is not an IMEX-RK/ARK tableau.
     """
 
     kind = TIME_IMEX  # typed time route (ADC-584); str value stays the historical "imex"
-    def __init__(self, substeps: int = 1, stride: int = 1, implicit_vars: Any = None, implicit_roles: Any = None,
-                 newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
-                 newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
-                 newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
-                 newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
-                 newton_diagnostics: bool = False,
-                 newton_damping: Any = NEWTON_DEFAULT_DAMPING,
-                 newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
+
+    def __init__(
+        self,
+        substeps: int = 1,
+        stride: int = 1,
+        implicit_vars: Any = None,
+        implicit_roles: Any = None,
+        newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
+        newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
+        newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
+        newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
+        newton_diagnostics: bool = False,
+        newton_damping: Any = NEWTON_DEFAULT_DAMPING,
+        newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY,
+    ) -> None:
         self.substeps, self.stride = _cadence("IMEX", substeps, stride)
-        self.implicit_vars, self.implicit_roles = _norm_implicit("IMEX", implicit_vars, implicit_roles)
-        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
-         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
-         self.newton_fail_policy) = _newton_controls(
-             "IMEX", newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps,
-             newton_diagnostics, newton_damping, newton_fail_policy)
+        self.implicit_vars, self.implicit_roles = _norm_implicit(
+            "IMEX", implicit_vars, implicit_roles
+        )
+        (
+            self.newton_max_iters,
+            self.newton_rel_tol,
+            self.newton_abs_tol,
+            self.newton_fd_eps,
+            self.newton_diagnostics,
+            self.newton_damping,
+            self.newton_fail_policy,
+        ) = _newton_controls(
+            "IMEX",
+            newton_max_iters,
+            newton_rel_tol,
+            newton_abs_tol,
+            newton_fd_eps,
+            newton_diagnostics,
+            newton_damping,
+            newton_fail_policy,
+        )
 
 
 class SourceImplicit:
-    """Implicit treatment of the STIFF SOURCE (backward-Euler, local Newton), explicit transport.
+    """Describe a stiff local implicit source with explicit transport.
 
-    Clear name for the source-only IMEX scheme: only the SOURCE is treated implicitly
-    (backward-Euler solved by local per-cell Newton, via backward_euler_source /
-    ImplicitSourceStepper on the C++ side). TRANSPORT stays EXPLICIT (advanced by the SSPRK core).
+    Clear authoring name for the source-only IMEX scheme. A target-specific typed Program must
+    provide the local backward-Euler/Newton primitive and the explicit transport. Merely attaching
+    this descriptor never enables a hidden runtime stepper.
 
     IMPORTANT -- this is NOT a global implicit PDE solver. A global implicit solver
     (flux + source + Poisson all implicit, Newton-Krylov or global Schur) is a distinct
-    future effort. ``SourceImplicit`` and the private ``IMEX`` record select the same source-only
-    engine route with bit-identical numerics.
+    future effort. ``SourceImplicit`` and ``IMEX`` request the same source-only semantics.
 
     WHEN TO USE IT (local source solve vs global ``Program.solve``) -- both mechanisms can treat a
     stiff contribution implicitly, but at different scales:
@@ -181,29 +209,48 @@ class SourceImplicit:
       THIS POLICY / the block, not by the model. Defaults [] = model default, bit-identical.
     """
 
-    kind = TIME_IMEX  # same C++ path as IMEX (ImplicitSourceStepper); typed route (ADC-584)
+    kind = TIME_IMEX  # same typed authoring route as IMEX (ADC-584)
 
-    def __init__(self, substeps: int = 1, stride: int = 1, implicit_vars: Any = None, implicit_roles: Any = None,
-                 newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
-                 newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
-                 newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
-                 newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
-                 newton_diagnostics: bool = False,
-                 newton_damping: Any = NEWTON_DEFAULT_DAMPING,
-                 newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
+    def __init__(
+        self,
+        substeps: int = 1,
+        stride: int = 1,
+        implicit_vars: Any = None,
+        implicit_roles: Any = None,
+        newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
+        newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
+        newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
+        newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
+        newton_diagnostics: bool = False,
+        newton_damping: Any = NEWTON_DEFAULT_DAMPING,
+        newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY,
+    ) -> None:
         self.substeps, self.stride = _cadence("SourceImplicit", substeps, stride)
         self.implicit_vars, self.implicit_roles = _norm_implicit(
-            "SourceImplicit", implicit_vars, implicit_roles)
-        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
-         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
-         self.newton_fail_policy) = _newton_controls(
-             "SourceImplicit", newton_max_iters, newton_rel_tol, newton_abs_tol,
-             newton_fd_eps, newton_diagnostics, newton_damping, newton_fail_policy)
+            "SourceImplicit", implicit_vars, implicit_roles
+        )
+        (
+            self.newton_max_iters,
+            self.newton_rel_tol,
+            self.newton_abs_tol,
+            self.newton_fd_eps,
+            self.newton_diagnostics,
+            self.newton_damping,
+            self.newton_fail_policy,
+        ) = _newton_controls(
+            "SourceImplicit",
+            newton_max_iters,
+            newton_rel_tol,
+            newton_abs_tol,
+            newton_fd_eps,
+            newton_diagnostics,
+            newton_damping,
+            newton_fail_policy,
+        )
 
 
-# PRECISE name of the scheme wired by IMEX / SourceImplicit (audit 2026-06): ForwardEuler transport
-# without source + LOCAL backward-Euler on the source (per-cell Newton). STRICT alias of
-# SourceImplicit (same object): to use when you want to name the hypothesis in a script.
+# Precise authoring name for ForwardEuler transport without source plus local backward-Euler on the
+# source. Strict alias of SourceImplicit; target availability is checked during Program lowering.
 SourceImplicitBE = SourceImplicit
 
 
@@ -236,30 +283,56 @@ class IMEXRK:
 
     FULLY IMPLICIT SOURCE: unlike the private ``IMEX`` policy, ``IMEXRK`` does not expose implicit_vars /
     implicit_roles (the ARS(2,2,2) stage-consistency relation assumes a homogeneous solve). A partial
-    mask is rejected on the C++ side; the partial engine route uses the private ``IMEX`` record.
+    mask is rejected during lowering; a supported partial route uses the ``IMEX`` descriptor and a
+    typed local-solve Program primitive.
     """
 
     kind = TIME_IMEXRK_ARS222  # typed time route (ADC-584)
 
-    def __init__(self, scheme: str = "ars222", substeps: int = 1, stride: int = 1,
-                 newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
-                 newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
-                 newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
-                 newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
-                 newton_diagnostics: bool = False,
-                 newton_damping: Any = NEWTON_DEFAULT_DAMPING,
-                 newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
+    def __init__(
+        self,
+        scheme: str = "ars222",
+        substeps: int = 1,
+        stride: int = 1,
+        newton_max_iters: Any = NEWTON_DEFAULT_MAX_ITERS,
+        newton_rel_tol: Any = NEWTON_DEFAULT_REL_TOL,
+        newton_abs_tol: Any = NEWTON_DEFAULT_ABS_TOL,
+        newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
+        newton_diagnostics: bool = False,
+        newton_damping: Any = NEWTON_DEFAULT_DAMPING,
+        newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY,
+    ) -> None:
         if not isinstance(scheme, str) or scheme != "ars222":
-            raise ValueError("IMEXRK: scheme 'ars222' (only wired IMEX-RK scheme; got %r)"
-                             % (scheme,))
+            raise ValueError(
+                "IMEXRK: scheme 'ars222' (only wired IMEX-RK scheme; got %r)" % (scheme,)
+            )
         self.scheme = scheme
         self.substeps, self.stride = _cadence("IMEXRK", substeps, stride)
-        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
-         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
-         self.newton_fail_policy) = _newton_controls(
-             "IMEXRK", newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps,
-             newton_diagnostics, newton_damping, newton_fail_policy)
+        (
+            self.newton_max_iters,
+            self.newton_rel_tol,
+            self.newton_abs_tol,
+            self.newton_fd_eps,
+            self.newton_diagnostics,
+            self.newton_damping,
+            self.newton_fail_policy,
+        ) = _newton_controls(
+            "IMEXRK",
+            newton_max_iters,
+            newton_rel_tol,
+            newton_abs_tol,
+            newton_fd_eps,
+            newton_diagnostics,
+            newton_damping,
+            newton_fail_policy,
+        )
 
 
-__all__ = ["_role_to_stable", "_norm_implicit", "IMEX", "SourceImplicit", "SourceImplicitBE",
-           "IMEXRK"]
+__all__ = [
+    "_role_to_stable",
+    "_norm_implicit",
+    "IMEX",
+    "SourceImplicit",
+    "SourceImplicitBE",
+    "IMEXRK",
+]

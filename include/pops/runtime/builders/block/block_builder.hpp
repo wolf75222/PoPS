@@ -789,9 +789,10 @@ POPS_COLD_FN ImplicitMask<N> make_implicit_mask(const std::vector<int>& implicit
 /// default is_implicit -> bit-identical. No effect outside IMEX (the explicit has no implicit step).
 /// The optional EMBEDDED-BOUNDARY transport advances (advance_masked / advance_eb) are built when @p ctx
 /// carries the System prepared geometry (ctx.domain_mask / ctx.eb_inverse_volume_fraction);
-/// otherwise they
-/// stay empty and the stepper falls back on advance (bit-identical). STABLE addresses of Impl members,
-/// read by pointer at step time -> block and level-set installation order is indifferent. The
+/// otherwise they stay empty for the low-level engine. The public Program path never falls back to
+/// Cartesian transport: capability validation and the geometry-qualified residual selector reject a
+/// missing provider explicitly. STABLE addresses of Impl members, read by pointer at step time ->
+/// block and level-set installation order is indifferent. The
 /// embedded-boundary advances MIMIC advance (same RK / IMEX, same limiter / flux); only the transport
 /// residual is dispatched (assemble_rhs_masked / _eb).
 template <class Limiter, class Flux, class Model>
@@ -835,8 +836,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       // IMEX-RK FAMILY, ARS(2,2,2) scheme (order 2): advance PARALLEL to AdvanceImex, FULLY implicit
       // source (impl_mask ignored: the facade already rejects a partial mask with this scheme). FULL
       // CARTESIAN ONLY: we do NOT build an embedded-boundary advance (advance_masked / advance_eb stay
-      // empty) -> an embedded-boundary geometry mode on this block throws an EXPLICIT error at step time
-      // (SystemStepper::advance_transport_n), never a silent cartesian.
+      // empty) -> Program lowering must reject an embedded-boundary geometry mode explicitly, never
+      // select a silent Cartesian advance.
       bc.advance = detail::AdvanceImexRkArs222<Limiter, Flux, Model>{
           m, ctx, recon_prim, newton_opts, newton_report, pos_floor, weno_eps};
     } else {

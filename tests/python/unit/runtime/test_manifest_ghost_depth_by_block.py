@@ -98,7 +98,7 @@ def _compiled(blocks, *, ghost_depth=2):
         layout_targets={
             row.handle.qualified_id: "system" for row in layout_plan.layouts
         },
-        time={"program": "gas_program"},
+        time=program,
         blocks=tuple(
             ResolvedBlock(
                 name, {"model": "ghost-depth-model"},

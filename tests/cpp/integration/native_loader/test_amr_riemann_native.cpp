@@ -22,6 +22,7 @@
 
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
+#include "explicit_amr_program.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
@@ -52,7 +53,7 @@ ProdModel make_model() {
                    BackgroundDensity{Real(0), Real(0)}};
 }
 
-// ModelSpec equivalente pour le chemin add_block (dispatch_amr_compiled -> MEME type concret).
+// ModelSpec equivalente pour le chemin add_block (MEME type concret).
 ModelSpec make_spec() {
   ModelSpec spec;
   spec.transport = "compressible";
@@ -95,6 +96,7 @@ Snap run(AmrSystem& s, int nsteps) {
   s.set_temporal_relations({2}, {1}, {"integral_only"});
   s.set_poisson("charge_density", "geometric_mg");
   s.set_refinement(1.2);
+  test::install_forward_euler_program(s);
   const double dt = 2e-4;
   for (int k = 0; k < nsteps; ++k)
     s.step(dt);

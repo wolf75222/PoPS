@@ -436,33 +436,15 @@ def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
     return (np.array(amr.density("plasma")), amr.installed_program_hash(), last_dt), None
 
 
-def _amr_run_cfl_native(model, u0, nsteps=NSTEPS, cfl=0.4):
-    """A NATIVE (no Program installed) AMR step_cfl run, the baseline the Program route must NOT silently
-    reproduce. Same block + IC, but no install_program -> the native engine advances under step_cfl."""
-    amr = AmrSystem(n=N, L=1.0, regrid_every=0)
-    try:
-        block_cm = compile_block_model(model, target="amr_system")
-    except RuntimeError as exc:
-        return None, "compile (AMR native): %s" % str(exc)[:140]
-    amr.add_equation("plasma", block_cm,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="ssprk2"))
-    amr.set_density("plasma", u0)
-    last_dt = 0.0
-    for _ in range(nsteps):
-        last_dt = float(amr.step_cfl(cfl))
-    return (np.array(amr.density("plasma")), last_dt), None
-
-
 def test_step_cfl_routes_through_installed_program():
     """(4) ADC-508 review fix 1: AmrSystem::step_cfl must route through an installed Program, NOT silently
     run the native engine. We install a custom midpoint Program, drive it with step_cfl, and assert:
     (a) the
     program ran (its hash is set, finite dt, finite density), and (b) the evolved density DIFFERS from a
-    native (no-program) step_cfl run on the same block + IC -- i.e. step_cfl did NOT silently bypass the
-    Program.  A custom midpoint Program is compared with the native SSPRK2 engine on a nonlinear
-    Burgers flux, so a measurable difference proves the Program drove the step without relying on a
-    formerly-wrong SSPRK2 implementation. Host/CPU-runnable; self-skips without a compiler / Kokkos."""
+    separately authored SSPRK2 Program on the same block + IC -- i.e. step_cfl did NOT silently select
+    a hidden runtime scheme. A custom midpoint Program is compared with the explicit SSPRK2 Program on
+    a nonlinear Burgers flux, so a measurable difference proves the installed Program drove the step.
+    Host/CPU-runnable; self-skips without a compiler / Kokkos."""
     print("== step_cfl routes through the installed AMR Program (fix 1: no silent native bypass) ==")
     model = _nonlinear_model("adc508_stepcfl")
     u0 = _init_density()
@@ -482,15 +464,24 @@ def test_step_cfl_routes_through_installed_program():
         "the Program-driven step_cfl kept a finite, strictly-positive density (min = %.4f)"
         % float(prog_rho.min()))
 
-    nat_out, nerr = _amr_run_cfl_native(_nonlinear_model("adc508_stepcfl"), u0)
-    assert nat_out is not None, nerr
-    nat_rho, nat_dt = nat_out
-    # The evolved density must DIFFER: if step_cfl had silently run the native SSPRK2 scheme, the
-    # custom midpoint Program would have no effect and prog_rho would equal nat_rho byte-for-byte.
-    diff = float(np.abs(prog_rho - nat_rho).max())
+    ss_model = _nonlinear_model("adc508_stepcfl")
+    ss_out, ss_err = _amr_run_cfl(
+        _ssprk2_program(
+            ss_model,
+            "adc508_stepcfl_ssprk2",
+            target="amr_system",
+        ),
+        ss_model,
+        u0,
+    )
+    assert ss_out is not None, ss_err
+    ss_rho, ss_hash, ss_dt = ss_out
+    chk(ss_hash != prog_hash, "midpoint and SSPRK2 carry distinct installed Program identities")
+    chk(np.isfinite(ss_dt) and ss_dt > 0.0, "SSPRK2 Program returned a finite positive CFL dt")
+    # The evolved densities must differ: the two installed Program bodies own distinct tableaux.
+    diff = float(np.abs(prog_rho - ss_rho).max())
     chk(diff > 1e-14,
-        "the Program-driven step_cfl density DIFFERS from the native step_cfl baseline (max|diff| = "
-        "%.3e) -- the installed Program is NOT silently bypassed" % diff)
+        "midpoint and SSPRK2 Program-driven step_cfl densities differ (max|diff| = %.3e)" % diff)
 
 
 def _run_all():

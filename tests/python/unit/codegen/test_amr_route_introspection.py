@@ -30,6 +30,7 @@ from tests.python.support.resolved_amr_plan import resolved_amr_plan  # noqa: E4
 from tests.python.support.native_execution_context import (  # noqa: E402
     artifact_execution_context,
 )
+from tests.python.support.compiled_program import CompiledProgramStub  # noqa: E402
 
 
 def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
@@ -64,9 +65,11 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         cells=64,
         name="amr-route-introspection",
     )
+    program = CompiledProgramStub(
+        target="amr_system", block_names=("block",), abi_key=component.abi_key)
     artifact = CompiledSimulationArtifact(
         plan=plan,
-        program=None,
+        program=program,
         blocks=(
             CompiledBlockArtifact(
                 "block", component, plan.blocks[0].spatial, ("U",)

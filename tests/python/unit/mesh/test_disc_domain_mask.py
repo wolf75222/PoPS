@@ -28,6 +28,7 @@ from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 from pops.mesh.geometry import DiscDomain
 from pops.mesh.polar import PolarMesh
+from tests.python.support.explicit_program import install_forward_euler_program
 
 import numpy as np
 
@@ -80,6 +81,7 @@ def _build(n, L):
                      time=Explicit())
     # Vitesse initiale CONSTANTE non nulle : le transport advecte la bosse (test non trivial).
     sim.set_primitive_state("s", rho=rho0, u=0.7 + 0.0 * rho0, v=-0.4 + 0.0 * rho0)
+    install_forward_euler_program(sim)
     return sim
 
 

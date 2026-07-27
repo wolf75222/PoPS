@@ -551,10 +551,10 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   P->sp.back().supported_geometry_modes = closures.supported_geometry_modes;
   P->sp.back().cons_vars = cons_vars;
   P->sp.back().prim_vars = prim_vars;
-  // EMBEDDED-BOUNDARY transport advances (project T5-PR3): empty unless build_block built them
-  // (Cartesian block with prepared mask/inverse-kappa owners provided). Empty -> the stepper falls
-  // back on advance
-  // (bit-identical).
+  // EMBEDDED-BOUNDARY transport advances (project T5-PR3): retained for the low-level engine and
+  // empty unless build_block built them from prepared mask/inverse-kappa owners. They are not a
+  // facade fallback: the Program route selects geometry-qualified residuals and fails closed when
+  // their provider is absent.
   P->sp.back().advance_masked = std::move(closures.advance_masked);
   P->sp.back().advance_eb = std::move(closures.advance_eb);
   P->sp.back().hotspot = std::move(closures.hotspot);  // dt_hotspot diagnostic (ADC-182)
@@ -613,7 +613,7 @@ POPS_EXPORT void System::set_block_ghosts(const std::string& name, int n_ghost) 
 }
 
 // OPTIONAL step bounds of a block (model traits): set after install_block, read by
-// step_cfl / step_adaptive. Empty functions = the block imposes no bound (historical).
+// step_cfl. Empty functions = the block imposes no bound.
 void System::set_block_dt_bounds(const std::string& name,
                                  std::function<Real(const MultiFab&)> source_frequency,
                                  std::function<Real(const MultiFab&)> stability_dt) {
@@ -623,7 +623,7 @@ void System::set_block_dt_bounds(const std::string& name,
 }
 
 // GLOBAL step bound (host, one evaluation per step): multi-block coupling, Schur/Poisson,
-// scheduler, user policy. cf. SystemStepper::step_cfl for the aggregation.
+// scheduler, user policy. cf. SystemProgramDriver::step_cfl for the aggregation.
 void System::add_dt_bound(const std::string& label, std::function<double()> fn) {
   require_assembling(p_->lifecycle_, "add_dt_bound");  // frozen once pops.bind completes (ADC-592)
   if (!fn)
@@ -633,7 +633,7 @@ void System::add_dt_bound(const std::string& label, std::function<double()> fn) 
 
 // ACTIVE bound of the last step_cfl (step-policy diagnostic). "" before the first step.
 std::string System::last_dt_bound() const {
-  return p_->stepper_.last_dt_reason();
+  return p_->program_driver_.last_dt_reason();
 }
 
 // dt_hotspot diagnostic (ADC-182): the GLOBAL cell (i, j) that dominates the transport CFL
@@ -994,6 +994,7 @@ void System::set_field_boundary_kernel(const std::string& provider_slot,
   auto plan_it = p_->fields_.named_field_plans_.find(provider_slot);
   if (plan_it == p_->fields_.named_field_plans_.end())
     throw std::runtime_error("System::set_field_boundary_kernel unknown provider slot");
+  p_->fields_.prepare_program_boundary_kernel_install(provider_slot);
   auto& plan = plan_it->second;
   plan.boundary_kernel = kernel;
   plan.has_boundary_kernel = true;
@@ -1562,7 +1563,8 @@ std::vector<double> System::aux_field_component(int comp) const {
 // are removed (ADC-595): they are Python presets (python/pops/physics/coupling_presets.py) that emit the
 // same formulas as a generic CoupledSource and register through add_coupling_operator with a declared
 // conservation contract. Impl::couplings / coupled_freqs_ / coupled_freq_exprs_ STORAGE stays untouched
-// (SystemStepper::apply_couplings / step_cfl read them); only the entry methods go.
+// (explicit Program lowering consumes operators; SystemProgramDriver::step_cfl reads the bounds); only the
+// entry methods go.
 
 void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,
                                 const std::string& label) {
@@ -1700,7 +1702,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
     validate_cs_program_stack(freq_pg, "System::add_coupled_source frequency");
   }
   // CONSTANT declared frequency of the coupling (audit wave 3): registered for the step bound of
-  // step_cfl / step_adaptive (dt <= cfl/mu on the MACRO-step). <= 0 = no bound (historical). Pushed
+  // step_cfl (dt <= cfl/mu on the Program macro-step). <= 0 = no bound. Pushed
   // AFTER all the validation (source AND frequency have raised if invalid): a rejected coupling must
   // leave NO phantom bound -- otherwise a script that try/excepts the failure would keep a throttled step without
   // matching physics.
@@ -1708,7 +1710,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
     P->coupled_freqs_.push_back(Impl::CoupledFreq{label, frequency});
   // PER-CELL frequency: same rule (push after complete validation). The inputs REUSE the
   // resolve() resolution (ins); the constants are the same as the source (kconsts). The program
-  // mu(U) is reduced (MAX) at each step in step_cfl / step_adaptive.
+  // mu(U) is reduced (MAX) at each step_cfl.
   if (has_freq_expr) {
     Impl::CoupledFreqExpr ce;
     ce.label = label;
@@ -1721,35 +1723,38 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
     ce.kconsts = kconsts;
     P->coupled_freq_exprs_.push_back(std::move(ce));
   }
-  P->couplings.push_back([P, ins, outs, kconsts, n_in, n_const, n_terms](Real dt) {
-    // MPI-safe: iteration over the LOCAL fabs of the first input block (or output if no
-    // input). local_size()==0 on a rank without a box -> empty loop, no-op (no hard-coded fab(0)).
-    const int sref = n_in > 0 ? ins[0].sidx : outs[0].sidx;
-    MultiFab& Uref = P->sp[static_cast<std::size_t>(sref)].U;
-    for (int li = 0; li < Uref.local_size(); ++li) {
-      CoupledSourceKernel kern;
-      kern.dt = dt;
-      kern.n_in = n_in;
-      kern.n_const = n_const;
-      kern.n_terms = n_terms;
-      for (int c = 0; c < n_in; ++c) {
-        kern.in[c] = P->sp[static_cast<std::size_t>(ins[static_cast<std::size_t>(c)].sidx)]
-                         .U.fab(li)
-                         .array();
-        kern.in_comp[c] = ins[static_cast<std::size_t>(c)].comp;
+  P->couplings.push_back([ins, outs, kconsts, n_in, n_const, n_terms](
+                             Real dt, const std::vector<MultiFab*>& states) {
+      // MPI-safe: iteration over the LOCAL fabs of the first input block (or output if no
+      // input). local_size()==0 on a rank without a box -> empty loop, no-op (no hard-coded fab(0)).
+      const int sref = n_in > 0 ? ins[0].sidx : outs[0].sidx;
+      MultiFab& Uref = *states[static_cast<std::size_t>(sref)];
+      for (int li = 0; li < Uref.local_size(); ++li) {
+        CoupledSourceKernel kern;
+        kern.dt = dt;
+        kern.n_in = n_in;
+        kern.n_const = n_const;
+        kern.n_terms = n_terms;
+        for (int c = 0; c < n_in; ++c) {
+          kern.in[c] =
+              states[static_cast<std::size_t>(ins[static_cast<std::size_t>(c)].sidx)]
+                  ->fab(li)
+                  .array();
+          kern.in_comp[c] = ins[static_cast<std::size_t>(c)].comp;
+        }
+        for (int c = 0; c < n_const; ++c)
+          kern.consts[c] = kconsts[static_cast<std::size_t>(c)];
+        for (int t = 0; t < n_terms; ++t) {
+          kern.out[t] =
+              states[static_cast<std::size_t>(outs[static_cast<std::size_t>(t)].sidx)]
+                  ->fab(li)
+                  .array();
+          kern.out_comp[t] = outs[static_cast<std::size_t>(t)].comp;
+          kern.prog[t] = outs[static_cast<std::size_t>(t)].prog;
+        }
+        for_each_cell(Uref.box(li), kern);  // NAMED functor, device-clean additive forward-Euler
       }
-      for (int c = 0; c < n_const; ++c)
-        kern.consts[c] = kconsts[static_cast<std::size_t>(c)];
-      for (int t = 0; t < n_terms; ++t) {
-        kern.out[t] = P->sp[static_cast<std::size_t>(outs[static_cast<std::size_t>(t)].sidx)]
-                          .U.fab(li)
-                          .array();
-        kern.out_comp[t] = outs[static_cast<std::size_t>(t)].comp;
-        kern.prog[t] = outs[static_cast<std::size_t>(t)].prog;
-      }
-      for_each_cell(Uref.box(li), kern);  // NAMED functor (device-clean), additive forward-Euler
-    }
-  });
+    });
   // Inspect metadata (ADC-595): a raw add_coupled_source declares NO conservation contract, so it
   // registers an "unchecked" view (empty ConservationContract) carrying the label and the frequency
   // bound. add_coupling_operator overwrites this behavior by pushing the DECLARED contract instead.

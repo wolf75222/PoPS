@@ -2,12 +2,11 @@
 
 #include <limits>
 
-#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/boundary/physical_bc.hpp>  // BCRec
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/mesh/boundary/prepared_boundary_plan.hpp>
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
+#include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions compatibility validation only
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/spatial_provider.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
@@ -47,14 +46,15 @@
 /// grad phi) and a single coarse Poisson whose right-hand side is the CO-LOCATED SUM of the blocks'
 /// elliptic bricks (f = Sum_b q_b n_b read at the same cells). Conservation PER BLOCK (reflux +
 /// average_down). AmrRuntime runtime engine (type-erased registry by name). Blocks with potentially
-/// DIFFERENT spatial schemes and with PER-BLOCK TEMPORAL TREATMENT (explicit or IMEX, local stiff
-/// implicit source; capstone vii) with union-of-tags regrid (multi-block + regrid_every > 0 is NOW
-/// SUPPORTED: the mesh re-grids from the union of the tags; regrid_every == 0 = frozen hierarchy). Multirate (substeps/stride), inter-species
-/// coupled sources: already wired. Multiple COMPILED blocks (add_compiled_model) and a MIX of
-/// compiled + native: wired (capstone v, multi-block production DSL).
+/// DIFFERENT spatial schemes. Per-block temporal descriptors are immutable authoring metadata for
+/// Program normalization; this spatial runtime does not decode or execute them. Union-of-tags
+/// regridding is supported (multi-block + regrid_every > 0 regrids from the union; zero freezes the
+/// hierarchy). Multirate cadence and inter-species coupled rates execute only where the installed
+/// ProgramGraph places their typed operations. Multiple COMPILED blocks (add_compiled_model) and a
+/// MIX of compiled + native blocks share the same hierarchy (capstone v, multi-block production DSL).
 ///
-/// @note Resolved explicit bootstrap supports N ratio-2 levels; the legacy implicit config remains
-/// two-level. Temporal treatment is explicit or IMEX per block.
+/// @note Resolved explicit Programs support N ratio-2 levels. An implicit/IMEX AMR composition
+/// without a typed Program primitive fails closed; there is no private Newton or time-step fallback.
 
 namespace pops {
 
@@ -152,8 +152,8 @@ struct AmrSystemConfig {
 /// by AmrSystem at ensure_built time: the geometry + the refine/poisson/density choices known
 /// at that moment. The amr_dsl_block header consumes them to instantiate AmrCouplerMP<Model>.
 ///
-/// STRUCTURE (ADC-610). The 31 settings are grouped into NAMED sub-structs by ownership/role
-/// (mesh, physics, regrid, poisson, initial data, Schur source stage, named aux) instead of one flat
+/// STRUCTURE (ADC-610). Settings are grouped into NAMED sub-structs by ownership/role
+/// (mesh, regrid, poisson, initial data, named aux) instead of one flat
 /// append-only bag. A new setting goes INTO its semantic group -- the historical "add at the tail so an
 /// older .so loader falls back silently" idiom is RETIRED because it no longer describes how this struct
 /// evolves. The ABI story is now the VERSIONED KEY, not tail-only placement: this struct crosses the
@@ -182,26 +182,6 @@ struct AmrBuildParams {
     [[nodiscard]] double length_x() const noexcept { return L; }
     [[nodiscard]] double length_y() const noexcept { return Ly == 0.0 ? L : Ly; }
   } mesh;
-  /// Physical + temporal treatment of the block (gamma, substeps, recon, IMEX, time method, Newton,
-  /// positivity floor). newton_options serves the IMEX source; pos_floor serves the transport.
-  struct Physics {
-    double gamma = static_cast<double>(kPhysicalDefaultGamma);
-    int substeps = 1;
-    bool recon_prim = false;  ///< recon == "primitive" (frozen by add_compiled_model)
-    bool imex = false;        ///< time == "imex": stiff implicit source (backward_euler)
-    int time_method = 0;      ///< stable AmrTimeMethod wire: 0 kEuler, 1 kSsprk3, 2 kSsprk2
-    // NEWTON OPTIONS of the IMEX source on the MONO-BLOCK path (wave 3: mono-block AMR options wired).
-    // DEFAULT {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none) -> backward_euler_source path
-    // (2a) bit-identical. Consumed by build_amr_compiled (the mono-block closure passes it to cpl->step).
-    NewtonOptions newton_options{};
-    // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on the AMR
-    // transport. 0 (default) -> inactive, bit-identical. Consumed by build_amr_compiled (mono-block ->
-    // cpl->step / advance_transport). The COMPILED .so path carries it too (ADC-322): the loader marshals
-    // it (pops_install_native_amr) into add_compiled_model -> set_compiled_block, which stores it here.
-    double pos_floor = 0.0;
-    double weno_epsilon = static_cast<double>(kWenoEpsilon);
-    bool wave_speed_cache = false;
-  } physics;
   /// Refinement criterion frozen at build.
   struct Regrid {
     double threshold =
@@ -220,9 +200,9 @@ struct AmrBuildParams {
     bool has_state = false;
     std::vector<double> state;  ///< ncomp*ny*nx, component-major c*cells + j*nx + i
   } initial;
-  /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the coupler's
-  /// shared aux at build (build_amr_compiled), like bz_field; re-applied each update (persist across
-  /// regrid). Both empty -> bit-identical.
+  /// Model-NAMED aux fields (ADC-291) + their per-field HALO policies (ADC-369). Seeded onto the
+  /// runtime block at build, like bz_field; re-applied each update (persist across regrid).
+  /// Both empty -> bit-identical.
   struct NamedAux {
     std::map<int, std::vector<double>>
         fields;  ///< component (>= kAuxNamedBase) -> coarse field (ny*nx)
@@ -230,79 +210,10 @@ struct AmrBuildParams {
   } named_aux;
 };
 
-/// Type-erased closures of a compiled AMR block, produced by amr_dsl_block::build_amr_compiled and
-/// installed via AmrSystem::set_compiled_block. Symmetric with the std::function hooks of AmrSystem::Impl.
-///
-/// STRUCTURE (ADC-610). The closures are grouped into SIX named tiers documented in the design
-/// (lifetime, base, stability, checkpoint, MPI gather) instead of one flat append-only list. A new
-/// closure goes INTO its tier -- the historical "add at the tail" idiom is retired (a regroup or add
-/// shifts POPS_HEADER_SIG anyway, which re-keys pops_native_abi_key, so a stale .so is REJECTED at
-/// add_native_block with a clear regenerate error, never silently truncated). The builder always
-/// populates every closure (none are optional except stability, empty without the trait).
-struct AmrCompiledHooks {
-  /// LIFETIME tier: keeps the concrete coupler alive (every other closure captures it).
-  std::shared_ptr<void> coupler_holder;  ///< keeps the AmrCouplerMP<Model> alive
-  /// BASE tier: the macro-step + the primary observables.
-  struct Base {
-    std::function<void(double)> step;                ///< one macro-step (periodic regrid included)
-    std::function<double()> max_speed;               ///< max wave speed (CFL step)
-    std::function<double()> mass;                    ///< coarse mass
-    std::function<int()> n_patches;                  ///< number of fine patches
-    std::function<std::vector<double>()> density;    ///< coarse density, ny*nx row-major
-    std::function<std::vector<double>()> potential;  ///< coarse-level phi, ny*nx row-major
-  } base;
-  /// STABILITY tier: patch signatures + OPTIONAL step bounds (empty without the HasSourceFrequency /
-  /// HasStabilityDt traits, bit-identical). patch_boxes mirrors base.n_patches (count becomes boxes).
-  struct Stability {
-    std::function<std::vector<PatchBox>()>
-        patch_boxes;                           ///< index-space signatures of the fine patches
-    std::function<double()> source_frequency;  ///< coarse max of mu [1/s] (0 = does not constrain)
-    std::function<double()>
-        stability_dt;  ///< coarse min of the admissible step (0 = does not constrain)
-  } stability;
-  /// CHECKPOINT tier (ADC-65 mono-rank restart): cadence phase + per-level state/phi + hierarchy.
-  struct Checkpoint {
-    std::function<void(int)>
-        set_macro_step;             ///< restores the cadence (regrid) phase of the mono-block
-    std::function<int()> n_levels;  ///< number of levels (>= 1)
-    std::function<int()> n_vars;    ///< conserved components of the block
-    std::function<std::vector<double>(int)>
-        level_state;  ///< full state of level k (c*nf*nf+j*nf+i)
-    std::function<void(int, const std::vector<double>&)>
-        set_level_state;                                      ///< restores the state of level k
-    std::function<std::vector<double>(int)> level_potential;  ///< phi of level k (nf*nf row-major)
-    std::function<void(int, const std::vector<double>&)>
-        set_level_potential;  ///< restores phi of level k
-    std::function<void(const std::vector<PatchBox>&)>
-        set_hierarchy;  ///< imposes the saved fine patches
-  } checkpoint;
-  /// MPI-GATHER tier: coarse ownership diagnostic (ADC-319) + the all_reduce_sum gather counterparts of
-  /// the checkpoint state/phi (ADC-509), so a bit-identical np>1 checkpoint gathers onto rank 0.
-  struct MpiGather {
-    std::function<int()> coarse_local_boxes;  ///< per-rank owned coarse (level-0) fab count
-    std::function<int()> coarse_total_boxes;  ///< global coarse box count (identical on all ranks)
-    std::function<std::vector<double>(int)> level_state_global;      ///< level k state, gathered
-    std::function<std::vector<double>(int)> level_potential_global;  ///< level k phi, gathered
-  } mpi_gather;
-  /// OUTPUT tier: exact rank-local valid-cell pieces.  This is distinct from checkpoint buffers:
-  /// scientific writers must preserve native patch ownership and must not allocate zeros outside
-  /// fine patches. ``geometry_boxes`` carries every level's GLOBAL BoxArray in native index order;
-  /// OutputPiece.global_box_index is defined against that exact per-level order.
-  struct Output {
-    std::function<std::vector<PatchBox>()> geometry_boxes;
-    std::function<std::vector<OutputPiece>(int)> state_local_pieces;
-  } output;
-  /// DIAGNOSTICS tier: exact selected-level reductions over the live native hierarchy. This avoids
-  /// gathering complete level arrays through the checkpoint ABI for one scalar diagnostic.
-  struct Diagnostics {
-    std::function<double(const std::string&, int, const std::vector<int>&)> composite_reduce;
-  } diagnostics;
-};
-
 /// DEFERRED builder of a COMPILED block on the multi-block hierarchy: receives the SHARED layout (created
 /// ONCE at lazy build, common to all blocks) plus the block parameters frozen at
-/// add time (name, initial density/state, gamma, substeps/stride, recon/imex, partial IMEX mask
-/// resolved into component indices), and returns the type-erased AmrRuntimeBlock of the block
+/// add time (name, initial density/state, gamma, substeps/stride and recon/imex authoring metadata),
+/// and returns the type-erased AmrRuntimeBlock of the block
 /// (captures the CONCRETE Model/Limiter/Flux via detail::dispatch_amr_block, the kernel stays
 /// COMPILED). Symmetric with the
 /// native add_block path: the (sole) difference is only that the types are known at add time (compiled
@@ -315,6 +226,8 @@ using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
     const detail::SharedAmrLayout& layout, const std::string& name,
     const std::vector<double>& density, bool has_density, const std::vector<double>& state,
     bool has_state, double gamma, int substeps, bool recon_prim, bool imex, int stride,
+    // Compatibility slots in the frozen builder ABI. Registration rejects every non-empty selector
+    // before this callable is stored; the spatial builder never resolves or executes an IMEX mask.
     const std::vector<std::string>& implicit_vars, const std::vector<std::string>& implicit_roles,
     double pos_floor, double weno_epsilon, bool wave_speed_cache)>;
 
@@ -372,31 +285,25 @@ class AmrSystem {
   ///                4 variables + pressure)
   /// @param time    "explicit" (SSPRK2) | "euler" (forward Euler) | "ssprk3"
   ///                (SSPRK3, order 3, reflux per stage; explicit transport, EXCLUSIVE of imex) |
-  ///                "imex" (stiff source handled IMPLICITLY by backward_euler_source; the transport
-  ///                stays explicit, carried by the conservative reflux; cf. capstone vii). Any other
-  ///                treatment is refused.
-  /// @param substeps explicit substeps of the block (>= 1): the effective step is split into equal
-  ///                pieces by the unified AMR runtime.
+  ///                "imex". This is immutable authoring metadata consumed by Program normalization;
+  ///                the spatial block never executes a time method. A composition without a typed
+  ///                Program primitive fails closed instead of reaching a private fallback.
+  /// @param substeps declared Program substeps of the block (>= 1): the normalized ProgramGraph
+  ///                partitions the effective step into equal pieces.
   /// @param stride  HOLD-THEN-CATCH-UP cadence of the block (>= 1; default 1 = each macro-step). stride=M
   ///                holds the block M-1 macro-steps then catches it up by an effective step M*dt (multirate).
-  ///                step_cfl honors the cadence: dt =
+  ///                Program-owned step_cfl honors the cadence: dt =
   ///                cfl*h*min_b(substeps_b/(stride_b*w_b)), mirror of System::step_cfl.
-  /// @param implicit_vars / implicit_roles  partial IMEX mask CARRIED BY THE BLOCK (cf. System::add_block):
-  ///                conserved components handled IMPLICITLY, by NAME (implicit_vars) or by physical
-  ///                ROLE (implicit_roles). EMPTY (default) -> full backward-Euler (all
-  ///                components implicit). Only meaningful with time="imex": requesting them in
-  ///                explicit is an ERROR (no silent ignore).
-  /// @throws std::runtime_error if a block is already defined, if substeps < 1, if stride < 1, if time
-  ///         is not in {explicit, euler, ssprk3, imex}, if recon is not in {conservative,
-  ///         primitive}, or if an implicit mask is requested outside IMEX / with a name-role absent from the block.
-  /// @param newton  options of the IMEX source Newton grouped in a POD (ADC-214; cf.
-  ///                 NewtonOptions; parity with System::add_block): max_iters / rel_tol / abs_tol /
-  ///                 fd_eps / damping / fail_policy. Default {} = historical constants, bit-identical.
-  ///                 These options are wired for native blocks at every block count; compiled .so
-  ///                 loaders reject non-default values because their flat ABI does not transport them.
-  /// @param newton_diagnostics  aggregated Newton report (newton_report), wired for native blocks at
-  ///                 every block count. Compiled .so loaders reject it explicitly. Stays flat (a
-  ///                 separate bool, outside the homogeneous family of convergence options).
+  /// @param implicit_vars / implicit_roles  reserved partial-IMEX selectors. The current AMR target
+  ///                has no typed implicit-source Program primitive, so every non-empty selector
+  ///                fails closed, including with time="imex"; it is never stored or ignored.
+  /// @param newton  compatibility input validated like System::add_block. The spatial AMR block does
+  ///                 not retain or execute source-Newton configuration, so every non-default value
+  ///                 fails closed until the AMR target provides an executable typed local
+  ///                 nonlinear/Newton Program primitive.
+  /// @param newton_diagnostics  request for an aggregated Newton report owned by the typed implicit
+  ///                 Program solve. The spatial runtime has no such report carrier, so true fails
+  ///                 closed instead of exposing a permanently empty diagnostic.
   /// @param positivity_floor  Zhang-Shu positivity floor (ADC-259): if > 0, the AMR transport floors
   ///                 the Density-role face states (reconstruct_pp / zhang_shu_scale) AND the C/F fine
   ///                 ghost means to >= floor. Default 0 = inactive, bit-identical. Guarantee = face /
@@ -404,6 +311,10 @@ class AmrSystem {
   ///                 pressure positivity (parity with System::add_block). A model without a Density
   ///                 role rejects floor > 0. The COMPILED .so path carries it too (ADC-322): a loader
   ///                 regenerated against this header marshals the floor (pops_install_native_amr).
+  /// @throws std::runtime_error if a block is already defined, if substeps < 1, if stride < 1, if time
+  ///         is not in {explicit, euler, ssprk3, imex}, if recon is not in {conservative,
+  ///         primitive}, if a non-empty implicit selector is requested, or if source-Newton options
+  ///         or diagnostics are requested on the spatial AMR block.
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod", const std::string& riemann = "rusanov",
                  const std::string& recon = "conservative", const std::string& time = "explicit",
@@ -415,33 +326,15 @@ class AmrSystem {
                  double weno_epsilon = static_cast<double>(kWenoEpsilon),
                  bool wave_speed_cache = false);
 
-  /// Report of the implicit (IMEX) source Newton of a block, AGGREGATED over the levels and substeps of
-  /// the block's LAST advance. Exists only if a native block was added with
-  /// newton_diagnostics=true; compiled loaders reject that option before build.
-  /// Flat copy (no dependence on the numerics header on the caller side), parity with System::SourceNewtonReport.
-  struct SourceNewtonReport {
-    bool enabled;           ///< a report was computed (at least one IMEX advance played)
-    bool converged;         ///< no cell failed on the last advance
-    double max_residual;    ///< max over cells/levels/substeps of ||F||_inf at the Newton exit
-    double max_iters_used;  ///< max over cells/levels/substeps of the iterations consumed
-    double
-        n_failed;  ///< count (cells x levels x substeps) failed (non-finite / pivot / non-convergence)
-    double failed_i;     ///< i of ONE faulty cell (-1 if none; max index encoded)
-    double failed_j;     ///< j of the same cell (-1 if none)
-    double failed_comp;  ///< conserved component of the worst residual of that cell (-1 unknown)
-    std::vector<RuntimeDiagnosticEvent> diagnostics;  ///< structured policy/solver events
-  };
-  /// @throws std::runtime_error if the block is unknown or did not enable newton_diagnostics.
-  ///         Forces the lazy build (ensure_built).
-  SourceNewtonReport newton_report(const std::string& name);
-
   /// Registers a COMPILED block (add_compiled_model path, header amr_dsl_block.hpp). The single
   /// type-erased builder materializes an AmrRuntimeBlock on the runtime-owned shared hierarchy.
   /// Single- and multi-block systems deliberately use this same route: no hidden AmrCouplerMP
   /// orchestration or second elliptic-solver authority survives behind this facade.
-  /// @p recon_prim / @p imex / @p time_method / @p stride / @p implicit_vars / @p implicit_roles:
-  /// metadata of the block (temporal scheme, multirate, partial IMEX mask) frozen at add time, consumed by the
-  /// runtime routing.
+  /// @p recon_prim / @p imex / @p time / @p stride are authoring metadata frozen at add time. The
+  /// canonical @p time token is normalized into the installed ProgramGraph; the runtime block remains
+  /// spatial. @p implicit_vars / @p implicit_roles remain in this loader-facing signature for ABI
+  /// compatibility only: the current AMR target rejects every non-empty selector before storing the
+  /// block because no typed implicit-source Program primitive consumes it.
   /// DO NOT call directly: go through the free function add_compiled_model(AmrSystem&, ...).
   /// @throws std::runtime_error if the system is already built.
   /// DEFAULT VISIBILITY (POPS_EXPORT): the ONLY method called by the header template
@@ -453,7 +346,8 @@ class AmrSystem {
   POPS_EXPORT void set_compiled_block(
       int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
       const std::string& name = std::string(), bool recon_prim = false, bool imex = false,
-      int time_method = 0, int stride = 1, const std::vector<std::string>& implicit_vars = {},
+      const std::string& time = "euler", int stride = 1,
+      const std::vector<std::string>& implicit_vars = {},
       const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0,
       double weno_epsilon = static_cast<double>(kWenoEpsilon), bool wave_speed_cache = false);
 
@@ -501,10 +395,10 @@ class AmrSystem {
   POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
                                                      int level = 0) const;
 
-  /// Internal installation seam for a compiled AMR production package. The .so inlines the header template
-  /// add_compiled_model(AmrSystem&, ...), which materializes a concrete AmrCouplerMP<Model> at lazy
-  /// build and installs its hooks via set_compiled_block -- NATIVE path, SAME AMR hierarchy as
-  /// add_block (conservative reflux, regrid), no flat-array marshaling.
+  /// Internal installation seam for a compiled AMR production package. The .so inlines the header
+  /// template add_compiled_model(AmrSystem&, ...), which materializes a concrete AmrRuntimeBlock at
+  /// lazy build and installs its spatial Program primitives via set_compiled_block. All block counts
+  /// use the same shared hierarchy; no flat-array marshaling or alternate temporal engine is involved.
   ///
   /// The _pops host module is PROMOTED to global scope (RTLD_NOLOAD), then the generated package is
   /// opened RTLD_LOCAL: it can resolve set_compiled_block without exporting its identically named
@@ -516,14 +410,13 @@ class AmrSystem {
   /// with native add_block) -> the compiled blocks co-exist on the shared hierarchy via AmrRuntime
   /// (the loader recompiled against this header provides the runtime builder; cf. set_compiled_block). The
   /// name then INDEXES the block (set_density/mass/density), like add_block.
-  /// time is wired to {explicit (SSPRK2/Heun), euler, ssprk3, imex}; imex is the distinct
-  /// forward-Euler-transport + stiff implicit-source split. The multirate (stride) and the partial IMEX
-  /// mask do NOT transit through the flat ABI of the loader (ABI unchanged): this .so path now REJECTS
-  /// them at the Python facade level (AmrSystem.add_equation raises ValueError on stride>1 or a
-  /// non-empty IMEX mask, rather than ignoring them silently). For these parameters, use
-  /// native add_block (ModelSpec) or add_compiled_model(AmrSystem&) DIRECTLY (header), which expose
-  /// stride and the mask. recon "primitive" and flux "roe"/"hllc" are WIRED at parity (#113:
-  /// dispatch_amr_compiled accepts them; the Python facade applies a pressure guard for hllc/roe).
+  /// time accepts canonical Program-authoring tokens {explicit, euler, ssprk3, imex}; the spatial
+  /// loader never executes one of those methods. In particular, ``imex`` requires a typed implicit
+  /// Program primitive and has no backward-Euler/Newton fallback. The multirate stride and partial
+  /// IMEX mask do not transit through the flat block-loader ABI: the Python facade rejects them
+  /// rather than ignoring them silently. They must be expressed by a compiled typed Program whose
+  /// target provides the corresponding primitive. recon "primitive" and flux "roe"/"hllc" are WIRED at parity (#113);
+  /// the Python facade applies a pressure guard for hllc/roe.
   /// The low-level loader contains a WENO5-Z stencil route and allocates its three-cell halo. The
   /// resolved Case route authenticates the matching order-five conservative coarse/fine provider;
   /// neither the facade nor AmrRuntime substitutes the order-two route.
@@ -744,9 +637,9 @@ class AmrSystem {
   /// Sets a model-NAMED aux field (ADC-291) at shared-channel component @p comp (>= kAuxNamedBase) from
   /// a coarse base-level field @p field (ny*nx row-major). AMR counterpart of
   /// System::set_aux_field_component: the field is STATIC (re-applied by the engine each update, so it
-  /// survives a regrid) and reaches every level via the coarse->fine aux injection. Works on the
-  /// single-block (AmrCouplerMP) AND multi-block (AmrRuntime) paths. The Python facade resolves the name
-  /// to @p comp and reshapes the array. Mono-rank facade (same as set_density). @throws if the system is
+  /// survives a regrid) and reaches every level via the coarse->fine aux injection. The Python facade
+  /// resolves the name to @p comp and reshapes the array. Mono-rank facade (same as set_density). @throws
+  /// if the system is
   /// already built, if @p comp is reserved (< kAuxNamedBase), or if @p field is not of size ny*nx.
   void set_aux_field_component(int comp, const std::vector<double>& field);
 
@@ -763,10 +656,9 @@ class AmrSystem {
   /// System::register_elliptic_field / set_block_elliptic_field. The named field owns its RHS (a per-block
   /// brick), a DEDICATED coarse GeometricMG, and its OWN aux output components; AmrRuntime solves it each
   /// solve_fields and injects it to the fine levels, so a bare run() leaves it SOLVED. The default Poisson
-  /// path is untouched / bit-identical. Registering a named field forces the MULTI-BLOCK runtime engine
-  /// (AmrRuntime) even for a single block (the named-field solve lives there, not on the single-block
-  /// AmrCouplerMP coupler). POPS_EXPORT: resolved by the generated AMR .so / native loader across the
-  /// dlopen boundary, like set_compiled_block.
+  /// path is untouched / bit-identical. The field is registered on the same AmrRuntime engine used for
+  /// every block count. POPS_EXPORT: resolved by the generated AMR .so / native loader across the dlopen
+  /// boundary, like set_compiled_block.
   /// @{
   /// Registers named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native AMR loader for each m.elliptic_field. @p gx_comp / @p gy_comp < 0 => only phi is
@@ -797,7 +689,8 @@ class AmrSystem {
   std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
   std::vector<OutputPiece> output_field_root_pieces(const WorldCommunicator& world,
                                                     const std::string& provider_slot, int level);
-  /// Transaction bracket used by the v3 reader after complete payload preflight.  Every hierarchy,
+  /// Transaction bracket used by the accepted-state reader after complete payload preflight. Every
+  /// hierarchy,
   /// state, aux, field warm-start, history and clock mutation is rolled back if any restore step fails.
   void begin_restart_transaction();
   void commit_restart_transaction();
@@ -812,9 +705,9 @@ class AmrSystem {
   /// @}
 
   /// Registers an inter-species COUPLED SOURCE (compiled pops.dsl.CoupledSource, flat bytecode ABI
-  /// P5), refined counterpart of System::add_coupled_source but on the SHARED AMR hierarchy. The source
-  /// is applied at EACH macro-step AFTER the transport, by forward-Euler splitting, level by
-  /// level, followed by a fine -> coarse cascade (consistency of the covered coarse cells, #169).
+  /// P5), refined counterpart of System::add_coupled_source but on the SHARED AMR hierarchy.
+  /// Registration stores the typed operator only: the installed Program owns its temporal placement,
+  /// applies it to candidate states level by level, and then performs the authored synchronization.
   /// The coupling is baked into a device-clean stack machine (CoupledSourceKernel): NO per-cell Python
   /// callback in the hot path. MULTI-BLOCK only (>= 2 add_block: the coupling reads/writes
   /// SEVERAL named blocks). Must be called BEFORE the first step (the runtime engine is built
@@ -881,12 +774,17 @@ class AmrSystem {
   /// host while the generated package remains RTLD_LOCAL, exactly like set_compiled_block on the
   /// native AMR loader.
   /// @{
-  /// Install the macro-step body. When set, AmrSystem::step calls it instead of the historical
-  /// AmrRuntime::step path (keeping t / macro_step coherent). Pass an empty std::function to clear it.
+  /// Install the mandatory macro-step body. AmrSystem::step, advance and step_cfl reject before lazy
+  /// hierarchy construction or any other mutation while it is absent. An empty std::function is
+  /// rejected: there is no public temporal route that silently clears the whole-system Program.
   /// POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary, like
-  /// set_compiled_block. The closure drives the per-level Lie/Strang macro-step through an
-  /// AmrProgramContext (the AMR counterpart of ProgramContext).
+  /// set_compiled_block. The closure executes the normalized ProgramGraph on the hierarchy through
+  /// an AmrProgramContext (the AMR counterpart of ProgramContext).
   POPS_EXPORT void install_program_step(std::function<void(double)> step);
+  /// Install the companion callback that republishes Program-owned accepted clocks/history whenever
+  /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
+  /// low-level steps may omit it because they have no authenticated checkpoint context.
+  POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
@@ -899,12 +797,26 @@ class AmrSystem {
   /// structured ProgramRuntimeReport reads them; there was no Python-visible getter before.
   POPS_EXPORT int program_substeps() const;
   POPS_EXPORT int program_stride() const;
+  /// Exact duration, accepted public-step count and physical start currently held by the GLOBAL
+  /// Program stride window. All are zero at a stride boundary and form mandatory checkpoint state.
+  POPS_EXPORT double program_cadence_window_dt() const;
+  POPS_EXPORT int program_cadence_window_steps() const;
+  POPS_EXPORT double program_cadence_window_start_time() const;
+  /// Exact accepted Program interval provenance. Zero means no Program invocation has been accepted.
+  POPS_EXPORT double program_last_dt() const;
+  /// Stage the exact held-window image before set_clock during strict restart. The image must match
+  /// the exact accepted (@p accepted_time, @p macro_step) cursor, @p accepted_last_dt and installed
+  /// stride; malformed, missing or mismatched state is rejected without mutating accepted state.
+  POPS_EXPORT void restore_program_cadence_window(double accumulated_dt, int held_steps,
+                                                  double window_start_time, double accepted_last_dt,
+                                                  double accepted_time, int macro_step);
   /// Install the program-index -> AMR-block-index map (entry p = the AMR block index of Program block
   /// p), built by install_program after matching the .so's block names to the instantiated AMR blocks
-  /// BY NAME (Spec 3 criterion 23, ADC-457). Empty clears it (identity: a single-block or order-matching
-  /// Program). Read by the AmrProgramContext to resolve a Program block index to the name-matched block.
+  /// BY NAME (Spec 3 criterion 23, ADC-457). Empty clears it and is never an implicit positional
+  /// identity. Read by the AmrProgramContext to resolve a Program block index to the name-matched block.
   POPS_EXPORT void set_program_block_map(const std::vector<int>& prog_to_sys);
-  /// The installed program-index -> AMR-block-index map (empty = identity). Read by the AmrProgramContext.
+  /// The installed program-index -> AMR-block-index map. Empty means no authenticated mapping and is
+  /// rejected by AmrProgramContext.
   POPS_EXPORT const std::vector<int>& program_block_map() const;
   /// Load a generated problem.so and install its compiled time Program on the AMR hierarchy. dlopens
   /// @p so_path, checks its ABI key against this module (fail-loud on mismatch), runs the section-24
@@ -920,7 +832,6 @@ class AmrSystem {
   /// The last macro-step dt handed to the installed Program (ADC-631): the AmrProgramContext reads it
   /// so a pre-commit history sample records its outgoing interval (variable-dt replay). POPS_EXPORT
   /// for the dlopen boundary (the generated AMR Program .so reads it via the AmrProgramContext).
-  POPS_EXPORT double program_last_dt() const;
   /// Authenticated accepted-state image owned by the compiled AMR Program context.  This is distinct
   /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
   /// identities and lagged effective-flux publications required for conservative multistep restart.
@@ -982,15 +893,13 @@ class AmrSystem {
   /// block; a later set_program_params overwrites only the supplied values. Idempotent.
   POPS_EXPORT void seed_program_params(int prog_block, const std::vector<double>& defaults);
   /// @}
-  /// The built multi-block AMR engine (the AmrRuntime the AmrProgramContext driver wraps), or nullptr
-  /// before the lazy build. install_program forces the build so the .so's pops_install_program_amr gets
-  /// a live engine. POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary.
+  /// The built AMR spatial engine (the AmrRuntime the AmrProgramContext driver wraps), or nullptr
+  /// before the lazy build. install_program forces the build so the .so's pops_install_program_amr
+  /// receives a live engine. POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen
+  /// boundary.
   POPS_EXPORT AmrRuntime* engine() const;
-  /// True when the built system runs on the multi-block AmrRuntime engine (shared layout + per-block
-  /// level stacks), as opposed to the single-block AmrCouplerMP coupler. A compiled Program forces the
-  /// runtime engine even for ONE block, so `n_blocks() == 1` does NOT imply the coupler: the v3
-  /// checkpoint routes state I/O on THIS predicate (per-block accessors on the runtime engine, the
-  /// mono-block level_state path on the coupler). POPS_EXPORT for the dlopen boundary parity.
+  /// Compatibility inspection seam. Once built, every resolved AMR system uses AmrRuntime, so this
+  /// returns true; before build engine() remains null. POPS_EXPORT for dlopen-boundary parity.
   POPS_EXPORT bool uses_runtime_engine() const;
   /// The facade-owned Profiler (the AmrProgramContext forwards count_kernel / profile_record to it).
   /// POPS_EXPORT for the dlopen boundary. Disabled by default -> zero hot-path cost.
@@ -1010,7 +919,7 @@ class AmrSystem {
   POPS_EXPORT double composite_reduce(const std::string& block, const std::string& kind, int comp,
                                       const std::vector<int>& levels = {}) const;
   /// Composite integral/reduction of one qualified native field provider.  This route is available
-  /// only on the multi-block runtime engine because that engine owns the typed provider hierarchy.
+  /// only after the AMR runtime has been built because that engine owns the typed provider hierarchy.
   POPS_EXPORT double composite_reduce_field(const std::string& provider_slot,
                                             const std::string& kind, int comp,
                                             const std::vector<int>& levels = {});
@@ -1021,15 +930,16 @@ class AmrSystem {
   int ny() const;  ///< Coarse y-axis cell count.
   /// Generated Program shared libraries read the accepted clock through the flat loader ABI.
   POPS_EXPORT double time() const;
-  /// MACRO-STEP counter (0-indexed; incremented by step / advance / step_cfl), parity with
-  /// System::macro_step. Required for checkpoint/restart (the stride / regrid cadence depends on
-  /// macro_step % stride|regrid_every, not only on t). Persisted by accepted-state v3.
+  /// ACCEPTED macro-step counter (0-indexed; incremented by step / advance / step_cfl), parity with
+  /// System::macro_step. Required for checkpoint/restart because Program schedules and regrid cadence
+  /// depend on accepted-step phase, not only on physical time. Persisted by accepted-state restart.
   /// POPS_EXPORT: the AmrProgramContext (a generated AMR Program .so) reads it across the dlopen
   /// boundary for the head-of-step regrid cadence, like the other program seam accessors (ADC-508).
   POPS_EXPORT int macro_step() const;
   /// RESTORES the AMR clock (t, macro_step) -- parity with System::set_clock. Sets the time AND the
-  /// macro-step counter (propagated to the regrid/stride cadence of the engine, mono-block as well as multi-block). Useful
-  /// alone (stride cadence + clock resumption). @throws if macro_step < 0.
+  /// macro-step counter propagated to Program schedules and regrid cadence. A mid-window cursor also
+  /// requires an immediately preceding restore_program_cadence_window; neither the start nor
+  /// accumulated variable-dt duration can be inferred from the clock. @throws on invalid state.
   POPS_EXPORT void set_clock(double t, int macro_step);
 
   /// @name AMR / MPI profiling (Spec 5 sec.12.5, ADC-479 criterion 43)
@@ -1040,7 +950,7 @@ class AmrSystem {
   /// hot-path cost when off, parity with System). enable_profiling() then step()/step_cfl() over a
   /// run where a regrid fires (regrid_every set) then profile_report() returns the table; the typed
   /// PerformanceSummary.by_amr_mpi() view surfaces it. Per-rank (no cross-rank reduction of the
-  /// report). Multi-block engine only (the runtime owns the union regrid + shared-aux halo).
+  /// report). The same runtime owns these phases for every block count.
   /// @{
   void enable_profiling();
   void disable_profiling();
@@ -1048,7 +958,7 @@ class AmrSystem {
   void reset_profiling();
   std::string profile_report() const;
   /// @}
-  int n_blocks() const;  ///< number of blocks (1 = mono-block AmrCouplerMP; >= 2 = AmrRuntime)
+  int n_blocks() const;  ///< number of blocks on the shared AmrRuntime engine
   /// Names of the blocks in add order (parity with System::block_names): the IO facade iterates over them
   /// to write EACH block by its name (an empty name -> block 0, historical mono-block compat).
   std::vector<std::string> block_names() const;
@@ -1076,11 +986,9 @@ class AmrSystem {
 
   /// AMR CHECKPOINT / RESTART (ADC-65 single-block single-rank; ADC-509 multi-block + np>1):
   /// per-level STATE accessors + hierarchy imposition for a BIT-IDENTICAL resumption (cf.
-  /// AmrSystem.checkpoint/restart on the Python side). MONO-BLOCK uses these (level_state /
-  /// level_potential / set_hierarchy on the AmrCouplerMP coupler); MULTI-BLOCK (AmrRuntime engine,
-  /// SHARED layout + aux) uses the per-BLOCK variants below (block_level_state ...), plus the SHARED
-  /// level_potential / n_levels (no set_hierarchy: the shared hierarchy is the deterministic frozen
-  /// central patch, reproduced by replaying the same composition). The _global variants all_reduce_sum
+  /// AmrSystem.checkpoint/restart on the Python side). Unqualified level_state is a one-block
+  /// convenience over AmrRuntime; multi-block callers use the qualified block_level_state variants.
+  /// Potential, hierarchy and aux remain shared. The _global variants all_reduce_sum
   /// the per-rank fabs so a np>1 checkpoint gathers onto rank 0 (mono-rank: identity, bit-identical).
   /// Force the lazy build (ensure_built) like patch_boxes()/mass(). @p k: level (0 = coarse, >= 1 = fine).
   int n_levels();             ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
@@ -1090,53 +998,49 @@ class AmrSystem {
   /// FULL conservative state of level @p k, flat component-major c*nf*nf + j*nf + i (nf = n << k;
   /// zeros outside the patches at the fine level -- only the patch interior is defined). MONO-BLOCK.
   std::vector<double> level_state(int k);
-  std::vector<double> level_state_global(int k);  ///< MONO-BLOCK, np>1 gather (all ranks call)
+  std::vector<double> level_state_global(int k);  ///< one-block, np>1 gather (all ranks call)
   void set_level_state(int k,
                        const std::vector<double>& s);  ///< restores the state of level @p k (as is)
   /// Potential phi of level @p k, flat nf*nf row-major. Level 0 = warm-start of the multigrid
-  /// (bit-identical resumption); level >= 1 = aux comp 0 (recomputed at update). SHARED -> works in
-  /// MONO-BLOCK as well as MULTI-BLOCK (single aux). The _global variant gathers under np>1.
+  /// (bit-identical resumption); level >= 1 = aux comp 0 (recomputed at update). Shared across blocks;
+  /// the _global variant gathers under np>1.
   std::vector<double> level_potential(int k);
   std::vector<double> level_potential_global(int k);              ///< np>1 gather (all ranks call)
   void set_level_potential(int k, const std::vector<double>& p);  ///< restores phi of level @p k
   /// Imposes the SAVED fine hierarchy (at restart) instead of Berger-Rigoutsos clustering: @p boxes
-  /// are the patch_boxes() signatures of the checkpoint (filtered to level 1 in mono-block). MONO-BLOCK.
+  /// are the patch_boxes() signatures of the checkpoint. Serial convenience over rebuild_hierarchy.
   void set_hierarchy(const std::vector<PatchBox>& boxes);
 
-  /// Impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint (ADC-542): @p boxes are ALL the
+  /// Impose a mid-run hierarchy from a v3 checkpoint (ADC-542): @p boxes are ALL the
   /// checkpoint patch boxes (level tagged, level 0 implicit), @p owner_ranks the per-box owner rank
   /// aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt, reusing regrid
-  /// R6/R7). MULTI-BLOCK / runtime engine only; @throws on the single-block coupler path (use
-  /// set_hierarchy). The v3 restart calls this so restartable=True works under ACTIVE regridding.
+  /// R6/R7). The v3 restart calls this so restartable=True works under ACTIVE regridding.
   void rebuild_hierarchy(const std::vector<PatchBox>& boxes, const std::vector<int>& owner_ranks);
 
-  /// MULTI-BLOCK per-BLOCK per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
+  /// Per-block per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
   /// layout AND the aux across blocks, so the per-level STATE is read/restored PER BLOCK (by NAME)
   /// while phi stays shared (level_potential above). @p name indexes the block (block_names()); @p k:
   /// level. The _global variant all_reduce_sum the per-rank fabs (np>1 gather, all ranks call); the
   /// shared hierarchy is the deterministic frozen central patch (regrid_every==0), reproduced at
-  /// restart by replaying the same composition -> no set_hierarchy needed. @throws in MONO-BLOCK (use
-  /// the level_state path) or if @p name / @p k is out of bounds.
+  /// restart by replaying the same composition. @throws if @p name / @p k is out of bounds.
   int block_n_vars(const std::string& name);  ///< conserved components of the named block
   std::vector<double> block_level_state(const std::string& name, int k);
   std::vector<double> block_level_state_global(const std::string& name,
                                                int k);  ///< np>1 gather (all ranks call)
   void set_block_level_state(const std::string& name, int k, const std::vector<double>& s);
   /// Unified scientific-output state accessor. Unlike the checkpoint names above, this routes an
-  /// exactly named block through either the mono-block coupler or the multi-block runtime and returns
-  /// compact native valid-cell pieces without allocating a global level buffer.
+  /// exactly named block through the shared runtime and returns compact native valid-cell pieces
+  /// without allocating a global level buffer.
   std::vector<OutputPiece> output_state_local_pieces(const std::string& name, int k);
   std::vector<PatchBox> output_geometry_boxes();
   std::vector<OutputPiece> output_state_root_pieces(const WorldCommunicator& world,
                                                     const std::string& name, int k);
   /// Owner rank per box of level @p k (the shared layout's DistributionMapping), aligned with the
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
-  /// reproduces the LOCAL-fab iteration order. MULTI-BLOCK / runtime engine; empty on the coupler path.
+  /// reproduces the LOCAL-fab iteration order.
   std::vector<int> level_owner_ranks(int k);
   /// FULL shared aux of level @p k (ALL components, flat c*nf*nf+j*nf+i; _global = np>1 gather,
-  /// COLLECTIVE) + the owner-rank restore -- the v3 checkpoint aux payload (ADC-542). MULTI-BLOCK /
-  /// runtime engine; the read returns EMPTY on the single-block coupler path (its aux is derived +
-  /// static-reapplied each solve, phi_<k> suffices there) and the write throws on it.
+  /// COLLECTIVE) + the owner-rank restore -- the v3 checkpoint aux payload (ADC-542).
   std::vector<double> level_aux_flat(int k);
   std::vector<double> level_aux_flat_global(int k);
   void set_level_aux_flat(int k, const std::vector<double>& v);
@@ -1147,7 +1051,7 @@ class AmrSystem {
   /// so the shared _system_io_history.py serialize/restore is reused verbatim: history_global returns
   /// the per-level slices concatenated into ONE flat buffer (level axis hidden, parity level_aux_flat),
   /// restore_history scatters it back per level, rebuild_history_slots replays the policy-recomputed
-  /// slots by re-stepping the installed Program. Engine-less coupler -> history_names() is empty.
+  /// slots by re-stepping the installed Program.
   /// @{
   std::vector<std::string> history_names() const;
   int history_depth(const std::string& name) const;
@@ -1162,8 +1066,8 @@ class AmrSystem {
   void restore_history_slot_dt(const std::string& name, int slot, double dt);
   int rebuild_history_slots(const std::string& name, const std::vector<int>& stored_slots);
   /// The sorted macro-step cursors at which the LAST rebuild_history_slots fired an in-window regrid
-  /// (ADC-635). The v3 reader asserts it against the checkpoint's recorded schedule fingerprint; empty
-  /// after a Dense / clean-window / no-regrid replay.
+  /// (ADC-635). The accepted-state reader asserts it against the checkpoint's recorded schedule
+  /// fingerprint; empty after a Dense / clean-window / no-regrid replay.
   std::vector<int> last_replay_regrid_steps() const;
   /// @}
 

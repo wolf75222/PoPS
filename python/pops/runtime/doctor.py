@@ -5,6 +5,7 @@ of "build environment != execution environment" bugs). ``capabilities()`` is the
 introspectable matrix of what each facade / geometry / backend supports. Both read ``_pops`` and
 the codegen / physics layers, so they live in the runtime layer.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -94,28 +95,41 @@ def doctor(verbose: bool = True) -> Any:
     that rejects -std=c++23). Returns a dict {check: (ok, detail)} ; verbose=True prints it."""
     import os
     import sys
+
     checks = {}
 
     # 1. interpreter + extension (cpython-3XY ABI trap)
     from pops import _pops
+
     so = getattr(_pops, "__file__", "?")
-    checks["interpreteur"] = (True, "%s (%d.%d) ; extension %s"
-                              % (sys.executable, sys.version_info[0], sys.version_info[1], so))
+    checks["interpreteur"] = (
+        True,
+        "%s (%d.%d) ; extension %s"
+        % (sys.executable, sys.version_info[0], sys.version_info[1], so),
+    )
 
     # 2. numpy (required by the codegen IR host evaluator)
     try:
         import numpy
+
         checks["numpy"] = (True, numpy.__version__)
     except Exception as e:
-        checks["numpy"] = (False, "ABSENT from this interpreter (%s) -> compiling a model will fail. "
-                                  "Install numpy in THIS python." % e)
+        checks["numpy"] = (
+            False,
+            "ABSENT from this interpreter (%s) -> compiling a model will fail. "
+            "Install numpy in THIS python." % e,
+        )
 
     # 3. compiled compute backend
     hk = has_kokkos()
-    checks["kokkos"] = (hk is not False,
-                        {True: "Kokkos module (thread/device resources selected before initialization)",
-                         False: "SERIAL module (rebuild preset python-parallel for threaded execution)",
-                         None: "undetermined (old module without __has_kokkos__)"}[hk])
+    checks["kokkos"] = (
+        hk is not False,
+        {
+            True: "Kokkos module (thread/device resources selected before initialization)",
+            False: "SERIAL module (rebuild preset python-parallel for threaded execution)",
+            None: "undetermined (old module without __has_kokkos__)",
+        }[hk],
+    )
 
     # 4. runtime DSL compiler (the link of the -std=c++23 bug)
     try:
@@ -128,21 +142,32 @@ def doctor(verbose: bool = True) -> Any:
         baked = _tc.loader_cxx_compiler()
         cc = _tc._default_cxx(None)
         if not cc:
-            checks["compilateur"] = (False, "NO C++ compiler found (POPS_CXX, module, PATH). "
-                                            "Install Xcode CLT (macOS) or `conda install cxx-compiler`.")
+            checks["compilateur"] = (
+                False,
+                "NO C++ compiler found (POPS_CXX, module, PATH). "
+                "Install Xcode CLT (macOS) or `conda install cxx-compiler`.",
+            )
         else:
-            origin = ("$POPS_CXX" if os.environ.get("POPS_CXX") == cc
-                      else "baked by the _pops build" if cc == baked else "PATH (which)")
+            origin = (
+                "$POPS_CXX"
+                if os.environ.get("POPS_CXX") == cc
+                else "baked by the _pops build"
+                if cc == baked
+                else "PATH (which)"
+            )
             try:
                 std = _tc._probe_cxx_std(cc, _tc.loader_cxx_std())
                 checks["compilateur"] = (True, "%s [%s] ; -std=%s accepted" % (cc, origin, std))
             except RuntimeError as e:
                 checks["compilateur"] = (False, str(e).splitlines()[0])
             if baked and cc != baked:
-                checks["compilateur_abi"] = (False, "runtime compiler (%s) != build (%s) -> risk "
-                                                    "of 'incompatible ABI' rejection on production "
-                                                    "backend. export POPS_CXX=%r to force the one "
-                                                    "from the build." % (cc, baked, baked))
+                checks["compilateur_abi"] = (
+                    False,
+                    "runtime compiler (%s) != build (%s) -> risk "
+                    "of 'incompatible ABI' rejection on production "
+                    "backend. export POPS_CXX=%r to force the one "
+                    "from the build." % (cc, baked, baked),
+                )
 
         # 5. pops headers (production DSL : the signature must match the one baked into _pops)
         try:
@@ -155,13 +180,18 @@ def doctor(verbose: bool = True) -> Any:
             if baked_sig is not None:
                 cur_sig = _tc.pops_header_signature(inc)
                 if cur_sig == baked_sig:
-                    checks["headers_sync"] = (True, "headers == module build (sig %s...)"
-                                              % baked_sig[:12])
+                    checks["headers_sync"] = (
+                        True,
+                        "headers == module build (sig %s...)" % baked_sig[:12],
+                    )
                 else:
-                    checks["headers_sync"] = (False, "headers MODIFIED since the _pops build "
-                                                     "(stale module) -> rebuild : cmake --build "
-                                                     "build-py --target _pops (otherwise : dlopen "
-                                                     "'symbol not found' on production backend)")
+                    checks["headers_sync"] = (
+                        False,
+                        "headers MODIFIED since the _pops build "
+                        "(stale module) -> rebuild : cmake --build "
+                        "build-py --target _pops (otherwise : dlopen "
+                        "'symbol not found' on production backend)",
+                    )
         except RuntimeError as e:
             checks["include"] = (False, "pops headers not found (set POPS_INCLUDE) : %s" % e)
 
@@ -170,17 +200,20 @@ def doctor(verbose: bool = True) -> Any:
         # installed Kokkos (Serial is enough on CPU), found via POPS_KOKKOS_ROOT / Kokkos_ROOT.
         kroot = _tc._native_kokkos_root()
         if kroot is None:
-            checks["kokkos_root"] = (False,
+            checks["kokkos_root"] = (
+                False,
                 "POPS_KOKKOS_ROOT / Kokkos_ROOT not set -> production package cannot compile "
                 "(the tutorial dead-ends on 'no DSL backend'). Fix (conda) :\n"
-                "      conda env config vars set POPS_KOKKOS_ROOT=\"$CONDA_PREFIX\"\n"
-                "      conda env config vars set Kokkos_ROOT=\"$CONDA_PREFIX\"\n"
-                "      conda deactivate && conda activate pops")
+                '      conda env config vars set POPS_KOKKOS_ROOT="$CONDA_PREFIX"\n'
+                '      conda env config vars set Kokkos_ROOT="$CONDA_PREFIX"\n'
+                "      conda deactivate && conda activate pops",
+            )
         else:
             checks["kokkos_root"] = (True, kroot)
             # 5d. A CUDA Kokkos on a host without nvcc breaks BOTH `pip install .` (find_package picks it
             # -> nvcc) AND the production .so. On a CPU host, install the CPU Kokkos variant instead.
             import shutil
+
             cuda = False
             try:
                 with open(os.path.join(kroot, "include", "KokkosCore_config.h")) as _f:
@@ -188,15 +221,19 @@ def doctor(verbose: bool = True) -> Any:
             except OSError:
                 pass
             if cuda and shutil.which("nvcc") is None:
-                checks["kokkos_cuda"] = (False,
+                checks["kokkos_cuda"] = (
+                    False,
                     "Kokkos at %s is a CUDA build but nvcc is not on PATH -> `pip install .` fails "
                     "'Could not find nvcc'. Fix for a CPU host, recreate the env with CPU Kokkos :\n"
-                    "      CONDA_OVERRIDE_CUDA=\"\" bash scripts/setup_env.sh" % kroot)
+                    '      CONDA_OVERRIDE_CUDA="" bash scripts/setup_env.sh' % kroot,
+                )
 
     # 6. current threads
-    checks["threads"] = (True, "OMP_NUM_THREADS=%s ; first System created=%s"
-                         % (os.environ.get("OMP_NUM_THREADS", "(default)"),
-                            _threading._first_system_built))
+    checks["threads"] = (
+        True,
+        "OMP_NUM_THREADS=%s ; first System created=%s"
+        % (os.environ.get("OMP_NUM_THREADS", "(default)"), _threading._first_system_built),
+    )
 
     if verbose:
         for cname, (ok, detail) in checks.items():
@@ -223,6 +260,7 @@ def capabilities() -> Any:
     """
     from pops import _pops as _pops_mod  # ADC-291: read the aux limit from the SINGLE C++ source
     from pops.physics.aux import AUX_NAMED_MAX  # fallback mirror (no second hardcoded literal)
+
     aux_max_extra = int(getattr(_pops_mod, "__aux_max_extra__", AUX_NAMED_MAX))
     # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
     # catalogs (the same source as the internal descriptor report) instead of hardcoding them, so a
@@ -235,6 +273,7 @@ def capabilities() -> Any:
     poisson_fft_spectral = tok["poisson"]["fft_spectral"]
     dsl_limiters = list(tok["dsl_limiters"])
     from pops.runtime_environment import runtime_environment_report
+
     runtime_env = runtime_environment_report()
     return {
         # Spatial dimension of the core (ADC-294 / ADR-0001 Decision 1). The solver is structurally
@@ -261,96 +300,130 @@ def capabilities() -> Any:
             "notes": {
                 "rusanov": "minimal generic (physical flux + exact provider pack + declared stability bound)",
                 "hll": "generic with signed waves (typed Model.wave_speeds(...) "
-                       "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p') ; "
-                       "polar : eligible for the isothermal fluid (IsothermalFluxPolar), not for "
-                       "scalar ExB (no wave_speeds) -- same gate as the cartesian one",
+                "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p') ; "
+                "polar : eligible for the isothermal fluid (IsothermalFluxPolar), not for "
+                "scalar ExB (no wave_speeds) -- same gate as the cartesian one",
                 "hllc": "GENERIC-ONLY (ADC-590) : model capability HasHLLCStructure required -- "
-                        "emitted by the DSL via m.enable_hllc() (roles + 'p', including 3-var non "
-                        "Euler, passive advected scalars) ; the native Euler brick provides it. "
-                        "Canonical 4-var Euler without the capability -> riemann='euler_hllc'",
+                "emitted by the DSL via m.enable_hllc() (roles + 'p', including 3-var non "
+                "Euler, passive advected scalars) ; the native Euler brick provides it. "
+                "Canonical 4-var Euler without the capability -> riemann='euler_hllc'",
                 "roe": "GENERIC-ONLY (ADC-590) : model capability HasRoeDissipation required "
-                       "-- TWO DSL paths : (a) m.enable_roe() generated from the roles (roles + "
-                       "'p' : with Energy = transcribed canonical algebra, without Energy = "
-                       "c=sqrt(p/rho) Roe average, passive scalars on the entropy wave) ; (b) "
-                       "m.roe_dissipation(x=, y=) PROVIDED by the user (own eigenstructure, "
-                       "left()/right() of the two states, helper m.flux_jacobian auto-derived). Paths "
-                       "exclusive (a single provider of the hook). has_roe covers both ; the native "
-                       "Euler brick provides the hook. Canonical Euler without it -> 'euler_roe'",
+                "-- TWO DSL paths : (a) m.enable_roe() generated from the roles (roles + "
+                "'p' : with Energy = transcribed canonical algebra, without Energy = "
+                "c=sqrt(p/rho) Roe average, passive scalars on the entropy wave) ; (b) "
+                "m.roe_dissipation(x=, y=) PROVIDED by the user (own eigenstructure, "
+                "left()/right() of the two states, helper m.flux_jacobian auto-derived). Paths "
+                "exclusive (a single provider of the hook). has_roe covers both ; the native "
+                "Euler brick provides the hook. Canonical Euler without it -> 'euler_roe'",
                 "euler_hllc": "EXPLICIT canonical 2D Euler HLLC (EulerHLLCFlux2D, ADC-590) : "
-                              "n_vars == 4 + primitive 'p' (rho/mx/my/E), never a fallback ; "
-                              "refuses a model that emitted the generic capability",
+                "n_vars == 4 + primitive 'p' (rho/mx/my/E), never a fallback ; "
+                "refuses a model that emitted the generic capability",
                 "euler_roe": "EXPLICIT canonical ideal-gas 2D Euler Roe (EulerRoeFlux2D, ADC-590) : "
-                             "n_vars == 4 + primitive 'p', Harten eps = 0.1c, never a fallback ; "
-                             "refuses a model that emitted the generic capability",
+                "n_vars == 4 + primitive 'p', Harten eps = 0.1c, never a fallback ; "
+                "refuses a model that emitted the generic capability",
             },
         },
         "time": {
-            "system": ["explicit (ssprk2|ssprk3)", "imex (= SourceImplicitBE)",
-                       "imexrk_ars222 (IMEX-RK family, ARS(2,2,2) scheme, order 2 ; cartesian only ; "
-                       "fully implicit source)",
-                       "Program factories Lie|Strang + explicit Program.solve"],
-            "amr": ["explicit (SSPRK2/Heun, order 2 + effective reflux flux)",
-                    "euler (Forward Euler)",
-                    "ssprk3 (order 3 + effective reflux flux)",
-                    "coarse/fine SSP stages sample the parent window at RK abscissae",
-                    "imex (= Forward Euler transport + SourceImplicitBE)",
-                    "Program factories Lie|Strang + hierarchy-scoped Program.solve"],
-            "system_polar": ["explicit (ssprk2|ssprk3)",
-                             "metric-aware explicit Program.solve graph"],
-            "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System + AMR "
-                              "native at every block count (.so loaders : explicit rejection) ; "
-                              "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
-                              "newton_report : System + AMR native at every block count "
-                              "(.so loaders : explicit rejection)",
+            "system": [
+                "explicit (ssprk2|ssprk3)",
+                "imex (= SourceImplicitBE)",
+                "imexrk_ars222 (IMEX-RK family, ARS(2,2,2) scheme, order 2 ; cartesian only ; "
+                "fully implicit source)",
+                "Program factories Lie|Strang + explicit Program.solve",
+            ],
+            "amr": [
+                "explicit (SSPRK2/Heun, order 2 + effective reflux flux)",
+                "euler (Forward Euler)",
+                "ssprk3 (order 3 + effective reflux flux)",
+                "coarse/fine SSP stages sample the parent window at RK abscissae",
+                "IMEX execution requires a typed implicit Program primitive "
+                "(no AMR spatial-runtime fallback)",
+                "Program factories Lie|Strang + hierarchy-scoped Program.solve",
+            ],
+            "system_polar": [
+                "explicit (ssprk2|ssprk3)",
+                "metric-aware explicit Program.solve graph",
+            ],
+            "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System route "
+            "or typed Program solve; AMR rejects non-default block options and "
+            "diagnostics until its typed implicit primitive exists (.so block "
+            "loaders: explicit rejection) ; "
+            "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
+            "newton_report requires the executing typed solve",
         },
         "stability_policy": {
-            "system": ["transport (max_wave_speed | stability_speed)", "source_frequency",
-                       "stability_dt", "coupled_source.frequency", "add_dt_bound (global, "
-                       "all_reduce_min)", "last_dt_bound"],
-            "amr": ["transport (max_wave_speed | stability_speed)", "source_frequency",
-                    "stability_dt", "coupled_source.frequency (multi-block)", "add_dt_bound",
-                    "last_dt_bound"],
-            "system_polar": ["transport (max_wave_speed | stability_speed)", "source_frequency",
-                             "stability_dt", "coupled_source.frequency", "add_dt_bound",
-                             "last_dt_bound"],
+            "system": [
+                "transport (max_wave_speed | stability_speed)",
+                "source_frequency",
+                "stability_dt",
+                "coupled_source.frequency",
+                "add_dt_bound (global, all_reduce_min)",
+                "last_dt_bound",
+            ],
+            "amr": [
+                "transport (max_wave_speed | stability_speed)",
+                "source_frequency",
+                "stability_dt",
+                "coupled_source.frequency (multi-block)",
+                "add_dt_bound",
+                "last_dt_bound",
+            ],
+            "system_polar": [
+                "transport (max_wave_speed | stability_speed)",
+                "source_frequency",
+                "stability_dt",
+                "coupled_source.frequency",
+                "add_dt_bound",
+                "last_dt_bound",
+            ],
         },
         "poisson": {
-            "system_cartesian": ["%s (wall, eps(x), aniso, screened)" % poisson_mg,
-                                 "%s (periodic, n = 2^k, constant eps, mono-box)" % poisson_fft,
-                                 "%s (same as fft, continuous spectral symbol)" % poisson_fft_spectral],
-            "system_polar": ["polar direct (mono-rank, one box) -- clear UPSTREAM REJECT if theta_boxes>1"],
+            "system_cartesian": [
+                "%s (wall, eps(x), aniso, screened)" % poisson_mg,
+                "%s (periodic, n = 2^k, constant eps, mono-box)" % poisson_fft,
+                "%s (same as fft, continuous spectral symbol)" % poisson_fft_spectral,
+            ],
+            "system_polar": [
+                "polar direct (mono-rank, one box) -- clear UPSTREAM REJECT if theta_boxes>1"
+            ],
             "amr": ["%s only ; rhs charge_density|composite" % poisson_mg],
         },
         "geometry": {
             "system_cartesian": "square n x n ; mono-box (multi-box = AmrSystem or MPI mono-box)",
             "system_polar": "ring (r, theta) global ; theta_boxes=1 mono-box (default) OR "
-                            "theta_boxes>1 split into theta bands (divides ntheta). MATRIX "
-                            "multi-box (ADC-67) : TRANSPORT (assemble_rhs_polar + fill_ghosts "
-                            "collective) multi-box OK ; polar Poisson DIRECT mono-box only (upstream "
-                            "reject if theta_boxes>1) ; polar tensor Schur stage multi-box. "
-                            "get/set state (and eval_rhs/density) reconstruct the global ring "
-                            "multi-box ; mono-rank (the direct Poisson refuses MPI).",
+            "theta_boxes>1 split into theta bands (divides ntheta). MATRIX "
+            "multi-box (ADC-67) : TRANSPORT (assemble_rhs_polar + fill_ghosts "
+            "collective) multi-box OK ; polar Poisson DIRECT mono-box only (upstream "
+            "reject if theta_boxes>1) ; polar tensor Schur stage multi-box. "
+            "get/set state (and eval_rhs/density) reconstruct the global ring "
+            "multi-box ; mono-rank (the direct Poisson refuses MPI).",
             "amr": "hierarchy of levels (BoxArray per level, dynamic regrid) ; "
-                   "refinement_ratio = 2 only (single native AMR invariant, centralized in "
-                   "include/pops/amr/refinement_ratio.hpp ; a non-2 ratio is rejected at "
-                   "hierarchy construction, not silently mis-coarsened)",
+            "refinement_ratio = 2 only (single native AMR invariant, centralized in "
+            "include/pops/amr/refinement_ratio.hpp ; a non-2 ratio is rejected at "
+            "hierarchy construction, not silently mis-coarsened)",
         },
         "schur": {
             "system_cartesian": "explicit Program.solve(LinearProblem(..., nullspace=None), "
-                                "solver=GMRES/BiCGStab) ; "
-                                "authored roles/fields ; generic matrix-free operator",
+            "solver=GMRES/BiCGStab) ; "
+            "authored roles/fields ; generic matrix-free operator",
             "system_polar": "same explicit Program IR ; metric-aware divergence/gradient plus "
-                            "PolarTensorKrylovSolver provider",
+            "PolarTensorKrylovSolver provider",
             "amr": "hierarchy-scoped Program.solve with CompositeTensorFAC ; gather-all-levels, "
-                   "one composite tensor solve, then reconstruct-all-levels through the Program",
+            "one composite tensor solve, then reconstruct-all-levels through the Program",
         },
         "backends_dsl": {
             "default": "production package; compiler, headers and module ABI must match",
-            "production": {"tier": "production",
-                           "riemann": list(riemann_all),
-                           "limiter": dsl_limiters, "stride": True,
-                           "evolve_false": True, "mpi": True, "amr": "target='amr_system'",
-                           "stability_hooks": True, "bind_params": "fixed at install"},
+            "production": {
+                "tier": "production",
+                "riemann": list(riemann_all),
+                "limiter": dsl_limiters,
+                "stride": True,
+                "evolve_false": True,
+                "mpi": True,
+                "amr": "target='amr_system'",
+                "stability_hooks": True,
+                "bind_params": "fixed at install",
+            },
         },
         "io": {
             "scientific_output": (
@@ -358,14 +431,14 @@ def capabilities() -> Any:
                 "PER_RANK topology; collective HDF5 requires the native C++ parallel-HDF5 route"
             ),
             "checkpoint_restart": (
-                "strict accepted-state v3 for Uniform and AMR, including multi-block, active "
+                "strict accepted-state v5 for Uniform and AMR, including multi-block, active "
                 "regridding, fields, histories, clocks and consumer cursors; exact MPI_COMM_WORLD "
                 "captures collectively and publishes one rank-0 NPZ artifact"
             ),
         },
         "amr_layout": {
             "set_conservative_state": "mono-block, native multi-block, and compiled multi-block "
-                                      "(.so loaders ; complete block-qualified conservative state)",
+            "(.so loaders ; complete block-qualified conservative state)",
         },
         "regrid": {
             # ADC-296 / ADR-0001 Decision 5. The MULTI-BLOCK AMR regrid variable is selectable PER BLOCK
@@ -381,14 +454,18 @@ def capabilities() -> Any:
         },
         "aux": {
             "canonical": "phi/grad_x/grad_y (base) + B_z (set_magnetic_field) + T_e "
-                         "(set_electron_temperature_from), closed list POPS_AUX_FIELDS / AUX_CANONICAL "
-                         "(C++ name table pops/core/aux_names.hpp, mirror of Python AUX_CANONICAL)",
+            "(set_electron_temperature_from), closed list POPS_AUX_FIELDS / AUX_CANONICAL "
+            "(C++ name table pops/core/aux_names.hpp, mirror of Python AUX_CANONICAL)",
             "named": {
                 # Model-declared NAMED aux fields (ADC-70 phase 1 + ADC-291 phase 2): m.aux_field('name')
                 # reserves component AUX_NAMED_BASE + k (read in C++ via aux.extra_field(k));
                 # set_aux_field(block, name, array) carries the static field. STATIC + persistent.
-                "backends": ["system_cartesian", "system_polar", "amr_single_block",
-                             "amr_multi_block"],
+                "backends": [
+                    "system_cartesian",
+                    "system_polar",
+                    "amr_single_block",
+                    "amr_multi_block",
+                ],
                 # The ONLY remaining compile-time aux limit, declarative + introspectable (= C++
                 # kAuxMaxExtra, mirrored by dsl.AUX_NAMED_MAX ; test_capabilities.py pins the match).
                 "limit": aux_max_extra,
@@ -407,6 +484,6 @@ def capabilities() -> Any:
                 },
             },
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
-                         "AMR path needs target='amr_system'",
+            "AMR path needs target='amr_system'",
         },
     }

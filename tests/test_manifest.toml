@@ -1,18 +1,8 @@
 # Generated from the reorganized test tree. Keep paths and labels in sync with CMake/pytest.
 
 [[cpp.suite]]
-name = "test_amr_aux_bz"
-sources = ["tests/cpp/integration/amr/test_amr_aux_bz.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_amr_composite_poisson"
 sources = ["tests/cpp/integration/amr/test_amr_composite_poisson.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_composite_source_conservation"
-sources = ["tests/cpp/integration/amr/test_amr_composite_source_conservation.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
@@ -23,11 +13,6 @@ labels = ["integration", "amr", "medium"]
 [[cpp.suite]]
 name = "test_amr_diagnostics"
 sources = ["tests/cpp/integration/amr/test_amr_diagnostics.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_diffusion"
-sources = ["tests/cpp/integration/amr/test_amr_diffusion.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
@@ -81,13 +66,18 @@ sources = ["tests/cpp/integration/amr/test_amr_named_field.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_positivity_floor"
-sources = ["tests/cpp/integration/amr/test_amr_positivity_floor.cpp"]
+name = "test_amr_potential"
+sources = ["tests/cpp/integration/amr/test_amr_potential.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_potential"
-sources = ["tests/cpp/integration/amr/test_amr_potential.cpp"]
+name = "test_amr_program_diffusion"
+sources = ["tests/cpp/integration/amr/test_amr_program_diffusion.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_amr_program_positivity_floor"
+sources = ["tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
@@ -101,23 +91,8 @@ sources = ["tests/cpp/integration/amr/test_amr_seed_no_refine.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_source_covered_cells"
-sources = ["tests/cpp/integration/amr/test_amr_source_covered_cells.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_amr_spatial_parity"
 sources = ["tests/cpp/integration/amr/test_amr_spatial_parity.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_ssprk2"
-sources = ["tests/cpp/integration/amr/test_amr_ssprk2.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_stride_cadence"
-sources = ["tests/cpp/integration/amr/test_amr_stride_cadence.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
@@ -134,11 +109,6 @@ labels = ["integration", "amr", "medium"]
 [[cpp.suite]]
 name = "test_amr_system_contract"
 sources = ["tests/cpp/integration/amr/test_amr_system_contract.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_system_coupler"
-sources = ["tests/cpp/integration/amr/test_amr_system_coupler.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]

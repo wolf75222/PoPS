@@ -70,6 +70,9 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
         "amr_checkpoint_payload_version",
     ):
         assert source[name] >= 1
+    assert source["uniform_checkpoint_payload_version"] == 5
+    assert source["amr_checkpoint_payload_version"] == 5
+    assert source["capability_vocabulary_version"] == 2
     assert generated.SUPPORTED_MATRIX["wheels"] == (
         {"arch": "arm64", "backend": "Kokkos Serial", "os": "macos", "python": "cp312"},
     )

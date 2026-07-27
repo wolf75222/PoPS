@@ -21,12 +21,13 @@ per step is possible; the tolerance below is bit-exact for the tested states, wi
 """
 import numpy as np
 import pytest
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 # The _bootstrap of a mismatched-interpreter extension raises ImportError (a subclass), so gate on it.
 pops = pytest.importorskip("pops", exc_type=ImportError)
 import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._engine_descriptors import Periodic  # noqa: E402
+from tests.python.support.explicit_program import install_ssprk2_program
 
 
 N = 8
@@ -89,6 +90,7 @@ def test_collision_preset_matches_deleted_helper():
     sim.set_primitive_state("a", rho=_uni(1.0), u=_uni(0.5), v=_uni(0.2), p=_uni(1.0))
     sim.set_primitive_state("b", rho=_uni(2.0), u=_uni(-0.3), v=_uni(0.1), p=_uni(1.0))
     sim.add_coupling(engine.Collision("a", "b", 0.5))  # lowered via the preset -> add_coupling_operator
+    install_ssprk2_program(sim, coupled_sources=True)
     # The coupling is registered as a TYPED operator with the declared momentum contract.
     ops = sim.coupled_operators()
     assert len(ops) == 1 and ops[0]["conserved_roles"] == ["momentum_x", "momentum_y"], ops
@@ -107,10 +109,11 @@ def test_ionization_preset_matches_deleted_helper():
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     for name in ("e", "i", "g"):
         sim.add_equation(name, _isothermal(), spatial=engine.Spatial())
-    sim.set_primitive_state("e", rho=_uni(0.3), u=_uni(0.0), v=_uni(0.0))
-    sim.set_primitive_state("i", rho=_uni(0.1), u=_uni(0.0), v=_uni(0.0))
-    sim.set_primitive_state("g", rho=_uni(1.0), u=_uni(0.0), v=_uni(0.0))
+    sim.set_density("e", _uni(0.3))
+    sim.set_density("i", _uni(0.1))
+    sim.set_density("g", _uni(1.0))
     sim.add_coupling(engine.Ionization("e", "i", "g", 1.7))
+    install_ssprk2_program(sim, coupled_sources=True)
     # Ionization is a declared NET SOURCE in density (electron creation), not a conserved exchange.
     ops = sim.coupled_operators()
     assert len(ops) == 1 and ops[0]["created_roles"] == ["density"], ops
@@ -127,6 +130,33 @@ def test_ionization_preset_matches_deleted_helper():
         assert abs((got[1] + got[2]) - 1.1) <= 1e-12, "ion mass transfer rho_i+rho_g conserved"
 
 
+def test_amr_ionization_runs_through_the_same_candidate_program_primitive():
+    sim = AmrSystem(
+        n=N,
+        L=1.0,
+        periodicity=(True, True),
+        regrid_every=0,
+    )
+    sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
+    for name in ("e", "i", "g"):
+        sim.add_equation(name, _isothermal(), spatial=engine.Spatial())
+    sim.set_density("e", _uni(0.3))
+    sim.set_density("i", _uni(0.1))
+    sim.set_density("g", _uni(1.0))
+    sim.add_coupling(engine.Ionization("e", "i", "g", 1.7))
+    install_ssprk2_program(sim, coupled_sources=True)
+
+    sim.step(DT)
+    got = (
+        np.asarray(sim.density("e"))[0, 0],
+        np.asarray(sim.density("i"))[0, 0],
+        np.asarray(sim.density("g"))[0, 0],
+    )
+    assert np.allclose(got, IONIZATION_REF[0], rtol=0.0, atol=TOL), got
+    assert abs((got[1] + got[2]) - 1.1) <= 1e-12
+
+
 def test_thermal_exchange_preset_matches_deleted_helper():
     sim = System(n=N, L=1.0, periodicity=(True, True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
@@ -135,6 +165,7 @@ def test_thermal_exchange_preset_matches_deleted_helper():
     sim.set_primitive_state("a", rho=_uni(1.0), u=_uni(0.0), v=_uni(0.0), p=_uni(2.0))
     sim.set_primitive_state("b", rho=_uni(2.0), u=_uni(0.0), v=_uni(0.0), p=_uni(1.0))
     sim.add_coupling(engine.ThermalExchange("a", "b", 0.3))
+    install_ssprk2_program(sim, coupled_sources=True)
     ops = sim.coupled_operators()
     assert len(ops) == 1 and ops[0]["conserved_roles"] == ["energy"], ops
     for step in range(len(THERMAL_REF)):

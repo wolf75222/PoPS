@@ -1,11 +1,10 @@
 // AMR MULTI-BLOCS COMPILES (capstone "v", DSL production multi-bloc) : la FACADE RUNTIME AmrSystem
 // accepte desormais PLUSIEURS blocs COMPILES (add_compiled_model, modeles connus a la compilation)
 // co-localises sur UNE hierarchie AMR PARTAGEE. Avant ce capstone, le 2e bloc compile LEVAIT
-// ("set_compiled_block : un seul bloc compile est supporte") : la facade ne portait qu'un unique
-// AmrCouplerMP mono-bloc pour le chemin compile. Desormais add_compiled_model fige DEUX builders
-// (un mono-bloc AmrCouplerMP + un multi-blocs AmrRuntimeBlock) et la facade route a ensure_built :
-// un seul bloc -> AmrCouplerMP (bit-identique) ; deux blocs ou plus -> AmrRuntime (file de specs
-// construite paresseusement sur le layout PARTAGE, exactement comme add_block natif).
+// ("set_compiled_block : un seul bloc compile est supporte"). Desormais add_compiled_model enregistre
+// chaque bloc spatial concret et la facade les materialise tous dans l'unique AmrRuntime, sur le meme
+// layout que les blocs natifs. Le Program installe reste l'unique autorite temporelle, quel que soit le
+// nombre ou l'origine des blocs.
 //
 // Ce que le test verrouille :
 //   (A) DEUX blocs compiles a SCHEMAS DIFFERENTS sur la hierarchie partagee : pas de crash au 2e bloc,
@@ -16,8 +15,8 @@
 //       conservant la masse COMPOSITE globale a ~machine.
 //   (C) MELANGE compile + natif : un bloc compile (add_compiled_model) et un bloc natif (add_block)
 //       co-existent sur la meme hierarchie (le melange etait refuse avant ce capstone).
-//   (D) MONO-BLOC COMPILE BIT-IDENTIQUE : un seul bloc compile route TOUJOURS par AmrCouplerMP (jamais
-//       par AmrRuntime), donc un meme cas joue deux fois donne le MEME resultat au bit pres (dmax==0).
+//   (D) MONO-BLOC COMPILE DETERMINISTE : le meme bloc spatial et le meme Program rejoues deux fois
+//       donnent le MEME resultat au bit pres (dmax==0).
 //   (E) NON-REGRESSION du refus : le 2e bloc compile NE LEVE PLUS (preuve directe que la file de specs
 //       a remplace l'ancien throw "un seul bloc compile").
 //
@@ -25,24 +24,27 @@
 // GENERIQUE (auto m) NE COMPILE PAS sous nvcc. Ici on utilise donc des FONCTEURS / TYPES CONCRETS :
 // les modeles sont des CompositeModel<ExBVelocity, NoSource, ChargeDensity> instancies a la main (pas
 // de dispatch_model generique), et add_compiled_model capture ces types concrets. Le noyau AMR
-// (advance_amr<Limiter, Flux>) reste capture par dispatch_amr_block via une fonction template NOMMEE
+// (residu spatial Limiter/Flux) reste capture par dispatch_amr_block via une fonction template NOMMEE
 // (recette device-clean #64/#97), jamais une lambda etendue cross-TU. Le test compile donc partout
 // (CPU + Kokkos Serial/OpenMP/Cuda), comme test_amr_coupled_source_role_strict et add_compiled_model #16/#18.
 
 #include <gtest/gtest.h>
 
-#include <pops/coupling/source/coupled_source_program.hpp>   // CsOp (opcodes du bytecode P5)
-#include <pops/physics/bricks/bricks.hpp>                    // CompositeModel
-#include <pops/physics/bricks/elliptic.hpp>                  // ChargeDensity
-#include <pops/physics/bricks/hyperbolic.hpp>                // ExBVelocity
-#include <pops/physics/bricks/source.hpp>                    // NoSource
+#include "explicit_amr_program.hpp"
+#include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
+#include <pops/physics/bricks/bricks.hpp>                   // CompositeModel
+#include <pops/physics/bricks/elliptic.hpp>                 // ChargeDensity
+#include <pops/physics/bricks/hyperbolic.hpp>               // ExBVelocity
+#include <pops/physics/bricks/source.hpp>                   // NoSource
+#include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem&, ...)
 #include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
 #include <pops/runtime/config/model_spec.hpp>  // ModelSpec (bloc natif, melange compile + natif)
-#include <pops/runtime/program/step_transaction.hpp>
+#include <pops/runtime/program/amr_program_context.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -179,11 +181,6 @@ static bool raises(F&& f) {
   return false;
 }
 
-static bool is_nonfinite_fv_rejection(const std::runtime_error& error) {
-  return std::string(error.what()).find("produced non-finite finite-volume data") !=
-         std::string::npos;
-}
-
 static double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
   double d = 0;
   const std::size_t nn = a.size() < b.size() ? a.size() : b.size();
@@ -197,13 +194,6 @@ static bool all_finite(const std::vector<double>& v) {
     if (!std::isfinite(x))
       return false;
   return true;
-}
-
-static double maxabs(const std::vector<double>& v) {
-  double m = 0;
-  for (double x : v)
-    m = std::max(m, std::fabs(x));
-  return m;
 }
 
 // Enregistre une source ionisation-like CONSERVATIVE entre deux blocs nommes sur le role density :
@@ -238,6 +228,41 @@ static void register_ionization(AmrSystem& sim, const std::string& block_a,
   prog.prog_args = prog_args;
   prog.prog_lens = prog_lens;
   sim.add_coupled_source(prog);
+}
+
+// Program-owned split used by the compiled-block coupling proof: one explicit transport rate for
+// each block, then one simultaneous coupled-source update on private candidates and one group commit.
+static void install_compiled_coupling_program(AmrSystem& system) {
+  system.install_program_step([](double) {});
+  if (!system.uses_runtime_engine() || system.engine() == nullptr)
+    throw std::runtime_error("compiled coupled-source fixture failed to materialize AmrRuntime");
+
+  auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
+  context->configure_primary_clock("test.compiled.coupling.macro");
+  context->install([context](double macro_dt) {
+    context->advance_hierarchy(macro_dt, [context](double level_dt) {
+      context->set_stage_time(0, 1);
+      (void)context->solve_fields();
+
+      MultiFab& ions = context->state(0);
+      MultiFab& neutrals = context->state(1);
+      MultiFab& ions_rate = context->rhs_scratch(1000, 0, ions);
+      MultiFab& neutrals_rate = context->rhs_scratch(1001, 0, neutrals);
+      context->rhs_into(0, ions, ions_rate, 2000);
+      context->rhs_into(1, neutrals, neutrals_rate, 2001);
+      context->axpy(ions, Real(level_dt), ions_rate, Real(level_dt), {{1, 1, 1}});
+      context->axpy(neutrals, Real(level_dt), neutrals_rate, Real(level_dt), {{1, 1, 1}});
+
+      MultiFab& ions_candidate = context->scratch_state(3000, 0, ions);
+      MultiFab& neutrals_candidate = context->scratch_state(3001, 0, neutrals);
+      context->lincomb(ions_candidate, Real(1), ions, Real(0), ions);
+      context->lincomb(neutrals_candidate, Real(1), neutrals, Real(0), neutrals);
+      context->apply_coupling_operators(Real(level_dt),
+                                        {{0, &ions_candidate}, {1, &neutrals_candidate}});
+      context->commit_many({{&ions, &ions_candidate}, {&neutrals, &neutrals_candidate}});
+    });
+  });
+  system.set_program_block_map({0, 1});
 }
 
 TEST(test_amr_multiblock_compiled, Runs) {
@@ -278,6 +303,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
+    test::install_forward_euler_program(sim);
 
     EXPECT_EQ(sim.n_blocks(), 2) << "A_two_compiled_blocks";
 
@@ -306,7 +332,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
   }
 
   // ============================================================================================
-  // (B) COUPLAGE entre deux blocs compiles : ionisation-like +S/-S (ions gagnent, neutrals perdent).
+  // (B) COUPLAGE entre deux blocs compiles par un Program explicite.
   //     La masse COMPOSITE n_ions + n_neutrals est conservee globalement ; la masse ions AUGMENTE.
   //     Both blocks are field-neutral here: this section isolates the coupled source and keeps the
   //     fully periodic elliptic RHS exactly compatible with its constant nullspace.
@@ -331,10 +357,13 @@ TEST(test_amr_multiblock_compiled, Runs) {
     sim.set_density("neutrals", rho1);
     // gain sur "ions", perte sur "neutrals" (echange conservatif par cellule).
     register_ionization(sim, "ions", "neutrals", "ions", "neutrals", k);
+    install_compiled_coupling_program(sim);
 
     const double tot0 = sim.mass("ions") + sim.mass("neutrals");
     const double mi0 = sim.mass("ions");
 
+    ASSERT_TRUE(sim.uses_runtime_engine());
+    ASSERT_NE(sim.engine(), nullptr);
     sim.advance(0.01, 6);
 
     EXPECT_TRUE(all_finite(sim.density("ions")) && all_finite(sim.density("neutrals")))
@@ -364,6 +393,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
     sim.set_density("ions", rho0);
     sim.set_density("electrons", rho1);
+    test::install_forward_euler_program(sim);
 
     EXPECT_EQ(sim.n_blocks(), 2) << "C_mixed_two_blocks";
     const std::vector<double> d0_before = sim.density("ions");
@@ -375,9 +405,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
   }
 
   // ============================================================================================
-  // (D) MONO-BLOC COMPILE BIT-IDENTIQUE : un seul bloc compile route TOUJOURS par AmrCouplerMP
-  //     (jamais AmrRuntime). Meme cas joue deux fois -> dmax == 0 (le routage facade ne devie pas le
-  //     mono-bloc compile vers le nouveau moteur, qui differe sur l'ordre des operations flottantes).
+  // (D) MONO-BLOC COMPILE DETERMINISTE : meme bloc spatial + meme Program joues deux fois -> dmax == 0.
   // ============================================================================================
   {
     const std::vector<double> periodic_state = bump(N, 0.0, 0.40);
@@ -396,6 +424,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
       // A single periodic charged block must itself have zero mean; no projection is allowed.
       sim.set_density("ne", periodic_state);
+      test::install_forward_euler_program(sim);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };
@@ -425,131 +454,60 @@ TEST(test_amr_multiblock_compiled, Runs) {
   }
 
   // ============================================================================================
-  // (F) IMEX + MULTIRATE (stride) + MASQUE IMEX PARTIEL sur un bloc COMPILE multi-bloc, via le chemin
-  //     C++ DIRECT add_compiled_model(AmrSystem&) (qui, lui, SUPPORTE time="imex"/stride/masque ; le
-  //     chemin .so loader ne les transporte PAS et la facade Python les REJETTE, cf. revue #195). Tous
-  //     les autres cas du fichier utilisent time="explicit" : sans (F), le chemin IMEX des blocs
-  //     compiles multi-blocs etait ENTIEREMENT NON teste. On verrouille trois proprietes :
-  //       (F1) GENUINE IMEX : un bloc compile raide (1/eps >> 1/dt) en IMEX reste FINI/BORNE la ou le
-  //            MEME bloc en EXPLICITE EXPLOSE (la source raide n'attaque que mx/my/E ; l'explosion
-  //            contamine rho via le transport, observable a la facade density()).
-  //       (F2) STRIDE EFFECTIF : stride=2 donne une trajectoire DIFFERENTE de stride=1 (memes eps/dt/
-  //            macro-pas) -> la cadence est REELLEMENT prise en compte par le bloc compile (pas ignoree).
-  //       (F3) MASQUE PARTIEL : implicit_roles={"momentum_x"} (sous-ensemble des composantes) est RESOLU
-  //            contre l'Euler concret et le bloc tourne FINI ; un masque demande en EXPLICITE LEVE.
-  //     Le 2e bloc (neutre, explicite) force la route MULTI-BLOC (AmrRuntime), pas le mono-bloc AmrCouplerMP.
+  // (F) FAIL-CLOSED : les descripteurs IMEX/stride/masque d'un bloc compile restent des metadonnees
+  //     de lowering. Sans Program type qui place Newton, AmrSystem refuse avant de construire ou de
+  //     modifier la hierarchie ; il ne retombe jamais sur un stepper prive. La preuve numerique IMEX
+  //     Program est dans test_amr_multiblock_imex et test_amr_imex_native.
   // ============================================================================================
   {
     const int Nf = 32;
-    const double eps = 1e-5, dtF = 1e-3;
-    const int KF = 12;
+    const double eps = 1e-5;
     const std::vector<double> rhoF = bubble(Nf);
+    AmrSystemConfig cfg;
+    cfg.n = Nf;
+    cfg.L = L;
+    cfg.periodicity = {true, true};
+    cfg.regrid_every = 0;
+    AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
+    add_compiled_model(sim, "stiff", stiff_cmodel(eps), "minmod", "rusanov", "conservative", "imex",
+                       /*gamma=*/1.4, /*substeps=*/1, /*stride=*/2,
+                       /*implicit_vars=*/{}, /*implicit_roles=*/{});
+    add_compiled_model(sim, "neutral", neutral_cmodel(), "minmod", "rusanov", "conservative",
+                       "explicit", /*gamma=*/1.4);
+    sim.set_poisson("charge_density", "geometric_mg", "periodic");
+    sim.set_density("stiff", rhoF);
+    sim.set_density("neutral", rhoF);
 
-    // Construit un AmrSystem a DEUX blocs COMPILES : un bloc raide (traitement/stride/masque variables)
-    // + un bloc neutre explicite. Renvoie la densite du bloc raide apres KF macro-pas (peut lever au
-    // build paresseux si le masque demande en explicite, capte par l'appelant).
-    auto run_stiff_compiled = [&](bool imex, int stride,
-                                  const std::vector<std::string>& impl_roles) {
-      AmrSystemConfig cfg;
-      cfg.n = Nf;
-      cfg.L = L;
-      cfg.periodicity = {true, true};
-      cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
-      AmrSystem sim(cfg);
-      sim.set_temporal_relations({2}, {1}, {"integral_only"});
-      add_compiled_model(sim, "stiff", stiff_cmodel(eps), "minmod", "rusanov", "conservative",
-                         imex ? "imex" : "explicit", /*gamma=*/1.4, /*substeps=*/1, stride,
-                         /*implicit_vars=*/{}, impl_roles);
-      add_compiled_model(sim, "neutral", neutral_cmodel(), "minmod", "rusanov", "conservative",
-                         "explicit", /*gamma=*/1.4);  // voisin explicite -> route MULTI-BLOC
-      sim.set_poisson("charge_density", "geometric_mg", "periodic");
-      sim.set_density("stiff", rhoF);
-      sim.set_density("neutral", rhoF);
-      const double m0 = sim.mass("stiff");
-      for (int s = 0; s < KF; ++s)
-        sim.advance(dtF, 1);
-      const std::vector<double> d = sim.density("stiff");
-      return std::make_pair(d, std::fabs(sim.mass("stiff") - m0));
-    };
-
-    // (F1) IMEX stable vs EXPLICITE qui explose (genuine IMEX, pas un no-op silencieux).
-    const auto imex_res = run_stiff_compiled(/*imex=*/true, /*stride=*/1, {});
-    EXPECT_TRUE(all_finite(imex_res.first) && maxabs(imex_res.first) < 1e3)
-        << "F1_compiled_imex_block_finite_and_bounded";
-    EXPECT_TRUE(imex_res.second < 1e-10)
-        << "F1_compiled_imex_mass_conserved";  // source ne touche pas rho
-
-    std::pair<std::vector<double>, double> expl_res;
-    bool explicit_rejected = false;
+    std::string refusal;
     try {
-      expl_res = run_stiff_compiled(/*imex=*/false, /*stride=*/1, {});
-    } catch (const runtime::program::StepAttemptRejected& rejection) {
-      if (rejection.status() != SolveStatus::kInvalidEvaluation ||
-          rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
-          rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
-        throw;
-      explicit_rejected = true;
-    } catch (const std::runtime_error& error) {
-      if (!is_nonfinite_fv_rejection(error))
-        throw;
-      explicit_rejected = true;
+      sim.step(1e-3);
+    } catch (const std::exception& error) {
+      refusal = error.what();
     }
-    const bool expl_blew_up =
-        explicit_rejected || (all_finite(expl_res.first) && maxabs(expl_res.first) > 1e3);
-    EXPECT_TRUE(expl_blew_up)
-        << "F1_compiled_explicit_block_BLOWS_UP (disable-and-fail : IMEX requis)";
-    std::printf("      (F) compile IMEX : max(rho)=%.3e ; EXPLICITE : %s\n", maxabs(imex_res.first),
-                explicit_rejected
-                    ? "REJETE AVANT PUBLICATION D'UN ETAT NON FINI"
-                    : (all_finite(expl_res.first) ? "borne >> 1" : "ETAT NON FINI PUBLIE (ECHEC)"));
+    EXPECT_TRUE(refusal.find("Program") != std::string::npos)
+        << "F_compiled_imex_without_typed_program_fails_closed";
 
-    // (F2) stride=2 DIFFERE de stride=1 (memes eps/dt/macro-pas) : la cadence est effective.
-    const auto imex_s2 = run_stiff_compiled(/*imex=*/true, /*stride=*/2, {});
-    EXPECT_TRUE(all_finite(imex_s2.first)) << "F2_compiled_imex_stride2_finite";
-    const double d_stride = dmax_field(imex_res.first, imex_s2.first);
-    EXPECT_TRUE(d_stride > 0.0)
-        << "F2_compiled_imex_stride2_DIFFERS_from_stride1 (multirate effectif)";
-    std::printf("      (F2) stride : dmax(rho ; s1 vs s2)=%.3e\n", d_stride);
-
-    // (F3) masque IMEX PARTIEL implicit_roles={"momentum_x", "momentum_y"} : resolu contre l'Euler
-    //      concret (4 var) en les indices 1/2, et applique en IMPLICITE a ces SEULES composantes. Comme
-    //      la source raide n'attaque QUE mx/my, ce masque (qui couvre exactement les composantes raides)
-    //      donne un run FINI/BORNE -> preuve que le masque a ete RESOLU et APPLIQUE.
-    const auto imex_mask =
-        run_stiff_compiled(/*imex=*/true, /*stride=*/1, {"momentum_x", "momentum_y"});
-    EXPECT_TRUE(all_finite(imex_mask.first) && maxabs(imex_mask.first) < 1e3)
-        << "F3_compiled_imex_partial_mask_mxmy_resolved_and_runs";
-
-    // (F3-bis) le masque est GENUINEMENT PARTIEL (pas un backward-Euler plein deguise) : un masque
-    //          {momentum_x} SEUL laisse my en EXPLICITE -> my (raide) EXPLOSE et contamine rho. Si le
-    //          masque etait ignore (tout implicite) le run resterait borne ; l'explosion PROUVE que la
-    //          selection par composante est reellement honoree (mirroir de l'esprit disable-and-fail).
-    std::pair<std::vector<double>, double> imex_mask_mx;
-    bool partial_rejected = false;
+    std::string partial_mask_refusal;
     try {
-      imex_mask_mx = run_stiff_compiled(/*imex=*/true, /*stride=*/1, {"momentum_x"});
-    } catch (const runtime::program::StepAttemptRejected& rejection) {
-      if (rejection.status() != SolveStatus::kInvalidEvaluation ||
-          rejection.disposition() != runtime::program::StepAttemptDisposition::kReject ||
-          rejection.reason_code() != 0x53544201u || rejection.phase() != "stage")
-        throw;
-      partial_rejected = true;
-    } catch (const std::runtime_error& error) {
-      if (!is_nonfinite_fv_rejection(error))
-        throw;
-      partial_rejected = true;
+      AmrSystem invalid(cfg);
+      add_compiled_model(invalid, "stiff", stiff_cmodel(eps), "minmod", "rusanov", "conservative",
+                         "imex", /*gamma=*/1.4, /*substeps=*/1,
+                         /*stride=*/1, /*implicit_vars=*/{}, {"momentum_x"});
+    } catch (const std::exception& error) {
+      partial_mask_refusal = error.what();
     }
-    const bool partial_blew_up =
-        partial_rejected || (all_finite(imex_mask_mx.first) && maxabs(imex_mask_mx.first) > 1e3);
-    EXPECT_TRUE(partial_blew_up)
-        << "F3_compiled_partial_mask_mx_only_leaves_my_EXPLICIT_and_blows_up (masque honore par "
-           "composante)";
+    EXPECT_NE(partial_mask_refusal.find("no executable AMR Program implicit-source primitive"),
+              std::string::npos)
+        << "F_partial_imex_mask_rejected_before_compiled_builder";
 
-    // (F3-neg) masque PARTIEL demande en EXPLICITE -> LEVE (pas d'ignore silencieux ; meme garde que
-    //          add_block / set_compiled_block, amr_system.cpp / amr_dsl_block.hpp).
-    const bool mask_in_explicit_threw =
-        raises([&] { (void)run_stiff_compiled(/*imex=*/false, /*stride=*/1, {"momentum_x"}); });
-    EXPECT_TRUE(mask_in_explicit_threw) << "F3_compiled_partial_mask_rejected_in_explicit";
+    const bool mask_in_explicit_threw = raises([&] {
+      AmrSystem invalid(cfg);
+      add_compiled_model(invalid, "stiff", stiff_cmodel(eps), "minmod", "rusanov", "conservative",
+                         "explicit", /*gamma=*/1.4, /*substeps=*/1,
+                         /*stride=*/1, /*implicit_vars=*/{}, {"momentum_x"});
+    });
+    EXPECT_TRUE(mask_in_explicit_threw) << "F_partial_mask_rejected_in_explicit_metadata";
   }
 
   // ============================================================================================

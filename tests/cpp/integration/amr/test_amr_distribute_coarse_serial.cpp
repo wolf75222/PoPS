@@ -1,4 +1,4 @@
-// SERIAL regression lock for ADC-620 (build_amr_compiled paired the single-box fine seed with the
+// SERIAL regression lock for ADC-620 (the old single-block builder paired the single-box fine seed with the
 // COARSE DistributionMapping; with distribute_coarse=true the coarse dmap has one entry per coarse box,
 // so a 1-box fine BoxArray met a 4-entry mapping and the MultiFab layout check added by ADC-590/#416
 // aborted -- test_mpi_amr_distributed_coarse_np{1,2,4} ALL terminated, np1 included, since it is a
@@ -21,6 +21,7 @@
 //       field solver has a different local reduction tree than the replicated mono-box layout.
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"                // pops::test::Checker, checksum
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
@@ -97,6 +98,7 @@ Result run(int n, int nsteps, double dt, bool distribute) {
   sys.set_poisson("charge_density", "geometric_mg");
   sys.set_refinement(1.2);
   sys.set_density("gas", rho);
+  test::install_forward_euler_program(sys);
 
   Result R;
   R.m0 = sys.mass();
@@ -154,6 +156,7 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
   probe.set_poisson("charge_density", "geometric_mg");
   probe.set_refinement(1.2);
   probe.set_density("gas", four_bubbles(n));
+  test::install_forward_euler_program(probe);
   const double dt_cfl = probe.step_cfl(0.4);
   chk(std::isfinite(dt_cfl), "distribute_coarse step_cfl returns a finite dt");
   chk(dt_cfl > 0.0, "distribute_coarse step_cfl returns a positive dt");

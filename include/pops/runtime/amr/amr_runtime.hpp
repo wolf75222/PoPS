@@ -18,13 +18,12 @@
 #include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_prepare.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_workspace.hpp>
+#include <pops/numerics/elliptic/interface/field_nonlinear.hpp>
 #include <pops/numerics/elliptic/interface/field_provider.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
-#include <pops/numerics/time/amr/advance/amr_advance.hpp>  // PreparedAmrTemporalPlan
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonReport (OPT-IN IMEX diagnostics, aggregated per block)
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
@@ -78,10 +77,8 @@
 ///
 /// Runtime counterpart of System::Impl (python/system.cpp): where System type-erases the species
 /// (struct Species) on a SINGLE-LEVEL grid, AmrRuntime type-erases N blocks on a SHARED AMR
-/// hierarchy. It FAITHFULLY reproduces the AmrSystemCoupler::solve_fields / step algorithm
-/// (include/pops/coupling/amr_system_coupler.hpp), but over type-erased closures (the runtime facade
-/// does not know the blocks' Model/Limiter/Flux types at compile time) rather than over a
-/// compile-time CoupledSystem<Blocks...>.
+/// hierarchy. It owns spatial operators, fields, hierarchy mutation and candidate-state primitives;
+/// an installed Program is the sole temporal authority.
 ///
 /// INVARIANTS (multi-block capstone, docs/AMR_MULTIBLOCK_DESIGN.md):
 ///  - ONE single shared AMR hierarchy (AmrHierarchyLayout, same_layout_or_throw guard): all
@@ -91,24 +88,11 @@
 ///    elliptic_rhs_b(U_b) read at the SAME cells of the shared coarse;
 ///  - aux SHARED per level (phi, grad phi); a single coarse Poisson solve then coarse->fine
 ///    injection (coupler_inject_aux_mb), exactly like AmrSystemCoupler;
-///  - PER-BLOCK conservation (reflux + average_down of the AMR engine, in the advance closure).
+///  - PER-BLOCK conservation through Program-owned flux capture, reflux and average-down.
 ///
-/// SCOPE (capstone). We carry blocks with potentially DIFFERENT spatial schemes over the FROZEN
-/// hierarchy (no regrid: AmrSystemCoupler has none), with per-block MULTIRATE: substeps (explicit
-/// substeps) and stride (hold-then-catch-up cadence), honored in step() mirroring
-/// AmrSystemCoupler::step (#140). The TEMPORAL TREATMENT is PER BLOCK: explicit (forward-Euler
-/// source, carried by the AMR step) OR IMEX (stiff source treated IMPLICITLY by
-/// backward_euler_source, transport staying explicit; capstone vii), selected in step().
-///
-/// IMEX SEMANTICS UNDER substeps (integration decision, follow-up review #184). At substeps=1 &&
-/// stride=1 the runtime IMEX branch COINCIDES with AmrSystemCoupler::step (source-free transport + one
-/// backward_euler_source over the effective step). FOR substeps>1 the paths DIVERGE DELIBERATELY: the
-/// compile-time engine ignores substeps on its IMEX branch (one transport + one implicit_advance over
-/// bdt), while the RUNTIME sub-cycles the Lie splitting K=substeps times over bdt/K. This is sound, not
-/// a bug: the source-free transport gets CFL-safer, backward-Euler is unconditionally stable at any
-/// step, and refining the implicit step brings the stiff relaxation closer to its trajectory. So the
-/// runtime is NOT bit-identical to the compile-time engine once substeps>1; it honors substeps like
-/// the explicit branch (test_amr_multiblock_imex guards that substeps=4 DIFFERS from substeps=1).
+/// SCOPE. Blocks may use different spatial schemes and per-block cadence metadata. The normalized
+/// ProgramGraph owns explicit, implicit, split and multirate ordering; AmrRuntime exposes no hidden
+/// macro-step loop and never chooses a time integrator.
 
 namespace pops {
 
@@ -648,7 +632,7 @@ struct AmrNamedAuxCopyKernel {
 
 /// Type-erased closures of ONE AMR block, placed on the shared hierarchy. AMR counterpart of the
 /// Species struct of System::Impl: a name + its level stack (on the shared layout) + its closures
-/// (advance / elliptic-rhs / max_speed / mass / density). The closures capture the CONCRETE
+/// (spatial residual / elliptic-rhs / max_speed / mass / density). The closures capture the CONCRETE
 /// Model/Limiter/Flux of the block (resolved at build): the kernel stays COMPILED, only the block
 /// list is type-erased. Produced by detail::build_amr_block (amr_dsl_block.hpp).
 struct AmrRuntimeBlock {
@@ -658,16 +642,9 @@ struct AmrRuntimeBlock {
   std::string state_identity;
   int ncomp = 1;
   double gamma = static_cast<double>(kPhysicalDefaultGamma);
-  /// EXPLICIT substeps of the block within ITS effective macro-step: the effective step (stride * dt)
-  /// is split into substeps equal pieces and each piece is advanced by ONE advance_amr (cf.
-  /// AmrRuntime::step). substeps=1 => a single advance_amr over the whole effective step (bit-identical).
+  /// Authored per-block subdivision used by Program cadence and CFL scaling.
   int substeps = 1;
-  /// HOLD-THEN-CATCH-UP cadence of the block (multirate). stride=1 (default): advances EVERY macro-step
-  /// (bit-identical). stride=M>1: HELD at macro-steps 0..M-2 then CATCHES UP at M-1 ((macro_step+1)%M==0)
-  /// by an effective step M*dt. Same semantics as block_stride_v / AmrSystemCoupler::step (#140). The
-  /// end-of-window catch-up keeps the block temporally CONSISTENT with the fast blocks (never "in the
-  /// future"), so the summed-RHS Poisson coupling stays meaningful: a held block contributes with its
-  /// FROZEN state (its last advance), not an anticipated state that would falsify q_b n_b in the sum.
+  /// Authored per-block hold/catch-up stride used by Program cadence and CFL scaling.
   int stride = 1;
   /// Width of the aux channel READ by the block model (aux_comps<Model>(); >= kAuxBaseComps). The aux
   /// channel SHARED per level is sized to the MAX of this width over all blocks, so that a block
@@ -677,11 +654,6 @@ struct AmrRuntimeBlock {
   /// a fine hierarchy when the installed provider cannot meet it.  No order is inferred here.
   int reconstruction_order = 1;
   int reconstruction_ghost_depth = 1;
-  /// Exact native face-speed cache policy consumed by this block's prepared advance scratch.
-  /// IMEX source-free transport sets this false because its concrete closure does not request HLL
-  /// caching; explicit blocks retain the resolved numerical-flux policy.
-  bool wave_speed_cache = false;
-
   /// Descriptor of the model CONSERVATIVE variables (names + physical ROLES, Model::conservative_vars()).
   /// Single source of truth to resolve a role (Density, MomentumX, ...) -> component index in
   /// add_coupled_source, like System::add_coupled_source reads Species::cons_vars. The resolution is
@@ -700,87 +672,19 @@ struct AmrRuntimeBlock {
   std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
   std::shared_ptr<GridContext::BoundaryFieldRegistryFactory> boundary_field_registry;
   std::shared_ptr<const AmrBoundaryFillAuthority> transport_boundary_fill;
-  /// Stable indirection captured by the native advance closures. AmrRuntime replaces the contained
-  /// plan transactionally after every topology generation while the shared holder address remains
-  /// unchanged across block moves and regrids.
+  /// Prepared topology workspaces replaced transactionally after every hierarchy generation.
   std::optional<PreparedAmrFillPatchPlan> fill_patch_plan;
   std::vector<detail::PreparedConservativeCellTransferWorkspace> coarse_fine_spatial_workspaces;
   std::optional<PreparedAmrAverageDownPlan> average_down_plan;
-  std::optional<PreparedAmrAdvanceScratchPlan> advance_scratch_plan;
+  std::optional<PreparedAmrProgramRefluxPlan> program_reflux_plan;
   /// One sequential session per level, materialized after all qualified routes are installed.
   /// Prepared Krylov workspaces create separate lane-private sessions.
   std::vector<std::shared_ptr<ExecutionLane>> boundary_lanes;
   std::vector<std::shared_ptr<PreparedGridBoundarySession>> boundary_sessions;
 
-  /// Advances the block by ONE substep of size dt: AMR transport (Berger-Oliger + conservative reflux
-  /// + average_down) over the block level stack, with ITS spatial scheme (Limiter, Flux). Captures
-  /// advance_amr<Limiter, Flux> on the concrete Model. The substep loop and the stride cadence are
-  /// carried by AmrRuntime::step (runtime counterpart of AmrSystemCoupler::step): the closure does ONE
-  /// advance_amr, the engine calls it substeps times (dt = effective step/substeps). The signature
-  /// passes the base domain + periodicity + coarse ownership policy, rewired by the engine.
-  std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
-                     PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
-                     PreparedAmrAdvanceScratchPlan*)>
-      advance;
-
-  /// Explicit-clock counterpart of @ref advance.  It is populated by compiled/native block builders
-  /// that support the final temporal contract and receives the immutable plan prepared from the
-  /// complete contiguous relation chain.
-  /// AmrRuntime selects this closure whenever relations were installed; it never installs a relation
-  /// and then falls back to the spatial-ratio legacy closure above.
-  std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
-                     const detail::PreparedAmrTemporalPlan&, PreparedAmrFillPatchPlan*,
-                     PreparedAmrAverageDownPlan*, PreparedAmrAdvanceScratchPlan*)>
-      advance_with_temporal_plan;
-
-  /// TEMPORAL TREATMENT of the block: false (default) = EXPLICIT (forward-Euler source, in advance);
-  /// true = IMEX (stiff source treated IMPLICITLY by backward_euler_source). The facade (AmrSystem)
-  /// freezes it from time="imex". Selected EXPLICITLY in AmrRuntime::step (runtime counterpart of the
-  /// constexpr block_time_treatment_v dispatch of AmrSystemCoupler::step): an explicit block goes
-  /// through advance, an IMEX block through imex_advance. false everywhere -> bit-identical trajectory
-  /// to the historical one.
-  bool imex = false;
-
-  /// IMEX advance of the block by ONE substep of size dt = ONE Lie step [transport; implicit source]:
-  /// (1) EXPLICIT SOURCE-FREE transport (-div F only, SourceFreeModel) via the AMR engine (Berger-
-  /// Oliger + reflux + average_down), then (2) IMPLICIT stiff source backward_euler_source AT EACH
-  /// LEVEL (local Newton, FD jacobian, block-carried partial-IMEX mask) + a fine -> coarse cascade.
-  /// Mirrors the IMEX branch of AmrSystemCoupler::step; at substeps=1 IDENTICAL to it, at substeps>1 the
-  /// runtime sub-cycles it (divergence intentional, cf. file header). CONSERVATION: the source is
-  /// cell-local (outside the reflux registers) so C/F conservation holds, and the final cascade restores
-  /// each covered coarse cell to the 2x2 average of its children. Empty for an explicit block.
-  std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
-                     PreparedAmrFillPatchPlan*, PreparedAmrAverageDownPlan*,
-                     PreparedAmrAdvanceScratchPlan*)>
-      imex_advance;
-
-  /// Explicit-clock counterpart of @ref imex_advance.  The source-free transport consumes the same
-  /// authored clock chain as an explicit block; the following implicit source/cascade is unchanged.
-  std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
-                     const detail::PreparedAmrTemporalPlan&, PreparedAmrFillPatchPlan*,
-                     PreparedAmrAverageDownPlan*, PreparedAmrAdvanceScratchPlan*)>
-      imex_advance_with_temporal_plan;
-
-  /// POINTWISE PROJECTION post-pas (ADC-177) : U <- project(U, aux) appliquee PAR NIVEAU a la FIN
-  /// de l'avance complete du bloc (substeps + reflux/cascade faits). Vide -> aucune projection
-  /// (modele sans HasPointwiseProjection : trajectoire bit-identique). Locale par niveau (aucun
-  /// collectif MPI). Cf. detail::apply_pointwise_project_amr, cable par build_amr_block.
-  std::function<void(std::vector<AmrLevelMP>&)> project_per_level;
   /// Same concrete projection applied to a provisional Program scratch on one level.  This is the
   /// typed ProjectAndRecheck seam; it never mutates the live block unless that scratch is committed.
   std::function<void(MultiFab&, const MultiFab&)> project_level_state;
-
-  /// NEWTON DIAGNOSTICS (AMR counterpart of System::newton_report). false (default) -> imex_advance
-  /// passes report=nullptr to backward_euler_source: FAST bit-identical path, no extra allocation or
-  /// reduction. true -> imex_advance passes @c newton_report.get() (STABLE address since shared_ptr)
-  /// to backward_euler_source of EACH level; the report is AGGREGATED (max residual, max iterations,
-  /// sum of failed cells, MPI all_reduce, structured fail_policy events) over all levels AND all
-  /// substeps of a macro-step. AmrRuntime::step RESETS the report at the head of the block advance
-  /// (parity with System::AdvanceImex which resets at the head of operator()). MULTI-BLOCK native only
-  /// (the single-block coupler and the .so loaders reject it at build / at the facade). STABLE address
-  /// (shared_ptr): captured by the imex_advance closure AND read by AmrRuntime::newton_report.
-  bool newton_diagnostics = false;
-  std::shared_ptr<NewtonReport> newton_report;
 
   /// Contribution of the block to the Poisson right-hand side: rhs += elliptic_rhs_b(U_b) on the
   /// coarse. CO-LOCATED: the loop reads U_b and writes rhs AT THE SAME cells (same shared coarse
@@ -803,7 +707,7 @@ struct AmrRuntimeBlock {
   /// (the SAME evaluator System uses, device-clean named functor) on the concrete scheme; the level
   /// geometry / domain are passed in so the SAME closure serves every level. EMPTY for a block built
   /// before the seam (the host .so prototype loader): AmrRuntime::level_rhs_into fails loud then. Used
-  /// ONLY by an installed compiled time Program (AmrProgramContext); the native AMR step never calls it.
+  /// ONLY by an installed compiled time Program (AmrProgramContext).
   std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&)> level_rhs;
   /// FLUX-ONLY per-level residual R <- -div F(U) (NO default source), the SourceFreeModel<Model> path
   /// (Lie/Strang split, ADC-425). Same signature / device contract as @ref level_rhs.
@@ -875,7 +779,7 @@ struct AmrRuntimeBlock {
   /// OPTIONAL STEP BOUNDS of the block (AMR StabilityPolicy, audit 2026-06): evaluated on the COARSE
   /// (level 0, where the AMR CFL lives -- cf. step_cfl: h is the conservative coarse spacing).
   /// EMPTY (default) -> step_cfl
-  /// keeps the transport bound only, bit-identical. Filled by build_amr_block / build_amr_compiled when
+  /// keeps the transport bound only, bit-identical. Filled by build_amr_block when
   /// the model declares HasSourceFrequency / HasStabilityDt (same semantics as System: mu in 1/s ->
   /// dt <= cfl*substeps/(stride*mu), without h; direct admissible step -> dt <=
   /// dt_adm*substeps/stride, without cfl).
@@ -903,9 +807,8 @@ struct AmrRuntimeBlock {
       level_neg_div_flux_without_prepared_interfaces;
 };
 
-/// AMR multi-block engine at runtime. Owns the SHARED aux per level, the coarse Poisson
-/// (GeometricMG), the geometry + BC, and the type-erased block REGISTRY. Reproduces the
-/// AmrSystemCoupler algorithm (solve_fields + step) over closures rather than a CoupledSystem.
+/// AMR multi-block spatial engine. Owns the shared hierarchy, fields, geometry, boundaries and
+/// type-erased block registry; ProgramGraph alone composes its primitives in time.
 class AmrRuntime {
   struct BlockTransferAuthority {
     runtime::amr::PreparedTransferKernel prolongation;
@@ -952,7 +855,9 @@ class AmrRuntime {
   /// replace AMRTagging's refine/coarsen/equality/conflict authority.
   using TaggingProgram = runtime::amr::PreparedTaggingProgram;
 
-  /// Move-independent image of every runtime-owned value a macro-step may mutate.  The owning
+  /// Move-independent image of every accepted-state runtime value a macro-step may mutate. Ephemeral
+  /// component-evaluation coordinates are deliberately excluded because the Program injects them at
+  /// each call and they never define cadence or restart state. The owning
   /// transaction retains one instance and capture_step_snapshot() refreshes its MultiFab storage in
   /// place when the layout is unchanged; on a real topology change the same image reallocates only
   /// the incompatible levels.  The snapshot therefore carries the hierarchy itself, not merely field
@@ -980,11 +885,8 @@ class AmrRuntime {
     std::map<std::string, std::vector<Real>> history_slot_dt;
     std::map<std::string, BootstrapStaggeredField> staggered_fields;
     std::map<std::string, BootstrapCacheState> bootstrap_caches;
-    std::vector<NewtonReport> newton_reports;
-    std::vector<char> has_newton_report;
     std::string last_dt_reason;
     int nlev = 0;
-    int macro_step = 0;
     int solve_count = 0;
     int regrid_count = 0;
     std::uint64_t topology_epoch = 0;
@@ -1249,7 +1151,7 @@ class AmrRuntime {
           "AmrRuntime temporal relation count must match the active hierarchy");
     configured_temporal_relations_ = relations;
     maximum_refinement_ratios_ = hierarchy_.refinement_ratios;
-    refresh_active_temporal_plan_();
+    refresh_active_temporal_relations_();
   }
   void configure_hierarchy_capacity(
       std::vector<int> refinement_ratios,
@@ -1270,7 +1172,7 @@ class AmrRuntime {
     }
     maximum_refinement_ratios_ = std::move(refinement_ratios);
     configured_temporal_relations_ = std::move(temporal_relations);
-    refresh_active_temporal_plan_();
+    refresh_active_temporal_relations_();
   }
   const ::pops::amr::ParentChildClockRelation& parent_child_temporal_relation(
       int child_level) const {
@@ -1507,6 +1409,9 @@ class AmrRuntime {
     external_clustering_ = std::move(provider);
   }
 
+  /// Inject the current Program evaluation coordinate used by external Tagger/boundary component
+  /// calls. This is not an accepted clock: it is never read for cadence/restart, is absent from
+  /// StepSnapshot, and is overwritten by AmrProgramContext at the exact tagger/regrid boundary.
   void set_component_logical_time(std::int64_t tick, double physical_time) {
     if (tick < 0 || !std::isfinite(physical_time))
       throw std::runtime_error("AmrRuntime component logical time is invalid");
@@ -2006,8 +1911,6 @@ class AmrRuntime {
 
   bool step_snapshot_layout_matches_(const StepSnapshot& saved) const {
     if (saved.nlev != nlev_ || saved.block_levels.size() != blocks_.size() ||
-        saved.has_newton_report.size() != blocks_.size() ||
-        saved.newton_reports.size() != blocks_.size() ||
         saved.hierarchy.ba.size() != hierarchy_.ba.size() ||
         saved.hierarchy.dm.size() != hierarchy_.dm.size() || saved.hierarchy.dx != hierarchy_.dx ||
         saved.hierarchy.dy != hierarchy_.dy ||
@@ -2030,10 +1933,7 @@ class AmrRuntime {
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
       const auto& live = *blocks_[block].levels;
       const auto& accepted = saved.block_levels[block];
-      const bool accepted_report =
-          block < saved.has_newton_report.size() && saved.has_newton_report[block];
-      if (live.size() != accepted.size() ||
-          static_cast<bool>(blocks_[block].newton_report) != accepted_report)
+      if (live.size() != accepted.size())
         return false;
       for (std::size_t level = 0; level < live.size(); ++level)
         if (live[level].dx != accepted[level].dx || live[level].dy != accepted[level].dy ||
@@ -2094,8 +1994,6 @@ class AmrRuntime {
   /// topology-carrying MultiFabs.
   void capture_step_snapshot(StepSnapshot& out) {
     out.block_levels.resize(blocks_.size());
-    out.has_newton_report.resize(blocks_.size());
-    out.newton_reports.resize(blocks_.size());
     for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
       const auto& block = blocks_[block_index];
       auto& saved_levels = out.block_levels[block_index];
@@ -2106,8 +2004,6 @@ class AmrRuntime {
         saved_levels[level].dx = (*block.levels)[level].dx;
         saved_levels[level].dy = (*block.levels)[level].dy;
       }
-      out.has_newton_report[block_index] = block.newton_report ? char(1) : char(0);
-      out.newton_reports[block_index] = block.newton_report ? *block.newton_report : NewtonReport{};
     }
     copy_snapshot_hierarchy_(out.hierarchy, hierarchy_);
     copy_snapshot_storage_vector_(out.aux, aux_);
@@ -2149,7 +2045,6 @@ class AmrRuntime {
     copy_snapshot_bootstrap_caches_(out.bootstrap_caches, bootstrap_caches_);
     out.last_dt_reason = last_dt_reason_;
     out.nlev = nlev_;
-    out.macro_step = macro_step_;
     out.solve_count = solve_count_;
     out.regrid_count = regrid_count_;
     out.topology_epoch = topology_epoch_;
@@ -2199,10 +2094,6 @@ class AmrRuntime {
           live_levels[level].dx = accepted_levels[level].dx;
           live_levels[level].dy = accepted_levels[level].dy;
         }
-        const bool had_report =
-            block < saved.has_newton_report.size() && saved.has_newton_report[block];
-        if (had_report)
-          *blocks_[block].newton_report = saved.newton_reports[block];
       }
       nlev_ = saved.nlev;
       for (std::size_t level = 0; level < aux_.size(); ++level)
@@ -2232,7 +2123,6 @@ class AmrRuntime {
       copy_snapshot_staggered_fields_(bootstrap_staggered_fields_, saved.staggered_fields);
       copy_snapshot_bootstrap_caches_(bootstrap_caches_, saved.bootstrap_caches);
       last_dt_reason_ = saved.last_dt_reason;
-      macro_step_ = saved.macro_step;
       solve_count_ = saved.solve_count;
       regrid_count_ = saved.regrid_count;
       topology_epoch_ = saved.topology_epoch;
@@ -2257,18 +2147,10 @@ class AmrRuntime {
         live_levels[level].dx = accepted_levels[level].dx;
         live_levels[level].dy = accepted_levels[level].dy;
       }
-      const bool had_report = b < saved.has_newton_report.size() && saved.has_newton_report[b];
-      if (!had_report) {
-        blocks_[b].newton_report.reset();
-      } else {
-        if (!blocks_[b].newton_report)
-          blocks_[b].newton_report = std::make_shared<NewtonReport>();
-        *blocks_[b].newton_report = saved.newton_reports[b];
-      }
     }
     nlev_ = saved.nlev;
     copy_snapshot_hierarchy_(hierarchy_, saved.hierarchy);
-    refresh_active_temporal_plan_();
+    refresh_active_temporal_relations_();
     copy_snapshot_storage_vector_(aux_, saved.aux);
     for (auto& block : blocks_)
       for (int k = 0; k < nlev_; ++k)
@@ -2315,7 +2197,6 @@ class AmrRuntime {
     copy_snapshot_staggered_fields_(bootstrap_staggered_fields_, saved.staggered_fields);
     copy_snapshot_bootstrap_caches_(bootstrap_caches_, saved.bootstrap_caches);
     last_dt_reason_ = saved.last_dt_reason;
-    macro_step_ = saved.macro_step;
     solve_count_ = saved.solve_count;
     regrid_count_ = saved.regrid_count;
     topology_epoch_ = saved.topology_epoch;
@@ -2344,18 +2225,62 @@ class AmrRuntime {
   }
 
   /// @name Compiled time-Program AMR driver seam (epic ADC-508): per-level primitives exposing the
-  /// engine internals an AmrProgramContext composes into a per-level macro-step. APPEND-ONLY: these
-  /// surface existing storage / closures; none reimplement numerics. All are NO-OP-safe under MPI
-  /// (loops over local_size()). The native AMR step does not call any of them.
+  /// engine internals an AmrProgramContext composes into a per-level macro-step. These surface
+  /// existing storage/closures and do not reimplement numerics. All are NO-OP-safe under MPI.
   /// @{
   /// The live state MultiFab of block @p b at level @p k (zero-copy; same address an AmrProgramContext
   /// reads each macro-step). @c b is the AMR block index (sys_block-resolved by the caller).
   MultiFab& level_state(std::size_t b, int k) { return (*blocks_[b].levels)[k].U; }
   const MultiFab& level_state(std::size_t b, int k) const { return (*blocks_[b].levels)[k].U; }
-  PreparedAmrTransitionAdvanceScratch& prepared_reflux_transition(std::size_t b, int child_level) {
-    if (b >= blocks_.size() || !blocks_[b].advance_scratch_plan)
+
+  /// Apply every registered coupled-source operator to one complete candidate-state pack at an exact
+  /// AMR level.  This is the Program-owned splitting primitive: it never solves fields, walks another
+  /// level, averages down, or mutates accepted live states.  The hierarchy Program applies it to its
+  /// uncommitted endpoint candidates; the ordinary reflux/average-down synchronization then treats
+  /// the coupled result like every other accepted per-level state.
+  std::size_t apply_coupling_operators_at_level(int level, Real dt,
+                                                const std::vector<MultiFab*>& candidate_states) {
+    if (level < 0 || level >= nlev_)
+      throw std::out_of_range(
+          "AmrRuntime::apply_coupling_operators_at_level level is out of range");
+    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
+      throw std::invalid_argument(
+          "AmrRuntime::apply_coupling_operators_at_level requires a finite non-negative dt");
+    if (candidate_states.size() != blocks_.size())
+      throw std::invalid_argument(
+          "AmrRuntime::apply_coupling_operators_at_level requires one candidate per block");
+    for (std::size_t block = 0; block < candidate_states.size(); ++block) {
+      const MultiFab* candidate = candidate_states[block];
+      if (candidate == nullptr)
+        throw std::invalid_argument(
+            "AmrRuntime::apply_coupling_operators_at_level received a null candidate");
+      const MultiFab& live = (*blocks_[block].levels)[level].U;
+      if (candidate->box_array().boxes() != live.box_array().boxes() ||
+          candidate->dmap().ranks() != live.dmap().ranks() || candidate->ncomp() != live.ncomp() ||
+          candidate->n_grow() != live.n_grow())
+        throw std::invalid_argument(
+            "AmrRuntime::apply_coupling_operators_at_level candidate layout differs from its "
+            "block");
+      for (const auto& accepted_block : blocks_)
+        if (candidate == &(*accepted_block.levels)[level].U)
+          throw std::invalid_argument(
+              "AmrRuntime::apply_coupling_operators_at_level cannot mutate accepted live states");
+      for (std::size_t other = 0; other < block; ++other)
+        if (candidate_states[other] == candidate)
+          throw std::invalid_argument(
+              "AmrRuntime::apply_coupling_operators_at_level cannot alias block candidates");
+    }
+
+    for (const auto& source : coupled_sources_)
+      apply_coupling_operator_to_pack_(source, dt, candidate_states);
+    return coupled_sources_.size();
+  }
+
+  PreparedAmrProgramRefluxTransition& prepared_reflux_transition(std::size_t b, int child_level) {
+    if (b >= blocks_.size() || !blocks_[b].program_reflux_plan)
       throw std::logic_error("AMR block has no prepared reflux transition storage");
-    return blocks_[b].advance_scratch_plan->transition_for_child(child_level);
+    return blocks_[b].program_reflux_plan->transition_for_child(
+        child_level, topology_materialization_generation_);
   }
   /// Whether level @p k is present in full on every rank.  Replication is an ownership property of
   /// the runtime hierarchy, not something callers may infer from rank-local DistributionMapping
@@ -3046,8 +2971,8 @@ class AmrRuntime {
   /// the face fluxes into @p Fx / @p Fy (sized here from the level box_array's xface_box/yface_box) so a
   /// reflux register can sample them. R is bit-consistent with the fused level_rhs_into by construction.
   /// The fine-level C/F ghost refresh matches level_rhs_into. Bodies in amr_program_reflux.hpp (the tail
-  /// header keeps amr_runtime.hpp at its line budget). Used ONLY by the reflux path (AmrProgramContext,
-  /// nlev>1); the native step and the coarse-only / flat Program never call it.
+  /// header keeps amr_runtime.hpp at its line budget). Used ONLY by the reflux path
+  /// (AmrProgramContext, nlev>1); the coarse-only/flat Program never calls it.
   void level_rhs_capture_into(std::size_t b, int k,
                               const runtime::multiblock::BoundaryEvaluationPoint& point,
                               MultiFab& U, MultiFab& R, MultiFab& Fx, MultiFab& Fy);
@@ -3064,8 +2989,8 @@ class AmrRuntime {
       std::size_t b, int k, const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
       MultiFab& R, MultiFab& Fx, MultiFab& Fy, const MultiFab& parent_old,
       const MultiFab& parent_new, const runtime::amr::TemporalTransferContext& target_time);
-  /// Max |wave speed| of block @p b on @p U (the SAME closure step_cfl reads). Evaluated on the aux of
-  /// level @p k. A Program dt bound reads it as cfl*hmin/max_wave_speed.
+  /// Max |wave speed| of block @p b on @p U. Evaluated on the aux of level @p k; a Program dt bound
+  /// reads it as cfl*hmin/max_wave_speed.
   Real level_max_speed(std::size_t b, int k, const MultiFab& U) const {
     return blocks_[b].max_speed(U, aux_[k]);
   }
@@ -3075,8 +3000,8 @@ class AmrRuntime {
     return std::min(geom_.dx(), geom_.dy()) / r;
   }
   /// fine -> coarse restriction of block @p b between levels @p k and @p k-1 (covered coarse cell <-
-  /// 2x2 fine average): the SAME mf_average_down_mb solve_fields / the native step run. Exposed for the
-  /// synchronous Program driver's inter-level coupling. No-op when k < 1.
+  /// 2x2 fine average). Exposed for the synchronous Program driver's inter-level coupling. No-op when
+  /// k < 1.
   void average_down_level(std::size_t b, int k) {
     if (k < 1)
       return;
@@ -3126,8 +3051,8 @@ class AmrRuntime {
   std::vector<double> level_aux_flat(int k) const;
   std::vector<double> level_aux_flat_global(int k) const;
   void set_level_aux_flat(int k, const std::vector<double>& v);
-  /// Head-of-step union-tags regrid at the Program driver's cadence (the SAME regrid() the native step
-  /// runs at its head). @p macro_step gates it like AmrRuntime::step (skip step 0; honor regrid_every_).
+  /// Head-of-step union-tags regrid at the Program driver's cadence. @p macro_step gates it by
+  /// skipping step zero and honoring regrid_every_.
   void regrid_if_due(int macro_step) {
     if (regrid_every_ > 0 && macro_step > 0 && macro_step % regrid_every_ == 0)
       regrid();
@@ -3135,12 +3060,11 @@ class AmrRuntime {
   /// @}
 
   /// Activates the UNION-TAGS REGRID at the cadence @p every (in macro-steps): every @p every
-  /// macro-steps, BEFORE the macro-step's step(dt) (D2, consistent with the single-block
-  /// amr_dsl_block.hpp:104), the shared hierarchy is re-gridded from the UNION of the tags of all
-  /// blocks + phi. @p every == 0 (DEFAULT) -> FROZEN hierarchy, regrid never called -> BIT-IDENTICAL
-  /// trajectory to the historical one (the feature is opt-in). @p grow: tag dilation (nesting +
-  /// anticipation); @p margin: nesting (clamp the patches to the boundaries). Must be called BEFORE
-  /// the first step. Body in amr_restore.hpp.
+  /// macro-steps, BEFORE the Program advances its candidates, the shared hierarchy is re-gridded from
+  /// the UNION of the tags of all blocks + phi. @p every == 0 (DEFAULT) -> FROZEN hierarchy, regrid
+  /// never called -> BIT-IDENTICAL trajectory to the historical one (the feature is opt-in). @p grow:
+  /// tag dilation (nesting + anticipation); @p margin: nesting (clamp the patches to the boundaries).
+  /// Must be called BEFORE the first step. Body in amr_restore.hpp.
   void set_regrid(int every, int grow = 2, int margin = 2);
 
   /// ADC-616: Berger-Rigoutsos clustering params (min_efficiency in (0,1], sizes > 0, min <= max).
@@ -3439,10 +3363,10 @@ class AmrRuntime {
 
   /// Registers an inter-species COUPLED SOURCE (DSL CoupledSource, P5 bytecode) on the runtime facade,
   /// counterpart of System::add_coupled_source. The ABI is FLAT (postfix bytecode): we resolve each
-  /// (block, role) into (block index, component) then store a closure that, at each macro-step AFTER
-  /// the transport, applies the source by additive forward-Euler splitting via coupled_source_step. The
-  /// coupling is ENTIRELY baked into a stack machine (device-clean functor CoupledSourceKernel): NO
-  /// per-cell Python callback in the hot path.
+  /// (block, role) into (block index, component), then store the device-clean stack-machine program.
+  /// ProgramGraph alone chooses the temporal composition and calls
+  /// apply_coupling_operators_at_level on an uncommitted candidate pack; registration never installs
+  /// an implicit post-transport step or another scheduler.
   ///
   /// CONSERVATION (conservative exchange): with an add_pair construction (one +expr term on one block,
   /// -expr exactly on the other, SAME cell), the two per-cell contributions are opposite up to sign, so
@@ -3571,75 +3495,6 @@ class AmrRuntime {
     view.frequency.constant_mu = frequency;
     view.frequency.per_cell = !p.freq_prog_ops.empty() || !p.freq_prog_args.empty();
     coupled_operators_.push_back(std::move(view));
-  }
-
-  /// Applies ALL the registered coupled sources of a step dt, by forward-Euler splitting. Runtime
-  /// counterpart of AmrSystemCoupler::coupled_source_step: we refresh the fields (aux per level) then,
-  /// source by source, we apply the bytecode INDEPENDENTLY AT EACH LEVEL of the shared hierarchy (the
-  /// blocks live on ALL levels), followed by a fine -> coarse cascade.
-  ///
-  /// COVERAGE INVARIANT (#169): the source was applied independently on EACH level, so a coarse cell
-  /// COVERED by a fine patch would otherwise carry its own coarse source, unrelated to the source seen
-  /// by its fine children. A covered coarse cell MUST be the 2x2 average of its children (it does not
-  /// represent matter on its own). We restore this consistency by the SAME fine -> coarse cascade
-  /// (mf_average_down_mb) as solve_fields and the compile-time engine: without it, the mass diagnostic
-  /// (sum of the coarse only) would count a phantom coarse source under the patch. Single-level
-  /// hierarchy: no covered cell, the cascade loops do not run -> bit-identical to the no-patch case.
-  ///
-  /// PER-CELL CONSERVATION: at a given level, each term writes out(i,j,comp) += dt * S(reg(i,j)) on
-  /// the SAME cell (i,j) read by the inputs; an add_pair exchange lays +S on one block and -S on the
-  /// other AT THE SAME (i,j), so the sum of the two blocks is unchanged cell by cell. Without a
-  /// registered source (coupled_sources_ empty): total no-op -> bit-identical trajectory.
-  void coupled_source_step(Real dt) {
-    if (coupled_sources_.empty())
-      return;  // opt-in: no source -> bit-identical path
-    require_solved_field_report(solve_fields(), "AmrRuntime::coupled_source_step");
-    for (const auto& cs : coupled_sources_) {
-      // PER-LEVEL application: at each level k, the blocks share EXACTLY the same layout
-      // (same_layout_or_throw guard), so same local_size() and same local indexing -> we iterate in
-      // parallel over the local fabs. local_size()==0 on a rank without a box -> empty loop (MPI-safe).
-      for (int k = 0; k < nlev_; ++k) {
-        const int sref = cs.n_in > 0 ? cs.ins[0].block : cs.outs[0].block;
-        MultiFab& Uref = (*blocks_[static_cast<std::size_t>(sref)].levels)[k].U;
-        for (int li = 0; li < Uref.local_size(); ++li) {
-          CoupledSourceKernel kern;
-          kern.dt = dt;
-          kern.n_in = cs.n_in;
-          kern.n_const = cs.n_const;
-          kern.n_terms = cs.n_terms;
-          for (int c = 0; c < cs.n_in; ++c) {
-            kern.in[c] =
-                (*blocks_[static_cast<std::size_t>(cs.ins[static_cast<std::size_t>(c)].block)]
-                      .levels)[k]
-                    .U.fab(li)
-                    .array();
-            kern.in_comp[c] = cs.ins[static_cast<std::size_t>(c)].comp;
-          }
-          for (int c = 0; c < cs.n_const; ++c)
-            kern.consts[c] = cs.kconsts[static_cast<std::size_t>(c)];
-          for (int t = 0; t < cs.n_terms; ++t) {
-            kern.out[t] =
-                (*blocks_[static_cast<std::size_t>(cs.outs[static_cast<std::size_t>(t)].block)]
-                      .levels)[k]
-                    .U.fab(li)
-                    .array();
-            kern.out_comp[t] = cs.outs[static_cast<std::size_t>(t)].comp;
-            kern.prog[t] = cs.outs[static_cast<std::size_t>(t)].prog;
-          }
-          for_each_cell(Uref.box(li),
-                        kern);  // NAMED functor (device-clean), additive forward-Euler
-        }
-      }
-      // Restore the consistency of the covered coarse cells (cf. COVERAGE INVARIANT above).
-      for (auto& b : blocks_) {
-        if (!b.average_down_plan)
-          throw std::logic_error("AMR block average-down plan was not prepared");
-        for (int k = nlev_ - 1; k >= 1; --k)
-          mf_average_down_mb((*b.levels)[k].U, (*b.levels)[k - 1].U,
-                             b.average_down_plan->transition_for_child(k),
-                             b.average_down_plan->topology_generation(), world_communicator_view());
-      }
-    }
   }
 
   /// sync_down (per block) + system coarse Poisson (CO-LOCATED SUMMED RHS) + coarse aux + fine
@@ -4141,7 +3996,11 @@ class AmrRuntime {
     hierarchy_.refinement_ratios.push_back(refinement_ratio);
     aux_.push_back(std::move(fine_aux));
     ++nlev_;
-    refresh_active_temporal_plan_();
+    refresh_active_temporal_relations_();
+    // A compiled multistep Program is installed while explicit bootstrap still exposes only level
+    // zero. Grow every registered history slot through the same owner-qualified prolongation route
+    // used by dynamic regridding before the generated resource refresh observes the new hierarchy.
+    remap_history_rings_(fb, dmap, nlev_ - 1, pk, /*prolong=*/true);
     for (auto& block : blocks_)
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[level].aux = &aux_[level];
@@ -4172,33 +4031,67 @@ class AmrRuntime {
   void commit_bootstrap_level() {
     if (!bootstrap_pending_)
       throw std::runtime_error("AmrRuntime::commit_bootstrap_level : no pending transaction");
-    if (bootstrap_snapshot_.macro_step != 0 || macro_step_ != 0)
-      throw std::runtime_error(
-          "AmrRuntime::commit_bootstrap_level requires clocks to remain at t=0/step=0");
+    // AmrRuntime is a spatial hierarchy service and deliberately owns no accepted clock.  The
+    // AmrSystem facade validates its authoritative (time, macro_step) before entering or committing
+    // a public bootstrap transaction; direct runtime users are responsible for their own scheduler.
     for (const auto& [subject, cache] : bootstrap_caches_)
       if (!cache.valid || cache.materialized_level != nlev_ - 1)
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level has a stale cache '" +
                                  subject + "'");
     for (const auto& [name, ring] : hist_rings_) {
       const auto owner = hist_block_owner_.find(name);
-      if (owner == hist_block_owner_.end() || owner->second >= blocks_.size() || ring.size() != 2 ||
-          ring[0].size() != static_cast<std::size_t>(nlev_) ||
-          ring[1].size() != static_cast<std::size_t>(nlev_) ||
-          ring[0][0].ncomp() != blocks_[owner->second].ncomp ||
-          hist_init_[name].size() != static_cast<std::size_t>(nlev_) ||
-          hist_fill_count_[name].size() != static_cast<std::size_t>(nlev_) ||
-          hist_store_pending_[name].size() != static_cast<std::size_t>(nlev_) ||
-          hist_slot_dt_[name].size() != ring.size())
+      const auto depth = hist_depth_.find(name);
+      const auto initialized = hist_init_.find(name);
+      const auto fill_counts = hist_fill_count_.find(name);
+      const auto pending = hist_store_pending_.find(name);
+      const auto slot_dt = hist_slot_dt_.find(name);
+      bool invalid_layout =
+          owner == hist_block_owner_.end() || owner->second >= blocks_.size() ||
+          depth == hist_depth_.end() || depth->second < 2 ||
+          ring.size() != static_cast<std::size_t>(depth->second) ||
+          initialized == hist_init_.end() || fill_counts == hist_fill_count_.end() ||
+          pending == hist_store_pending_.end() || slot_dt == hist_slot_dt_.end() ||
+          initialized->second.size() != static_cast<std::size_t>(nlev_) ||
+          fill_counts->second.size() != static_cast<std::size_t>(nlev_) ||
+          pending->second.size() != static_cast<std::size_t>(nlev_) ||
+          slot_dt->second.size() != ring.size();
+      if (!invalid_layout) {
+        int ncomp = -1;
+        for (const auto& slot : ring) {
+          if (slot.size() != static_cast<std::size_t>(nlev_)) {
+            invalid_layout = true;
+            continue;
+          }
+          if (ncomp < 0)
+            ncomp = slot.front().ncomp();
+          invalid_layout = invalid_layout || ncomp < 1;
+          for (int level = 0; level < nlev_; ++level) {
+            const MultiFab& value = slot[static_cast<std::size_t>(level)];
+            invalid_layout =
+                invalid_layout || value.ncomp() != ncomp || value.n_grow() != 1 ||
+                value.box_array().boxes() !=
+                    hierarchy_.ba[static_cast<std::size_t>(level)].boxes() ||
+                value.dmap().ranks() != hierarchy_.dm[static_cast<std::size_t>(level)].ranks();
+          }
+        }
+        invalid_layout =
+            invalid_layout ||
+            std::any_of(slot_dt->second.begin(), slot_dt->second.end(),
+                        [](Real value) { return !std::isfinite(value) || value < Real(0); });
+      }
+      if (invalid_layout)
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +
-                                 "' requires an explicit materialization provider");
+                                 "' has incomplete level materialization");
       bool invalid_fill = false;
       for (int level = 0; level < nlev_; ++level) {
         const auto index = static_cast<std::size_t>(level);
-        const int fill = hist_fill_count_[name][index];
-        invalid_fill = invalid_fill || hist_init_[name][index] == 0 || fill < 0 ||
-                       fill > static_cast<int>(ring.size()) ||
-                       hist_store_pending_[name][index] != 0 ||
-                       (hist_init_[name][index] != 0) != (fill > 0);
+        const int fill = fill_counts->second[index];
+        // A history declared by the installed Program is legitimately cold at t=0. Accept exactly
+        // the coherent (initialized=false, fill=0, pending=false) image; any warm level must carry a
+        // positive bounded fill count. The first Program store performs the normal cold broadcast.
+        invalid_fill = invalid_fill || fill < 0 || fill > static_cast<int>(ring.size()) ||
+                       pending->second[index] != 0 ||
+                       (initialized->second[index] != 0) != (fill > 0);
       }
       if (invalid_fill)
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +
@@ -4364,7 +4257,7 @@ class AmrRuntime {
       hierarchy_.refinement_ratios.push_back(refinement_ratio);
       aux_.emplace_back(boxes, distribution, aux_ncomp_, 1);
       ++nlev_;
-      refresh_active_temporal_plan_();
+      refresh_active_temporal_relations_();
       for (std::size_t block = 0; block < blocks_.size(); ++block) {
         auto& levels = *blocks_[block].levels;
         levels.push_back(
@@ -4409,7 +4302,7 @@ class AmrRuntime {
     hierarchy_.refinement_ratios.resize(static_cast<std::size_t>(parent_level));
     aux_.resize(active);
     nlev_ = parent_level + 1;
-    refresh_active_temporal_plan_();
+    refresh_active_temporal_relations_();
     for (auto& block : blocks_)
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[static_cast<std::size_t>(level)].aux =
@@ -4544,126 +4437,13 @@ class AmrRuntime {
       throw;
     }
   }
-  /// Advances the system by one macro-step dt. We first solve the fields (co-located summed Poisson,
-  /// ONCE per macro-step: OncePerStep cadence), then each block advances over ITS level stack with ITS
-  /// scheme, honoring its stride cadence and its substeps, and ITS temporal treatment. Runtime
-  /// counterpart of AmrSystemCoupler::step (OncePerStep): the compile-time version carries
-  /// substeps/stride in block_substeps_v / block_stride_v and chooses the treatment by the constexpr
-  /// block_time_treatment_v; here the engine carries the substep loop, the stride filter AND the
-  /// IMEX-vs-explicit selection.
-  ///
-  /// TREATMENT SELECTION (capstone vii):
-  ///  - EXPLICIT block (b.imex == false): the advance closure does ONE advance_amr (transport +
-  ///    forward-Euler source), called substeps times;
-  ///  - IMEX block (b.imex == true): the imex_advance closure does ONE SOURCE-FREE advance_amr then the
-  ///    IMPLICIT stiff source backward_euler_source per level + cascade (cf.
-  ///    AmrRuntimeBlock::imex_advance), called substeps times. Unconditionally stable on a stiff
-  ///    relaxation (where the explicit, of factor |1 - dt/eps|, DIVERGES as soon as dt > 2 eps).
-  /// The substep loop is COMMON to both treatments (substeps applications of h = bdt/substeps), so the
-  /// runtime also SUB-CYCLES the IMEX splitting. At substeps=1 this sub-cycling is a no-op and the IMEX
-  /// path coincides with the IMEX branch of the compile-time engine AmrSystemCoupler::step; for
-  /// substeps>1 it DIVERGES deliberately from that engine (which itself ignores substeps on its IMEX
-  /// branch): see IMEX SEMANTICS UNDER substeps in the header (CFL-safe on the transport,
-  /// backward-Euler stable at any step, stiff relaxation more accurate). imex == false everywhere ->
-  /// advance path only -> bit-identical trajectory to the historical one (the IMEX is opt-in).
-  void step(Real dt) {
-    // PREPARE before any observable mutation (including regrid, field warm-start and diagnostics).
-    // This rejects an invalid rational IntegralOnly relation or an old block without the explicit
-    // execution closure while the accepted numerical state is still untouched.
-    preflight_native_temporal_step_();
-    solve_count_ = 0;
-    // UNION-TAGS REGRID (capstone Phase 2, C.6; D2: BEFORE the macro-step's step, consistent with the
-    // single-block amr_dsl_block.hpp:108). regrid_every_ cadence in MACRO-STEPS, OUTSIDE the substep
-    // loops and the stride windows (macro-step granularity ONLY, D3). regrid_every_ == 0 -> FROZEN
-    // hierarchy, regrid never called -> BIT-IDENTICAL trajectory to the historical one. The guard
-    // macro_step_ > 0 (like the single-block) avoids a regrid at the very first step (the initial grid
-    // is already the build one). The regrid sits BEFORE solve_fields below: it does its own
-    // solve_fields (R0/R8), then the step's solve_fields recomputes phi on the re-gridded grid.
-    if (regrid_every_ > 0 && macro_step_ > 0 && macro_step_ % regrid_every_ == 0)
-      regrid();
-    // System Poisson solved ONCE on the current state (OncePerStep cadence). A HELD block (stride > 1,
-    // outside end-of-window) contributed with its FROZEN state since its last advance: loose coupling
-    // assumed by the multirate, exactly like System::step / AmrSystemCoupler in OncePerStep. phi stays
-    // frozen during the blocks' advance (no per-substep re-solve here). When reached from step_cfl this
-    // re-solves an unchanged state (a second solve), kept on purpose; see the ADC-318 note in step_cfl.
-    require_solved_field_report(solve_fields(), "AmrRuntime::step");
-    for (auto& b : blocks_) {
-      // HOLD-THEN-CATCH-UP cadence (cf. AmrRuntimeBlock::stride, #140): the block is HELD as long as
-      // (macro_step_+1) % stride != 0, then CATCHES UP at end-of-window by an effective step stride*dt.
-      // The end-of-window catch-up keeps the block temporally consistent with the fast ones at the
-      // coupling point (never in the future). stride=1: always true -> every step, bit-identical.
-      if ((macro_step_ + 1) % b.stride != 0)
-        continue;
-      // NEWTON DIAGNOSTICS (OPT-IN): RESET of the report at the HEAD of the block advance (parity with
-      // System::AdvanceImex::operator() which resets nreport before its substep loop). The report then
-      // AGGREGATES over all the levels AND substeps of THIS advance (imex_advance accumulates per level
-      // via backward_euler_source; step() calls imex_advance substeps times without re-resetting).
-      // Placed AFTER the stride skip: a HELD block keeps the report of its LAST advance ("last advance"
-      // semantics of System). No-op for a block without diagnostics (newton_report null).
-      if (b.newton_diagnostics && b.newton_report)
-        b.newton_report->reset();
-      const Real bdt = dt * static_cast<Real>(b.stride);  // catch-up: effective step stride*dt
-      // substeps equal substeps of bdt/substeps. The chosen closure does ONE advance per call;
-      // substeps=1 -> a single advance of bdt (bit-identical to the single-substep case). Per-block
-      // treatment SELECTION: IMEX (source-free transport + implicit stiff source, mirrors the IMEX
-      // branch of AmrSystemCoupler::step) if b.imex, otherwise EXPLICIT (transport + forward-Euler
-      // source). The test is PER BLOCK and stable: a single IMEX block changes nothing for the
-      // neighboring explicit blocks.
-      // NOTE substeps>1: the loop below calls step_block substeps times for BOTH treatments, so the
-      // IMEX splitting is SUB-CYCLED (K Lie steps over bdt/K). The compile-time, for its part, applies
-      // its IMEX only once over bdt (it ignores substeps on its IMEX branch): divergence INTENTIONAL
-      // and sound for substeps>1 (cf. IMEX SEMANTICS UNDER substeps in the file header).
-      const Real h = bdt / static_cast<Real>(b.substeps);
-      for (int s = 0; s < b.substeps; ++s) {
-        if (!b.fill_patch_plan || !b.average_down_plan || !b.advance_scratch_plan)
-          throw std::logic_error("AMR block lost its prepared topology execution plans");
-        if (has_explicit_temporal_relations_()) {
-          auto& step_block =
-              b.imex ? b.imex_advance_with_temporal_plan : b.advance_with_temporal_plan;
-          step_block(*b.levels, dom_, h, base_per_, replicated_coarse_, *temporal_execution_plan_,
-                     &*b.fill_patch_plan, &*b.average_down_plan, &*b.advance_scratch_plan);
-        } else {
-          // Low-level compatibility route: no temporal relation was installed, so the block keeps
-          // the historical spatial-ratio cadence.  This branch is unreachable once a relation exists.
-          auto& step_block = b.imex ? b.imex_advance : b.advance;
-          step_block(*b.levels, dom_, h, base_per_, replicated_coarse_, &*b.fill_patch_plan,
-                     &*b.average_down_plan, &*b.advance_scratch_plan);
-        }
-      }
-      // PROJECTION PONCTUELLE post-pas (ADC-177) : par niveau, APRES substeps + reflux/cascade.
-      // Cell-local + idempotente -> conservation preservee (flux-registres deja regles). No-op si vide.
-      if (b.project_per_level)
-        b.project_per_level(*b.levels);
-    }
-    // Inter-species coupled sources AFTER the transport (same order as AmrSystemCoupler: transport then
-    // coupled_source_step), by forward-Euler splitting. No-op if no source registered -> bit-identical
-    // trajectory to the historical one (the feature is opt-in).
-    coupled_source_step(dt);
-    ++macro_step_;
-  }
-
-  /// substeps/stride-aware CFL step (runtime counterpart of System::step_cfl, EXACT mirror of its
-  /// formula). A block of stride cadence advances by an effective step stride*dt in substeps substeps,
-  /// so each substep is worth stride*dt/substeps; the per-substep stability condition
-  /// stride*dt/substeps <= cfl*h/w_b gives dt <= cfl*h*substeps_b/(stride_b*w_b). The GLOBAL dt is the
-  /// min over the blocks (the most constraining). We first solve the fields (per-block max_speed
-  /// requires the aux up to date), compute dt, then advance by one step(dt). @p h = coarse mesh spacing
-  /// (dx_coarse). Returns the dt used. Single-block (a single block, stride=1): if w_b is the only
-  /// constraining one, dt = cfl*h*substeps/w (identical to System::step_cfl single-block).
-  Real step_cfl(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
-    const Real dt = cfl_dt(cfl, h, speed_floor);
-    step(dt);
-    return dt;
-  }
-
-  /// The CFL dt computation of @ref step_cfl WITHOUT the trailing advance (no step(dt)): solves the
+  /// Computes the Program-owned CFL bound without advancing the accepted state: solves the
   /// fields (max_speed needs the aux), scans the per-block transport / source / stability bounds + the
-  /// coupled-frequency + global bounds, and returns the macro-step dt (records last_dt_reason_). Split
-  /// out so an installed compiled Program can take the SAME CFL dt and drive the macro-step itself
-  /// (AmrSystem::step_cfl's Program route, parity SystemStepper::step_cfl) instead of the native step.
-  /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
+  /// coupled-frequency + global bounds, and returns the macro-step dt (records last_dt_reason_).
+  /// AmrSystem::step_cfl passes that bound to the installed Program; AmrRuntime has no temporal
+  /// advancement entry point of its own.
   Real cfl_dt(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
-    preflight_native_temporal_step_();
+    preflight_program_cfl_state_();
     // This pre-solve provides the field required by max_speed. step(dt) keeps its own transaction-level
     // field solve, but the unchanged warm start now exits at zero V-cycles because GeometricMG measures
     // convergence against ||rhs|| rather than demanding another rel_tol factor from its incoming
@@ -4808,14 +4588,6 @@ class AmrRuntime {
     return dt;
   }
 
-  /// MACRO-STEP counter of the engine (regrid + hold-then-catch-up stride cadence: regrid when
-  /// macro_step_ % regrid_every == 0, stride catch-up when (macro_step_+1) % stride == 0).
-  int macro_step() const { return macro_step_; }
-  /// RESTORES the macro-step counter (accepted-state v3, via AmrSystem::set_clock): without
-  /// it the regrid/stride cadence would restart from phase 0 after a resume. No effect on the level
-  /// state; only sets the cadence phase.
-  void set_macro_step(int s) { macro_step_ = s; }
-
   /// AMR / MPI PROFILING SEAM (Spec 5 sec.12.5, ADC-479 criterion 43). The AmrSystem owns the
   /// runtime::program::Profiler (parity with System::profiler_) and wires it in here AFTER build, so
   /// the engine times its non-numeric AMR phases -- regrid, fill_boundary (the cross-rank ghost
@@ -4914,23 +4686,6 @@ class AmrRuntime {
   /// "stability_dt:<block>" / "global:<label>" / "degenerate" / "" before the first step).
   const std::string& last_dt_bound() const { return last_dt_reason_; }
   void override_last_dt_bound(std::string reason) { last_dt_reason_ = std::move(reason); }
-
-  /// NEWTON REPORT (OPT-IN IMEX diagnostics) of block @p name, AGGREGATED over the levels and substeps
-  /// of its LAST advance (cf. AmrRuntimeBlock::newton_report). AMR counterpart of System::newton_report.
-  /// @throws std::runtime_error if the block is unknown, or if it was not added with
-  ///         newton_diagnostics=true / newton_fail_policy warn|throw (no silently empty report).
-  const NewtonReport& newton_report(const std::string& name) const {
-    const int b = block_index(name);
-    if (b < 0)
-      throw std::runtime_error("AmrRuntime::newton_report : no block named '" + name + "'");
-    const AmrRuntimeBlock& blk = blocks_[static_cast<std::size_t>(b)];
-    if (!blk.newton_diagnostics || !blk.newton_report)
-      throw std::runtime_error(
-          "AmrRuntime::newton_report : Newton diagnostics not enabled for block '" + name +
-          "' ; add the block with newton_diagnostics=True "
-          "(pops.IMEX(newton_diagnostics=True)) or newton_fail_policy='warn'/'throw'");
-    return *blk.newton_report;
-  }
 
   /// Coarse potential (component 0 of the shared aux) as a ny*nx row-major field. Solves the fields if
   /// needed (counterpart of AmrSystem::potential), then reads aux(0). Identical for all blocks.
@@ -5140,7 +4895,7 @@ class AmrRuntime {
   }
 
  private:
-  void refresh_active_temporal_plan_() {
+  void refresh_active_temporal_relations_() {
     const std::size_t active = static_cast<std::size_t>(nlev_ - 1);
     if (configured_temporal_relations_.size() < active)
       throw std::runtime_error(
@@ -5148,44 +4903,26 @@ class AmrRuntime {
     temporal_relations_.assign(
         configured_temporal_relations_.begin(),
         configured_temporal_relations_.begin() + static_cast<std::ptrdiff_t>(active));
-    temporal_execution_plan_ = detail::PreparedAmrTemporalPlan::prepare(temporal_relations_, nlev_);
   }
 
-  bool has_explicit_temporal_relations_() const { return !temporal_relations_.empty(); }
-
-  /// Completes every check that could reject the explicit native route before solve/regrid/state
-  /// mutation.  A block built by an older low-level consumer can still use the separate legacy route
-  /// when no relations are installed, but it cannot silently ignore an installed relation chain.
-  void preflight_native_temporal_step_() const {
-    if (nlev_ > 1)
+  /// Validate the spatial hierarchy contract needed by Program-owned CFL evaluation.
+  void preflight_program_cfl_state_() const {
+    if (nlev_ > 1) {
       require_coarse_fine_reconstruction_contract_();
-    if (!has_explicit_temporal_relations_())
-      return;
-    if (!temporal_execution_plan_ || temporal_execution_plan_->nlevels() != nlev_)
-      throw std::runtime_error(
-          "AMR explicit temporal relations lack their prepared execution plan");
-    for (const auto& block : blocks_) {
-      const bool prepared = block.imex ? static_cast<bool>(block.imex_advance_with_temporal_plan)
-                                       : static_cast<bool>(block.advance_with_temporal_plan);
-      if (!prepared)
-        throw std::runtime_error("AMR block '" + block.name +
-                                 "' cannot execute its installed explicit temporal relations");
+      if (temporal_relations_.size() != hierarchy_.refinement_ratios.size())
+        throw std::runtime_error(
+            "AMR Program CFL evaluation lacks explicit parent/child temporal relations; spatial "
+            "refinement ratios are never reused as time-subcycling ratios");
     }
   }
 
-  /// Product parent_dt/child_dt from level zero to @p level.  With an explicit clock chain this is
-  /// independent from spatial refinement; the spatial product is retained solely for the separate
-  /// compatibility route that has no authored temporal relations.
+  /// Product parent_dt/child_dt from level zero to @p level. The Program-authored clock chain is
+  /// independent from spatial refinement: no spatial ratio may silently become a time ratio.
   Real temporal_refinement_product_(int level) const {
     Real product = Real(1);
-    for (int transition = 0; transition < level; ++transition) {
-      if (has_explicit_temporal_relations_())
-        product *= static_cast<Real>(
-            temporal_relations_[static_cast<std::size_t>(transition)].temporal_ratio().value());
-      else
-        product *=
-            static_cast<Real>(hierarchy_.refinement_ratios[static_cast<std::size_t>(transition)]);
-    }
+    for (int transition = 0; transition < level; ++transition)
+      product *= static_cast<Real>(
+          temporal_relations_[static_cast<std::size_t>(transition)].temporal_ratio().value());
     return product;
   }
 
@@ -5693,6 +5430,33 @@ class AmrRuntime {
     int n_terms = 0;
   };
 
+  static void apply_coupling_operator_to_pack_(const CoupledSourceSpec& source, Real dt,
+                                               const std::vector<MultiFab*>& states) {
+    const int reference = source.n_in > 0 ? source.ins[0].block : source.outs[0].block;
+    MultiFab& iteration_space = *states[static_cast<std::size_t>(reference)];
+    for (int local = 0; local < iteration_space.local_size(); ++local) {
+      CoupledSourceKernel kernel;
+      kernel.dt = dt;
+      kernel.n_in = source.n_in;
+      kernel.n_const = source.n_const;
+      kernel.n_terms = source.n_terms;
+      for (int input = 0; input < source.n_in; ++input) {
+        const CsRef& ref = source.ins[static_cast<std::size_t>(input)];
+        kernel.in[input] = states[static_cast<std::size_t>(ref.block)]->fab(local).array();
+        kernel.in_comp[input] = ref.comp;
+      }
+      for (int constant = 0; constant < source.n_const; ++constant)
+        kernel.consts[constant] = source.kconsts[static_cast<std::size_t>(constant)];
+      for (int term = 0; term < source.n_terms; ++term) {
+        const CsRef& ref = source.outs[static_cast<std::size_t>(term)];
+        kernel.out[term] = states[static_cast<std::size_t>(ref.block)]->fab(local).array();
+        kernel.out_comp[term] = ref.comp;
+        kernel.prog[term] = ref.prog;
+      }
+      for_each_cell(iteration_space.box(local), kernel);
+    }
+  }
+
   Geometry geom_;
   Box2D dom_;
   Periodicity base_per_;
@@ -5705,7 +5469,6 @@ class AmrRuntime {
   std::vector<int> maximum_refinement_ratios_;
   std::vector<::pops::amr::ParentChildClockRelation> configured_temporal_relations_;
   std::vector<::pops::amr::ParentChildClockRelation> temporal_relations_;
-  std::optional<detail::PreparedAmrTemporalPlan> temporal_execution_plan_;
   ActiveRegionProvider2D wall_active_;
   std::shared_ptr<const AmrFieldSolverProviderRegistry> field_solver_registry_;
   std::shared_ptr<const FieldNullspaceProviderRegistry> nullspace_provider_registry_;
@@ -5794,11 +5557,12 @@ class AmrRuntime {
   std::shared_ptr<runtime::amr::PreparedClusteringComponent> external_clustering_;
   std::shared_ptr<const amr::ClusteringProvider> clustering_provider_ =
       std::make_shared<const amr::BergerRigoutsosProvider>(ClusterParams{});
+  // Ephemeral Program evaluation metadata required by the prepared component ABI.  These values
+  // deliberately do not participate in accepted-state snapshot/restart or temporal scheduling.
   std::int64_t component_tick_ = 0;
   double component_physical_time_ = 0.0;
   int aux_ncomp_ = kAuxBaseComps;
   int nlev_ = 0;
-  int macro_step_ = 0;
   mutable int solve_count_ = 0;
   int regrid_count_ = 0;
   // Monotone identity of the materialized hierarchy.  Every successful topology replacement bumps
@@ -5953,11 +5717,11 @@ class AmrRuntime {
     std::vector<std::vector<detail::PreparedConservativeCellTransferWorkspace>>
         coarse_fine_spatial_candidate;
     std::vector<PreparedAmrAverageDownPlan> average_down_candidate;
-    std::vector<PreparedAmrAdvanceScratchPlan> advance_scratch_candidate;
+    std::vector<PreparedAmrProgramRefluxPlan> program_reflux_candidate;
     fill_patch_candidate.reserve(blocks_.size());
     coarse_fine_spatial_candidate.reserve(blocks_.size());
     average_down_candidate.reserve(blocks_.size());
-    advance_scratch_candidate.reserve(blocks_.size());
+    program_reflux_candidate.reserve(blocks_.size());
     for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
       const AmrRuntimeBlock& block = blocks_[block_index];
       const auto& authority = block_transfer_authorities_[block_index];
@@ -5986,9 +5750,8 @@ class AmrRuntime {
       }
       average_down_candidate.push_back(
           PreparedAmrAverageDownPlan::prepare(*block.levels, generation));
-      advance_scratch_candidate.push_back(PreparedAmrAdvanceScratchPlan::prepare(
-          *block.levels, dom_, base_per_, replicated_coarse_, block.wave_speed_cache, generation,
-          world_communicator_view()));
+      program_reflux_candidate.push_back(PreparedAmrProgramRefluxPlan::prepare(
+          *block.levels, dom_, base_per_, generation, world_communicator_view()));
     }
     auto tagging_candidate = make_tagging_execution_plan_(tagging_program_, generation);
     temporal_parent_workspaces_.swap(temporal_candidate);
@@ -5999,7 +5762,7 @@ class AmrRuntime {
       blocks_[block].coarse_fine_spatial_workspaces =
           std::move(coarse_fine_spatial_candidate[block]);
       blocks_[block].average_down_plan = std::move(average_down_candidate[block]);
-      blocks_[block].advance_scratch_plan = std::move(advance_scratch_candidate[block]);
+      blocks_[block].program_reflux_plan = std::move(program_reflux_candidate[block]);
     }
     field_solve_rollback_workspaces_.clear();
     topology_materialization_generation_ = generation;

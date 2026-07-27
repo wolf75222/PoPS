@@ -18,7 +18,7 @@
 
 /// @file
 /// @brief SystemBlockStore: the BLOCK MANAGEMENT responsibility extracted from the god-class System::Impl
-///        (audit Lot B.3, last P0 extraction; follows SystemFieldSolver #176 and SystemStepper).
+///        (audit Lot B.3, last P0 extraction; follows SystemFieldSolver #176 and SystemProgramDriver).
 ///        Extracted VERBATIM from python/system.cpp: no change to numerics, layout, iteration order,
 ///        indexing, or error message. STRICTLY bit-identical -- the code is moved as is.
 ///
@@ -35,10 +35,10 @@
 ///   facade tests depends on it).
 /// - DOES NOT OWN: the domain (ba/dm/dom/geom/pgeom_), the aux and its width, the Poisson/elliptic, the
 ///   couplings, t/macro_step_. These concerns stay in System::Impl (or in SystemFieldSolver /
-///   SystemStepper); the store knows nothing about them.
+///   SystemProgramDriver); the store knows nothing about them.
 ///
 /// The `blocks` registry is PUBLIC: System::Impl exposes it as is via a reference member `sp` (alias),
-/// so that the already-extracted header templates (SystemFieldSolver, SystemStepper, native_loader) that
+/// so that the already-extracted header templates (SystemFieldSolver, SystemProgramDriver, native_loader) that
 /// iterate `owner_->sp` / `P->sp` and name `Impl::Species` stay UNCHANGED and bit-identical. The
 /// struct is named BlockState (clearer meaning than the historical "Species"); Impl keeps the alias
 /// `using Species = SystemBlockStore::BlockState;` for template compatibility.
@@ -65,12 +65,12 @@ class SystemBlockStore {
   /// do not reorder these members nor insert any before add_poisson_rhs.
   ///
   /// DESIGN DECISION (ADC-610, named-option-groups audit): this struct is DELIBERATELY kept flat, unlike
-  /// AmrBuildParams / AmrCompiledHooks which were regrouped into named sub-structs. Three constraints make
+  /// AmrBuildParams, which was regrouped into named sub-structs. Three constraints make
   /// a regroup net-negative here:
   ///   (1) it is a POSITIONAL AGGREGATE (the frozen brace-init above): grouping members into sub-structs
   ///       would break every {..} construction site (install_block, native_loader push_dynamic /
   ///       add_compiled_model) with no ordering safety gained;
-  ///   (2) the SystemStepper templates read these members by name on the hot path, so a regroup churns
+  ///   (2) the SystemProgramDriver templates read these members by name on the hot path, so a regroup churns
   ///       the stepper without changing ownership;
   ///   (3) unlike AmrBuildParams, BlockState does NOT cross the dlopen `.so` boundary by value, so there is
   ///       no ABI-versioning payoff.
@@ -215,7 +215,7 @@ class SystemBlockStore {
   };
 
   /// ORDERED registry of the blocks (UNIQUE source of truth). PUBLIC: Impl aliases it as `sp` for the
-  /// already-extracted templates (SystemFieldSolver / SystemStepper / native_loader) that iterate owner_->sp.
+  /// already-extracted templates (SystemFieldSolver / SystemProgramDriver / native_loader) that iterate owner_->sp.
   std::vector<BlockState> blocks;
 
   // --- access by NAME (0-based indexing, insertion order) ------------------------------------------

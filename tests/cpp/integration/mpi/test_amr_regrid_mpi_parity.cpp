@@ -32,6 +32,7 @@
 // test_mpi_amr_twoblock_parity (avec python/amr_system.cpp).
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
@@ -106,6 +107,7 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
       1e-3);  // tag |grad phi| > 1e-3 (bord d'anneau ; predicat phi cable facade)
   sys.set_density("a", rho0);
   sys.set_density("b", rho1);
+  test::install_forward_euler_program(sys);
 
   const double m0a = sys.mass("a");  // declenche le build paresseux
   const double m0b = sys.mass("b");

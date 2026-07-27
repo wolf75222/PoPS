@@ -1,5 +1,5 @@
-// ADC-324 regression : le patch fin SEED du chemin AMR compile (build_amr_compiled, partage par
-// add_compiled_model ET le bloc natif add_block mono-bloc) n'est alloue QUE quand le raffinement est
+// ADC-324 regression : le patch fin SEED du chemin AMR partage par add_compiled_model ET add_block
+// n'est alloue QUE quand le raffinement est
 // reellement configure (set_refinement avec un seuil fini). Sans set_refinement, refine_threshold
 // reste au sentinel 1e30 "pas de raffinement" : la hierarchie est alors MONO-NIVEAU (n_patches()==0),
 // comme le chemin amr-schur, donc le transport grossier se distribue proprement sous MPI. Avant ce
@@ -12,6 +12,7 @@
 // bit-a-bit du chemin raffine est verrouillee par test_amr_compiled_model / test_amr_riemann_native).
 #include <gtest/gtest.h>
 
+#include "explicit_amr_program.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
 #include <pops/physics/fluids/euler.hpp>   // Euler (= CompressibleFlux)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -104,6 +105,7 @@ TEST(test_amr_seed_no_refine, Runs) {
                        "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
     A.set_poisson("charge_density", "geometric_mg");
     A.set_density("gas", rho);
+    test::install_forward_euler_program(A);
     EXPECT_EQ(A.n_patches(), 0) << "no set_refinement -> n_patches()==0 (compile, mono-niveau)";
     // le mono-niveau reste un solveur valide : il avance et conserve la masse (FV periodique).
     const double m0 = A.mass();
@@ -132,13 +134,14 @@ TEST(test_amr_seed_no_refine, Runs) {
     B.set_poisson("charge_density", "geometric_mg");
     B.set_refinement(1.2);
     B.set_density("gas", rho);
+    test::install_forward_euler_program(B);
     EXPECT_GE(B.n_patches(), 1) << "set_refinement(1.2) -> n_patches()>=1 (seed alloue + regrid)";
     for (int s = 0; s < 8; ++s)
       B.step(1e-3);
     EXPECT_GE(B.n_patches(), 1) << "set_refinement(1.2) : raffinement actif apres pas";
   }
 
-  // (C) chemin NATIF (add_block via ModelSpec) : il PARTAGE build_amr_compiled, donc la meme garde
+  // (C) chemin NATIF (add_block via ModelSpec) : il partage le meme runtime, donc la meme garde
   //     s'applique -> sans set_refinement, mono-niveau (n_patches()==0).
   {
     AmrSystemConfig c = cfg;

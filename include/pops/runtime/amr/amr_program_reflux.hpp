@@ -18,10 +18,10 @@
 /// @file
 /// @brief ADC-639 conservative reflux for a whole-system compiled Program on AMR: the flux-materialising
 /// per-level residual seams, the effective-flux interface-strip samplers, and the route_reflux driver
-/// the recursively subcycled Program driver runs at level sync.
+/// the Program executor runs at an exact parent/child level synchronization.
 ///
 /// Included at the END of amr_runtime.hpp (so the full AmrRuntime class AND the reflux types from
-/// amr_reflux_mf.hpp -- PatchRange / FluxRegister / CoverageMask / CoarseFineInterface / RegMP -- are
+/// amr_reflux_mf.hpp -- PatchRange / FluxRegister / CoverageMask / CoarseFineInterface -- are
 /// visible). It defines AmrRuntime members out-of-line; it is NOT a standalone header.
 ///
 /// The apparatus reuses the native Berger-Oliger reflux. Round-off C/F conservation comes from capturing
@@ -33,7 +33,7 @@
 
 namespace pops {
 
-/// One patch's effective-flux interface strip (the native Reg / RegMP field layout: c* = the coarse-side
+/// One patch's effective-flux interface strip (the native EdgeStrip-shaped layout: c* = the coarse-side
 /// flux at the 4 C/F faces, f* = the fine-side flux, both already dt-integrated in the ledger). The strip
 /// is over a coarse (PARENT-coordinate) footprint [I0..I1] x [J0..J1]; the x strips hold nJ*nc entries
 /// (indexed (J - J0)*nc + k), the y strips nI*nc. Reused by CoarseFineInterface::route_reflux_integrated.
@@ -43,11 +43,25 @@ struct EdgeStrip {
   RefluxStorage<Real> fL, fR, fB, fT;  // fine-side (time-integrated) flux at the same faces
 
   void alloc(const Box2D& coarse_footprint, int nc) {
+    if (coarse_footprint.empty() || nc <= 0)
+      throw std::invalid_argument("Program reflux strip requires a non-empty footprint and nc > 0");
     I0 = coarse_footprint.lo[0];
     I1 = coarse_footprint.hi[0];
     J0 = coarse_footprint.lo[1];
     J1 = coarse_footprint.hi[1];
-    const int nJ = (J1 - J0 + 1) * nc, nI = (I1 - I0 + 1) * nc;
+    const auto checked_size = [nc](std::int64_t extent) {
+      if (extent <= 0)
+        throw std::overflow_error("Program reflux strip extent overflow");
+      const std::size_t cells = static_cast<std::size_t>(extent);
+      const std::size_t components = static_cast<std::size_t>(nc);
+      if (cells > std::numeric_limits<std::size_t>::max() / components)
+        throw std::overflow_error("Program reflux strip size overflow");
+      return cells * components;
+    };
+    const std::size_t nJ =
+        checked_size(static_cast<std::int64_t>(J1) - static_cast<std::int64_t>(J0) + 1);
+    const std::size_t nI =
+        checked_size(static_cast<std::int64_t>(I1) - static_cast<std::int64_t>(I0) + 1);
     cL.assign(nJ, Real(0));
     cR.assign(nJ, Real(0));
     fL.assign(nJ, Real(0));
@@ -62,8 +76,17 @@ struct EdgeStrip {
     if (nc <= 0 || I0 != coarse_footprint.lo[0] || I1 != coarse_footprint.hi[0] ||
         J0 != coarse_footprint.lo[1] || J1 != coarse_footprint.hi[1])
       return false;
-    const std::size_t nj = static_cast<std::size_t>(J1 - J0 + 1) * static_cast<std::size_t>(nc);
-    const std::size_t ni = static_cast<std::size_t>(I1 - I0 + 1) * static_cast<std::size_t>(nc);
+    const std::int64_t j_extent = static_cast<std::int64_t>(J1) - static_cast<std::int64_t>(J0) + 1;
+    const std::int64_t i_extent = static_cast<std::int64_t>(I1) - static_cast<std::int64_t>(I0) + 1;
+    if (j_extent <= 0 || i_extent <= 0)
+      return false;
+    const std::size_t components = static_cast<std::size_t>(nc);
+    if (static_cast<std::uint64_t>(j_extent) >
+            std::numeric_limits<std::size_t>::max() / components ||
+        static_cast<std::uint64_t>(i_extent) > std::numeric_limits<std::size_t>::max() / components)
+      return false;
+    const std::size_t nj = static_cast<std::size_t>(j_extent) * components;
+    const std::size_t ni = static_cast<std::size_t>(i_extent) * components;
     return cL.size() == nj && cR.size() == nj && fL.size() == nj && fR.size() == nj &&
            cB.size() == ni && cT.size() == ni && fB.size() == ni && fT.size() == ni;
   }
@@ -242,7 +265,47 @@ inline void edge_axpy(RefluxStorage<Real>& dst, Real a, const RefluxStorage<Real
       EdgeAxpyKernel{dst.data(), src.data(), a});
 }
 
+inline bool edge_strip_has_storage(const EdgeStrip& strip) noexcept {
+  return !strip.cL.empty() || !strip.cR.empty() || !strip.cB.empty() || !strip.cT.empty() ||
+         !strip.fL.empty() || !strip.fR.empty() || !strip.fB.empty() || !strip.fT.empty();
+}
+
+inline bool same_edge_strip_footprint(const EdgeStrip& left, const EdgeStrip& right) noexcept {
+  return left.I0 == right.I0 && left.I1 == right.I1 && left.J0 == right.J0 && left.J1 == right.J1;
+}
+
+inline bool same_edge_strip_storage_shape(const EdgeStrip& left, const EdgeStrip& right) noexcept {
+  return left.cL.size() == right.cL.size() && left.cR.size() == right.cR.size() &&
+         left.cB.size() == right.cB.size() && left.cT.size() == right.cT.size() &&
+         left.fL.size() == right.fL.size() && left.fR.size() == right.fR.size() &&
+         left.fB.size() == right.fB.size() && left.fT.size() == right.fT.size();
+}
+
+inline bool edge_strip_copy_requires_rebind(const EdgeStrip& destination,
+                                            const EdgeStrip& source) noexcept {
+  const bool destination_has_storage = edge_strip_has_storage(destination);
+  const bool source_has_storage = edge_strip_has_storage(source);
+  return destination_has_storage != source_has_storage ||
+         (source_has_storage && (!same_edge_strip_footprint(destination, source) ||
+                                 !same_edge_strip_storage_shape(destination, source)));
+}
+
+inline void preflight_edge_strip_axpy(const EdgeStrip& destination, const EdgeStrip& source) {
+  if (!edge_strip_has_storage(source))
+    return;
+  if (source.I1 < source.I0 || source.J1 < source.J0)
+    throw std::invalid_argument("Program reflux ledger source strip has an empty footprint");
+  if (edge_strip_has_storage(destination) &&
+      (destination.I0 != source.I0 || destination.I1 != source.I1 || destination.J0 != source.J0 ||
+       destination.J1 != source.J1))
+    throw std::invalid_argument(
+        "Program reflux ledger cannot combine strips from different patch footprints");
+}
+
 inline void edge_strip_axpy(EdgeStrip& d, Real a, const EdgeStrip& s) {
+  preflight_edge_strip_axpy(d, s);
+  if (!edge_strip_has_storage(s))
+    return;
   d.I0 = s.I0;
   d.I1 = s.I1;
   d.J0 = s.J0;
@@ -261,6 +324,10 @@ inline void edge_strip_axpy(EdgeStrip& d, Real a, const EdgeStrip& s) {
 /// This is the whole engine of the ledger's saxpy / lincomb mirror: an arbitrary DSL scheme's stage
 /// weights reach the reflux register through exactly these calls.
 inline void edge_flux_axpy(EdgeFlux& dst, Real a, const EdgeFlux& src) {
+  for (std::size_t i = 0; i < src.coarse.size() && i < dst.coarse.size(); ++i)
+    preflight_edge_strip_axpy(dst.coarse[i], src.coarse[i]);
+  for (std::size_t i = 0; i < src.fine.size() && i < dst.fine.size(); ++i)
+    preflight_edge_strip_axpy(dst.fine[i], src.fine[i]);
   if (src.coarse.size() > dst.coarse.size())
     dst.coarse.resize(src.coarse.size());
   if (src.fine.size() > dst.fine.size())
@@ -281,8 +348,30 @@ inline void edge_flux_axpy(EdgeFlux& dst, Real a, const EdgeFlux& src) {
 inline void edge_flux_copy_into(EdgeFlux& dst, const EdgeFlux& src) {
   if (&dst == &src)
     return;
+  bool requires_rebind =
+      dst.coarse.size() != src.coarse.size() || dst.fine.size() != src.fine.size();
+  for (std::size_t index = 0; index < src.coarse.size() && index < dst.coarse.size(); ++index)
+    requires_rebind =
+        requires_rebind || edge_strip_copy_requires_rebind(dst.coarse[index], src.coarse[index]);
+  for (std::size_t index = 0; index < src.fine.size() && index < dst.fine.size(); ++index)
+    requires_rebind =
+        requires_rebind || edge_strip_copy_requires_rebind(dst.fine[index], src.fine[index]);
+  // A rejected regrid restores an accepted snapshot whose compact strips have the old patch
+  // footprints.  Those values are a replacement, not an algebraic combination: retire only the
+  // incompatible pinned storage (after its device work is complete), while retaining every
+  // allocation on the common unchanged-topology path.
+  if (requires_rebind)
+    device_fence();
   dst.coarse.resize(src.coarse.size());
   dst.fine.resize(src.fine.size());
+  const auto prepare_destination = [](EdgeStrip& destination, const EdgeStrip& source) {
+    if (!edge_strip_has_storage(source) || edge_strip_copy_requires_rebind(destination, source))
+      destination = EdgeStrip{};
+  };
+  for (std::size_t index = 0; index < src.coarse.size(); ++index)
+    prepare_destination(dst.coarse[index], src.coarse[index]);
+  for (std::size_t index = 0; index < src.fine.size(); ++index)
+    prepare_destination(dst.fine[index], src.fine[index]);
   clear_edge_flux_role_on_device(dst.coarse);
   clear_edge_flux_role_on_device(dst.fine);
   for (std::size_t index = 0; index < src.coarse.size(); ++index)
@@ -397,11 +486,11 @@ inline void sample_coarse_role_strip(const MultiFab& parent, const MultiFab& Fx,
 
 /// Sample the FINE-ROLE strip of a level-k flux field (Fx/Fy on the level-k grid): for each LOCAL level-k
 /// patch, accumulate the coarse-face-averaged level-k flux 0.5*(F(2I,2J)+F(2I,2J+1)) at the patch edges.
-/// This is the native fine-flux accumulation of amr_subcycling.hpp:135-148 (mono) / :567-580 (multi),
-/// lifted verbatim (WITHOUT the *dtf: the ledger carries dt through the Program combine, so the strip is a
-/// pure flux and the commit's dt-weighting lands it as dt*Feff). @p Fx / @p Fy: the level-k face fluxes,
-/// one face-box per LOCAL level-k box, co-distributed with the level state. @p state is the authoritative
-/// level-k cell layout (the fine patches at this level, seen from level k-1). Fills @p out.fine.
+/// The spatial sampling arithmetic is shared with the native coarse/fine strip helpers; the Program
+/// ledger owns all time integration (there is deliberately no *dt factor here). @p Fx / @p Fy are
+/// the level-k face fluxes, one face-box per LOCAL level-k box, co-distributed with the level state.
+/// @p state is the authoritative level-k cell layout (the fine patches at this level, seen from
+/// level k-1). Fills @p out.fine.
 inline void sample_fine_role_strip(const MultiFab& state, const MultiFab& Fx, const MultiFab& Fy,
                                    int nc, EdgeFlux& out) {
   device_fence();
@@ -426,40 +515,10 @@ inline void sample_fine_role_strip(const MultiFab& state, const MultiFab& Fx, co
   device_fence();
 }
 
-/// Combine a coarse-role EdgeStrip (c* = the level-(k-1) coarse flux at a patch's C/F faces) and the
-/// matching fine-role EdgeStrip (f* = the coarse-face-averaged level-k flux at the same faces) into one
-/// route_reflux-shaped register. Both are dt-integrated (the ledger carried dt through the Program), keyed
-/// by the SAME level-k patch footprint. A missing role (empty strip) contributes 0.
-inline EdgeStrip merge_reflux_strip(const EdgeStrip& coarse, const EdgeStrip& fine, int nc) {
-  // Take the footprint from whichever strip is populated (they coincide when both exist).
-  const EdgeStrip& shape =
-      (!fine.cL.empty() || !fine.fL.empty() || fine.I1 >= fine.I0) ? fine : coarse;
-  EdgeStrip g;
-  g.I0 = shape.I0;
-  g.I1 = shape.I1;
-  g.J0 = shape.J0;
-  g.J1 = shape.J1;
-  const int nJ = (g.J1 - g.J0 + 1) * nc, nI = (g.I1 - g.I0 + 1) * nc;
-  auto take = [](const RefluxStorage<Real>& v, int n) {
-    return v.size() == static_cast<std::size_t>(n)
-               ? v
-               : RefluxStorage<Real>(static_cast<std::size_t>(n), Real(0));
-  };
-  g.cL = take(coarse.cL, nJ);
-  g.cR = take(coarse.cR, nJ);
-  g.cB = take(coarse.cB, nI);
-  g.cT = take(coarse.cT, nI);
-  g.fL = take(fine.fL, nJ);
-  g.fR = take(fine.fR, nJ);
-  g.fB = take(fine.fB, nI);
-  g.fT = take(fine.fT, nI);
-  return g;
-}
-
 /// Route the conservative reflux of the coarse-fine interface between coarse level @p k-1 (PARENT) and
-/// fine level @p k for block @p b: for each level-k patch, merge the coarse-role strip (from the level-
-/// (k-1) buffer's ledger) with the fine-role strip (from the level-k buffer's ledger) into a route_reflux
-/// register, deposit the coverage-aware correction into a sparse GLOBAL-indexed FluxRegister restricted
+/// fine level @p k for block @p b: for each level-k patch, route the coarse-role strip (from the level-
+/// (k-1) buffer's ledger) with the fine-role strip (from the level-k buffer's ledger), deposit the
+/// coverage-aware correction into a sparse GLOBAL-indexed FluxRegister restricted
 /// to exact interface cells, gather (all_reduce; identity in serial), and apply to the coarse live state
 /// under the coverage guard. Both sides are dt-integrated, so route_reflux_integrated (NO *dt) keeps the
 /// cancellation exact. REUSES CoarseFineInterface / FluxRegister / CoverageMask verbatim. MPI single-writer

@@ -19,6 +19,7 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 
 
 def _bump(n, amp):
@@ -42,6 +43,7 @@ def _build(n=32, regrid_every=0):
     sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
+    install_forward_euler_program(sim)
     return sim
 
 
@@ -90,6 +92,7 @@ def main():
         )
         s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
+        install_forward_euler_program(s)
         s.advance(0.001, 10)
         return np.asarray(s.density())
 

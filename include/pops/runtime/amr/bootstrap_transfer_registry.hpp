@@ -101,8 +101,8 @@ struct PreparedTransferCapabilities {
 
 struct PreparedTransferKernel {
   PreparedTransferCapabilities capabilities;
-  /// Prepared spatial identity used by allocation-free FillPatch.  A coarse/fine callable without
-  /// this value is not eligible for the native subcycling route.
+  /// Prepared spatial identity used by allocation-free FillPatch. A coarse/fine callable without
+  /// this value is not eligible for the Program-owned AMR execution route.
   std::shared_ptr<const PreparedCoarseFineOperator> prepared_coarse_fine;
   std::function<void(const MultiFab&, MultiFab&, const SpatialTransferContext&)> spatial;
   std::function<void(const MultiFab&, MultiFab&, const SpatialTransferContext&)> coarse_fine;

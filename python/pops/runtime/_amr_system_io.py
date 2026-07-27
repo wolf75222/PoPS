@@ -1,4 +1,5 @@
 """Strict accepted-state checkpoint/restart mixin for the AMR engine."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,25 +36,36 @@ class _AmrSystemIO(_AmrSystem):
         from pops.runtime._amr_checkpoint_v3 import write_v3
 
         return write_v3(
-            self, self._s, path, (self._L, self._Ly), (self._xlo, self._ylo),
+            self,
+            self._s,
+            path,
+            (self._L, self._Ly),
+            (self._xlo, self._ylo),
             self._regrid_every,
-            getattr(self, "_history_persistence", None) or {})
+            getattr(self, "_history_persistence", None) or {},
+        )
 
     def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedAMRSystemRestart:
         """Authenticate and preflight the complete AMR payload without native mutation."""
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
-        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
+        from pops.runtime._checkpoint_manifest import (
+            authenticate_checkpoint_payload,
+            require_exact_payload_version,
+        )
         from pops.runtime._amr_checkpoint_v3 import prepare_v3
 
         data = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
-        version = int(data["pops_amr_checkpoint_version"])
-        if version != 3:
-            raise ValueError(
-                "restart: AMR checkpoint version %r unsupported; expected exactly 3" % version)
+        require_exact_payload_version(
+            data,
+            "pops_amr_checkpoint_version",
+            AMR_CHECKPOINT_PAYLOAD_VERSION,
+            runtime="AMR",
+        )
         return _PreparedAMRSystemRestart(
-            identity, prepare_v3(
-                self, self._s, data, (self._L, self._Ly), (self._xlo, self._ylo)))
+            identity, prepare_v3(self, self._s, data, (self._L, self._Ly), (self._xlo, self._ylo))
+        )
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -95,8 +107,12 @@ class _AmrSystemIO(_AmrSystem):
         try:
             self._s.rollback_restart_transaction()
         finally:
-            (self._last_restart_identity, self._last_restart_report,
-             self._temporal_restart_state, self._step_controller) = snapshot
+            (
+                self._last_restart_identity,
+                self._last_restart_report,
+                self._temporal_restart_state,
+                self._step_controller,
+            ) = snapshot
             self.__dict__.pop("_checkpoint_restart_committed", None)
             del self._checkpoint_restart_python_snapshot
 
@@ -104,8 +120,7 @@ class _AmrSystemIO(_AmrSystem):
         """Restore the direct AMR engine through the native collective transaction protocol."""
         from pops.output._checkpoint_collective import restore_checkpoint_path
 
-        return restore_checkpoint_path(
-            self, self, path, phase_prefix="AMR direct-engine restart")
+        return restore_checkpoint_path(self, self, path, phase_prefix="AMR direct-engine restart")
 
 
 __all__ = ["_AmrSystemIO"]

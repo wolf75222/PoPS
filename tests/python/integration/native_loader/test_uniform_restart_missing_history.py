@@ -116,7 +116,10 @@ def test_authenticated_restart_missing_required_history_fails_at_exact_guard(
 
     with pytest.raises(
         RuntimeError,
-        match="checkpoint does not contain required Program history",
+        match=(
+            r"checkpoint Program histories \[\] != installed qualified histories "
+            r"\['blk\.rate'\]"
+        ),
     ) as caught:
         runtime.restart(path)
     assert required_histories[0] in str(caught.value)

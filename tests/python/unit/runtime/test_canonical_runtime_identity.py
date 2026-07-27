@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from pops import _pops
+from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
 from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
 from tests.python.support.native_execution_context import artifact_execution_context
 from pops.codegen._plans import BindInputs, InstallPlan
@@ -37,11 +38,19 @@ def _bound_snapshot():
         semantic_identity=make_identity("semantic", {"problem": "advection"}),
         artifact_identity=make_identity("artifact", {"binary": "abc"}),
         layout={"kind": "uniform"},
-        blocks=[{"name": "tracer", "definition_identity": {"model": "m"},
-                 "spatial": {"flux": "hll"}, "evolve": True}],
+        blocks=[
+            {
+                "name": "tracer",
+                "definition_identity": {"model": "m"},
+                "spatial": {"flux": "hll"},
+                "evolve": True,
+            }
+        ],
         field_plans={},
         step_transaction=StepTransactionPlan(FixedDt(0.1)).to_data(),
-        params=[], aux_evidence={}, initial_evidence={},
+        params=[],
+        aux_evidence={},
+        initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
     )
 
@@ -72,8 +81,7 @@ def _exact_install_plan():
             block.name: {"model": block.model, "spatial": block.spatial}
             for block in artifact.blocks
         },
-        params=artifact.bind_schema.resolve_bind(
-            {}, compile_values=artifact.plan.compile_values),
+        params=artifact.bind_schema.resolve_bind({}, compile_values=artifact.plan.compile_values),
         aux={},
         execution_context=artifact_execution_context(artifact),
     )
@@ -97,8 +105,13 @@ def test_bound_snapshot_projects_execution_context_identity_digest_without_loss(
     snapshot = BoundSnapshot(
         semantic_identity=make_identity("semantic", {}),
         artifact_identity=make_identity("artifact", {}),
-        layout={"kind": "uniform"}, blocks=[], field_plans={}, step_transaction={}, params=[],
-        aux_evidence={}, initial_evidence={},
+        layout={"kind": "uniform"},
+        blocks=[],
+        field_plans={},
+        step_transaction={},
+        params=[],
+        aux_evidence={},
+        initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {}),
         execution_context={"backend_identity": identity.to_data()},
     )
@@ -112,8 +125,13 @@ def test_bound_snapshot_refuses_a_bare_bind_identity():
         BoundSnapshot(
             semantic_identity=make_identity("semantic", {}),
             artifact_identity=make_identity("artifact", {}),
-            layout={"kind": "uniform"}, blocks=[], field_plans={}, step_transaction={}, params=[],
-            aux_evidence={}, initial_evidence={},
+            layout={"kind": "uniform"},
+            blocks=[],
+            field_plans={},
+            step_transaction={},
+            params=[],
+            aux_evidence={},
+            initial_evidence={},
             bind_schema_identity=make_identity("bind-schema", {}),
             bind_identity=make_identity("bind", {"spoofed": True}),
         )
@@ -125,9 +143,7 @@ def test_final_bound_snapshot_uses_only_the_verified_install_plan_authority():
         _execution_context=plan.execution_context,
         _lower_spatial=lambda value: value,
     )
-    resolved_models = {
-        name: spec["model"] for name, spec in plan.instances.items()
-    }
+    resolved_models = {name: spec["model"] for name, spec in plan.instances.items()}
 
     snapshot = build_uniform_snapshot(
         engine,
@@ -186,7 +202,8 @@ def test_final_bound_snapshot_refuses_every_install_plan_input_alias(changed):
         values["instances"] = dict(plan.instances)
     elif changed == "params":
         values["params"] = plan.artifact.bind_schema.resolve_bind(
-            {}, compile_values=plan.artifact.plan.compile_values)
+            {}, compile_values=plan.artifact.plan.compile_values
+        )
     elif changed == "aux":
         values["aux"] = dict(plan.aux)
     elif changed == "field_plans":
@@ -203,8 +220,13 @@ def test_bound_snapshot_refuses_repr_based_extension():
         BoundSnapshot(
             semantic_identity=make_identity("semantic", {}),
             artifact_identity=make_identity("artifact", {}),
-            layout={"kind": "uniform"}, blocks=[], field_plans={"phi": object()},
-            step_transaction={}, params=[], aux_evidence={}, initial_evidence={},
+            layout={"kind": "uniform"},
+            blocks=[],
+            field_plans={"phi": object()},
+            step_transaction={},
+            params=[],
+            aux_evidence={},
+            initial_evidence={},
             bind_schema_identity=make_identity("bind-schema", {}),
         )
 
@@ -212,17 +234,38 @@ def test_bound_snapshot_refuses_repr_based_extension():
 def test_run_identity_changes_only_with_effective_controls():
     bind = _bound_snapshot().bind_identity
     first = RunManifest(
-        bind_identity=bind, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "step_transaction": _run_control(0.4), "max_steps": 10,
-                  "output_mode": "current-directory"})
+        bind_identity=bind,
+        start_time=0.0,
+        start_macro_step=0,
+        controls={
+            "t_end": 1.0,
+            "step_transaction": _run_control(0.4),
+            "max_steps": 10,
+            "output_mode": "current-directory",
+        },
+    )
     same = RunManifest(
-        bind_identity=bind, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "step_transaction": _run_control(0.4), "max_steps": 10,
-                  "output_mode": "current-directory"})
+        bind_identity=bind,
+        start_time=0.0,
+        start_macro_step=0,
+        controls={
+            "t_end": 1.0,
+            "step_transaction": _run_control(0.4),
+            "max_steps": 10,
+            "output_mode": "current-directory",
+        },
+    )
     changed = RunManifest(
-        bind_identity=bind, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "step_transaction": _run_control(0.2), "max_steps": 10,
-                  "output_mode": "current-directory"})
+        bind_identity=bind,
+        start_time=0.0,
+        start_macro_step=0,
+        controls={
+            "t_end": 1.0,
+            "step_transaction": _run_control(0.2),
+            "max_steps": 10,
+            "output_mode": "current-directory",
+        },
+    )
     assert first.run_identity == same.run_identity
     assert first.run_identity != changed.run_identity
 
@@ -230,20 +273,41 @@ def test_run_identity_changes_only_with_effective_controls():
 def test_run_manifest_strict_round_trip_and_no_numeric_coercion():
     bind = _bound_snapshot().bind_identity
     manifest = RunManifest(
-        bind_identity=bind, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "step_transaction": _run_control(), "max_steps": 10,
-                  "output_mode": "current-directory"})
+        bind_identity=bind,
+        start_time=0.0,
+        start_macro_step=0,
+        controls={
+            "t_end": 1.0,
+            "step_transaction": _run_control(),
+            "max_steps": 10,
+            "output_mode": "current-directory",
+        },
+    )
     assert RunManifest.from_dict(manifest.to_dict()).to_dict() == manifest.to_dict()
     with pytest.raises(TypeError, match="max_steps"):
         RunManifest(
-            bind_identity=bind, start_time=0.0, start_macro_step=0,
-            controls={"t_end": 1.0, "step_transaction": _run_control(), "max_steps": True,
-                      "output_mode": "current-directory"})
+            bind_identity=bind,
+            start_time=0.0,
+            start_macro_step=0,
+            controls={
+                "t_end": 1.0,
+                "step_transaction": _run_control(),
+                "max_steps": True,
+                "output_mode": "current-directory",
+            },
+        )
     with pytest.raises(ValueError, match="finite"):
         RunManifest(
-            bind_identity=bind, start_time=0.0, start_macro_step=0,
-            controls={"t_end": float("nan"), "step_transaction": _run_control(), "max_steps": 10,
-                      "output_mode": "current-directory"})
+            bind_identity=bind,
+            start_time=0.0,
+            start_macro_step=0,
+            controls={
+                "t_end": float("nan"),
+                "step_transaction": _run_control(),
+                "max_steps": 10,
+                "output_mode": "current-directory",
+            },
+        )
 
 
 def test_internal_engines_do_not_reintroduce_public_strategy_controls():
@@ -258,16 +322,30 @@ def test_internal_engines_do_not_reintroduce_public_strategy_controls():
 def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(monkeypatch):
     snapshot = _bound_snapshot()
     run = RunManifest(
-        bind_identity=snapshot.bind_identity, start_time=0.0, start_macro_step=0,
-        controls={"t_end": 1.0, "step_transaction": _run_control(), "max_steps": 10,
-                  "output_mode": "current-directory"})
+        bind_identity=snapshot.bind_identity,
+        start_time=0.0,
+        start_macro_step=0,
+        controls={
+            "t_end": 1.0,
+            "step_transaction": _run_control(),
+            "max_steps": 10,
+            "output_mode": "current-directory",
+        },
+    )
     owner = SimpleNamespace(
         _checkpoint_identities=lambda: (
-            snapshot.semantic_identity, snapshot.artifact_identity, snapshot.bind_identity),
-        last_run_identity=run.run_identity)
+            snapshot.semantic_identity,
+            snapshot.artifact_identity,
+            snapshot.bind_identity,
+        ),
+        last_run_identity=run.run_identity,
+    )
     payload = {
-        "pops_checkpoint_version": 3, "t": 0.5, "macro_step": 2,
-        "abi_key": "test-abi", "state_tracer": np.arange(4, dtype=np.float64),
+        "pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+        "t": 0.5,
+        "macro_step": 2,
+        "abi_key": "test-abi",
+        "state_tracer": np.arange(4, dtype=np.float64),
         "inactive_level": np.empty((0, 4), dtype=np.float64),
     }
     monkeypatch.setattr("pops.runtime._engine_descriptors.abi_key", lambda: "test-abi")

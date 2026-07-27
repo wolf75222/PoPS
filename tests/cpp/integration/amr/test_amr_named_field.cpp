@@ -424,7 +424,7 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   std::vector<AmrRuntimeBlock> blocks;
   blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
                                               "plasma", blob(n, 0.25),
-                                              /*has_density=*/true, 1.4, 1, false, false));
+                                              /*has_density=*/true, 1.4, 1, false));
   blocks[0].aux_ncomp = kAuxNamedBase + 1;
 
   auto registry = make_default_amr_field_solver_registry();
@@ -494,7 +494,7 @@ TEST(test_amr_named_field, Runs) {
 
   std::vector<AmrRuntimeBlock> blocks;
   blocks.push_back(detail::dispatch_amr_block(exb_charge(q, B0), "minmod", "rusanov", S, "plasma",
-                                              rho, /*has_density=*/true, 1.4, 1, false, false));
+                                              rho, /*has_density=*/true, 1.4, 1, false));
   // Widen the shared aux channel so the named fields' output components (>= kAuxNamedBase) fit. The
   // native ExB block reads only comps 0..2; the runtime sizes the channel to max(b.aux_ncomp), so a
   // wider value just reserves room (the extra comps are written only by the named solve). This is what a
@@ -755,7 +755,7 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   std::vector<AmrRuntimeBlock> blocks;
   blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
                                               "plasma", blob(n, 0.5),
-                                              /*has_density=*/true, 1.4, 1, false, false));
+                                              /*has_density=*/true, 1.4, 1, false));
   constexpr int phi_component = kAuxNamedBase;
   constexpr int gx_component = kAuxNamedBase + 1;
   constexpr int gy_component = kAuxNamedBase + 2;
@@ -857,7 +857,7 @@ TEST(test_amr_named_field, CoarseAuthoritativeAuxUsesPreparedTransferAndComponen
   std::vector<AmrRuntimeBlock> blocks;
   blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
                                               "plasma", blob(n, 0.25),
-                                              /*has_density=*/true, 1.4, 1, false, false));
+                                              /*has_density=*/true, 1.4, 1, false));
   blocks[0].aux_ncomp = component + 1;
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
@@ -937,7 +937,7 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     std::vector<AmrRuntimeBlock> blocks;
     blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
                                                 "plasma", blob(params.mesh.n, 0.25),
-                                                /*has_density=*/true, 1.4, 1, false, false));
+                                                /*has_density=*/true, 1.4, 1, false));
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
     test::install_second_order_amr_transfer_authorities(runtime, 1);
@@ -969,7 +969,7 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     std::vector<AmrRuntimeBlock> blocks;
     blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
                                                 "plasma", blob(params.mesh.n, 0.25),
-                                                /*has_density=*/true, 1.4, 1, false, false));
+                                                /*has_density=*/true, 1.4, 1, false));
     blocks[0].aux_ncomp = kAuxNamedBase + 1;
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);

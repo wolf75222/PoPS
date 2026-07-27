@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include "explicit_system_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalaire 1 var)
@@ -97,6 +98,7 @@ static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
   // exactement les sites du finding 8.
   add_compiled_model(sys, "u", ScalarModel{}, "none", "rusanov", "conservative", "explicit");
   sys.set_poisson("composite", "geometric_mg");
+  test::install_forward_euler_program(sys);
 
   // Init uniforme sur le rang proprietaire (box 0 = rang 0 sous DistributionMapping(1, np)).
   // Les rangs vides ne touchent rien (set_density itere local_size() = 0 -> no-op).

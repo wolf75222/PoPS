@@ -5,14 +5,11 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/coupling/amr/amr_coupler_mp.hpp>  // detail::coupler_inject_aux_mb
 #include <pops/coupling/base/aux_fill.hpp>  // detail::derive_aux_bc + detail::fill_bz_box (shared)
-#include <pops/coupling/source/coupled_source.hpp>  // CoupledSourceFor
 #include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
-#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, advance_amr, mf_average_down_mb
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source
-#include <pops/numerics/time/schemes/scheduler.hpp>  // block_substeps_v, block_time_treatment_v
+#include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, prepared AMR transfers
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -39,19 +36,11 @@
 ///
 /// Carries a CoupledSystem on an AMR hierarchy: each block has ITS OWN level hierarchy, all species
 /// SHARE the same AMR grid, the same aux field (phi, grad phi [, B_z, ...]) and the same coarse
-/// Poisson. Orchestration: sync_down (per block) -> coarse Poisson f = Sum_s q_s n_s -> coarse aux +
-/// injection to the fine levels -> each block advances via advance_amr<Disc_block> (with its scheme
-/// and its substeps; implicit/IMEX blocks delegated to a callback). STRONG INVARIANT: all blocks live
-/// on EXACTLY the same grid per level (the aux is shared); same_layout_or_throw checks this at the
-/// ctor. PoissonCadence chooses the re-solve frequency of phi (OncePerStep frozen vs PerSubstep).
-/// Single-block = bit-identical path to history (loops over the other blocks are empty).
+/// Poisson. It prepares shared fields and hierarchy storage for spatial operators; ProgramGraph owns
+/// every temporal composition. STRONG INVARIANT: all blocks live on EXACTLY the same grid per level
+/// (the aux is shared); same_layout_or_throw checks this at the ctor.
 
 namespace pops {
-
-/// Re-solve frequency of the Poisson on AMR: OncePerStep (phi solved once per macro-step, frozen
-/// during the advance; cheapest); PerSubstep (phi re-solved before each species substep, more
-/// faithful for a field-driven transport, more expensive).
-enum class PoissonCadence { OncePerStep, PerSubstep };
 
 // EXPLICIT layout of a shared AMR hierarchy (point 2 of the multi-block capstone, first MINIMAL
 // step). Single source of truth on the GRID that all blocks share: per level the BoxArray (the boxes
@@ -136,7 +125,8 @@ inline DistributionMapping amr_system_authoritative_coarse_mapping(
 
 // LAYOUT CONSISTENCY guard between blocks (point 1 of the capstone). The aux is SHARED per level: all
 // blocks MUST live on EXACTLY the same grid at each level, otherwise the rewiring
-// levels[k].aux = &aux_[k] and the advance read an inconsistent grid (silent out-of-bound access).
+// levels[k].aux = &aux_[k] and spatial operators read an inconsistent grid (silent out-of-bound
+// access).
 // The old check only compared the NUMBER of boxes (.size()); here we compare EXACTLY: number of
 // levels, then per level BoxArray (boxes AND order), DistributionMapping and dx/dy. Throws a clear
 // error at the FIRST discrepancy (block and level located). A single block matches itself trivially ->
@@ -190,7 +180,6 @@ class AmrSystemCoupler {
                    const BCRec& bcPhi, RhsAssembler rhs_assembler,
                    std::vector<std::vector<AmrLevelMP>> block_levels,
                    Periodicity base_per = Periodicity{true, true}, bool replicated_coarse = true,
-                   PoissonCadence cadence = PoissonCadence::OncePerStep,
                    ActiveRegionProvider2D active = {}, ScalarFieldProvider2D bz = {},
                    FactoryT elliptic_factory = {})
       : system_(std::move(system)),
@@ -201,7 +190,6 @@ class AmrSystemCoupler {
         bcPhi_(bcPhi),
         aux_bc_(detail::derive_aux_bc(bcPhi)),
         replicated_coarse_(replicated_coarse),
-        cadence_(cadence),
         coarse_mapping_(detail::amr_system_authoritative_coarse_mapping(ba_coarse, block_levels)),
         mg_(make_elliptic_solver<Elliptic>(
             {geom_, ba_coarse, coarse_mapping_, bcPhi_, std::move(active),
@@ -211,7 +199,7 @@ class AmrSystemCoupler {
         bz_(std::move(bz)) {
     require_prepared_provider_collective_consensus(bz_);
     // Construction checks (Codex review): without them, a malformed hierarchy
-    // causes a silent out-of-bound access in the wiring / the advance.
+    // causes a silent out-of-bound access in the wiring / spatial evaluations.
     if (block_levels_.size() != System::n_blocks)
       throw std::runtime_error(
           "AmrSystemCoupler: block_levels must have one level vector per block "
@@ -271,7 +259,7 @@ class AmrSystemCoupler {
   std::vector<AmrLevelMP>& levels(std::size_t b) { return block_levels_[b]; }
   MultiFab& coarse(std::size_t b) { return block_levels_[b][0].U; }
   const MultiFab& coarse(std::size_t b) const { return block_levels_[b][0].U; }
-  // number of Poisson solves of the last step(): diagnostic of the cadence.
+  // Number of Poisson solves since construction.
   int solve_count() const { return solve_count_; }
 
   // sync_down (per block) + coarse system Poisson + coarse aux + fine injection.
@@ -321,133 +309,6 @@ class AmrSystemCoupler {
     fill_bz();
   }
 
-  // Advances the system by one step. Explicit blocks: advance_amr with their Disc and their
-  // species substeps. Implicit / IMEX blocks: delegated to the callback (coupler, block,
-  // levels, dt), Newton / IMEX branch point (default AmrImplicitSourceStepper).
-  /// Advances the system by one macro-step dt. Explicit blocks via advance_amr (their Disc + substeps);
-  /// implicit/IMEX blocks delegated to @p implicit_advance (coupler, block, levels, dt). The per-block
-  /// cadence (stride) holds a slow block then catches it up (hold-then-catch-up).
-  template <class ImplicitAdvance>
-  void step(Real dt, ImplicitAdvance&& implicit_advance) {
-    solve_count_ = 0;
-    solve_fields();
-    std::size_t b = 0;
-    system_.for_each_block([&](auto& block) {
-      using Block = std::decay_t<decltype(block)>;
-      using Disc = typename Block::Spatial;
-      constexpr TimeTreatment treatment = block_time_treatment_v<Block>;
-      constexpr int n = block_substeps_v<Block>;
-      constexpr int stride = block_stride_v<Block>;
-      const std::size_t bi = b++;
-      // HOLD-THEN-CATCH-UP cadence (add_block doc, sec.8.2 C): the block is HELD at the
-      // macro-steps 0..stride-2 and catches up at macro-step stride-1 (when
-      // (macro_step_+1) % stride == 0). Avoids a slow block advancing ahead
-      // at the first macro-step (macro_step_=0, old condition 0%stride==0 true),
-      // which put the slow block IN THE FUTURE relative to the fast blocks.
-      // stride=1: (macro_step_+1)%1==0 always true -> every step, bit-identical.
-      if ((macro_step_ + 1) % stride != 0)
-        return;
-      const Real bdt = dt * static_cast<Real>(stride);
-      auto& levels = block_levels_[bi];
-      if constexpr (treatment == TimeTreatment::Explicit) {
-        const Real h = bdt / static_cast<Real>(n);
-        for (int s = 0; s < n; ++s) {
-          // PerSubstep: re-solves phi before each subsequent substep (the charge has
-          // moved); the first reuses the head solve. OncePerStep: phi frozen.
-          if (cadence_ == PoissonCadence::PerSubstep && s > 0)
-            solve_fields();
-          advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
-              block.model, levels, dom_, h, base_per_, replicated_coarse_, false, false,
-              NewtonOptions{}, AmrTimeMethod::kEuler, Real(0), kWenoEpsilon, false, nullptr,
-              fill_patch_plans_[bi] ? &*fill_patch_plans_[bi] : nullptr,
-              average_down_plans_[bi] ? &*average_down_plans_[bi] : nullptr);
-        }
-      } else if constexpr (treatment == TimeTreatment::Implicit ||
-                           treatment == TimeTreatment::IMEX) {
-        // IMEX = true forward-backward (Codex review 9.1): explicit transport by the
-        // AMR engine on a SOURCE-FREE model (-div F only), then implicit source by
-        // the callback. Pure implicit: everything to the callback (no transport).
-        if constexpr (treatment == TimeTreatment::IMEX)
-          advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
-              SourceFreeModel<typename Block::Model>{block.model}, levels, dom_, bdt, base_per_,
-              replicated_coarse_, false, false, NewtonOptions{}, AmrTimeMethod::kEuler, Real(0),
-              kWenoEpsilon, false, nullptr,
-              fill_patch_plans_[bi] ? &*fill_patch_plans_[bi] : nullptr,
-              average_down_plans_[bi] ? &*average_down_plans_[bi] : nullptr);
-        implicit_advance(*this, block, levels, bdt);
-      }
-    });
-    ++macro_step_;
-  }
-
-  // Overload for a fully explicit system.
-  /// Overload for a FULLY explicit system (static_assert if an implicit/IMEX block goes through it).
-  void step(Real dt) {
-    step(dt, [](auto&, auto& block, auto&, Real) {
-      using Block = std::decay_t<decltype(block)>;
-      static_assert(detail::amr_always_false_v<Block>,
-                    "AmrSystemCoupler::step(dt) cannot advance an "
-                    "implicit/IMEX block without a callback");
-    });
-  }
-
-  // Inter-species coupling source on AMR (parity with SystemCoupler, Codex review
-  // 9.5): forward-Euler splitting applied PER LEVEL. We refresh phi (aux per
-  // level) then, at each level k, we temporarily re-point each block to its
-  // level k and let the source read all the blocks + aux[k]. NoCoupledSource => no-op.
-  template <class CoupledSource>
-  void coupled_source_step(CoupledSource&& src, Real dt) {
-    static_assert(CoupledSourceFor<std::decay_t<CoupledSource>, System>,
-                  "coupled_source_step expects a CoupledSource: apply(system, aux, dt)");
-    solve_fields();
-    for (int k = 0; k < nlev_; ++k) {
-      std::size_t b = 0;
-      MultiFab* saved[System::n_blocks == 0 ? 1 : System::n_blocks];
-      system_.for_each_block([&](auto& block) {
-        saved[b] = block.state;
-        block.state = &block_levels_[b][k].U;
-        ++b;
-      });
-      src.apply(system_, aux_[k], dt);
-      b = 0;
-      system_.for_each_block([&](auto& block) { block.state = saved[b++]; });
-    }
-    // COVERAGE INVARIANT: the source was applied independently on EACH
-    // level, so a coarse cell COVERED by a fine patch now carries its
-    // own coarse source, unrelated to the source seen by its fine children. A
-    // covered coarse cell must, by definition, be the 2x2 average of its children
-    // (it does not represent matter on its own, it is a coarse view of the fine).
-    // We restore this consistency by a fine -> coarse cascade identical to that of
-    // solve_fields and of the transport-IMEX path (subcycle_level_mp). Without it, the
-    // amr_mass diagnostic (which sums only the coarse level) counts a ghost coarse source
-    // under the patch. Single-level hierarchy: no covered cell, the loop
-    // does not execute -> strictly bit-identical to history.
-    for (std::size_t block = 0; block < block_levels_.size(); ++block) {
-      auto& levels = block_levels_[block];
-      auto& plan = average_down_plans_.at(block);
-      if (!plan)
-        throw std::logic_error("AMR system average-down plan was not prepared");
-      for (int k = nlev_ - 1; k >= 1; --k)
-        mf_average_down_mb(levels[k].U, levels[k - 1].U, plan->transition_for_child(k),
-                           plan->topology_generation(), world_communicator_view());
-    }
-  }
-
-  void average_down_prepared(std::vector<AmrLevelMP>& levels) {
-    const auto found = std::find_if(
-        block_levels_.begin(), block_levels_.end(),
-        [&levels](const std::vector<AmrLevelMP>& candidate) { return &candidate == &levels; });
-    if (found == block_levels_.end())
-      throw std::invalid_argument("AMR system average-down received a foreign hierarchy");
-    const std::size_t block = static_cast<std::size_t>(std::distance(block_levels_.begin(), found));
-    auto& plan = average_down_plans_.at(block);
-    if (!plan)
-      throw std::logic_error("AMR system average-down plan was not prepared");
-    for (int level = nlev_ - 1; level >= 1; --level)
-      mf_average_down_mb(levels[level].U, levels[level - 1].U, plan->transition_for_child(level),
-                         plan->topology_generation(), world_communicator_view());
-  }
-
   // mass of component 0 of the coarse level of block b (sum u*dV over local fabs;
   // replicated coarse -> local sum = total, otherwise all_reduce).
   Real mass(std::size_t b) const {
@@ -480,17 +341,11 @@ class AmrSystemCoupler {
               detail::ConservativeCellFillRegion::ValidAndGhost, periodicity,
               transfer_topology_generation_, communicator));
     }
-    std::vector<std::optional<PreparedAmrFillPatchPlan>> fill_patch(block_levels_.size());
     std::vector<std::optional<PreparedAmrAverageDownPlan>> average_down(block_levels_.size());
-    for (std::size_t block = 0; block < block_levels_.size(); ++block) {
-      fill_patch[block].emplace(PreparedAmrFillPatchPlan::prepare(block_levels_[block], dom_,
-                                                                  base_per_, replicated_coarse_,
-                                                                  transfer_topology_generation_));
+    for (std::size_t block = 0; block < block_levels_.size(); ++block)
       average_down[block].emplace(
           PreparedAmrAverageDownPlan::prepare(block_levels_[block], transfer_topology_generation_));
-    }
     aux_transfer_workspaces_.swap(prepared);
-    fill_patch_plans_.swap(fill_patch);
     average_down_plans_.swap(average_down);
   }
 
@@ -498,8 +353,8 @@ class AmrSystemCoupler {
   RhsAssembler rhs_assembler_;
   // Width of the SHARED aux channel: maximum of aux_comps<Model> over all the blocks (at least
   // kAuxBaseComps). The shared channel per level must be at least as wide as the most demanding
-  // block so that load_aux<aux_comps<Model>> never reads out of bound in the AMR paths
-  // (compute_face_fluxes, mf_apply_source, ...); a less demanding block simply ignores the extra
+  // block so that load_aux<aux_comps<Model>> never reads out of bound in AMR spatial operators; a
+  // less demanding block simply ignores the extra
   // components. Exact analog of SystemAssembler::system_aux_comps (non-AMR path). Without a
   // block with an extra field, the width stays 3 -> allocation strictly bit-identical to history.
   static int system_aux_comps(const System& sys) {
@@ -515,8 +370,8 @@ class AmrSystemCoupler {
   // Populates the aux B_z component (index kAuxBaseComps) of the shared channel of EACH level from
   // bz_(x, y). B_z is static (external to the elliptic): set once (at the ctor / set_bz),
   // preserved by solve_fields (field_postprocess only writes phi/grad, comp 0..2; we re-set
-  // after the coarse->fine injection which would copy a coarse B_z) and by the advance (the
-  // AMR engine does not touch the aux). Each level has ITS geometry: level k = geom_.refine(1 << k),
+  // after the coarse->fine injection which would copy a coarse B_z) and by Program execution
+  // (spatial state updates do not touch aux). Each level has ITS geometry: level k = geom_.refine(1 << k),
   // same physical extents but refined index domain, so x_cell/y_cell point to the physical
   // center of the FINE cell. We fill the GROWN box (valid + halos) directly from
   // bz_(x, y): bz_ being a pure function of the physical position, its evaluation at the ghost
@@ -543,9 +398,7 @@ class AmrSystemCoupler {
   Periodicity base_per_;
   BCRec bcPhi_, aux_bc_;
   bool replicated_coarse_;
-  PoissonCadence cadence_;
   mutable int solve_count_ = 0;
-  int macro_step_ = 0;  // macro-step counter (per-block stride cadence)
   DistributionMapping coarse_mapping_;
   Elliptic mg_;
   std::vector<std::vector<AmrLevelMP>> block_levels_;  // [block][level]
@@ -553,43 +406,11 @@ class AmrSystemCoupler {
   std::uint64_t transfer_topology_generation_ = 1;
   std::vector<std::optional<detail::PreparedConservativeLinearTransferWorkspace>>
       aux_transfer_workspaces_;
-  std::vector<std::optional<PreparedAmrFillPatchPlan>> fill_patch_plans_;
   std::vector<std::optional<PreparedAmrAverageDownPlan>> average_down_plans_;
   int aux_ncomp_ =
       kAuxBaseComps;  // width of the shared aux channel (max aux_comps over the blocks)
   int nlev_ = 0;
   ScalarFieldProvider2D bz_;  // prepared external B_z(x, y) (empty if not provided)
 };
-
-// Default implicit on AMR: backward-Euler (Newton) on the model source, applied
-// to EACH level of the block hierarchy. AMR pendant of ImplicitSourceStepper; same
-// stability (unconditional for a linear relaxation). No solver on the user side.
-/// Default implicit callback for AmrSystemCoupler::step: backward-Euler (Newton) on the model source,
-/// applied to EACH level of the hierarchy, followed by a fine -> coarse cascade
-/// (coverage consistency, cf. coupled_source_step). @p iters: Newton iterations per stage.
-struct AmrImplicitSourceStepper {
-  int iters = 2;
-
-  template <class Coupler, class Block, class Levels>
-  void operator()(Coupler& coupler, Block& block, Levels& levels, Real dt) const {
-    const int nlev = static_cast<int>(levels.size());
-    for (int k = 0; k < nlev; ++k)
-      backward_euler_source(block.model, coupler.aux(k), levels[k].U, dt, iters);
-    // COVERAGE INVARIANT (cf. coupled_source_step): the implicit source was
-    // solved independently level by level, so the COVERED coarse cells
-    // carry a ghost coarse source instead of the 2x2 average of their fine
-    // children. We restore consistency by the same fine -> coarse cascade as the
-    // transport-IMEX path, so that a covered coarse cell stays the coarse view of the fine
-    // (otherwise amr_mass, sum of only the coarse level, double-counts the patch source).
-    // Single-level: no covered cell, empty loop -> bit-identical to history.
-    coupler.average_down_prepared(levels);
-  }
-};
-
-// "Advancing" alias (tutor feedback sec.8.2 B, sec.9.6): AmrSystemCoupler assembles (system
-// Poisson + aux per level) AND advances (step, reflux, subcycling). Splitting into two classes is
-// cosmetic and deferred (the unified class is validated bit-identical).
-template <CoupledSystemLike System, class RhsAssembler, class Elliptic = GeometricMG>
-using AmrSystemDriver = AmrSystemCoupler<System, RhsAssembler, Elliptic>;
 
 }  // namespace pops

@@ -14,11 +14,13 @@ facade AmrSystem.add_equation. It checks, on the compiled .so path:
   (1) NO LONGER RAISES: add_equation(positivity_floor > 0) no longer raises (it used to) and, on the
       1e6-contrast oscillating top-hat advected at u=1 (where weno5 reconstructs a negative face density),
       the floored .so run stays FINITE. The load-bearing claim (an unfloored run diverging on the same
-      spike) is covered on the System path by tests/cpp/unit/numerics/test_positivity_floor.cpp and on a refined AMR C/F
-      interface by tests/cpp/integration/amr/test_amr_positivity_floor.cpp; it is not asserted here since it
-      depended on the pre-ADC-324 never-tagged seed of set_refinement(1e30) (now a mono-level hierarchy),
-      leaving a coarse-only grid on which the demo is not robust. The floor still rides the compiled
-      loader -- exercised by (2)'s dmax==0 marshalling check and (3)'s multi-block routing.
+      spike) is covered on the System path by tests/cpp/unit/numerics/test_positivity_floor.cpp;
+      refined AMR C/F ghost flooring is covered by tests/cpp/integration/amr/test_cf_interface.cpp.
+      The full refined Program trajectory is covered by
+      tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp instead of depending on this
+      pre-ADC-324 never-tagged seed of set_refinement(1e30), which is now mono-level. The floor still
+      rides the compiled loader -- exercised by (2)'s dmax==0 marshalling check and (3)'s multi-block
+      routing.
   (2) BIT-IDENTICAL AT floor=0: on a smooth strictly-positive drifting state, the compiled run with
       positivity_floor > 0 is BIT-IDENTICAL (dmax == 0) to positivity_floor = 0 -- the floor never bites
       a face above it, so the regenerated loader is a no-default-change at floor 0.
@@ -31,6 +33,7 @@ uniform and refined-AMR coverage in the dedicated C++ positivity tests.
 Needs a C++ compiler + the pops headers + POPS_KOKKOS_ROOT (the production loader is Kokkos-only):
 auto-skips (exit 0) without a compiler, like test_dsl_production_amr. Validated under CI (ci-kokkos*).
 """
+
 from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction import WENO5
@@ -46,10 +49,11 @@ from pops.codegen.loader import CompiledModel
 from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_ssprk2_program
 
 from tests.python.support.requirements import repo_include
 
-CS2 = 0.25       # isothermal sound speed^2 (p = cs2 rho): flooring rho floors the pressure
+CS2 = 0.25  # isothermal sound speed^2 (p = cs2 rho): flooring rho floors the pressure
 N = 48
 DT = 0.0008
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
@@ -76,10 +80,8 @@ def build_iso_model():
     v = rhov / rho
     pu = m.primitive("u", u)
     pv = m.primitive("v", v)
-    m.flux(x=[rhou, rhou * pu + CS2 * rho, rhou * pv],
-           y=[rhov, rhov * pu, rhov * pv + CS2 * rho])
-    m.eigenvalues(x=[pu - sqrt(CS2), pu, pu + sqrt(CS2)],
-                  y=[pv - sqrt(CS2), pv, pv + sqrt(CS2)])
+    m.flux(x=[rhou, rhou * pu + CS2 * rho, rhou * pv], y=[rhov, rhov * pu, rhov * pv + CS2 * rho])
+    m.eigenvalues(x=[pu - sqrt(CS2), pu, pu + sqrt(CS2)], y=[pv - sqrt(CS2), pv, pv + sqrt(CS2)])
     m.primitive_vars(rho, pu, pv)
     m.conservative_from([rho, rho * pu, rho * pv])
     m.elliptic_rhs(0.0 * rho)
@@ -90,7 +92,7 @@ def spike_state():
     """1e6-contrast top-hat in x (rho = 1 in the central band, 1e-6 outside) with a non-monotone
     oscillating spike at x ~ 3/4, advected at u = 1. set_conservative_state expects (ncomp, n, n)."""
     rho = np.full((N, N), 1e-6)
-    rho[:, N // 3:2 * N // 3] = 1.0
+    rho[:, N // 3 : 2 * N // 3] = 1.0
     ks = 3 * N // 4
     rho[:, ks] = 0.8
     rho[:, ks + 1] = 0.5
@@ -114,10 +116,14 @@ def compiled_single(cm, pf, state):
     s = AmrSystem(n=N, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)
-    s.add_equation("gas", cm,
-                   spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
-                   time=engine.Explicit())
+    s.add_equation(
+        "gas",
+        cm,
+        spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
+        time=engine.Explicit(),
+    )
     s.set_conservative_state("gas", state)
+    install_ssprk2_program(s)
     for _ in range(38):
         s.step(DT)
     return np.asarray(s.density("gas"))
@@ -126,14 +132,18 @@ def compiled_single(cm, pf, state):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        require_native_or_skip('skip  no C++ compiler or pops headers')
+        require_native_or_skip("skip  no C++ compiler or pops headers")
         print("test_amr_compiled_positivity_floor : OK (nothing to compile)")
         return
 
     tmp = tempfile.mkdtemp()
     try:
-        cm = build_iso_model().compile(os.path.join(tmp, "iso_floor_amr.so"), INCLUDE,
-                                       backend="production", target="amr_system")
+        cm = build_iso_model().compile(
+            os.path.join(tmp, "iso_floor_amr.so"),
+            INCLUDE,
+            backend="production",
+            target="amr_system",
+        )
         assert isinstance(cm, CompiledModel)
         assert cm.backend == "production" and cm.target == "amr_system"
 
@@ -141,22 +151,32 @@ def main():
         # ADC-341/ADC-324: set_refinement(1e30) is now a MONO-LEVEL hierarchy (no seed fine patch). The
         # historical "unfloored .so run blows up" assertion relied on the never-tagged 1e30 seed and is
         # not robust on the resulting coarse-only grid (neither floored nor unfloored diverges there); the
-        # load-bearing property is covered on System by tests/cpp/unit/numerics/test_positivity_floor.cpp and on a refined
-        # AMR C/F interface by tests/cpp/integration/amr/test_amr_positivity_floor.cpp. Here we keep the
+        # load-bearing property is covered on System by tests/cpp/unit/numerics/test_positivity_floor.cpp;
+        # refined AMR C/F ghost flooring is covered by tests/cpp/integration/amr/test_cf_interface.cpp.
+        # The complete refined Program trajectory is covered by
+        # tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp. Here we keep the
         # compiled-facade contract: floor>0 is accepted (previously raised at add_equation) and the
         # floored .so run stays finite. That the floor actually rides the loader is proven by (2)'s
         # dmax==0 marshalling check and (3)'s multi-block routing.
-        print("== (1) compiled .so: positivity_floor>0 accepted + floored run finite on the contrast-1e6 spike ==")
-        d_on = compiled_single(cm, 1e-8, spike_state())   # previously raised ValueError at add_equation
-        chk(np.all(np.isfinite(d_on)),
-            "compiled add_equation(positivity_floor>0) accepted + finite over 38 steps")
+        print(
+            "== (1) compiled .so: positivity_floor>0 accepted + floored run finite on the contrast-1e6 spike =="
+        )
+        d_on = compiled_single(
+            cm, 1e-8, spike_state()
+        )  # previously raised ValueError at add_equation
+        chk(
+            np.all(np.isfinite(d_on)),
+            "compiled add_equation(positivity_floor>0) accepted + finite over 38 steps",
+        )
 
         # --- (2) bit-identical at floor=0: smooth positive drift -> floor ON == floor OFF -------------
         print("== (2) no-default-change: compiled floor>0 == floor=0 on smooth positive data ==")
         da = compiled_single(cm, 0.0, smooth_state())
         db = compiled_single(cm, 1e-8, smooth_state())
-        chk(float(np.abs(da - db).max()) == 0.0,
-            "compiled floor>0 bit-identical to floor=0 on smooth state (dmax==0)")
+        chk(
+            float(np.abs(da - db).max()) == 0.0,
+            "compiled floor>0 bit-identical to floor=0 on smooth state (dmax==0)",
+        )
         chk(np.all(np.isfinite(db)), "floored compiled smooth run finite")
 
         # --- (3) multi-block: the floor rides the AmrCompiledBlockBuilder slot too --------------------
@@ -165,15 +185,19 @@ def main():
         # routing than (1)-(2)). set_conservative_state is single-block only, so seed the density from
         # the smooth profile above (u=0). The floor stays inactive, while the exact effective-options
         # report authenticates its value and the five native steps exercise the compiled builder arity.
-        print("== (3) multi-block compiled: positivity_floor threaded through AmrCompiledBlockBuilder ==")
+        print(
+            "== (3) multi-block compiled: positivity_floor threaded through AmrCompiledBlockBuilder =="
+        )
         density = smooth_state()[0]
         sm = AmrSystem(n=N, L=1.0, periodicity=(True, True))
         sm.set_temporal_relations([2], [1], ["integral_only"])
         sm.set_refinement(1e30)
-        sm.add_equation("a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
-                                                     positivity_floor=1e-8))
-        sm.add_equation("b", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
-                                                     positivity_floor=1e-8))
+        sm.add_equation(
+            "a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8)
+        )
+        sm.add_equation(
+            "b", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8)
+        )
         sm.set_density("a", density.copy())
         sm.set_density("b", density.copy())
         effective_blocks = sm.effective_options_report()["blocks"]
@@ -183,10 +207,17 @@ def main():
             and all(row["positivity_floor"] == 1e-8 for row in effective_blocks),
             "multi-block compiled floor: exact native options retained",
         )
+        install_ssprk2_program(sm)
         for _ in range(5):
             sm.step(DT)
-        chk(np.all(np.isfinite(np.asarray(sm.density("a")))), "multi-block compiled floor: block a finite")
-        chk(np.all(np.isfinite(np.asarray(sm.density("b")))), "multi-block compiled floor: block b finite")
+        chk(
+            np.all(np.isfinite(np.asarray(sm.density("a")))),
+            "multi-block compiled floor: block a finite",
+        )
+        chk(
+            np.all(np.isfinite(np.asarray(sm.density("b")))),
+            "multi-block compiled floor: block b finite",
+        )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

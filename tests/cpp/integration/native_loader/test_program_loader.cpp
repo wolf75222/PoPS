@@ -21,13 +21,16 @@
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <pops/runtime/program/cache_manager.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <exception>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -72,7 +75,10 @@ void add_gas(System& s) {
 // The generated problem.so: a Forward-Euler Program installed via ProgramContext. This is exactly the
 // source the Phase 2c-ii codegen will emit (here hand-written for an autonomous C++ test). The ABI key
 // is the preprocessor LITERAL (not the inline abi_key_string(), which would be interposed via RTLD).
-std::string loader_source(bool include_block_identities = true) {
+std::string loader_source(bool include_block_identities = true, bool install_step = true,
+                          bool incomplete_dt_bound = false,
+                          const std::string& dynamic_boundary_slot = {},
+                          bool register_history = false) {
   // clang-format off
   std::string source = R"CPP(
 #include <pops/runtime/program/program_context.hpp>
@@ -107,9 +113,23 @@ extern "C" int pops_program_block_count() { return 1; }
 extern "C" const char* pops_program_block_name(int i) { return i == 0 ? "gas" : ""; }
 )CPP";
   }
-  source += R"CPP(
+  if (incomplete_dt_bound) {
+    source += R"CPP(
+extern "C" bool pops_program_has_dt_bound() { return true; }
+)CPP";
+  }
+  if (install_step) {
+    source += R"CPP(
 extern "C" void pops_install_program(void* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
+)CPP";
+    if (register_history) {
+      source += R"CPP(
+  ctx.register_history("artifact.history", 1, 1, 0, "test:artifact/state",
+                       "test:artifact/space", "clock.macro", "test:artifact/interp");
+)CPP";
+    }
+    source += R"CPP(
   ctx.configure_primary_clock("clock.macro");
   ctx.install([ctx](double dt) {
     ctx.begin_step(dt);
@@ -124,6 +144,40 @@ extern "C" void pops_install_program(void* sys) {
   });
 }
 )CPP";
+  } else {
+    source += R"CPP(
+extern "C" void pops_install_program(void* sys) {
+  pops::runtime::program::ProgramContext ctx(sys);
+  ctx.register_history("poison", 1, 1, 0, "test:poison/state", "test:poison/space",
+                       "clock.macro", "test:poison/interp");
+}
+)CPP";
+  }
+  if (!dynamic_boundary_slot.empty()) {
+    source += R"CPP(
+namespace {
+void prepare_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, const pops::Geometry&,
+                               const pops::FieldBoundaryExecutionContext&) {}
+void add_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, const pops::Geometry&,
+                           const pops::FieldBoundaryExecutionContext&) {}
+}  // namespace
+extern "C" void pops_install_field_boundaries(void* sys) {
+  pops::runtime::program::ProgramContext ctx(sys);
+  ctx.set_field_boundary_kernel(
+)CPP";
+    source += "\"" + dynamic_boundary_slot + "\"";
+    source += R"CPP(,
+      pops::CompiledFieldBoundaryKernel{"test:program-boundary",
+                                        "test:program-boundary-residual",
+                                        "",
+                                        prepare_boundary_residual,
+                                        nullptr,
+                                        add_boundary_residual,
+                                        nullptr,
+                                        false});
+}
+)CPP";
+  }
   // clang-format on
   return source;
 }
@@ -162,6 +216,12 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   const std::string so = tmp + ".so";
   const std::string legacy_src = tmp + "_missing_block_identities.cpp";
   const std::string legacy_so = tmp + "_missing_block_identities.so";
+  const std::string no_op_src = tmp + "_no_op_installer.cpp";
+  const std::string no_op_so = tmp + "_no_op_installer.so";
+  const std::string incomplete_dt_src = tmp + "_incomplete_dt.cpp";
+  const std::string incomplete_dt_so = tmp + "_incomplete_dt.so";
+  const std::string dynamic_boundary_src = tmp + "_dynamic_boundary.cpp";
+  const std::string dynamic_boundary_so = tmp + "_dynamic_boundary.so";
   {
     std::ofstream f(src);
     f << loader_source();
@@ -169,6 +229,18 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   {
     std::ofstream f(legacy_src);
     f << loader_source(false);
+  }
+  {
+    std::ofstream f(no_op_src);
+    f << loader_source(true, false);
+  }
+  {
+    std::ofstream f(incomplete_dt_src);
+    f << loader_source(true, true, true);
+  }
+  {
+    std::ofstream f(dynamic_boundary_src);
+    f << loader_source(true, true, false, "program-boundary-field", true);
   }
   const auto package = pops::test::native_dso::compile_shared(src, so);
   if (!package.ok) {
@@ -179,6 +251,26 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   if (!legacy_package.ok) {
     pops::test::native_dso::report_compile_failure("test_program_loader legacy package",
                                                    legacy_package);
+    return 1;
+  }
+  const auto no_op_package = pops::test::native_dso::compile_shared(no_op_src, no_op_so);
+  if (!no_op_package.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_loader no-op package",
+                                                   no_op_package);
+    return 1;
+  }
+  const auto incomplete_dt_package =
+      pops::test::native_dso::compile_shared(incomplete_dt_src, incomplete_dt_so);
+  if (!incomplete_dt_package.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_loader incomplete-dt package",
+                                                   incomplete_dt_package);
+    return 1;
+  }
+  const auto dynamic_boundary_package =
+      pops::test::native_dso::compile_shared(dynamic_boundary_src, dynamic_boundary_so);
+  if (!dynamic_boundary_package.ok) {
+    pops::test::native_dso::report_compile_failure("test_program_loader dynamic-boundary package",
+                                                   dynamic_boundary_package);
     return 1;
   }
 
@@ -202,12 +294,135 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     }
   }
 
+  // A prelude-only installer that registers a history but omits the Program step must not inherit its
+  // candidate block map/history or replace an already usable direct step. The loader's generation
+  // witness fails and restores the exact image.
+  System no_op(cfg);
+  add_gas(no_op);
+  no_op.install_program_step([](double) {});
+  no_op.program_cache().store(7, no_op.block_state(0), 0, "kept-cache");
+  no_op.record_program_diagnostic("kept-diagnostic", Real(2.5));
+  const auto histories_before_no_op = no_op.history_names();
+  try {
+    no_op.install_program(no_op_so);
+    std::printf("FAIL no-op artifact installer was accepted\\n");
+    ++fails;
+  } catch (const std::runtime_error& e) {
+    if (std::string(e.what()).find("exactly one new unverified") == std::string::npos) {
+      std::printf("FAIL no-op installer diagnostic: %s\\n", e.what());
+      ++fails;
+    }
+  }
+  if (!no_op.program_block_map().empty()) {
+    std::printf("FAIL no-op installer leaked its candidate block map\\n");
+    ++fails;
+  }
+  if (no_op.history_names() != histories_before_no_op) {
+    std::printf("FAIL no-op installer leaked its candidate history ring\\n");
+    ++fails;
+  }
+  if (no_op.program_cache_nodes() != std::vector<int>{7} ||
+      no_op.program_diagnostics() != std::map<std::string, Real>{{"kept-diagnostic", Real(2.5)}}) {
+    std::printf("FAIL prelude-only installer did not restore cache/diagnostics\\n");
+    ++fails;
+  }
+  try {
+    no_op.step(dt);
+  } catch (const std::exception& e) {
+    std::printf("FAIL no-op installer did not restore the prior Program: %s\\n", e.what());
+    ++fails;
+  }
+
+  // A declared-but-missing dt-bound entry is rejected before any candidate facade state is
+  // installed. Falling back to the native CFL would silently change the authored numerics.
+  System incomplete_dt(cfg);
+  add_gas(incomplete_dt);
+  incomplete_dt.install_program_step([](double) {});
+  try {
+    incomplete_dt.install_program(incomplete_dt_so);
+    std::printf("FAIL incomplete dt-bound artifact was accepted\\n");
+    ++fails;
+  } catch (const std::runtime_error& e) {
+    const std::string message = e.what();
+    if (message.find("declares a dt bound") == std::string::npos ||
+        message.find("pops_program_dt_bound") == std::string::npos) {
+      std::printf("FAIL incomplete dt-bound diagnostic: %s\\n", message.c_str());
+      ++fails;
+    }
+  }
+  if (!incomplete_dt.program_block_map().empty()) {
+    std::printf("FAIL incomplete dt-bound preflight mutated the block map\\n");
+    ++fails;
+  }
+
+  // Program-owned field-boundary kernels are an artifact overlay, not durable System authoring.
+  // Replacing artifact A (dynamic boundary export) with artifact B (no export) must therefore
+  // restore the static baseline. The FFT provider is a useful witness: it rejects A's dynamic
+  // boundary, but accepts the same periodic field plan once B has removed that overlay.
+  {
+    System replacement(cfg);
+    add_gas(replacement);
+    constexpr const char* slot = "program-boundary-field";
+    replacement.set_field_solver_plan(
+        slot, "test:program-boundary-plan", "test:program-boundary-provider", "test:gas", "gas",
+        "program-boundary-potential", {"test:gas/program-boundary-rhs"}, {"gas"},
+        {"program-boundary-potential"}, {1.0}, "fft");
+    replacement.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
+                                             "test:periodic-cartesian",
+                                             "test:periodic-cartesian:v1");
+    replacement.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
+                                        {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0},
+                                        {0.0, 0.0, 0.0, 0.0});
+    replacement.ensure_aux_width(kAuxNamedBase + 1);
+    replacement.register_elliptic_field("gas", "program-boundary-potential", kAuxNamedBase, -1, -1,
+                                        1);
+    replacement.set_block_elliptic_field("gas", "program-boundary-potential",
+                                         [](const MultiFab&, MultiFab&) {});
+    replacement.set_state("gas", U0);
+
+    replacement.install_program(dynamic_boundary_so);
+    if (replacement.history_names() != std::vector<std::string>{"artifact.history"}) {
+      std::printf("FAIL artifact A did not materialize its qualified history\\n");
+      ++fails;
+    }
+    replacement.program_cache().store(11, replacement.block_state(0), 0, "artifact-A-cache");
+    replacement.record_program_diagnostic("artifact-A-diagnostic", Real(1));
+    try {
+      (void)replacement.solve_fields_from_state(slot, 0, replacement.block_state(0));
+      std::printf("FAIL dynamic-boundary artifact did not install its field kernel\\n");
+      ++fails;
+    } catch (const std::exception& e) {
+      if (std::string(e.what()).find("dynamic boundary") == std::string::npos) {
+        std::printf("FAIL unexpected dynamic-boundary rejection: %s\\n", e.what());
+        ++fails;
+      }
+    }
+
+    replacement.install_program(so);
+    if (!replacement.history_names().empty() || !replacement.program_cache_nodes().empty() ||
+        !replacement.program_diagnostics().empty()) {
+      std::printf("FAIL artifact B retained Program-owned state from artifact A\\n");
+      ++fails;
+    }
+    try {
+      const SolveReport report =
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0));
+      if (!report.solved()) {
+        std::printf("FAIL static replacement field solve returned %s\\n", report.status_name());
+        ++fails;
+      }
+    } catch (const std::exception& e) {
+      std::printf("FAIL static artifact inherited A's dynamic boundary: %s\\n", e.what());
+      ++fails;
+    }
+  }
+
   System sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
   sim.install_program(so);  // dlopen + ABI check + pops_install_program(this)
   const int step0 = sim.macro_step();
-  sim.step(dt);  // SystemStepper dispatches to the installed Program
+  sim.step(dt);  // SystemProgramDriver dispatches to the installed Program
   const std::vector<double> Up = sim.get_state("gas");
 
   double err = 0, change = 0;

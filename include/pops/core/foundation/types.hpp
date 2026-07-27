@@ -34,7 +34,8 @@ using Real = double;
 /// when a block has no wave (frozen transport / null field). WARNING: a system in which ALL
 /// the speeds are null then receives a step ~cfl*h/1e-30, enormous -- that is the historical
 /// behavior assumed (such a step transports nothing); diagnose it via last_dt_bound() ==
-/// "degenerate" on the System side. Shared by System::step_cfl/step_adaptive and AmrRuntime::step_cfl.
+/// "degenerate" on the System side. Shared by System::step_cfl and low-level adaptive/AMR CFL
+/// policies.
 inline constexpr Real kCflSpeedFloor = Real(1e-30);
 
 /// Speed FLOOR for the AMR drift / wave-speed reductions (ADC-643, single source of the scattered

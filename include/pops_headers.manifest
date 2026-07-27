@@ -116,7 +116,6 @@ api pops/numerics/spatial/primitives/positivity.hpp
 api pops/numerics/spatial/primitives/state_access.hpp
 api pops/numerics/spatial/primitives/wave_speed.hpp
 api pops/numerics/spatial_operator.hpp
-api pops/numerics/time/amr/advance/amr_advance.hpp
 api pops/numerics/time/amr/levels/amr_clock.hpp
 api pops/numerics/time/amr/levels/amr_patch_range.hpp
 api pops/numerics/time/amr/levels/amr_subcycling.hpp
@@ -232,5 +231,5 @@ sdk-support pops/runtime/system/system_elliptic_backend.hpp
 sdk-support pops/runtime/system/system_field_solver.hpp
 sdk-support pops/runtime/system/system_lifecycle.hpp
 sdk-support pops/runtime/system/system_poisson_options.hpp
-sdk-support pops/runtime/system/system_stepper.hpp
+sdk-support pops/runtime/system/system_program_driver.hpp
 test-only pops/validation/physics/advection_diffusion.hpp

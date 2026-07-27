@@ -28,6 +28,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.mesh import PolarMesh
 from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_ssprk2_program
 
 RMIN, RMAX = 0.3, 1.0
 
@@ -81,6 +82,7 @@ def _build(nr, nth, riemann, cs2=1.0):
     u0 = _annular_state(nr, nth)
     sim.set_density("ions", u0[0].ravel())     # pose rho (vitesse au repos)
     sim.set_state("ions", u0.ravel())          # injecte la vitesse initiale (mom_r, mom_theta)
+    install_ssprk2_program(sim)
     return sim
 
 

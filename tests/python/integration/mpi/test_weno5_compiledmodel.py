@@ -16,6 +16,7 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_ssprk2_program
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
@@ -125,6 +126,8 @@ def main():
             return sys
 
         p_sys, r_sys = build_prod_step(), build_ref_step()
+        install_ssprk2_program(p_sys)
+        install_ssprk2_program(r_sys)
         dt = 1e-3
         for _ in range(12):
             p_sys.step(dt)

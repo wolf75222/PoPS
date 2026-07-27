@@ -26,6 +26,7 @@ import numpy as np
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.explicit_program import install_forward_euler_program
 
 fails = 0
 
@@ -60,6 +61,7 @@ sim.add_equation("ions", iso_model(n0=float(rho0.mean())),
               time=engine.Explicit())
 sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 sim.set_density("ions", rho0.ravel())
+install_forward_euler_program(sim)
 m0 = sim.mass("ions")
 for _ in range(5):
     dt = sim.step_cfl(0.4)
@@ -98,6 +100,7 @@ amr.add_equation("ions", iso_model(n0=float(amr_rho0.mean())),
               spatial=engine.Spatial(limiter=Minmod(), flux=HLL(), recon=Primitive()),
               time=engine.Explicit())
 amr.set_density("ions", amr_rho0)
+install_forward_euler_program(amr)
 m0 = amr.mass("ions")
 for _ in range(3):
     dt = amr.step_cfl(0.4)

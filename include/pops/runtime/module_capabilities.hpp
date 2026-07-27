@@ -13,9 +13,9 @@
 /// cross-check its descriptor walk against the C++ truth and FAIL LOUD on a disagreement.
 ///
 /// HONESTY (non-negotiable, Spec 5 sec.13.12). A capability is reported TRUE only when a C++ path backs
-/// it. ``supports_partial_imex_mask`` is FALSE: a tree-wide grep finds NO partial-IMEX-mask code path,
-/// so claiming it would be a lie. ``supports_gpu`` is TRUE only under Kokkos AND a real device backend
-/// token (CUDA/HIP); a Kokkos-Serial / OpenMP CPU build reports FALSE. ``supports_stride`` is
+/// it. ``supports_partial_imex_mask`` is FALSE: descriptors may retain the metadata, but no executable
+/// Program primitive consumes it, so claiming support would be a lie. ``supports_gpu`` is TRUE only
+/// under Kokkos AND a real device backend token (CUDA/HIP); a Kokkos-Serial / OpenMP CPU build reports FALSE. ``supports_stride`` is
 /// route-dependent (the installed production package carries a stride while the route-agnostic module
 /// report does not describe one), so the facts are queried per @p target.
 ///
@@ -128,7 +128,7 @@ inline constexpr bool kHasMpi =
 ///   - ``supports_stride`` = true for the production package and false for the route-agnostic
 ///     ``kModule`` query;
 ///   - ``supports_named_fields`` = true (the named-aux transport exists, kAuxNamedBase / aux_field);
-///   - ``supports_partial_imex_mask`` = false (NO C++ path backs it -- reporting true would be a lie).
+///   - ``supports_partial_imex_mask`` = false (no executable Program primitive consumes it).
 inline ModuleCapabilities module_capabilities(CapabilityTarget target = CapabilityTarget::kModule) {
   ModuleCapabilities caps{};
   caps.abi_version = kAbiVersion;
@@ -206,9 +206,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        mpi, gpu, "named aux fields", "native named-field transport"),
       capability_route(
           "supports_partial_imex_mask", status_from_bool(caps.supports_partial_imex_mask),
-          "no C++ route backs a partial IMEX mask", kLayoutRouteTokensCsv, "production", "host",
-          mpi, gpu, "partial IMEX mask", "full source implicit / split routes",
-          "use IMEX/IMEXRK/Split without partial masks"),
+          "no executable C++ Program primitive backs a partial IMEX mask", kLayoutRouteTokensCsv,
+          "production", "host", mpi, gpu, "partial IMEX mask",
+          "typed local implicit Program primitive where implemented",
+          "author an explicit typed Program; AMR currently has no implicit-source primitive"),
       capability_route(
           "supports_custom_communicator", status_from_bool(env.supports_custom_communicator),
           "no C++ route accepts a caller-provided MPI_Comm", kLayoutRouteTokensCsv, "none", "mpi",
@@ -321,7 +322,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format advertises "
                        "its exact supported modes",
                        kLayoutRouteTokensCsv, "runtime", "host|mpi", mpi, gpu),
-      capability_route("checkpoint:accepted_state_v3", "available",
+      capability_route("checkpoint:accepted_state_v5", "available",
                        "single-file strict accepted-state checkpoint; MPI_COMM_WORLD uses one "
                        "rank-0 publication with collective capture and consensus",
                        kLayoutRouteTokensCsv, "runtime", "host|mpi", mpi, gpu),
@@ -329,10 +330,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "parallel HDF5 checkpoint is not a native checkpoint route",
                        kLayoutRouteTokensCsv, "none", "mpi", mpi, gpu,
                        "restartable checkpoint encoded as parallel HDF5",
-                       "strict accepted-state v3 NPZ checkpoint",
+                       "strict accepted-state v5 NPZ checkpoint",
                        "use RuntimeInstance.checkpoint() or the typed Checkpoint consumer"),
       capability_route("checkpoint:amr_dynamic_regrid", status_from_bool(caps.supports_amr),
-                       "strict v3 accepted-state restart; non-Dense history replay keeps rank "
+                       "strict v5 accepted-state restart; non-Dense history replay keeps rank "
                        "count",
                        "amr", "runtime", "host", mpi, gpu),
   };

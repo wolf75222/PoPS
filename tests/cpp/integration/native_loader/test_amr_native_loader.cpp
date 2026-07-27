@@ -4,12 +4,17 @@
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/program/amr_program_context.hpp>
 
 #include "component_abi_test_helpers.hpp"
 #include "native_dso_compiler.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -43,6 +48,8 @@ std::string component_source() {
     int tag_call_count = 0;
     int partial_tag_output = 0;
     const void* last_tag_state_data = nullptr;
+    std::int64_t last_tag_logical_tick = -1;
+    double last_tag_physical_time = -1.0;
 
     int evaluate(void*, const PopsNumericalFluxRequestV1* request, PopsNumericalFluxResultV1* result) {
       const auto* left = static_cast<const double*>(request->left.data);
@@ -89,6 +96,8 @@ std::string component_source() {
     int tag_batch(void*, const PopsTaggerRequestV2* request, PopsComponentStatusV1* status) {
       ++tag_call_count;
       last_tag_state_data = request->states[0].values.data;
+      last_tag_logical_tick = request->logical_time.tick;
+      last_tag_physical_time = request->logical_time.physical_time;
       if ((request->execution_mode != POPS_TAGGER_EXECUTION_NATIVE_BACKEND_V2 &&
            request->execution_mode != POPS_TAGGER_EXECUTION_HOST_V2) ||
           request->collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 ||
@@ -315,6 +324,12 @@ std::string component_source() {
     extern "C" const void* pops_test_last_tag_state_data() {
       return last_tag_state_data;
     }
+    extern "C" std::int64_t pops_test_last_tag_logical_tick() {
+      return last_tag_logical_tick;
+    }
+    extern "C" double pops_test_last_tag_physical_time() {
+      return last_tag_physical_time;
+    }
     extern "C" void pops_test_set_partial_tag_output(int value) {
       partial_tag_output = value;
     }
@@ -422,15 +437,23 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
   using CounterFn = int (*)();
   using SetIntFn = void (*)(int);
   using PointerFn = const void* (*)();
+  using TickFn = std::int64_t (*)();
+  using PhysicalTimeFn = double (*)();
   const auto tag_call_count =
       reinterpret_cast<CounterFn>(pops::dynlib::sym(inspection, "pops_test_tag_call_count"));
   const auto set_partial_tag_output =
       reinterpret_cast<SetIntFn>(pops::dynlib::sym(inspection, "pops_test_set_partial_tag_output"));
   const auto last_tag_state_data =
       reinterpret_cast<PointerFn>(pops::dynlib::sym(inspection, "pops_test_last_tag_state_data"));
+  const auto last_tag_logical_tick =
+      reinterpret_cast<TickFn>(pops::dynlib::sym(inspection, "pops_test_last_tag_logical_tick"));
+  const auto last_tag_physical_time = reinterpret_cast<PhysicalTimeFn>(
+      pops::dynlib::sym(inspection, "pops_test_last_tag_physical_time"));
   ASSERT_NE(tag_call_count, nullptr);
   ASSERT_NE(set_partial_tag_output, nullptr);
   ASSERT_NE(last_tag_state_data, nullptr);
+  ASSERT_NE(last_tag_logical_tick, nullptr);
+  ASSERT_NE(last_tag_physical_time, nullptr);
   {
     auto component = std::make_shared<pops::component::LoadedComponent>(
         pops::component::LoadedComponent::load(library.string(), expected()));
@@ -660,6 +683,264 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
                                  0.25, 0.25, 1.0 / 3.0, false, false, false);
     EXPECT_EQ(dual.refine.count(), 2);
     EXPECT_EQ(dual.coarsen.count(), 10);
+
+    // A direct/restarted Program context must publish its current evaluation coordinate at the
+    // tagger boundary. The facade clock is changed only after the lazy runtime build, so observing
+    // either build-time zero here would prove that stale runtime metadata leaked into regrid.
+    pops::AmrSystemConfig config;
+    config.n = 4;
+    config.ny = 4;
+    config.L = 1.0;
+    config.Ly = 1.0;
+    config.level_count = 2;
+    config.regrid_every = 1;
+    config.periodicity = {true, true};
+    pops::AmrSystem system(config);
+    system.set_temporal_relations({2}, {1}, {"integral_only"});
+    pops::ModelSpec model;
+    model.transport = "compressible";
+    model.source = "none";
+    model.elliptic = "background";
+    model.gamma = 1.4;
+    model.alpha = 0.0;
+    model.n0 = 0.0;
+    system.add_block("gas", model, "minmod", "rusanov", "conservative", "explicit", 1);
+    const std::size_t cells = static_cast<std::size_t>(config.n) * config.ny;
+    std::vector<double> conservative(4u * cells, 0.0);
+    std::fill_n(conservative.data(), cells, 1.0);
+    std::fill_n(conservative.data() + 3u * cells, cells, 2.5);
+    system.set_conservative_state("gas", conservative);
+    system.set_refinement(0.5);
+    pops::runtime::amr::PreparedTaggerSpec context_tagger_spec{
+        "test::direct-context-tagger-provider",
+        kComponentId,
+        kManifestIdentity,
+        "case::direct-context-layout",
+        "amr::refinement",
+        {1, 2, 3, 4, 5},
+        {16, 17, 18},
+        {POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1},
+        POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1,
+        128,
+        POPS_TAGGING_NON_FINITE_REJECT_V1,
+        POPS_TAGGER_EXECUTION_HOST_V2,
+        POPS_TAGGER_COLLECTIVE_NONE_V2,
+        {POPS_MEMORY_SPACE_HOST_V1},
+        2,
+        execution};
+    system.install_amr_tagger_component(std::move(context_tagger_spec), component);
+    ASSERT_TRUE(system.uses_runtime_engine());
+    ASSERT_NE(system.engine(), nullptr);
+    system.set_clock(2.75, 99);
+    pops::runtime::program::AmrProgramContext direct_context(system.engine(), &system);
+    const int direct_calls_before = tag_call_count();
+    direct_context.regrid_if_due(1);
+    EXPECT_GT(tag_call_count(), direct_calls_before);
+    EXPECT_EQ(last_tag_logical_tick(), 1);
+    EXPECT_DOUBLE_EQ(last_tag_physical_time(), 2.75);
+
+    // GLOBAL Program substeps share one public AMR macro-step. They must cover distinct physical
+    // intervals while the head-of-step regrid/tagger runs exactly once, not once per closure call.
+    system.set_clock(3.0, 1);
+    system.set_program_block_map({0});
+    system.set_program_cadence(/*substeps=*/2, /*stride=*/1);
+    pops::runtime::program::AmrProgramContext cadence_context(system.engine(), &system);
+    cadence_context.configure_primary_clock("clock.macro");
+    std::vector<double> cadence_times;
+    std::vector<int> cadence_macro_steps;
+    std::vector<int> cadence_tag_counts;
+    cadence_context.install([&](double step) {
+      cadence_times.push_back(static_cast<double>(cadence_context.physical_time()));
+      cadence_macro_steps.push_back(cadence_context.macro_step());
+      cadence_context.advance_hierarchy(step, [&](double level_step) {
+        cadence_context.set_stage_time(0, 1);
+        pops::MultiFab& state = cadence_context.state(0);
+        pops::MultiFab& rate = cadence_context.rhs_scratch(101, 0, state);
+        cadence_context.rhs_into(0, state, rate, 101);
+        cadence_context.axpy(state, static_cast<pops::Real>(level_step), rate,
+                             static_cast<pops::Real>(level_step), {{1, 1, 1}});
+      });
+      cadence_tag_counts.push_back(tag_call_count());
+    });
+    system.set_program_block_map({0});
+    const int cadence_calls_before = tag_call_count();
+    system.step(0.2);
+    ASSERT_EQ(cadence_times.size(), 2u);
+    ASSERT_EQ(cadence_macro_steps.size(), 2u);
+    ASSERT_EQ(cadence_tag_counts.size(), 2u);
+    EXPECT_NEAR(cadence_times[0], 3.0, 1.0e-14);
+    EXPECT_NEAR(cadence_times[1], 3.1, 1.0e-14);
+    EXPECT_EQ(cadence_macro_steps[0], 1);
+    EXPECT_EQ(cadence_macro_steps[1], 1);
+    EXPECT_GT(cadence_tag_counts[0], cadence_calls_before);
+    EXPECT_EQ(cadence_tag_counts[1], cadence_tag_counts[0]);
+    EXPECT_EQ(last_tag_logical_tick(), 1);
+    EXPECT_DOUBLE_EQ(last_tag_physical_time(), 3.0);
+    EXPECT_NEAR(system.time(), 3.2, 1.0e-14);
+    EXPECT_EQ(system.macro_step(), 2);
+
+    const auto configure_cadenced_system = [&](pops::AmrSystem& target,
+                                               const std::string& provider_identity,
+                                               const std::string& layout_identity) {
+      target.set_temporal_relations({2}, {1}, {"integral_only"});
+      target.add_block("gas", model, "minmod", "rusanov", "conservative", "explicit", 1);
+      target.set_conservative_state("gas", conservative);
+      target.set_refinement(0.5);
+      pops::runtime::amr::PreparedTaggerSpec spec{
+          provider_identity,
+          kComponentId,
+          kManifestIdentity,
+          layout_identity,
+          "amr::refinement",
+          {1, 2, 3, 4, 5},
+          {16, 17, 18},
+          {POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1},
+          POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1,
+          128,
+          POPS_TAGGING_NON_FINITE_REJECT_V1,
+          POPS_TAGGER_EXECUTION_HOST_V2,
+          POPS_TAGGER_COLLECTIVE_NONE_V2,
+          {POPS_MEMORY_SPACE_HOST_V1},
+          2,
+          execution};
+      target.install_amr_tagger_component(std::move(spec), component);
+      ASSERT_TRUE(target.uses_runtime_engine());
+      ASSERT_NE(target.engine(), nullptr);
+      target.set_program_block_map({0});
+    };
+
+    // A stride-two Program closes windows at facade ticks 1, 3, 5, ... but regrid cadence belongs
+    // to the accepted Program clock at the START of each window.  The second window must therefore
+    // tag at tick 2 / t=0.2.  Passing the facade cursor (the old behavior) yields 1, 3, 5 and this
+    // regrid_every=2 fixture never calls the tagger.
+    pops::AmrSystemConfig stride_config = config;
+    stride_config.regrid_every = 2;
+    pops::AmrSystem stride_system(stride_config);
+    configure_cadenced_system(stride_system, "test::stride-window-tagger-provider",
+                              "case::stride-window-layout");
+    stride_system.set_clock(0.0, 0);
+    stride_system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+    pops::runtime::program::AmrProgramContext stride_context(stride_system.engine(),
+                                                             &stride_system);
+    stride_context.configure_primary_clock("clock.macro");
+    std::vector<double> stride_context_times;
+    std::vector<int> stride_context_macro_steps;
+    stride_context.install([&](double step) {
+      stride_context_macro_steps.push_back(stride_context.macro_step());
+      stride_context.advance_hierarchy(step, [&](double level_step) {
+        if (stride_context.level() == 0)
+          stride_context_times.push_back(static_cast<double>(stride_context.physical_time()));
+        stride_context.set_stage_time(0, 1);
+        pops::MultiFab& state_value = stride_context.state(0);
+        pops::MultiFab& rate = stride_context.rhs_scratch(201, 0, state_value);
+        stride_context.rhs_into(0, state_value, rate, 201);
+        stride_context.axpy(state_value, static_cast<pops::Real>(level_step), rate,
+                            static_cast<pops::Real>(level_step), {{1, 1, 1}});
+      });
+    });
+    stride_system.set_program_block_map({0});
+    const int stride_calls_before = tag_call_count();
+    stride_system.step(0.05);  // held
+    stride_system.step(0.15);  // first variable-dt window starts at tick 0
+    EXPECT_EQ(tag_call_count(), stride_calls_before);
+    stride_system.step(0.07);  // held
+    stride_system.step(0.13);  // second window starts at accepted tick 2: regrid is due
+    ASSERT_EQ(stride_context_times.size(), 2u);
+    ASSERT_EQ(stride_context_macro_steps.size(), 2u);
+    EXPECT_NEAR(stride_context_times[0], 0.0, 1.0e-14);
+    EXPECT_NEAR(stride_context_times[1], 0.2, 1.0e-14);
+    EXPECT_EQ(stride_context_macro_steps[0], 0);
+    EXPECT_EQ(stride_context_macro_steps[1], 2);
+    EXPECT_GT(tag_call_count(), stride_calls_before);
+    EXPECT_EQ(last_tag_logical_tick(), 2);
+    EXPECT_NEAR(last_tag_physical_time(), 0.2, 1.0e-14);
+    EXPECT_NEAR(stride_system.time(), 0.4, 1.0e-14);
+    EXPECT_EQ(stride_system.macro_step(), 4);
+
+    // The first GLOBAL substep commits an AMR-context image before the second starts.  If substep
+    // two fails, the facade transaction rolls back farther than that inner image.  A retry must
+    // import the original accepted context, repeat the head-of-window regrid/tagger, and traverse
+    // exactly the same physical coordinates instead of retaining the substep-one marker/clock.
+    pops::AmrSystemConfig retry_config = config;
+    retry_config.regrid_every = 2;
+    pops::AmrSystem retry_system(retry_config);
+    configure_cadenced_system(retry_system, "test::substep-retry-tagger-provider",
+                              "case::substep-retry-layout");
+    retry_system.set_clock(1.25, 2);
+    retry_system.set_program_cadence(/*substeps=*/2, /*stride=*/1);
+    pops::runtime::program::AmrProgramContext retry_context(retry_system.engine(), &retry_system);
+    retry_context.configure_primary_clock("clock.macro");
+    bool reject_second_substep = true;
+    int program_invocation = 0;
+    std::vector<double> retry_context_times;
+    std::vector<int> retry_context_macro_steps;
+    retry_context.install([&](double step) {
+      ++program_invocation;
+      retry_context_macro_steps.push_back(retry_context.macro_step());
+      retry_context.advance_hierarchy(step, [&](double level_step) {
+        if (retry_context.level() == 0)
+          retry_context_times.push_back(static_cast<double>(retry_context.physical_time()));
+        retry_context.set_stage_time(0, 1);
+        pops::MultiFab& state_value = retry_context.state(0);
+        pops::MultiFab& rate = retry_context.rhs_scratch(301, 0, state_value);
+        retry_context.rhs_into(0, state_value, rate, 301);
+        retry_context.axpy(state_value, static_cast<pops::Real>(level_step), rate,
+                           static_cast<pops::Real>(level_step), {{1, 1, 1}});
+        if (reject_second_substep && program_invocation == 2 && retry_context.level() == 0)
+          throw std::runtime_error("intentional second AMR Program substep failure");
+      });
+    });
+    retry_system.set_program_block_map({0});
+
+    const double retry_time_before = retry_system.time();
+    const int retry_macro_before = retry_system.macro_step();
+    const int retry_levels_before = retry_system.engine()->nlev();
+    const int retry_regrids_before = retry_system.checkpoint_regrid_count();
+    const std::uint64_t retry_topology_before = retry_system.checkpoint_topology_epoch();
+    const std::vector<double> retry_state_before = retry_system.engine()->block_level_state(0, 0);
+    const std::vector<std::uint8_t> retry_program_state_before =
+        retry_system.program_accepted_state();
+    const std::uint64_t retry_program_revision_before =
+        retry_system.program_accepted_state_revision();
+    const int retry_calls_before = tag_call_count();
+
+    EXPECT_THROW(retry_system.step(0.2), std::runtime_error);
+    ASSERT_EQ(retry_context_times.size(), 2u);
+    ASSERT_EQ(retry_context_macro_steps.size(), 2u);
+    EXPECT_NEAR(retry_context_times[0], 1.25, 1.0e-14);
+    EXPECT_NEAR(retry_context_times[1], 1.35, 1.0e-14);
+    EXPECT_EQ(retry_context_macro_steps[0], retry_macro_before);
+    EXPECT_EQ(retry_context_macro_steps[1], retry_macro_before);
+    EXPECT_GT(tag_call_count(), retry_calls_before);
+    EXPECT_EQ(last_tag_logical_tick(), retry_macro_before);
+    EXPECT_NEAR(last_tag_physical_time(), retry_time_before, 1.0e-14);
+    EXPECT_DOUBLE_EQ(retry_system.time(), retry_time_before);
+    EXPECT_EQ(retry_system.macro_step(), retry_macro_before);
+    EXPECT_EQ(retry_system.engine()->nlev(), retry_levels_before);
+    EXPECT_EQ(retry_system.checkpoint_regrid_count(), retry_regrids_before);
+    EXPECT_EQ(retry_system.checkpoint_topology_epoch(), retry_topology_before);
+    EXPECT_EQ(retry_system.engine()->block_level_state(0, 0), retry_state_before);
+    EXPECT_EQ(retry_system.program_accepted_state(), retry_program_state_before);
+    EXPECT_EQ(retry_system.program_accepted_state_revision(), retry_program_revision_before);
+    EXPECT_NEAR(static_cast<double>(retry_context.physical_time()), retry_time_before, 1.0e-14);
+
+    reject_second_substep = false;
+    const int retry_calls_after_failure = tag_call_count();
+    retry_system.step(0.2);
+    ASSERT_EQ(retry_context_times.size(), 4u);
+    ASSERT_EQ(retry_context_macro_steps.size(), 4u);
+    EXPECT_NEAR(retry_context_times[2], retry_context_times[0], 1.0e-14);
+    EXPECT_NEAR(retry_context_times[3], retry_context_times[1], 1.0e-14);
+    EXPECT_EQ(retry_context_macro_steps[2], retry_macro_before);
+    EXPECT_EQ(retry_context_macro_steps[3], retry_macro_before);
+    EXPECT_GT(tag_call_count(), retry_calls_after_failure)
+        << "rollback must not retain the failed attempt's automatic-regrid marker";
+    EXPECT_EQ(last_tag_logical_tick(), retry_macro_before);
+    EXPECT_NEAR(last_tag_physical_time(), retry_time_before, 1.0e-14);
+    EXPECT_NEAR(retry_system.time(), retry_time_before + 0.2, 1.0e-14);
+    EXPECT_EQ(retry_system.macro_step(), retry_macro_before + 1);
+    EXPECT_GT(retry_system.checkpoint_regrid_count(), retry_regrids_before);
+    EXPECT_GT(retry_system.checkpoint_topology_epoch(), retry_topology_before);
 
     auto unsupported_hysteresis = program;
     unsupported_hysteresis.min_cycles = 1;
