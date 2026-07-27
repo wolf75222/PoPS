@@ -172,6 +172,7 @@ class ConsensusHierarchyPrepared final : public runtime::program::PreparedHierar
   runtime::program::HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
     return runtime::program::HierarchyTensorSolverExecutionPath::DirectProvider;
   }
+  int level_count() const noexcept override { return 0; }
   MultiFab& assembly_target(std::string_view, int) override {
     throw std::logic_error("report-only MPI provider has no field storage");
   }
@@ -365,8 +366,9 @@ int run_field_plan_consensus(int argc, char** argv) {
   {
     ConsensusHierarchyPrepared solver(SolveReportFault::None);
     try {
-      const SolveReport report = runtime::program::solve_prepared_hierarchy_tensor_collectively(
+      SolveOutcome outcome = runtime::program::solve_prepared_hierarchy_tensor_collectively(
           solver, {Real(1.0e-8), Real(0), 4});
+      const SolveReport report = outcome.consume(SolveConsumption::kAccept);
       require(report.solved());
       require(report.reason == "collective-solved");
     } catch (...) {
@@ -396,7 +398,8 @@ int run_field_plan_consensus(int argc, char** argv) {
   {
     ConsensusAmrFieldPrepared solver(SolveReportFault::None);
     try {
-      const SolveReport report = solve_prepared_amr_field_solver_collectively(solver);
+      SolveOutcome outcome = solve_prepared_amr_field_solver_collectively(solver);
+      const SolveReport report = outcome.consume(SolveConsumption::kAccept);
       require(report.solved());
       require(report.reason == "collective-solved");
     } catch (...) {
@@ -418,6 +421,41 @@ int run_field_plan_consensus(int argc, char** argv) {
     }
     require(rejected);
     require(exact_error);
+  }
+
+  // Consumption is itself a publication collective. A rank-divergent action is rejected before any
+  // rank can accept/reject, and the same intact outcome can then be consumed consistently.
+  {
+    ConsensusHierarchyPrepared solver(SolveReportFault::None);
+    SolveOutcome outcome = runtime::program::solve_prepared_hierarchy_tensor_collectively(
+        solver, {Real(1.0e-8), Real(0), 4});
+    bool rejected = false;
+    try {
+      (void)outcome.consume(rank == 0 ? SolveConsumption::kAccept
+                                     : SolveConsumption::kFailRun);
+    } catch (const std::logic_error& error) {
+      rejected = std::string_view(error.what()) ==
+                 "SolveOutcome consumption action differs between MPI ranks";
+    } catch (...) {
+    }
+    require(rejected);
+    require(outcome.consume(SolveConsumption::kAccept).solved());
+  }
+
+  {
+    ConsensusAmrFieldPrepared solver(SolveReportFault::None);
+    SolveOutcome outcome = solve_prepared_amr_field_solver_collectively(solver);
+    bool rejected = false;
+    try {
+      (void)outcome.consume(rank == 0 ? SolveConsumption::kAccept
+                                     : SolveConsumption::kRejectAttempt);
+    } catch (const std::logic_error& error) {
+      rejected = std::string_view(error.what()) ==
+                 "SolveOutcome consumption action differs between MPI ranks";
+    } catch (...) {
+    }
+    require(rejected);
+    require(outcome.consume(SolveConsumption::kAccept).solved());
   }
 
   // A malformed or divergent elliptic layout is rejected collectively before an arbitrary backend

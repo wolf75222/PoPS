@@ -4,6 +4,7 @@
 // accessors. This TU is a subdivision of system.cpp (state marshaling + field derivation surface).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+#include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
@@ -123,7 +124,7 @@ std::vector<double> System::get_primitive_state(const std::string& name) {
   return prim;
 }
 
-SolveReport System::solve_fields() {
+SolveReport System::solve_fields_in_place_() {
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
   const SolveReport report = p_->solve_fields();
   // ELLIPTIC-SOLVER NATIVE COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43). The opaque
@@ -146,11 +147,11 @@ SolveReport System::solve_fields() {
   return report;
 }
 
-SolveReport System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+SolveReport System::solve_fields_from_state_in_place_(int block_idx, const MultiFab& U_stage) {
   return p_->solve_fields_from_state(block_idx, U_stage);
 }
 
-SolveReport System::solve_fields_from_state_at(
+SolveReport System::solve_fields_from_state_at_in_place_(
     const runtime::multiblock::BoundaryEvaluationPoint& /*point*/,
     const std::string& provider_slot, int block_idx, const MultiFab& U_stage) {
   if (provider_slot.empty())
@@ -163,7 +164,7 @@ SolveReport System::solve_fields_from_state_at(
 // assembles the system Poisson RHS as Sum_s elliptic_rhs_s(U_s) reading EVERY block's stage state at
 // once (U_stages indexed by block index; nullptr -> the block's live state), then re-fills the shared
 // aux. POPS_EXPORT: resolved by a generated problem.so (ProgramContext) across the dlopen boundary.
-POPS_EXPORT SolveReport System::solve_fields_from_blocks(
+POPS_EXPORT SolveReport System::solve_fields_from_blocks_in_place_(
     const std::vector<const MultiFab*>& U_stages) {
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
   const SolveReport report = p_->solve_fields_from_blocks(U_stages);
@@ -182,14 +183,175 @@ POPS_EXPORT SolveReport System::solve_fields_from_blocks(
 // NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve for @p field from block @p block_idx's
 // stage state. Forwards to the field solver, which assembles the per-field RHS (sum of the blocks'
 // named bricks), solves with a dedicated native solver, and writes the field's OWN aux components.
-POPS_EXPORT SolveReport System::solve_fields_from_state(const std::string& field, int block_idx,
-                                                       const MultiFab& U_stage) {
+POPS_EXPORT SolveReport System::solve_fields_from_state_in_place_(
+    const std::string& field, int block_idx, const MultiFab& U_stage) {
   return p_->solve_named_field_from_state(field, block_idx, U_stage);
 }
 
-POPS_EXPORT SolveReport System::solve_fields_from_blocks(
+POPS_EXPORT SolveReport System::solve_fields_from_blocks_in_place_(
     const std::string& field, const std::vector<const MultiFab*>& U_stages) {
   return p_->solve_named_field_from_blocks(field, U_stages);
+}
+
+SolveOutcome System::solve_fields() {
+  return run_field_publication_outcome_([this]() { return solve_fields_in_place_(); });
+}
+
+SolveOutcome System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+  return run_field_publication_outcome_(
+      [this, block_idx, &U_stage]() { return solve_fields_from_state_in_place_(block_idx, U_stage); });
+}
+
+SolveOutcome System::solve_fields_from_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    const std::string& provider_slot, int block_idx, const MultiFab& U_stage) {
+  return run_field_publication_outcome_([this, &point, &provider_slot, block_idx, &U_stage]() {
+    return solve_fields_from_state_at_in_place_(point, provider_slot, block_idx, U_stage);
+  });
+}
+
+SolveOutcome System::solve_fields_from_blocks(
+    const std::vector<const MultiFab*>& U_stages) {
+  return run_field_publication_outcome_(
+      [this, &U_stages]() { return solve_fields_from_blocks_in_place_(U_stages); });
+}
+
+SolveOutcome System::solve_fields_from_state(const std::string& field, int block_idx,
+                                             const MultiFab& U_stage) {
+  return run_field_publication_outcome_([this, &field, block_idx, &U_stage]() {
+    return solve_fields_from_state_in_place_(field, block_idx, U_stage);
+  });
+}
+
+SolveOutcome System::solve_fields_from_blocks(
+    const std::string& field, const std::vector<const MultiFab*>& U_stages) {
+  return run_field_publication_outcome_([this, &field, &U_stages]() {
+    return solve_fields_from_blocks_in_place_(field, U_stages);
+  });
+}
+
+SolveOutcome System::run_field_publication_outcome_(
+    const std::function<SolveReport()>& solve) {
+  begin_field_publication_outcome_();
+  try {
+    return stage_field_publication_outcome_(solve());
+  } catch (...) {
+    rollback_field_publication_transaction();
+    throw;
+  }
+}
+
+void System::begin_field_publication_outcome_() {
+  const bool active_local = p_->field_publication_active_;
+  if (all_reduce_max(active_local ? 1L : 0L) != 0)
+    throw std::logic_error(
+        "System field solves are sequential until their prior SolveOutcome is consumed");
+
+  bool begin_failed_local = false;
+  try {
+    begin_field_publication_transaction();
+  } catch (...) {
+    begin_failed_local = true;
+  }
+  if (all_reduce_max(begin_failed_local ? 1L : 0L) != 0) {
+    rollback_field_publication_transaction();
+    throw std::runtime_error(
+        "System field publication snapshot failed on at least one MPI rank");
+  }
+}
+
+SolveOutcome System::stage_field_publication_outcome_(SolveReport report) {
+  const bool malformed =
+      !solve_report_is_publishable(report, std::numeric_limits<int>::max());
+  if (all_reduce_max(malformed ? 1L : 0L) != 0) {
+    rollback_field_publication_transaction();
+    throw std::runtime_error("System field solver published a malformed SolveReport");
+  }
+  ExactSolveReportConsensusScratch consensus;
+  if (!consensus.agrees(report)) {
+    rollback_field_publication_transaction();
+    throw std::runtime_error("System field solver report differs between MPI ranks");
+  }
+  if (!report.solved_value_available()) {
+    rollback_field_publication_transaction();
+    return SolveOutcome::collective_world(std::move(report));
+  }
+
+  bool stage_failed_local = false;
+  try {
+    stage_field_publication_candidate();
+  } catch (...) {
+    stage_failed_local = true;
+  }
+  if (all_reduce_max(stage_failed_local ? 1L : 0L) != 0) {
+    rollback_field_publication_transaction();
+    throw std::runtime_error(
+        "System field candidate staging failed on at least one MPI rank");
+  }
+  return SolveOutcome::collective_world(
+      std::move(report),
+      SolveOutcome::PublicationHooks{
+          this,
+          [](void* context) {
+            static_cast<System*>(context)->accept_field_publication_candidate();
+          },
+          nullptr,
+          [](void* context) noexcept {
+            try {
+              static_cast<System*>(context)->rollback_field_publication_transaction();
+            } catch (...) {
+              std::terminate();
+            }
+          }});
+}
+
+void System::begin_field_publication_transaction() {
+  if (p_->field_publication_active_)
+    throw std::logic_error(
+        "System field solves are sequential until their publication outcome is consumed");
+  if (p_->accepted_field_publication_)
+    p_->accepted_field_publication_->capture(*p_);
+  else
+    p_->accepted_field_publication_ =
+        std::make_unique<Impl::FieldPublicationSnapshot>(*p_);
+  p_->field_publication_active_ = true;
+  p_->field_publication_candidate_ready_ = false;
+}
+
+void System::stage_field_publication_candidate() {
+  if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
+      p_->field_publication_candidate_ready_)
+    throw std::logic_error("System field publication has no unique active candidate slot");
+  if (p_->candidate_field_publication_)
+    p_->candidate_field_publication_->capture(*p_);
+  else
+    p_->candidate_field_publication_ =
+        std::make_unique<Impl::FieldPublicationSnapshot>(*p_);
+  p_->field_publication_candidate_ready_ = true;
+  p_->accepted_field_publication_->restore(*p_);
+}
+
+void System::accept_field_publication_candidate() {
+  if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
+      !p_->candidate_field_publication_ || !p_->field_publication_candidate_ready_)
+    throw std::logic_error("System field publication has no staged candidate");
+  p_->candidate_field_publication_->restore(*p_);
+  p_->field_publication_candidate_ready_ = false;
+  p_->field_publication_active_ = false;
+}
+
+void System::rollback_field_publication_transaction() {
+  if (!p_->field_publication_active_)
+    return;
+  if (!p_->accepted_field_publication_)
+    std::terminate();
+  p_->accepted_field_publication_->restore(*p_);
+  p_->field_publication_candidate_ready_ = false;
+  p_->field_publication_active_ = false;
+}
+
+bool System::field_publication_transaction_active_() const noexcept {
+  return p_->field_publication_active_;
 }
 
 // Register a named elliptic field (ADC-428): records WHERE the field's solved phi / centered grad land

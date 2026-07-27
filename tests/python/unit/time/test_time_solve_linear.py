@@ -137,6 +137,17 @@ def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
     assert '" action=" +' in src and ".action_name()" in src, src
 
 
+def test_solve_outcome_is_consumed_before_graph_publication(t):
+    src = emit_cpp_program(_solve_program(t, method="cg"))
+    solve = src.index("pops::SolveOutcome kr")
+    guard = src.index(".report().solved_value_available()", solve)
+    accept = src.index(".consume(pops::SolveConsumption::kAccept)", guard)
+    commit = src.index("ctx.commit_many(", accept)
+
+    assert solve < guard < accept < commit
+    assert "throw " in src[guard:accept]
+
+
 def test_bicgstab_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="bicgstab"))
     assert "ctx.solve_prepared_linear" in src, src

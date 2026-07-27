@@ -11,6 +11,7 @@
 
 #include <pops/numerics/elliptic/linear/krylov_workspace.hpp>
 #include <pops/numerics/elliptic/linear/scaled_field_algebra.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -28,6 +29,13 @@ namespace pops {
 class PreparedKrylovSolveContext;
 class PreparedKrylovInvocation;
 namespace detail {
+
+PreparedKrylovInvocation prepare_krylov_solve_in_place(
+    const PreparedAffineLinearProblem&, KrylovWorkspace&, MultiFab&, const MultiFab&,
+    const KrylovControls&, bool staged_publication = false);
+SolveReport solve_prepared_affine_in_place(const PreparedAffineLinearProblem&, KrylovWorkspace&,
+                                           MultiFab&, const MultiFab&,
+                                           const KrylovControls&);
 
 struct PreparedKrylovInvocationAccess {
   static SolveReport execute(const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace,
@@ -135,6 +143,20 @@ struct KrylovWorkspaceAccess {
     return workspace.try_reserve_solve_();
   }
   static void release_solve(KrylovWorkspace& workspace) noexcept { workspace.release_solve_(); }
+  static MultiFab& publication_candidate(KrylovWorkspace& workspace) {
+    return workspace.publication_candidate_field_();
+  }
+  static void arm_publication(KrylovWorkspace& workspace,
+                              const PreparedAffineLinearProblem& problem,
+                              MultiFab& destination) noexcept {
+    workspace.arm_publication_(problem, destination);
+  }
+  static void publish_candidate(KrylovWorkspace& workspace) {
+    workspace.publish_candidate_();
+  }
+  static void release_publication(KrylovWorkspace& workspace) noexcept {
+    workspace.release_publication_();
+  }
   static void reset_provider_apply_status(KrylovWorkspace& workspace) noexcept {
     workspace.reset_provider_apply_status_();
   }
@@ -1459,8 +1481,9 @@ class PreparedKrylovSolveContext {
   friend class detail::GmresKrylovMethodProvider;
   friend class detail::RichardsonKrylovMethodProvider;
   friend struct detail::PreparedKrylovInvocationAccess;
-  friend SolveReport solve_prepared_affine(const PreparedAffineLinearProblem&, KrylovWorkspace&,
-                                           MultiFab&, const MultiFab&, const KrylovControls&);
+  friend SolveReport detail::solve_prepared_affine_in_place(
+      const PreparedAffineLinearProblem&, KrylovWorkspace&, MultiFab&, const MultiFab&,
+      const KrylovControls&);
 
   const PreparedAffineLinearProblem& problem_;
   KrylovWorkspace& workspace_;
@@ -1751,6 +1774,7 @@ class PreparedKrylovInvocation final {
       : problem_(std::exchange(other.problem_, nullptr)),
         workspace_(std::exchange(other.workspace_, nullptr)),
         iterate_(std::exchange(other.iterate_, nullptr)),
+        publication_destination_(std::exchange(other.publication_destination_, nullptr)),
         rhs_(std::exchange(other.rhs_, nullptr)),
         controls_(std::move(other.controls_)),
         consumed_(std::exchange(other.consumed_, true)),
@@ -1800,14 +1824,26 @@ class PreparedKrylovInvocation final {
   struct MaterializedToken {};
 
   PreparedKrylovInvocation(const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace,
-                           MultiFab& iterate, const MultiFab& rhs, KrylovControls controls,
-                           MaterializedToken)
+                           MultiFab& iterate, MultiFab* publication_destination,
+                           const MultiFab& rhs, KrylovControls controls, MaterializedToken)
       : problem_(&problem),
         workspace_(&workspace),
         iterate_(&iterate),
+        publication_destination_(publication_destination),
         rhs_(&rhs),
         controls_(std::move(controls)),
         owns_reservation_(true) {}
+
+  void transfer_publication_to_outcome_() {
+    if (!owns_reservation_ || !consumed_ || problem_ == nullptr || workspace_ == nullptr ||
+        publication_destination_ == nullptr)
+      throw std::logic_error(
+          "prepared Krylov publication requires one completed staged invocation");
+    detail::KrylovWorkspaceAccess::arm_publication(*workspace_, *problem_,
+                                                   *publication_destination_);
+    owns_reservation_ = false;
+    publication_destination_ = nullptr;
+  }
 
   void release_() noexcept {
     if (!owns_reservation_)
@@ -1817,13 +1853,17 @@ class PreparedKrylovInvocation final {
     owns_reservation_ = false;
   }
 
-  friend PreparedKrylovInvocation prepare_krylov_solve(const PreparedAffineLinearProblem&,
-                                                       KrylovWorkspace&, MultiFab&, const MultiFab&,
-                                                       const KrylovControls&);
+  friend PreparedKrylovInvocation detail::prepare_krylov_solve_in_place(
+      const PreparedAffineLinearProblem&, KrylovWorkspace&, MultiFab&, const MultiFab&,
+      const KrylovControls&, bool);
+  friend SolveOutcome solve_prepared_affine_outcome(const PreparedAffineLinearProblem&,
+                                                    KrylovWorkspace&, MultiFab&, const MultiFab&,
+                                                    const KrylovControls&);
 
   const PreparedAffineLinearProblem* problem_ = nullptr;
   KrylovWorkspace* workspace_ = nullptr;
   MultiFab* iterate_ = nullptr;
+  MultiFab* publication_destination_ = nullptr;
   const MultiFab* rhs_ = nullptr;
   KrylovControls controls_{};
   bool consumed_ = false;
@@ -1834,10 +1874,9 @@ class PreparedKrylovInvocation final {
 /// This is the generic MPI matching boundary: a communicator cannot diagnose ranks selecting
 /// different communicators after a collective has already begun, so selection is authenticated on
 /// the common control communicator first and numerical execution only then enters private lanes.
-inline PreparedKrylovInvocation prepare_krylov_solve(const PreparedAffineLinearProblem& problem,
-                                                     KrylovWorkspace& workspace, MultiFab& iterate,
-                                                     const MultiFab& rhs,
-                                                     const KrylovControls& controls) {
+inline PreparedKrylovInvocation detail::prepare_krylov_solve_in_place(
+    const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace, MultiFab& iterate,
+    const MultiFab& rhs, const KrylovControls& controls, bool staged_publication) {
   const bool workspace_reserved = detail::KrylovWorkspaceAccess::try_reserve_solve(workspace);
   const bool problem_reserved = detail::PreparedProblemAccess::try_reserve_use(problem);
   detail::PendingPreparedKrylovReservations pending_reservations(
@@ -1862,22 +1901,66 @@ inline PreparedKrylovInvocation prepare_krylov_solve(const PreparedAffineLinearP
         "its external execution context");
   }
 
-  detail::collective_solve_preflight(problem, workspace, iterate, rhs, controls, control_lane);
-  PreparedKrylovInvocation invocation(problem, workspace, iterate, rhs, controls,
+  MultiFab* solve_iterate = &iterate;
+  if (staged_publication) {
+    long staging_failure_local = 0;
+    try {
+      MultiFab& candidate = detail::KrylovWorkspaceAccess::publication_candidate(workspace);
+      detail::PreparedFieldAlgebra::copy(candidate, iterate);
+      solve_iterate = &candidate;
+    } catch (...) {
+      staging_failure_local = 1;
+    }
+    if (all_reduce_max(staging_failure_local, control_lane) != 0)
+      throw std::runtime_error(
+          "prepared Krylov publication staging failed on at least one communicator rank");
+  }
+
+  detail::collective_solve_preflight(problem, workspace, *solve_iterate, rhs, controls, control_lane);
+  PreparedKrylovInvocation invocation(problem, workspace, *solve_iterate,
+                                      staged_publication ? &iterate : nullptr, rhs, controls,
                                       PreparedKrylovInvocation::MaterializedToken{});
   pending_reservations.transfer_to_invocation();
   return invocation;
 }
 
-/// Ordered convenience path for one solve. Concurrent MPI callers first materialize one
-/// PreparedKrylovInvocation per workspace in canonical order, then execute those invocations from
-/// worker threads; they never race collectives on their shared control lane.
-inline SolveReport solve_prepared_affine(const PreparedAffineLinearProblem& problem,
-                                         KrylovWorkspace& workspace, MultiFab& iterate,
-                                         const MultiFab& rhs, const KrylovControls& controls) {
+/// Internal in-place numerical primitive. Public/runtime callers use
+/// solve_prepared_affine_outcome(); only prepared solver implementations and contract tests name
+/// this detail route explicitly.
+inline SolveReport detail::solve_prepared_affine_in_place(
+    const PreparedAffineLinearProblem& problem, KrylovWorkspace& workspace, MultiFab& iterate,
+    const MultiFab& rhs, const KrylovControls& controls) {
   PreparedKrylovInvocation invocation =
-      prepare_krylov_solve(problem, workspace, iterate, rhs, controls);
+      prepare_krylov_solve_in_place(problem, workspace, iterate, rhs, controls);
   return invocation.execute();
+}
+
+/// Generated/runtime publication boundary for a prepared global solve. The direct numerical entry
+/// point above remains the provider-level in-place report API. This route solves into a persistent
+/// workspace-private candidate, keeps the workspace/problem reserved, and copies the candidate to
+/// @p iterate only when the outcome is accepted on the workspace's exact execution lane.
+inline SolveOutcome solve_prepared_affine_outcome(const PreparedAffineLinearProblem& problem,
+                                                  KrylovWorkspace& workspace, MultiFab& iterate,
+                                                  const MultiFab& rhs,
+                                                  const KrylovControls& controls) {
+  PreparedKrylovInvocation invocation =
+      detail::prepare_krylov_solve_in_place(problem, workspace, iterate, rhs, controls,
+                                            /*staged_publication=*/true);
+  SolveReport report = invocation.execute();
+  invocation.transfer_publication_to_outcome_();
+  return SolveOutcome::collective_lane(
+      std::move(report), detail::KrylovWorkspaceAccess::execution_lane(workspace),
+      SolveOutcome::PublicationHooks{
+          &workspace,
+          [](void* context) {
+            detail::KrylovWorkspaceAccess::publish_candidate(
+                *static_cast<KrylovWorkspace*>(context));
+          },
+          nullptr,
+          [](void* context) noexcept {
+            detail::KrylovWorkspaceAccess::release_publication(
+                *static_cast<KrylovWorkspace*>(context));
+          }});
 }
 
 }  // namespace pops

@@ -123,8 +123,8 @@ static int pops_run_test_mpi_system_solve_fields(int argc, char** argv) {
   // L'APPEL CRITIQUE : sur tous les rangs. Le solve elliptique est collectif ; sans le fix, les
   // rangs sans box locale crashaient ici (fab(0)). On l'enchaine deux fois (ensure_elliptic puis
   // resolve) pour couvrir le chemin construit-puis-reutilise.
-  sys.solve_fields();
-  sys.solve_fields();
+  (void)pops::consume_solve_outcome(sys.solve_fields());
+  (void)pops::consume_solve_outcome(sys.solve_fields());
 
   // Resultat sense : potentiel + masse, lus sur le rang proprietaire (par cellule). eval_rhs() se
   // termine par le preflight natif COLLECTIF de finitude : tous les rangs doivent donc l'appeler,

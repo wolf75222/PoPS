@@ -682,6 +682,43 @@ struct System::Impl {
     }
   };
 
+  struct FieldPublicationSnapshot {
+    MultiFab aux;
+    typename pops::field_solver::SystemFieldSolver<Impl>::StepSnapshot fields;
+
+    explicit FieldPublicationSnapshot(Impl& impl)
+        : aux(impl.aux), fields(impl.fields_.step_snapshot()) {}
+
+    void capture(Impl& impl) {
+      const bool same_aux_layout =
+          aux.box_array().boxes() == impl.aux.box_array().boxes() &&
+          aux.dmap().ranks() == impl.aux.dmap().ranks() &&
+          aux.ncomp() == impl.aux.ncomp() && aux.n_grow() == impl.aux.n_grow();
+      if (!same_aux_layout)
+        aux = MultiFab(impl.aux.box_array(), impl.aux.dmap(), impl.aux.ncomp(),
+                       impl.aux.n_grow());
+      PureFieldAlgebra::copy_allocated(aux, impl.aux);
+      fields = impl.fields_.step_snapshot();
+    }
+
+    void restore(Impl& impl) const {
+      const bool same_aux_layout =
+          aux.box_array().boxes() == impl.aux.box_array().boxes() &&
+          aux.dmap().ranks() == impl.aux.dmap().ranks() &&
+          aux.ncomp() == impl.aux.ncomp() && aux.n_grow() == impl.aux.n_grow();
+      if (same_aux_layout)
+        PureFieldAlgebra::copy_allocated(impl.aux, aux);
+      else
+        impl.aux = aux;
+      impl.fields_.restore_step_snapshot(fields);
+    }
+  };
+
+  std::unique_ptr<FieldPublicationSnapshot> accepted_field_publication_;
+  std::unique_ptr<FieldPublicationSnapshot> candidate_field_publication_;
+  bool field_publication_active_ = false;
+  bool field_publication_candidate_ready_ = false;
+
   std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
   bool external_step_transaction_committed_ = false;
 

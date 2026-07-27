@@ -266,13 +266,14 @@ def section_a(t):
         "U_[i_] -= du_;",
         "pops::reduce_max(local_solve_status_",
         "pops::SolveReport local_solve_report_",
+        "pops::SolveOutcome local_solve_outcome_",
         "pops::SolveStatus::kIterationLimit",
         "pops::SolveStatus::kSingular",
         "pops::SolveStatus::kInvalidEvaluation",
         "pops::for_each_cell(",
     ):
         chk(frag in src, "the Newton kernel has %r" % frag)
-    guard = src.index("if (!local_solve_report_")
+    guard = src.index("if (!local_solve_outcome_")
     commit = src.index("ctx.commit_many(")
     chk(guard < commit, "a failed Newton report is consumed before the state commit")
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
@@ -283,9 +284,9 @@ def section_a(t):
     for forbidden in ("std::function", "std::vector", "Eigen::", "new ", "malloc"):
         chk(forbidden not in src, "the Newton kernel has no %r (device-clean)" % forbidden)
 
-    # The unique consumed action is copied into SolveReport.action before the guard branches.  The
-    # report is the sole runtime authority: selected RejectAttempt statuses reject, every unselected
-    # status fails the run, and FailRun has no independent status filter.
+    # The unique consumed action is selected at the native SolveOutcome boundary. Selected
+    # RejectAttempt statuses reject, every unselected status fails the run, and the consumed report
+    # carries the authoritative action used by the guard.
     fault = fault_model("fault_cg")
     reject_src = emit_cpp_program(
         fault_program(
@@ -296,39 +297,44 @@ def section_a(t):
         ),
         model=fault,
     )
-    reject_action = next(
+    reject_consumption = next(
         line for line in reject_src.splitlines()
-        if "local_solve_report_" in line and ".action =" in line
+        if "local_solve_outcome_" in line
+        and ".consume(" in line
+        and "SolveStatus::" in line
     )
     chk(
-        "SolveStatus::kSingular" in reject_action
-        and "SolveStatus::kInvalidEvaluation" in reject_action
-        and "SolveStatus::kIterationLimit" not in reject_action
-        and "SolveAction::kRejectAttempt" in reject_action
-        and "SolveAction::kFailRun" in reject_action,
-        "RejectAttempt is materialized exactly into SolveReport.action",
+        "SolveStatus::kSingular" in reject_consumption
+        and "SolveStatus::kInvalidEvaluation" in reject_consumption
+        and "SolveStatus::kIterationLimit" not in reject_consumption
+        and "SolveConsumption::kRejectAttempt" in reject_consumption
+        and "SolveConsumption::kFailRun" in reject_consumption,
+        "RejectAttempt is selected exactly at SolveOutcome consumption",
     )
     reject_guard = reject_src.index(
-        "if (local_solve_report_", reject_src.index(reject_action))
+        ".action == pops::SolveAction::kRejectAttempt",
+        reject_src.index(reject_consumption),
+    )
     chk(
-        ".action == pops::SolveAction::kRejectAttempt" in reject_src[reject_guard:],
-        "the rejection guard consumes SolveReport.action instead of filtering status again",
+        "local_solve_outcome_" in reject_src[reject_guard - 80:reject_guard],
+        "the rejection guard reads the report returned by SolveOutcome.consume",
     )
 
     fail_src = emit_cpp_program(
         fault_program(t, name="fault_fail_cg", model=fault, action=t.FailRun()),
         model=fault,
     )
-    fail_action = next(
+    fail_consumption = next(
         line for line in fail_src.splitlines()
-        if "local_solve_report_" in line and ".action =" in line
+        if "local_solve_outcome_" in line
+        and ".consume(pops::SolveConsumption::kFailRun)" in line
     )
     chk(
-        fail_action.strip().endswith("pops::SolveAction::kFailRun;"),
-        "FailRun is materialized exactly into SolveReport.action",
+        "const pops::SolveReport" in fail_consumption,
+        "FailRun is consumed exactly into one authoritative SolveReport",
     )
     chk(
-        '" action=" + local_solve_report_' in fail_src
+        '" action=" + local_solve_outcome_' in fail_src
         and ".action_name()" in fail_src,
         "the fatal diagnostic is rendered from SolveReport.action",
     )

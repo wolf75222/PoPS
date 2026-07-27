@@ -787,8 +787,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
                 *builtin_emission.configure,
             ),
             solve=(
-                "pops::SolveReport %s = pops_test_hierarchy::solve("
-                "ctx, %d, %d, %s, %s, %d);"
+                "pops::SolveOutcome %s = pops::SolveOutcome::collective_world("
+                "pops_test_hierarchy::solve(ctx, %d, %d, %s, %s, %d));"
                 % (
                     request.report_name,
                     request.block_index,

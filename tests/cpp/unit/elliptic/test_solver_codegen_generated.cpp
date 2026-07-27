@@ -189,7 +189,7 @@ TEST(test_solver_codegen_generated, generated_kernel_matches_native_richardson) 
   KrylovWorkspace workspace(x_ref, richardson_krylov_method(kOmega), footprint);
   problem.prepare(snapshot);
   workspace.bind(problem);
-  const SolveReport r_ref = solve_prepared_affine(
+  const SolveReport r_ref = detail::solve_prepared_affine_in_place(
       problem, workspace, x_ref, rhs,
       KrylovControls{richardson_krylov_method(kOmega), Real(0), kAbsTol, 1000000});
   const Real err_ref = max_abs_diff(x_ref, phi_exact_mf);

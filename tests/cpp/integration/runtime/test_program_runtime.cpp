@@ -544,7 +544,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   System ref(cfg);
   add_gas(ref, gamma);
   ref.set_state("gas", U0);
-  ref.solve_fields();
+  (void)pops::consume_solve_outcome(ref.solve_fields());
   const std::vector<double> R0 = ref.eval_rhs("gas");
   std::vector<double> Uref(4 * nn);
   for (std::size_t k = 0; k < Uref.size(); ++k)
@@ -561,7 +561,8 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   ctx.install([ctx](double h) {
     ctx.begin_step(h);
     ctx.set_stage_time(0, 1);
-    ctx.solve_fields();
+    auto field_outcome = ctx.solve_fields();
+    (void)field_outcome.consume(SolveConsumption::kAccept);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);
       MultiFab R = ctx.rhs_scratch_like(U);
