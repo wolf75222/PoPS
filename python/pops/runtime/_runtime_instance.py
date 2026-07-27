@@ -1153,6 +1153,53 @@ class RuntimeInstance:
                 raise cleanup_error from error
             raise
 
+    def _accepted_controller_step(
+        self,
+        native: Any,
+        step_target: Any,
+        strategy: Any,
+        *,
+        t_end: float,
+        controls: Mapping[str, Any],
+        deadline: float | None = None,
+        at_end: Any = False,
+    ) -> Any:
+        """Execute one accepted controller step with one transaction per native attempt."""
+        from pops._bootstrap import StepAttemptRejected
+        from pops.runtime._step_strategy import (
+            prepare_step_attempts,
+            run_prepared_step_attempt,
+        )
+
+        sequence = prepare_step_attempts(
+            native,
+            step_target,
+            strategy,
+            t_end=float(t_end),
+            controls=controls,
+        )
+        while True:
+            def advance() -> tuple[Any, int]:
+                report = run_prepared_step_attempt(sequence)
+                reached = float(native.time())
+                if deadline is not None \
+                        and reached > deadline \
+                        and not _same_physical_time(reached, deadline):
+                    raise RuntimeError(
+                        "step controller crossed every_dt hard deadline %s and reached %s"
+                        % (deadline.hex(), reached.hex())
+                    )
+                return report, report.attempts
+
+            try:
+                return self._accepted_step_transaction(advance, at_end=at_end)
+            except StepAttemptRejected as error:
+                # _accepted_step_transaction has already restored every native/Python store here.
+                # Only the detached proposal cursor may advance to the next retry.
+                if sequence.retry(error):
+                    continue
+                raise
+
     def _run(self, t_end: Any, *, max_steps: int = 1_000_000,
              output_dir: Any = None, console: bool = True,
              **controller_controls: Any) -> RunReport:
@@ -1168,7 +1215,7 @@ class RuntimeInstance:
                 "with Program.step_strategy(...)"
             )
         from pops.runtime._step_strategy import (
-            prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+            prepare_step_controller, resolve_run_strategy, run_control_payload)
         from pops.runtime._native_step_target import native_step_target
         from pops.runtime.run_report import RunStopReason
 
@@ -1223,26 +1270,13 @@ class RuntimeInstance:
                     deadline_is_active = False
                     step_end = run_end
 
-                def advance(
-                    *,
-                    accepted_deadline: float | None = deadline if deadline_is_active else None,
-                    accepted_step_end: float = step_end,
-                ) -> tuple[Any, int]:
-                    report = run_step_attempt(
-                        native, step_target, selected, t_end=accepted_step_end,
-                        controls=controller_controls)
-                    reached = float(native.time())
-                    if accepted_deadline is not None \
-                            and reached > accepted_deadline \
-                            and not _same_physical_time(reached, accepted_deadline):
-                        raise RuntimeError(
-                            "step controller crossed every_dt hard deadline %s and reached %s"
-                            % (accepted_deadline.hex(), reached.hex())
-                        )
-                    return report, report.attempts
-
-                step_report = self._accepted_step_transaction(
-                    advance,
+                step_report = self._accepted_controller_step(
+                    native,
+                    step_target,
+                    selected,
+                    t_end=step_end,
+                    controls=controller_controls,
+                    deadline=deadline if deadline_is_active else None,
                     at_end=lambda: not (native.time() < t_end),
                 )
                 rejected_steps += int(step_report.attempts) - 1
