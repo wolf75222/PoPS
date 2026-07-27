@@ -12,7 +12,8 @@
 
 #include <algorithm>  // std::max (Newton report aggregation, host)
 #include <concepts>
-#include <exception>  // std::terminate (unconsumed outcome contract)
+#include <cstdio>     // stderr diagnostics for an unconsumed outcome contract violation
+#include <cstdlib>    // std::abort
 #include <memory>
 #include <sstream>    // structured host failure message, never in kernel
 #include <stdexcept>  // explicit FailRun/contract errors, host after reductions
@@ -37,8 +38,7 @@
 /// - PARTIAL IMEX: a model can declare variable by variable which ones are stiff
 ///   (PartiallyImplicitModel::is_implicit), or an ImplicitMask carried by the BLOCK overrides the
 ///   model default. Inactive mask (default) -> all implicit -> bit-identical to before;
-/// - default NewtonOptions {} = 2 FIXED iterations, no stop test, fd_eps=1e-7,
-///   damping=1 -> reproduces the historical numerical iteration;
+/// - NewtonOptions always carries a convergence criterion and a finite iteration budget;
 /// - device kernels = NAMED functors (BackwardEulerSourceStatKernel, NewtonStat*Kernel);
 /// - publication is transactional: every candidate is reduced into an ImplicitSolveOutcome and
 ///   consumed exactly once; invalid/non-converged candidates never overwrite the accepted state.
@@ -101,54 +101,39 @@ POPS_HD inline bool is_implicit_component(const ImplicitMask<N>& mask, int c) {
   return model_is_implicit<Model>(c);
 }
 
-/// Options of the local Newton of the implicit source (backward-Euler). The DEFAULTS retain
-/// the historical numerical iteration: 2 FIXED iterations with no early stop
-/// (rel_tol == abs_tol == 0), finite-difference
-/// Jacobian step h = fd_eps*|w| + fd_eps with fd_eps = 1e-7 (the constant
-/// historically hard-coded). The transactional route still evaluates the final residual and
-/// failure status before publication. Device-clean POD (passed BY VALUE into the kernel).
-///  - max_iters: Newton iteration budget (historical: 2).
+/// Options of the local Newton of the implicit source (backward-Euler). Every solve has an explicit
+/// convergence criterion and a finite iteration budget; exhausting the budget is a typed failure,
+/// never a publishable best-effort value. Device-clean POD (passed BY VALUE into the kernel).
+///  - max_iters: Newton iteration budget.
 ///  - rel_tol / abs_tol: stop criterion ||F||_inf <= abs_tol + rel_tol*||F0||_inf, evaluated per
-///    CELL at the start of an iteration. 0/0 (default) = disabled -> bit-identical historical loop.
+///    CELL at the start of an iteration. At least one tolerance must be positive.
 ///  - fd_eps: step (relative AND absolute floor) of the finite-difference Jacobian.
 ///  - damping: damping factor of the update W -= damping * delta. 1 (default) =
 ///    full Newton, bit-identical (multiplication by 1.0 exact in IEEE). < 1 = damped Newton
 ///    (very stiff source / poor conditioning: robustness at the cost of speed).
-///  - fail_policy: legacy inspection value retained in the runtime manifest. It no longer controls
-///    publication: the immediate seam consumes every failure as FailRun, while the prepared seam
-///    requires an explicit RejectAttempt or FailRun.
 struct NewtonOptions {
-  static constexpr int kFailNone = kNewtonFailNone;
-  static constexpr int kFailWarn = kNewtonFailWarn;
-  static constexpr int kFailThrow = kNewtonFailThrow;
   int max_iters = kNewtonDefaultMaxIters;
   Real rel_tol = kNewtonDefaultRelTol;
   Real abs_tol = kNewtonDefaultAbsTol;
   Real fd_eps = kNewtonDefaultFdEps;
   Real damping = kNewtonDefaultDamping;
-  int fail_policy = kNewtonDefaultFailPolicy;
 };
 
 /// Range-validate a NewtonOptions POD; shared by System::add_block and AmrSystem::add_block, which
 /// carried this defensive check verbatim. @p where prefixes each message ("System::add_block" /
-/// "AmrSystem::add_block"). fail_policy is already a valid integer (the bindings resolve it from the
-/// string "none"/"warn"/"throw"); the range stays defensive. This does NOT decide whether non-default
-/// options are ALLOWED -- the time='imex' gate (and System's extra newton_diagnostics term in the
-/// non-default test) differ between the two callers and remain at each call site.
+/// "AmrSystem::add_block"). This does NOT decide whether non-default options are ALLOWED -- the
+/// time='imex' gate (and System's extra newton_diagnostics term in the non-default test) differ
+/// between the two callers and remain at each call site.
 inline void validate_newton_options(const NewtonOptions& newton, const char* where) {
   const std::string ctx = std::string(where) + " : ";
   if (newton.max_iters < 1)
     throw std::runtime_error(ctx + "newton_max_iters >= 1");
   if (newton.rel_tol < 0.0 || newton.abs_tol < 0.0 || newton.fd_eps <= 0.0)
     throw std::runtime_error(ctx + "newton_rel_tol/abs_tol >= 0 and newton_fd_eps > 0");
+  if (newton.rel_tol == 0.0 && newton.abs_tol == 0.0)
+    throw std::runtime_error(ctx + "at least one of newton_rel_tol/newton_abs_tol must be > 0");
   if (!(newton.damping > 0.0 && newton.damping <= 1.0))
     throw std::runtime_error(ctx + "newton_damping in (0, 1]");
-  if (newton.fail_policy != NewtonOptions::kFailNone &&
-      newton.fail_policy != NewtonOptions::kFailWarn &&
-      newton.fail_policy != NewtonOptions::kFailThrow)
-    throw std::runtime_error(ctx +
-                             "newton_fail_policy invalid "
-                             "(NewtonOptions::kFailNone|kFailWarn|kFailThrow)");
 }
 
 enum class NewtonFailureKind : int {
@@ -305,7 +290,6 @@ POPS_HD inline typename Model::State newton_source_solve(
       if (!is_implicit_component<Model>(mask, c))
         W[c] = Un[c] + dt * S_in[c];
   }
-  const bool tol_active = opts.rel_tol > Real(0) || opts.abs_tol > Real(0);
   // Instrumented candidate path: Newton plus the stop
   // criterion ||F||_inf <= abs_tol + rel_tol*||F0||_inf at the start of an iteration, the detection of
   // non-finite residual / degenerate pivot, and the exit statistic. One ADDITIONAL source evaluation
@@ -342,11 +326,9 @@ POPS_HD inline typename Model::State newton_source_solve(
       failure = NewtonFailureKind::kInvalidEvaluation;
     if (failure == NewtonFailureKind::kInvalidEvaluation)
       break;
-    if (tol_active) {
-      if (res <= opts.abs_tol + opts.rel_tol * res0) {
-        converged = true;
-        break;
-      }
+    if (res <= opts.abs_tol + opts.rel_tol * res0) {
+      converged = true;
+      break;
     }
     Real J[N][N];
     assemble_newton_jacobian<Model, N>(m, W, a, dt, opts, impl, m_impl, S0, J);
@@ -384,10 +366,10 @@ POPS_HD inline typename Model::State newton_source_solve(
     }
     if (!newton_finite(res))
       failure = NewtonFailureKind::kInvalidEvaluation;
-    else if (tol_active)
+    else
       converged = res <= opts.abs_tol + opts.rel_tol * res0;
   }
-  if (failure == NewtonFailureKind::kNone && tol_active && !converged)
+  if (failure == NewtonFailureKind::kNone && !converged)
     failure = NewtonFailureKind::kIterationLimit;
   stat.res = res;
   stat.reference_res = res0;
@@ -522,8 +504,13 @@ class ImplicitSolveOutcome {
   }
 
   ~ImplicitSolveOutcome() {
-    if (!consumed_)
-      std::terminate();
+    if (!consumed_) {
+      std::fputs(
+          "PoPS contract violation: ImplicitSolveOutcome destroyed before explicit consumption\n",
+          stderr);
+      std::fflush(stderr);
+      std::abort();
+    }
   }
 
   const SolveReport& report() const noexcept { return solve_; }
@@ -532,16 +519,29 @@ class ImplicitSolveOutcome {
   SolveReport consume(ImplicitSolveConsumption action) {
     if (consumed_)
       throw std::logic_error("ImplicitSolveOutcome has already been consumed");
-    consumed_ = true;
 
     if (action == ImplicitSolveConsumption::kAccept) {
       if (!solve_.solved_value_available())
         throw std::logic_error("cannot accept a failed ImplicitSolveOutcome");
-      lincomb(*destination_, Real(1), *candidate_, Real(0), *candidate_);
+      if (!publication_layout_matches())
+        throw std::logic_error(
+            "cannot accept an ImplicitSolveOutcome after its destination layout changed");
     } else if (action == ImplicitSolveConsumption::kRejectAttempt ||
                action == ImplicitSolveConsumption::kFailRun) {
       if (solve_.solved_value_available())
         throw std::logic_error("cannot reject a solved ImplicitSolveOutcome");
+    } else
+      throw std::logic_error("invalid ImplicitSolveConsumption action");
+
+    // From this point the action and its candidate status are compatible. Mark the outcome consumed
+    // immediately before the irreversible publication/discard boundary. In particular, a backend
+    // exception while launching/copying the accepted candidate propagates to the enclosing
+    // StepTransaction, which restores the accepted state; retrying a potentially partial publication
+    // through the same outcome is forbidden.
+    consumed_ = true;
+    if (action == ImplicitSolveConsumption::kAccept) {
+      lincomb(*destination_, Real(1), *candidate_, Real(0), *candidate_);
+    } else {
       solve_.action = action == ImplicitSolveConsumption::kRejectAttempt
                           ? SolveAction::kRejectAttempt
                           : SolveAction::kFailRun;
@@ -553,14 +553,22 @@ class ImplicitSolveOutcome {
             action == ImplicitSolveConsumption::kRejectAttempt ? "warning" : "error",
             failure_message_, -1, diagnostics_->n_failed);
       }
-    } else
-      throw std::logic_error("invalid ImplicitSolveConsumption action");
+    }
     if (diagnostics_)
       diagnostics_->solve = solve_;
     return solve_;
   }
 
  private:
+  bool publication_layout_matches() const noexcept {
+    return destination_ != nullptr && candidate_ != nullptr &&
+           destination_->box_array().boxes() == candidate_->box_array().boxes() &&
+           destination_->dmap().ranks() == candidate_->dmap().ranks() &&
+           destination_->ncomp() == candidate_->ncomp() &&
+           destination_->n_grow() == candidate_->n_grow() &&
+           destination_->local_size() == candidate_->local_size();
+  }
+
   MultiFab* destination_ = nullptr;
   std::unique_ptr<MultiFab> candidate_;
   SolveReport solve_;
@@ -587,7 +595,7 @@ inline SolveStatus newton_failure_status(NewtonFailureKind failure) {
 // Newton, reduced collectively into one SolveReport, and returned in an ImplicitSolveOutcome that
 // must be consumed exactly once. Only consume(kAccept) can mutate U.
 template <class Model>
-[[nodiscard]] ImplicitSolveOutcome prepare_backward_euler_source(
+[[nodiscard]] ImplicitSolveOutcome backward_euler_source(
     const Model& model, const MultiFab& aux, MultiFab& U, Real dt, const NewtonOptions& opts,
     const ImplicitMask<Model::n_vars>& mask = {}, NewtonReport* report = nullptr,
     const MultiFab* active_cells = nullptr) {
@@ -653,9 +661,7 @@ template <class Model>
     failure = NewtonFailureKind::kInvalidEvaluation;
   }
   if (failure == NewtonFailureKind::kNone)
-    solve.mark_solved(opts.rel_tol > Real(0) || opts.abs_tol > Real(0)
-                          ? "implicit_source_newton_converged"
-                          : "implicit_source_newton_fixed_iterations_completed");
+    solve.mark_solved("implicit_source_newton_converged");
   else
     solve.mark_failed(
         newton_failure_status(failure), SolveAction::kFailRun,
@@ -686,17 +692,9 @@ template <class Model>
   return ImplicitSolveOutcome(U, std::move(candidate), std::move(solve), report, message.str());
 }
 
-// Legacy immediate-consumption seam. It still returns the uniform report, but never exposes an
-// unconsumed candidate: success is explicitly accepted, while every failure is explicitly consumed
-// as FailRun and throws. The former none/warn policies can no longer publish a best-effort state.
-template <class Model>
-SolveReport backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U, Real dt,
-                                  const NewtonOptions& opts,
-                                  const ImplicitMask<Model::n_vars>& mask = {},
-                                  NewtonReport* report = nullptr,
-                                  const MultiFab* active_cells = nullptr) {
-  ImplicitSolveOutcome outcome =
-      prepare_backward_euler_source(model, aux, U, dt, opts, mask, report, active_cells);
+/// Consume one prepared local solve with the fail-fast runtime policy used by native engine routes.
+/// The caller still owns the outcome and names the policy at the publication boundary.
+inline SolveReport consume_implicit_source_fail_run(ImplicitSolveOutcome& outcome) {
   if (outcome.report().solved_value_available())
     return outcome.consume(ImplicitSolveConsumption::kAccept);
   const std::string message = outcome.failure_message();
@@ -711,18 +709,21 @@ SolveReport backward_euler_source(const Model& model, const MultiFab& aux, Multi
                                   int iters = 2, const ImplicitMask<Model::n_vars>& mask = {}) {
   NewtonOptions opts;
   opts.max_iters = iters;
-  return backward_euler_source(model, aux, U, dt, opts, mask, nullptr);
+  auto outcome = backward_euler_source(model, aux, U, dt, opts, mask, nullptr);
+  return consume_implicit_source_fail_run(outcome);
 }
 
 // Default implicit stepper: backward-Euler (Newton) on the model source.
 // Models ImplicitBlockStepper; passed as is to the test-only reference driver as the implicit
 // advance callback. The user writes no solver.
 struct ImplicitSourceStepper {
-  int iters = 2;
+  NewtonOptions options{};
 
   template <class Coupler, class Block>
   void operator()(Coupler& coupler, Block& block, Real dt, int /*substep*/, int /*nsub*/) const {
-    backward_euler_source(block.model, coupler.aux(), block.U(), dt, iters);
+    auto outcome =
+        backward_euler_source(block.model, coupler.aux(), block.U(), dt, options);
+    (void)consume_implicit_source_fail_run(outcome);
   }
 };
 
