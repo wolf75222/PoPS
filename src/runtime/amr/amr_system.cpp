@@ -76,16 +76,15 @@ runtime::amr::TransferKernelRegistry bootstrap_transfer_kernels() {
                 [](const TransferRouteDescriptor&) { return prepare_volume_average(); }});
   registry.add_exact(
       "pops.lib.amr.transfer::conservative_coarse_fine",
-      TransferRouteDescriptor{"cell", "cell", "conservative", "dense", "coarse_fine_fill",
-                              2, {2}, 2, 2},
+      TransferRouteDescriptor{
+          "cell", "cell", "conservative", "dense", "coarse_fine_fill", 2, {2}, 2, 2},
       [](const TransferRouteDescriptor&) { return prepare_conservative_coarse_fine(); });
-  registry.add_exact(
-      "pops.lib.amr.transfer::conservative_polynomial5_coarse_fine",
-      TransferRouteDescriptor{"cell", "cell", "conservative", "dense", "coarse_fine_fill",
-                              5, {3}, 2, 2},
-      [](const TransferRouteDescriptor&) {
-        return prepare_conservative_polynomial5_coarse_fine();
-      });
+  registry.add_exact("pops.lib.amr.transfer::conservative_polynomial5_coarse_fine",
+                     TransferRouteDescriptor{
+                         "cell", "cell", "conservative", "dense", "coarse_fine_fill", 5, {3}, 2, 2},
+                     [](const TransferRouteDescriptor&) {
+                       return prepare_conservative_polynomial5_coarse_fine();
+                     });
   const auto face_accepts = [](const TransferRouteDescriptor& row) {
     return row.space == "face" && (row.centering == "face_x" || row.centering == "face_y") &&
            row.representation == "conservative" && row.storage == "dense" &&
@@ -170,32 +169,13 @@ std::string amr_time_routes_csv() {
          route_token(TimeRouteId::kImex);
 }
 
-int amr_time_method_wire_for_route(const std::string& time) {
+std::string amr_program_method_label(const std::string& time) {
   if (time == route_token(TimeRouteId::kExplicitSsprk2))
-    return static_cast<int>(AmrTimeMethod::kSsprk2);
-  if (time == route_token(TimeRouteId::kForwardEuler) || time == route_token(TimeRouteId::kImex))
-    return static_cast<int>(AmrTimeMethod::kEuler);
-  if (time == route_token(TimeRouteId::kSsprk3))
-    return static_cast<int>(AmrTimeMethod::kSsprk3);
+    return "ssprk2";
+  if (time == route_token(TimeRouteId::kForwardEuler) ||
+      time == route_token(TimeRouteId::kSsprk3) || time == route_token(TimeRouteId::kImex))
+    return time;
   throw std::runtime_error("unknown AMR time route '" + time + "'");
-}
-
-std::string amr_effective_time_method_token(int wire) {
-  switch (amr_time_method_from_wire(wire)) {
-    case AmrTimeMethod::kEuler:
-      return "euler";
-    case AmrTimeMethod::kSsprk2:
-      return "ssprk2";
-    case AmrTimeMethod::kSsprk3:
-      return "ssprk3";
-  }
-  throw std::runtime_error("unreachable AMR time method");
-}
-
-std::string amr_effective_time_route_token(int wire) {
-  return amr_time_method_from_wire(wire) == AmrTimeMethod::kSsprk2
-             ? std::string(route_token(TimeRouteId::kExplicitSsprk2))
-             : amr_effective_time_method_token(wire);
 }
 
 bool amr_newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
@@ -223,8 +203,7 @@ std::string direct_amr_state_identity(const std::string& block_name) {
   // The private native engine can also be exercised directly; in that mode the engine itself is
   // the storage owner, so qualify its state deterministically from the already-unique block name.
   // The length prefix keeps this mapping injective for arbitrary (including path-like) names.
-  return "pops://runtime/amr-direct-state/" + std::to_string(block_name.size()) + ":" +
-         block_name;
+  return "pops://runtime/amr-direct-state/" + std::to_string(block_name.size()) + ":" + block_name;
 }
 }  // namespace
 
@@ -254,7 +233,7 @@ struct AmrSystem::Impl {
     // block's conservative descriptor. Empty (default) -> full backward-Euler (all implicit).
     std::vector<std::string> implicit_vars, implicit_roles;
     int substeps = 1;
-    int stride = 1;  // hold-then-catch-up cadence (multi-block; cf. AmrRuntimeBlock)
+    int stride = 1;  // authored Program hold/catch-up cadence
     double gamma = static_cast<double>(kPhysicalDefaultGamma);
     // Compiled production path: type-erasing builder that, on
     // the SHARED layout materialized at lazy build (build_multi), produces the AmrRuntimeBlock of the
@@ -272,13 +251,12 @@ struct AmrSystem::Impl {
     // runtime block builders.
     bool has_state = false;
     std::vector<double> state;
-    NewtonOptions newton{};  // IMEX source Newton options (wave 3; single-block AND multi-block)
+    NewtonOptions newton{};           // IMEX source Newton options carried into Program lowering
     bool newton_non_default = false;  // true -> non-default options (.so loader REJECTED: flat ABI)
     bool newton_diagnostics = false;  // newton_report: native runtime; compiled .so rejected
-    // Stable temporal-method wire: 0=kEuler, 1=kSsprk3 (both historical values), 2=kSsprk2.
-    // Materialized strictly to AmrTimeMethod at build via dispatch_amr_block.
-    // Any SSP method is mutually exclusive with imex.
-    int time_method = 0;
+    // Canonical authoring token retained for Program normalization and introspection. Spatial block
+    // construction does not decode it into a second native time method.
+    std::string time = std::string(route_token(TimeRouteId::kForwardEuler));
     // Zhang-Shu positivity floor (ADC-259): if > 0, the AMR transport floors the Density-role face
     // states + C/F fine ghost means to >= pos_floor. 0 (default) = inactive, bit-identical. Threaded
     // to dispatch_amr_block through the unique runtime builder.
@@ -422,14 +400,13 @@ struct AmrSystem::Impl {
     std::function<double()> fn;
   };
   std::vector<GlobalDtBound> dt_bounds;
-  std::string
-      last_dt_reason;  // ACTIVE bound of the last single-block step_cfl (multi: via runtime)
+  std::string last_dt_reason;  // active bound of the last Program-owned CFL step
   // Unique AmrRuntime path (shared hierarchy + summed default field).
   std::shared_ptr<pops::AmrRuntime> runtime;
   double t = 0;
-  // AUTHORITATIVE MACRO-STEP counter (parity System::Impl::macro_step_): incremented by
-  // AmrSystem::step / step_cfl, read by macro_step(). The engines (AmrRuntime; single-block step_state)
-  // hold their OWN cadence counter, synchronized from this one at build and at set_clock.
+  // AUTHORITATIVE accepted macro-step counter (parity System::Impl::macro_step_): incremented by
+  // AmrSystem::step / step_cfl, read by macro_step(), and mirrored into AmrRuntime for hierarchy and
+  // restart bookkeeping.
   int macro_step_ = 0;
   bool clock_restore_pending_ =
       false;  // a set_clock is waiting to be pushed to the engine (at the next step)
@@ -438,8 +415,8 @@ struct AmrSystem::Impl {
   // struct System::Impl holds (include/pops/runtime/program/program_runtime_state.hpp) -- the SHARED,
   // non-diverging Program subsystem the issue mandates. AMR uses the COMMON subset (step_ / substeps_ /
   // stride_ / installed_hash_ / block_map_ / block_params_ / diagnostics_ / profiler_ / dt_bound_);
-  // cache_ / hist_ stay EMPTY because their hierarchy-aware seams are not wired. The multi-block AmrRuntime
-  // engine is wired to &program_.profiler_ at build (parity with System::Impl); the Profiler's Impl
+  // cache_ / hist_ stay EMPTY because their hierarchy-aware seams are not wired. AmrRuntime is wired
+  // to &program_.profiler_ at build (parity with System::Impl); the Profiler's Impl
   // address stays stable (program_ is a stable Impl member). AmrSystem::step routes through
   // run_program_cadence_ (reading program_.step_ / substeps_ / stride_) when a program is installed.
   pops::runtime::program::ProgramRuntimeState program_;
@@ -449,9 +426,9 @@ struct AmrSystem::Impl {
 
   explicit Impl(const AmrSystemConfig& c)
       : cfg(c),
-        load_balance_authority_(std::make_shared<const PreparedLoadBalanceAuthority>(
-            prepare_load_balance_authority(c.load_balance_route, c.load_balance_identity,
-                                           c.load_balance_options))),
+        load_balance_authority_(
+            std::make_shared<const PreparedLoadBalanceAuthority>(prepare_load_balance_authority(
+                c.load_balance_route, c.load_balance_identity, c.load_balance_options))),
         field_solver_registry_(make_default_amr_field_solver_registry()),
         field_nullspace_provider_registry_(make_default_field_nullspace_provider_registry()),
         hierarchy_tensor_solver_provider_registry_(
@@ -462,8 +439,8 @@ struct AmrSystem::Impl {
   // SUBSTEPS/STRIDE cadence around the installed program closure (parity SystemProgramDriver::run_program_
   // cadence): runs the whole program ONCE over eff_dt = stride*dt when the stride window closes (the
   // clock still ticks every macro-step), subdivided into substeps equal program calls. With 1/1 this is
-  // a single program_.step_(dt) call (bit-identical to a bare install). MULTI-BLOCK stride is GLOBAL
-  // (whole-program), equal to the native per-block stride only for a single-block Program.
+  // a single program_.step_(dt) call (bit-identical to a bare install). The cadence applies to the
+  // whole resolved ProgramGraph.
   void run_program_cadence_(double dt) {
     // stride window: program runs only at the END of each stride window ((macro_step_+1) % stride == 0),
     // mirroring SystemProgramDriver. stride=1 -> always true (every macro-step).
@@ -636,9 +613,9 @@ struct AmrSystem::Impl {
           const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
                                        ? runtime::program::StepAttemptDisposition::kRetry
                                        : runtime::program::StepAttemptDisposition::kReject;
-          throw runtime::program::StepAttemptRejected(
-              SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
-              failure.what());
+          throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation, disposition,
+                                                      failure.reason_code(), "stage",
+                                                      failure.what());
         }
         throw;
       } catch (...) {
@@ -668,9 +645,8 @@ struct AmrSystem::Impl {
         const auto disposition = failure.action() == TransactionFailureAction::kRetryStep
                                      ? runtime::program::StepAttemptDisposition::kRetry
                                      : runtime::program::StepAttemptDisposition::kReject;
-        throw runtime::program::StepAttemptRejected(
-            SolveStatus::kInvalidEvaluation, disposition, failure.reason_code(), "stage",
-            failure.what());
+        throw runtime::program::StepAttemptRejected(SolveStatus::kInvalidEvaluation, disposition,
+                                                    failure.reason_code(), "stage", failure.what());
       }
       throw;
     } catch (...) {
@@ -728,8 +704,8 @@ struct AmrSystem::Impl {
     throw std::runtime_error("AmrSystem::set_poisson : unknown bc '" + mode + "'");
   }
   ActiveRegionProvider2D wall_active() {
-    return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, cfg.Ly,
-                                  "AmrSystem::set_poisson", cfg.xlo, cfg.ylo);
+    return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, cfg.Ly, "AmrSystem::set_poisson",
+                                  cfg.xlo, cfg.ylo);
   }
 
   // Materializes only hierarchy/system-owned parameters.  Multi-block construction must never select
@@ -877,8 +853,8 @@ struct AmrSystem::Impl {
       // conservative descriptor of the concrete Model type (cons_vars), then threaded to build_amr_block.
       // Transport-axis seam (ADC-335): each per-transport TU (python/amr_block_<transport>.cpp) runs the
       // SAME dispatch_amr_block as before (build_amr_block_for), but instantiates only its transport's
-      // leaves. The impl-mask resolution + temporal-method mapping move into the seam. The string if/else
-      // mirrors detail::dispatch_transport (same unknown-transport message).
+      // leaves. The implicit-mask resolution moves into the seam. The string if/else mirrors
+      // detail::dispatch_transport (same unknown-transport message).
       const detail::AmrBlockBuildArgs ba{b.spec,
                                          b.name,
                                          b.limiter,
@@ -895,7 +871,6 @@ struct AmrSystem::Impl {
                                          b.newton,
                                          b.has_state ? &b.state : nullptr,
                                          b.newton_diagnostics,
-                                         b.time_method,
                                          b.pos_floor,
                                          b.weno_epsilon,
                                          b.wave_speed_cache};
@@ -959,9 +934,15 @@ struct AmrSystem::Impl {
       for (std::size_t block = 0; block < reconstruction_requirements.size(); ++block) {
         const auto [order, ghost_depth] = reconstruction_requirements[block];
         auto coarse_fine = bootstrap_transfer_routes.prepare_minimum(
-            pops::runtime::amr::TransferRouteDescriptor{
-                "cell", "cell", "conservative", "dense", "coarse_fine_fill", order,
-                {ghost_depth}, 2, kAmrRefRatio});
+            pops::runtime::amr::TransferRouteDescriptor{"cell",
+                                                        "cell",
+                                                        "conservative",
+                                                        "dense",
+                                                        "coarse_fine_fill",
+                                                        order,
+                                                        {ghost_depth},
+                                                        2,
+                                                        kAmrRefRatio});
         runtime->set_block_transfer_authority(
             block, pops::runtime::amr::prepare_conservative_linear(),
             pops::runtime::amr::prepare_volume_average(), std::move(coarse_fine),
@@ -1001,17 +982,16 @@ struct AmrSystem::Impl {
         throw std::runtime_error(
             "AmrSystem : shared AMR hierarchy state providers disagree on refinement ratio");
       hierarchy_capacity_ratio = ratio;
-      runtime->set_block_transfer_authority(
-          static_cast<std::size_t>(block), prolongation.executable, restriction.executable,
-          coarse_fine.executable, temporal.executable, ratio);
+      runtime->set_block_transfer_authority(static_cast<std::size_t>(block),
+                                            prolongation.executable, restriction.executable,
+                                            coarse_fine.executable, temporal.executable, ratio);
     }
     if (cfg.explicit_bootstrap) {
       if (hierarchy_capacity_ratio < 2)
         throw std::runtime_error(
             "AmrSystem : explicit hierarchy capacity requires prepared state transfer routes");
       runtime->configure_hierarchy_capacity(
-          std::vector<int>(static_cast<std::size_t>(cfg.level_count - 1),
-                           hierarchy_capacity_ratio),
+          std::vector<int>(static_cast<std::size_t>(cfg.level_count - 1), hierarchy_capacity_ratio),
           temporal_relations_);
     }
     // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): wire the facade-owned Profiler into the
@@ -1046,11 +1026,11 @@ struct AmrSystem::Impl {
               runtime->block_cons_vars(static_cast<std::size_t>(block)),
               tagging_spec->leaf_variables[index], "");
           leaves.push_back(Program::Leaf{
-            static_cast<std::size_t>(block), static_cast<std::size_t>(component),
-            tagging_spec->leaf_ops[index], tagging_spec->leaf_thresholds[index],
-            tagging_spec->leaf_stencil_indices[index] < 0
-                ? POPS_TAGGING_NO_STENCIL_V1
-                : static_cast<std::size_t>(tagging_spec->leaf_stencil_indices[index])});
+              static_cast<std::size_t>(block), static_cast<std::size_t>(component),
+              tagging_spec->leaf_ops[index], tagging_spec->leaf_thresholds[index],
+              tagging_spec->leaf_stencil_indices[index] < 0
+                  ? POPS_TAGGING_NO_STENCIL_V1
+                  : static_cast<std::size_t>(tagging_spec->leaf_stencil_indices[index])});
         }
         refine_ops = tagging_spec->refine_ops;
         refine_args = tagging_spec->refine_args;
@@ -1070,9 +1050,8 @@ struct AmrSystem::Impl {
             runtime->block_cons_vars(static_cast<std::size_t>(b)), bootstrap_tag_spec->variable,
             "");
         leaves.push_back(Program::Leaf{static_cast<std::size_t>(b),
-                                       static_cast<std::size_t>(component),
-                                       POPS_TAGGING_ABOVE_V1, bootstrap_tag_spec->threshold,
-                                       POPS_TAGGING_NO_STENCIL_V1});
+                                       static_cast<std::size_t>(component), POPS_TAGGING_ABOVE_V1,
+                                       bootstrap_tag_spec->threshold, POPS_TAGGING_NO_STENCIL_V1});
         refine_ops.push_back(POPS_TAGGING_ABOVE_V1);
         refine_args.push_back(0);
         provider_identity = bootstrap_tag_spec->provider_identity;
@@ -1100,15 +1079,15 @@ struct AmrSystem::Impl {
 
       if (phi_grad_threshold > 0.0) {
         const std::size_t stencil_index = stencils.size();
-        stencils.push_back(Program::Stencil{
-            "pops.amr.tagging.shared-aux-gradient@1",
-            POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
-            "l2",
-            "inverse_cell_size",
-            "ghost_extension",
-            2,
-            {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
-             Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}});
+        stencils.push_back(
+            Program::Stencil{"pops.amr.tagging.shared-aux-gradient@1",
+                             POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
+                             "l2",
+                             "inverse_cell_size",
+                             "ghost_extension",
+                             2,
+                             {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
+                              Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}});
         const std::size_t leaf_index = leaves.size();
         leaves.push_back(Program::Leaf{blocks.size(), 0, POPS_TAGGING_GRADIENT_ABOVE_V1,
                                        phi_grad_threshold, stencil_index});
@@ -1126,10 +1105,9 @@ struct AmrSystem::Impl {
       }
 
       runtime->set_tagging_program(
-          std::move(stencils), std::move(leaves), std::move(refine_ops),
-          std::move(refine_args), std::move(coarsen_ops), std::move(coarsen_args), min_cycles,
-          equality_policy, conflict_policy, std::move(clock_identity),
-          std::move(provider_identity));
+          std::move(stencils), std::move(leaves), std::move(refine_ops), std::move(refine_args),
+          std::move(coarsen_ops), std::move(coarsen_args), min_cycles, equality_policy,
+          conflict_policy, std::move(clock_identity), std::move(provider_identity));
     }
     // Canonical B_z and model-NAMED aux fields share one native static-field authority. The runtime
     // validates that a block declared each component, publishes coarse->fine immediately, and
@@ -1220,20 +1198,17 @@ void validate_amr_system_config(const AmrSystemConfig& c) {
     throw std::runtime_error("AmrSystem : n >= 1 required (coarse x cells) ; got n = " +
                              std::to_string(c.n));
   if (c.ny < 0)
-    throw std::runtime_error(
-        "AmrSystem : ny must be zero (square shorthand) or >= 1; got ny = " +
-        std::to_string(c.ny));
+    throw std::runtime_error("AmrSystem : ny must be zero (square shorthand) or >= 1; got ny = " +
+                             std::to_string(c.ny));
   if (!(c.L > 0.0))
     throw std::runtime_error("AmrSystem : L > 0 required (Cartesian x extent) ; got L = " +
                              std::to_string(c.L));
   if (c.Ly < 0.0)
-    throw std::runtime_error(
-        "AmrSystem : Ly must be zero (square shorthand) or > 0; got Ly = " +
-        std::to_string(c.Ly));
+    throw std::runtime_error("AmrSystem : Ly must be zero (square shorthand) or > 0; got Ly = " +
+                             std::to_string(c.Ly));
   const double resolved_Ly = c.Ly == 0.0 ? c.L : c.Ly;
   if (!std::isfinite(c.L) || !std::isfinite(resolved_Ly) || !std::isfinite(c.xlo) ||
-      !std::isfinite(c.ylo) || !std::isfinite(c.xlo + c.L) ||
-      !std::isfinite(c.ylo + resolved_Ly))
+      !std::isfinite(c.ylo) || !std::isfinite(c.xlo + c.L) || !std::isfinite(c.ylo + resolved_Ly))
     throw std::runtime_error(
         "AmrSystem : finite Cartesian origin and upper bounds required; got xlo = " +
         std::to_string(c.xlo) + ", ylo = " + std::to_string(c.ylo));
@@ -1302,8 +1277,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           int stride, const std::vector<std::string>& implicit_vars,
                           const std::vector<std::string>& implicit_roles,
                           const NewtonOptions& newton, bool newton_diagnostics,
-                          double positivity_floor, double weno_epsilon,
-                          bool wave_speed_cache) {
+                          double positivity_floor, double weno_epsilon, bool wave_speed_cache) {
   require_assembling_amr(p_->bound_, "add_block");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error(
@@ -1326,11 +1300,9 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
     throw std::runtime_error("AmrSystem::add_block : finite weno_epsilon > 0 required");
   if (weno_epsilon != static_cast<double>(kWenoEpsilon) && limiter != "weno5")
-    throw std::runtime_error(
-        "AmrSystem::add_block : weno_epsilon applies to limiter='weno5' only");
+    throw std::runtime_error("AmrSystem::add_block : weno_epsilon applies to limiter='weno5' only");
   if (wave_speed_cache && riemann != "hll")
-    throw std::runtime_error(
-        "AmrSystem::add_block : wave_speed_cache requires riemann='hll'");
+    throw std::runtime_error("AmrSystem::add_block : wave_speed_cache requires riemann='hll'");
   if (wave_speed_cache && time == "imex")
     throw std::runtime_error(
         "AmrSystem::add_block : wave_speed_cache is supported by explicit AMR transport only");
@@ -1365,7 +1337,6 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
     throw std::runtime_error("AmrSystem : unknown recon '" + recon +
                              "' (valid: " + kReconRouteTokensCsv + ")");
   const bool imex = (time == "imex");
-  const int time_method = amr_time_method_wire_for_route(time);
   // The partial IMEX mask (implicit_vars / implicit_roles) only applies to the IMEX source step:
   // requesting it in explicit is an ERROR (no silent ignore; same guard as System::add_block).
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
@@ -1391,7 +1362,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   b.riemann = riemann;
   b.recon_prim = (recon == "primitive");
   b.imex = imex;
-  b.time_method = time_method;  // 0=euler, 1=ssprk3, 2=ssprk2; threaded at build (single/multi)
+  b.time = time;
   b.implicit_vars =
       implicit_vars;  // partial IMEX mask (resolved into indices at build, build_multi)
   b.implicit_roles = implicit_roles;
@@ -1639,14 +1610,11 @@ POPS_EXPORT void AmrSystem::discard_interface_flux_components() {
     P->runtime->discard_interface_fluxes();
 }
 
-POPS_EXPORT void AmrSystem::set_compiled_block(int ncomp, double gamma, int substeps,
-                                               AmrCompiledBlockBuilder runtime_builder,
-                                               const std::string& name, bool recon_prim, bool imex,
-                                               int time_method, int stride,
-                                               const std::vector<std::string>& implicit_vars,
-                                               const std::vector<std::string>& implicit_roles,
-                                               double pos_floor, double weno_epsilon,
-                                               bool wave_speed_cache) {
+POPS_EXPORT void AmrSystem::set_compiled_block(
+    int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
+    const std::string& name, bool recon_prim, bool imex, const std::string& time, int stride,
+    const std::vector<std::string>& implicit_vars, const std::vector<std::string>& implicit_roles,
+    double pos_floor, double weno_epsilon, bool wave_speed_cache) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
                 // type-erasing builders; the parameter stays for API symmetry with System.
   require_assembling_amr(p_->bound_,
@@ -1661,15 +1629,20 @@ POPS_EXPORT void AmrSystem::set_compiled_block(int ncomp, double gamma, int subs
     throw std::runtime_error(
         "AmrSystem::set_compiled_block requires an executable AmrRuntime block provider");
   if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
+    throw std::runtime_error("AmrSystem::set_compiled_block requires finite weno_epsilon > 0");
+  const bool token_is_imex = time == route_token(TimeRouteId::kImex);
+  if (time != route_token(TimeRouteId::kExplicitSsprk2) &&
+      time != route_token(TimeRouteId::kForwardEuler) &&
+      time != route_token(TimeRouteId::kSsprk3) && !token_is_imex)
+    throw std::runtime_error("AmrSystem::set_compiled_block : unknown time route '" + time + "'");
+  if (imex != token_is_imex)
     throw std::runtime_error(
-        "AmrSystem::set_compiled_block requires finite weno_epsilon > 0");
-  const AmrTimeMethod method = amr_time_method_from_wire(time_method);
-  if (imex && method != AmrTimeMethod::kEuler)
-    throw std::runtime_error(
-        "AmrSystem::set_compiled_block : SSPRK2/SSPRK3 cannot be combined with time='imex'");
+        "AmrSystem::set_compiled_block : imex flag disagrees with canonical time route '" + time +
+        "'");
   if (imex && wave_speed_cache)
     throw std::runtime_error(
-        "AmrSystem::set_compiled_block : wave_speed_cache is supported by explicit AMR transport only");
+        "AmrSystem::set_compiled_block : wave_speed_cache is supported by explicit AMR transport "
+        "only");
   // The partial IMEX mask only applies to the IMEX source step (same guard as add_block):
   // requesting it in explicit is an ERROR (no silent ignore).
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
@@ -1690,7 +1663,7 @@ POPS_EXPORT void AmrSystem::set_compiled_block(int ncomp, double gamma, int subs
   b.stride = stride;
   b.recon_prim = recon_prim;
   b.imex = imex;
-  b.time_method = static_cast<int>(method);
+  b.time = time;
   b.implicit_vars =
       implicit_vars;  // partial IMEX mask (resolved into indices by runtime_builder at build)
   b.implicit_roles = implicit_roles;
@@ -1746,22 +1719,14 @@ POPS_EXPORT void AmrSystem::set_block_elliptic_field(
 
 // Solved potential of a named elliptic field on the coarse level, ny*nx row-major.
 // Builds the hierarchy on first call (ensure_built) then reads from the AmrRuntime engine, which solves
-// the fields (counterpart of potential()). Only the runtime path carries named fields, so the single-block
-// AmrCouplerMP coupler (no named field registered) rejects with a clear message.
+// the fields (counterpart of potential()).
 std::vector<double> AmrSystem::named_field_values(const std::string& field) {
   p_->ensure_built();
-  if (!p_->runtime)
-    throw std::runtime_error(
-        "AmrSystem::named_field_values : named elliptic field '" + field +
-        "' is only solved by the multi-block runtime engine (AmrRuntime). Declare it via "
-        "m.elliptic_field on the block model so the loader registers it.");
   return p_->runtime->named_field_values(field);
 }
 
 std::vector<std::string> AmrSystem::field_provider_slots() const {
   const_cast<Impl*>(p_.get())->ensure_built();
-  if (!p_->runtime)
-    return {};
   return p_->runtime->provider_slots();
 }
 
@@ -1928,8 +1893,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     throw std::runtime_error(
         "AmrSystem::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
   if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
-    throw std::runtime_error(
-        "AmrSystem::add_native_block : finite weno_epsilon > 0 required");
+    throw std::runtime_error("AmrSystem::add_native_block : finite weno_epsilon > 0 required");
   if (weno_epsilon != static_cast<double>(kWenoEpsilon) && limiter != "weno5")
     throw std::runtime_error(
         "AmrSystem::add_native_block : weno_epsilon applies to limiter='weno5' only");
@@ -1938,28 +1902,28 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
         "AmrSystem::add_native_block : wave_speed_cache requires riemann='hll'");
   if (wave_speed_cache && time == "imex")
     throw std::runtime_error(
-        "AmrSystem::add_native_block : wave_speed_cache is supported by explicit AMR transport only");
+        "AmrSystem::add_native_block : wave_speed_cache is supported by explicit AMR transport "
+        "only");
   // UPSTREAM scheme validation (like add_block): add_compiled_model(AmrSystem&) rejects unknown
   // time routes and recon outside {conservative, primitive}, but we diagnose HERE a
-  // typo before the C++ boundary. time == "imex" => stiff source handled IMPLICITLY
-  // (backward_euler_source), explicit transport carried by the reflux. limiter (including weno5, wired #105)
-  // and riemann (including hllc/roe, wired at parity #113) are validated by the compiled runtime builder
-  // in the loader (clear exception).
+  // typo before the C++ boundary. The installed Program lowers time == "imex" into its explicit and
+  // implicit stages. limiter (including weno5, wired #105) and riemann (including hllc/roe, wired at
+  // parity #113) are validated by the compiled spatial builder in the loader (clear exception).
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error(
         "AmrSystem::add_native_block : recon 'conservative' | 'primitive' "
         "(got '" +
         recon + "')");
-  // The flat loader ABI already marshals the canonical time STRING. The regenerated header template
-  // lowers it to the stable AMR method wire, so Euler, SSPRK2 and SSPRK3 retain their real semantics.
+  // The flat loader ABI marshals the canonical time STRING for Program normalization and inspection;
+  // the spatial block builder does not decode it into a second time method.
   if (time != "explicit" && time != "euler" && time != "ssprk3" && time != "imex")
     throw std::runtime_error("AmrSystem::add_native_block : time must be one of " +
                              amr_time_routes_csv() + " (got '" + time + "')");
   // DSL "production" path on the AMR side: the generated .so loader (emit_cpp_native_loader with
   // target="amr_system") inlines the header template add_compiled_model(AmrSystem&, ...), which
-  // materializes a concrete AmrCouplerMP<Model> at lazy build and installs its hooks via
-  // set_compiled_block -- NATIVE path, SAME AMR hierarchy as add_block (reflux, regrid). The loader
-  // thus calls set_compiled_block (out-of-line method of pops::AmrSystem) DEFINED in THIS module;
+  // materializes a concrete AmrRuntimeBlock at lazy build and installs its Program primitives via
+  // set_compiled_block on the same hierarchy as add_block. The loader thus calls set_compiled_block
+  // (out-of-line method of pops::AmrSystem) DEFINED in THIS module;
   // it must be resolved through the dlopen against the already-loaded _pops module.
   // ELF PORTABILITY (Linux): CPython loads _pops with RTLD_LOCAL, so its symbols are NOT in
   // the global scope. We PROMOTE the current module to global scope (RTLD_NOLOAD = without
@@ -1991,9 +1955,9 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                                loader_key + "' != module '" + module_key + "'");
     }
     verify_amr_package(h, params);
-    using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
-                                  const char*, double, int, const double*, int, double, double,
-                                  bool);
+    using install_fn_t =
+        void (*)(void*, const char*, const char*, const char*, const char*, const char*, double,
+                 int, const double*, int, double, double, bool);
     auto install = reinterpret_cast<install_fn_t>(pops::dynlib::sym(h, "pops_install_native_amr"));
     if (!install) {
       pops::dynlib::close(h);
@@ -2075,6 +2039,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     b.riemann = riemann;
     b.recon_prim = (recon == "primitive");
     b.imex = (time == "imex");
+    b.time = time;
     b.gamma = gamma;
     b.substeps = substeps;
     b.pos_floor = positivity_floor;
@@ -2083,18 +2048,19 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   }
 }
 
-void AmrSystem::add_external_riemann_block(
-    const std::string& name, const std::string& so_path, const std::string& brick_id,
-    const std::string& sha256, const std::string& limiter, const std::string& recon,
-    const std::string& time, double gamma, int substeps, int stride, int expected_nvars,
-    int expected_naux, const std::string& expected_model_identity, double positivity_floor,
-    double weno_epsilon) {
+void AmrSystem::add_external_riemann_block(const std::string& name, const std::string& so_path,
+                                           const std::string& brick_id, const std::string& sha256,
+                                           const std::string& limiter, const std::string& recon,
+                                           const std::string& time, double gamma, int substeps,
+                                           int stride, int expected_nvars, int expected_naux,
+                                           const std::string& expected_model_identity,
+                                           double positivity_floor, double weno_epsilon) {
   require_assembling_amr(p_->bound_, "add_external_riemann_block");
   auto library = std::make_shared<runtime::program::ExternalBrickHandle>(
       so_path, brick_id, sha256, expected_nvars, expected_naux, expected_model_identity);
   p_->external_riemann_libraries_.push_back(library);
-  library->install_amr(this, name, limiter, recon, time, gamma, substeps, stride,
-                       positivity_floor, weno_epsilon);
+  library->install_amr(this, name, limiter, recon, time, gamma, substeps, stride, positivity_floor,
+                       weno_epsilon);
   const int installed_idx = p_->block_index(name);
   if (installed_idx >= 0) {
     Impl::BlockSpec& block = p_->blocks[static_cast<std::size_t>(installed_idx)];
@@ -2634,8 +2600,7 @@ void AmrSystem::set_conservative_state(const std::string& name, const std::vecto
   // at build (coupler_write_coarse_state), the only place where ncomp == Model::n_vars is known -- same
   // deferral as the dense-cell guard of set_density. We explicitly reject an EMPTY state (0 % nn == 0 would
   // otherwise set has_state=true with an empty state, which would only throw deep in the 1st step).
-  const std::size_t nn =
-      static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
+  const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
   if (U.empty())
     throw std::runtime_error(
         "AmrSystem::set_conservative_state : empty state (expected ncomp*ny*nx)");
@@ -2765,10 +2730,9 @@ void AmrSystem::register_bootstrap_array(const std::string& subject, const std::
     throw std::runtime_error(
         "AmrSystem::register_bootstrap_array centering differs from its transfer route");
   const int base_nx = p_->cfg.n, base_ny = p_->cfg.ny;
-  const bool shape_ok =
-      (centering == "node" && nx == base_nx + 1 && ny == base_ny + 1) ||
-      (centering == "face_x" && nx == base_nx + 1 && ny == base_ny) ||
-      (centering == "face_y" && nx == base_nx && ny == base_ny + 1);
+  const bool shape_ok = (centering == "node" && nx == base_nx + 1 && ny == base_ny + 1) ||
+                        (centering == "face_x" && nx == base_nx + 1 && ny == base_ny) ||
+                        (centering == "face_y" && nx == base_nx && ny == base_ny + 1);
   if (!shape_ok || ncomp < 1 || values.size() != static_cast<std::size_t>(ncomp) * nx * ny)
     throw std::runtime_error(
         "AmrSystem::register_bootstrap_array received an incompatible centered array shape");
@@ -2876,10 +2840,10 @@ void AmrSystem::register_analytic_gaussian(const std::string& subject, const std
       subject, Impl::BootstrapGaussian{center_x, center_y, background, amplitude, inverse_width});
 }
 
-void AmrSystem::register_analytic_expression(
-    const std::string& subject, const std::string& block, const std::string& space,
-    const std::string& centering, const std::vector<std::vector<std::string>>& opcodes,
-    const std::vector<std::vector<double>>& literals) {
+void AmrSystem::register_analytic_expression(const std::string& subject, const std::string& block,
+                                             const std::string& space, const std::string& centering,
+                                             const std::vector<std::vector<std::string>>& opcodes,
+                                             const std::vector<std::vector<double>>& literals) {
   using BlockSubjectMap = decltype(p_->bootstrap_block_subjects);
   using ExpressionMap = decltype(p_->bootstrap_analytic_expressions);
   struct PreparedRegistration {
@@ -2937,10 +2901,9 @@ std::int64_t AmrSystem::bootstrap_analytic_reproject(const std::string& subject,
   const auto gaussian = p_->bootstrap_analytic_gaussians.find(subject);
   const auto expression = p_->bootstrap_analytic_expressions.find(subject);
   const auto route_found = p_->bootstrap_subject_routes.find({subject, "prolongation"});
-  const int provider_count =
-      (constants != p_->bootstrap_analytic_constants.end() ? 1 : 0) +
-      (gaussian != p_->bootstrap_analytic_gaussians.end() ? 1 : 0) +
-      (expression != p_->bootstrap_analytic_expressions.end() ? 1 : 0);
+  const int provider_count = (constants != p_->bootstrap_analytic_constants.end() ? 1 : 0) +
+                             (gaussian != p_->bootstrap_analytic_gaussians.end() ? 1 : 0) +
+                             (expression != p_->bootstrap_analytic_expressions.end() ? 1 : 0);
   if (provider_count != 1 || route_found == p_->bootstrap_subject_routes.end())
     throw std::runtime_error("analytic bootstrap source/route is not registered");
   const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
@@ -3090,12 +3053,11 @@ void AmrSystem::set_magnetic_field(const std::vector<double>& bz) {
     throw std::runtime_error(
         "AmrSystem::set_magnetic_field : the system is already built "
         "(set B_z before any step)");
-  const std::size_t nn =
-      static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
+  const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
   if (bz.size() != nn)
     throw std::runtime_error("AmrSystem::set_magnetic_field : B_z of size " +
-                             std::to_string(bz.size()) + " (expected ny*nx = " + std::to_string(nn) +
-                             ", coarse row-major)");
+                             std::to_string(bz.size()) +
+                             " (expected ny*nx = " + std::to_string(nn) + ", coarse row-major)");
   p_->bz_field = bz;
 }
 
@@ -3111,8 +3073,7 @@ void AmrSystem::set_aux_field_component(int comp, const std::vector<double>& fie
         "AmrSystem::set_aux_field : component " + std::to_string(comp) +
         " reserved (phi/grad_x/grad_y/B_z/T_e) ; a named aux field starts at index " +
         std::to_string(kAuxNamedBase) + " (B_z -> set_magnetic_field)");
-  const std::size_t nn =
-      static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
+  const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.ny);
   if (field.size() != nn)
     throw std::runtime_error("AmrSystem::set_aux_field : field of size " +
                              std::to_string(field.size()) +
@@ -3146,14 +3107,11 @@ void AmrSystem::add_coupled_source(const CoupledSourceProgram& prog, double freq
     throw std::runtime_error(
         "AmrSystem::add_coupled_source : the system is already built "
         "(register the source before any step/mass/density)");
-  // MULTI-BLOCK only: a COUPLED source reads/writes SEVERAL named blocks; the single-block path
-  // (AmrCouplerMP) has no block registry and carries its source via the model. We thus refuse a
-  // coupled source as long as there are fewer than two blocks (EXPLICIT error rather than a silent no-op).
+  // A COUPLED source reads/writes SEVERAL named blocks. Refuse it when fewer than two blocks exist
+  // (explicit contract error rather than a silent single-block no-op).
   if (p_->blocks.size() < 2)
     throw std::runtime_error(
-        "AmrSystem::add_coupled_source : inter-species coupled source supported "
-        "only in MULTI-BLOCK (>= 2 add_block) ; the single-block carries its source "
-        "via the block model");
+        "AmrSystem::add_coupled_source : an inter-species source requires at least two blocks");
   // Bytecode description grouped into a POD (ADC-214). MINIMAL form validation here (list size);
   // the FINE validation (roles, blocks, opcodes, registers) is done by
   // AmrRuntime::add_coupled_source at injection (lazy build), exactly as System delegates to
@@ -3431,9 +3389,6 @@ void AmrSystem::materialize_program_restart_histories(const std::vector<std::uin
                                                       const std::vector<int>& depths,
                                                       const std::vector<int>& ncomps) {
   p_->ensure_built();
-  if (!p_->runtime)
-    throw std::runtime_error(
-        "AMR Program restart histories require the multi-block runtime engine");
   if (names.size() != depths.size() || names.size() != ncomps.size())
     throw std::invalid_argument(
         "AMR Program restart history names/depths/component counts must have equal length");
@@ -3641,15 +3596,13 @@ RuntimeParams AmrSystem::program_params(int prog_block) const {
   // Unseeded block (no runtime param) -> default RuntimeParams (count 0). Shared subsystem (ADC-594).
   return p_->program_.params(prog_block);
 }
-// The built multi-block AMR engine the AmrProgramContext driver wraps (nullptr before the lazy build /
-// on the single-block coupler path). install_program forces the runtime build so this is live there.
+// The built AMR spatial engine the AmrProgramContext driver wraps (nullptr before the lazy build).
+// install_program forces the runtime build so this is live there.
 AmrRuntime* AmrSystem::engine() const {
   return p_->runtime.get();
 }
-// True on the multi-block AmrRuntime engine (a compiled Program forces it even for ONE block), false on
-// the single-block AmrCouplerMP coupler. The v3 checkpoint routes state I/O on this (n_blocks()==1 does
-// NOT imply the coupler): the per-block accessors work for any block count on the runtime engine, while
-// n_vars / level_state throw there (kAmrCkptMonoOnly).
+// Compatibility predicate retained across the loader ABI. Every built AMR system now owns AmrRuntime;
+// n_vars / level_state remain one-block convenience accessors.
 bool AmrSystem::uses_runtime_engine() const {
   p_->ensure_built();
   return p_->runtime != nullptr;
@@ -4011,24 +3964,21 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
     report.amr_refinement.tagging_authority = "prepared_threshold";
   } else {
     report.amr_refinement.threshold = p_->refine_threshold;
-    report.amr_refinement.disabled_policy = report.amr_refinement.disabled
-                                                ? "no_active_tagging_criterion"
-                                                : "facade_threshold";
+    report.amr_refinement.disabled_policy =
+        report.amr_refinement.disabled ? "no_active_tagging_criterion" : "facade_threshold";
     report.amr_refinement.variable = p_->refine_var_name;
     report.amr_refinement.role = p_->refine_var_role;
-    report.amr_refinement.tagging_provider_identity =
-        "pops.amr.tagging.component-threshold@1";
+    report.amr_refinement.tagging_provider_identity = "pops.amr.tagging.component-threshold@1";
     report.amr_refinement.tagging_authority = "native_threshold_program";
   }
   report.amr_refinement.tagging_execution_provider_identity =
       p_->amr_tagger_component_ ? p_->amr_tagger_component_->provider_identity()
-                               : "pops.amr.tagging.native-kokkos-vm@1";
+                                : "pops.amr.tagging.native-kokkos-vm@1";
   report.amr_refinement.phi_grad_threshold = p_->phi_grad_threshold;
   report.amr_refinement.phi_refinement_enabled = has_phi_gradient;
   if (has_phi_gradient)
     report.amr_refinement.tagging_provider_identity =
-        "pops.amr.tagging.composite@1[" +
-        report.amr_refinement.tagging_provider_identity +
+        "pops.amr.tagging.composite@1[" + report.amr_refinement.tagging_provider_identity +
         ";pops.amr.tagging.shared-aux-gradient@1]";
   if (p_->amr_clustering_component_) {
     report.amr_refinement.clustering_provider_identity =
@@ -4057,8 +4007,8 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
     row.limiter = b.limiter;
     row.riemann = b.riemann;
     row.recon = b.recon_prim ? "primitive" : "conservative";
-    row.time = b.imex ? "imex" : amr_effective_time_route_token(b.time_method);
-    row.time_method = b.imex ? "imex" : amr_effective_time_method_token(b.time_method);
+    row.time = b.time;
+    row.time_method = amr_program_method_label(b.time);
     row.imex = b.imex;
     row.substeps = b.substeps;
     row.stride = b.stride;
@@ -4184,9 +4134,9 @@ void AmrSystem::set_hierarchy(const std::vector<PatchBox>& boxes) {
   rebuild_hierarchy(boxes, std::vector<int>(boxes.size(), 0));
 }
 
-// Impose a mid-run MULTI-BLOCK hierarchy from a v3 checkpoint (ADC-542). Regroups the flat level-tagged
+// Impose a mid-run hierarchy from a v3 checkpoint (ADC-542). Regroups the flat level-tagged
 // box + owner-rank arrays by level and forwards to AmrRuntime::rebuild_hierarchy (all levels rebuilt,
-// reusing regrid R6/R7). MULTI-BLOCK / runtime engine only.
+// reusing regrid R6/R7).
 void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
                                   const std::vector<int>& owner_ranks) {
   p_->ensure_built();
@@ -4196,8 +4146,7 @@ void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
   int nlev = 1;
   for (const PatchBox& box : boxes) {
     if (box.level < 1)
-      throw std::runtime_error(
-          "AmrSystem::rebuild_hierarchy accepts only fine-level patch boxes");
+      throw std::runtime_error("AmrSystem::rebuild_hierarchy accepts only fine-level patch boxes");
     nlev = std::max(nlev, box.level + 1);
   }
   if (nlev > p_->runtime->max_levels())
@@ -4298,10 +4247,9 @@ std::vector<std::vector<std::string>> AmrSystem::checkpoint_transfer_routes() co
   return rows;
 }
 
-// --- MULTI-BLOCK per-BLOCK per-level checkpoint accessors (ADC-509) --------------------------------
-// All require the multi-block runtime (the AmrRuntime engine carries the per-block level stacks on the
-// SHARED layout): mono-block uses the level_state path above (explicit redirection). The named block is
-// resolved to its index; the runtime accessors mirror AmrCouplerMP's (verbatim loops -> same layout).
+// --- Per-block per-level checkpoint accessors (ADC-509) ---------------------------------------------
+// AmrRuntime carries every block's level stack on the shared layout. The named block is resolved to
+// its index; one-block callers may also use the unqualified convenience accessors above.
 int AmrSystem::block_n_vars(const std::string& name) {
   p_->ensure_built();
   return p_->runtime->block_n_vars(p_->block_index_or_throw(name));
@@ -4361,13 +4309,11 @@ void AmrSystem::set_level_aux_flat(int k, const std::vector<double>& v) {
 // python/pops/runtime/_system_io_history.py serialize/restore is reused verbatim: history_global
 // returns the per-level slices concatenated into ONE flat buffer (the level axis hidden inside the
 // accessor, parity with level_aux_flat), restore_history scatters it back per level. The engine is the
-// multi-block AmrRuntime (install_program forces its build); an engine-less coupler has no rings ->
-// history_names() is empty and serialize_histories is a no-op. rebuild_history_slots replays the
+// shared AmrRuntime (install_program forces its build). rebuild_history_slots replays the
 // policy-recomputed slots by re-stepping the installed Program closure (owned by this facade).
 namespace {
 const char* const kAmrHistNoEngine =
-    "AmrSystem : multistep history rings require the multi-block AmrRuntime engine (a compiled AMR "
-    "Program forces its build via install_program); this system has none.";
+    "AmrSystem : multistep history rings require the resolved AmrRuntime engine.";
 }  // namespace
 
 std::vector<std::string> AmrSystem::history_names() const {

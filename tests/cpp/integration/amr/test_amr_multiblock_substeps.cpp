@@ -98,8 +98,7 @@ static double dmax_field(const std::vector<double>& a, const std::vector<double>
 // Test-only authored Program with per-block cadence. The old AmrRuntime::step owned this loop
 // implicitly; ADC-700 makes it explicit: each block's stride decides whether it is due, and its
 // substeps determine the Euler intervals evaluated by the Program over every hierarchy clock.
-static void install_multirate_forward_euler_program(AmrSystem& system,
-                                                    std::vector<int> substeps,
+static void install_multirate_forward_euler_program(AmrSystem& system, std::vector<int> substeps,
                                                     std::vector<int> strides) {
   if (substeps.size() != strides.size() ||
       substeps.size() != static_cast<std::size_t>(system.n_blocks()))
@@ -141,10 +140,11 @@ static void install_multirate_forward_euler_program(AmrSystem& system,
 
 // Construit une facade AmrSystem a DEUX blocs ExB sur une hierarchie partagee et installe le Program
 // multirate explicite ci-dessus. AmrRuntime reste uniquement le moteur spatial inspecte par le test.
-static std::unique_ptr<AmrSystem> make_two_block(
-    int N, double L, double q0, double q1, double B0, const std::vector<double>& rho0,
-    const std::vector<double>& rho1, const std::string& lim0, const std::string& lim1, int sub0,
-    int sub1, int stride0, int stride1) {
+static std::unique_ptr<AmrSystem> make_two_block(int N, double L, double q0, double q1, double B0,
+                                                 const std::vector<double>& rho0,
+                                                 const std::vector<double>& rho1,
+                                                 const std::string& lim0, const std::string& lim1,
+                                                 int sub0, int sub1, int stride0, int stride1) {
   AmrSystemConfig cfg;
   cfg.n = N;
   cfg.L = L;
@@ -207,31 +207,29 @@ static std::unique_ptr<AmrSystem> make_temporal_contract_system(
   auto system = std::make_unique<AmrSystem>(cfg);
   AmrCompiledBlockBuilder builder =
       [mode](const detail::SharedAmrLayout& layout, const std::string& name,
-             const std::vector<double>& density, bool has_density,
-             const std::vector<double>& state, bool has_state, double gamma, int substeps,
-             bool recon_prim, bool imex, int stride, const std::vector<std::string>& implicit_vars,
-             const std::vector<std::string>& implicit_roles, double pos_floor,
-             double weno_epsilon, bool wave_speed_cache) {
+             const std::vector<double>& density, bool has_density, const std::vector<double>& state,
+             bool has_state, double gamma, int substeps, bool recon_prim, bool imex, int stride,
+             const std::vector<std::string>& implicit_vars,
+             const std::vector<std::string>& implicit_roles, double pos_floor, double weno_epsilon,
+             bool wave_speed_cache) {
         if (imex || !implicit_vars.empty() || !implicit_roles.empty())
           throw std::invalid_argument("temporal-contract test block is explicit");
         return detail::build_amr_block<TemporalContractModel, NoSlope, RusanovFlux>(
             TemporalContractModel{mode}, layout, name, density, has_density, gamma, substeps,
-            recon_prim, /*imex=*/false, stride, {}, NewtonOptions{},
-            has_state ? &state : nullptr, /*newton_diagnostics=*/false, AmrTimeMethod::kEuler,
-            pos_floor, weno_epsilon, wave_speed_cache);
+            recon_prim, /*imex=*/false, stride, {}, NewtonOptions{}, has_state ? &state : nullptr,
+            /*newton_diagnostics=*/false, pos_floor, weno_epsilon, wave_speed_cache);
       };
-  system->set_compiled_block(TemporalContractModel::n_vars, 1.4, /*substeps=*/1,
-                             std::move(builder), "clocked");
+  system->set_compiled_block(TemporalContractModel::n_vars, 1.4, /*substeps=*/1, std::move(builder),
+                             "clocked");
   system->set_density("clocked", initial);
   system->set_poisson("charge_density", "geometric_mg", "periodic");
   // A configured (but never re-evaluated) criterion selects the two-level hierarchy template.
   system->set_refinement(1e29);
   const amr::Rational ratio = relation.temporal_ratio();
-  system->set_temporal_relations(
-      {ratio.numerator}, {ratio.denominator},
-      {relation.remainder_policy() == amr::RemainderPolicy::IntegralOnly
-           ? "integral_only"
-           : "explicit_final_substep"});
+  system->set_temporal_relations({ratio.numerator}, {ratio.denominator},
+                                 {relation.remainder_policy() == amr::RemainderPolicy::IntegralOnly
+                                      ? "integral_only"
+                                      : "explicit_final_substep"});
   test::install_forward_euler_program(*system);
   return system;
 }

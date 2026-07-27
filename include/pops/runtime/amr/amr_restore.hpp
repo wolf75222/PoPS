@@ -257,7 +257,7 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
         maximum_refinement_ratios_.begin(),
         maximum_refinement_ratios_.begin() + static_cast<std::ptrdiff_t>(n_levels - 1));
     nlev_ = n_levels;
-    refresh_active_temporal_plan_();
+    refresh_active_temporal_relations_();
 
     // Checkpoint payloads overwrite every valid value. Reallocate the exact active prefix without
     // prolongation/restriction, retaining only level-zero accepted storage until its payload lands.

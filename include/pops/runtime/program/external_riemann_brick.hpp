@@ -198,17 +198,9 @@ void external_install_amr(AmrSystem& sys, const std::string& name, const std::st
     throw std::runtime_error(
         "external riemann brick: time route 'imexrk_ars222' is not wired on the AMR compiled path");
   const bool imex = time_route == TimeRouteId::kImex;
-  AmrTimeMethod time_method = AmrTimeMethod::kEuler;
-  if (time_route == TimeRouteId::kExplicitSsprk2)
-    time_method = AmrTimeMethod::kSsprk2;
-  else if (time_route == TimeRouteId::kSsprk3)
-    time_method = AmrTimeMethod::kSsprk3;
-  if (imex && time_method != AmrTimeMethod::kEuler)
-    throw std::runtime_error(
-        "external riemann brick: SSPRK2/SSPRK3 cannot be combined with AMR IMEX");
 
   Model model{};
-  AmrCompiledBlockBuilder builder = [model, limiter, time_method](
+  AmrCompiledBlockBuilder builder = [model, limiter](
                                         const ::pops::detail::SharedAmrLayout& layout,
                                         const std::string& block_name,
                                         const std::vector<double>& density, bool has_density,
@@ -229,13 +221,12 @@ void external_install_amr(AmrSystem& sys, const std::string& name, const std::st
                               return ::pops::detail::build_amr_block<Model, Limiter, Flux>(
                                   model, layout, block_name, density, has_density, block_gamma,
                                   block_substeps, block_recon_prim, block_imex, block_stride, {},
-                                  NewtonOptions{}, has_state ? &state : nullptr, false, time_method,
+                                  NewtonOptions{}, has_state ? &state : nullptr, false,
                                   block_positivity_floor, block_weno_epsilon, false);
                             });
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(builder), name, recon_prim, imex,
-                         static_cast<int>(time_method), stride, {}, {}, positivity_floor,
-                         weno_epsilon, false);
+                         time, stride, {}, {}, positivity_floor, weno_epsilon, false);
 }
 
 }  // namespace detail

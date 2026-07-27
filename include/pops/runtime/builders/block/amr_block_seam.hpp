@@ -2,7 +2,7 @@
 
 #include <pops/core/state/variables.hpp>  // VariableSet/VariableRole/role_from_name (resolve mask)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // dispatch_amr_block + AmrBuildParams
-#include <pops/runtime/amr/amr_runtime.hpp>                 // AmrRuntimeBlock + AmrTimeMethod
+#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntimeBlock spatial registry
 #include <pops/runtime/builders/factory/model_factory.hpp>  // dispatch_model_for + compiled bricks + ModelSpec
 
 #include <algorithm>
@@ -84,14 +84,13 @@ struct AmrBlockBuildArgs {
   NewtonOptions newton;
   const std::vector<double>* state;  // &BlockSpec::state when has_state, else nullptr (non-owning)
   bool newton_diagnostics;
-  int time_method;  // stable AmrTimeMethod wire: 0=euler, 1=ssprk3, 2=ssprk2
   double pos_floor;
   double weno_epsilon;
   bool wave_speed_cache;
 };
 
-/// VERBATIM build_multi visitor body with the transport pinned: resolve the partial IMEX mask against the
-/// concrete model, map the temporal method, and produce the type-erased AmrRuntimeBlock via dispatch_amr_block.
+/// Build-multi visitor body with the transport pinned: resolve the partial IMEX mask against the
+/// concrete model and produce the type-erased spatial AmrRuntimeBlock.
 template <class TR>
 AmrRuntimeBlock build_amr_block_for(TR tr, const AmrBlockBuildArgs& a, const SharedAmrLayout& S) {
   AmrRuntimeBlock out;
@@ -101,10 +100,9 @@ AmrRuntimeBlock build_amr_block_for(TR tr, const AmrBlockBuildArgs& a, const Sha
         a.imex ? resolve_implicit_components_amr(a.name, M::conservative_vars(), a.implicit_vars,
                                                  a.implicit_roles)
                : std::vector<int>{};
-    const AmrTimeMethod tmethod = amr_time_method_from_wire(a.time_method);
     out = dispatch_amr_block(m, a.limiter, a.riemann, S, a.name, a.density, a.has_density, a.gamma,
                              a.substeps, a.recon_prim, a.imex, a.stride, impl_components, a.newton,
-                             a.state, a.newton_diagnostics, tmethod, a.pos_floor, a.weno_epsilon,
+                             a.state, a.newton_diagnostics, a.pos_floor, a.weno_epsilon,
                              a.wave_speed_cache);
   });
   return out;
@@ -112,8 +110,8 @@ AmrRuntimeBlock build_amr_block_for(TR tr, const AmrBlockBuildArgs& a, const Sha
 
 /// ADC-359 flux subdivision (compressible only): like build_amr_block_for, but the riemann dispatch is
 /// supplied by @p dispatch (a flux-pinned detail::dispatch_amr_block_<flux>), so each per-flux compressible
-/// seam TU instantiates ONE flux's build_amr_block leaves and they compile in parallel. The impl_components
-/// / tmethod resolution is IDENTICAL to build_amr_block_for; validate_riemann/limiter run once in the thin
+/// seam TU instantiates ONE flux's build_amr_block leaves and they compile in parallel. The implicit
+/// component resolution is IDENTICAL to build_amr_block_for; validate_riemann/limiter run once in the thin
 /// dispatcher (python/amr_block_compressible.cpp), so the reachable leaf set stays the same.
 template <class TR, class DispatchFn>
 AmrRuntimeBlock build_amr_block_for_flux(TR tr, const AmrBlockBuildArgs& a,
@@ -125,8 +123,7 @@ AmrRuntimeBlock build_amr_block_for_flux(TR tr, const AmrBlockBuildArgs& a,
         a.imex ? resolve_implicit_components_amr(a.name, M::conservative_vars(), a.implicit_vars,
                                                  a.implicit_roles)
                : std::vector<int>{};
-    const AmrTimeMethod tmethod = amr_time_method_from_wire(a.time_method);
-    out = dispatch(m, a, S, impl_components, tmethod);
+    out = dispatch(m, a, S, impl_components);
   });
   return out;
 }

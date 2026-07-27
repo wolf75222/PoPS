@@ -151,22 +151,21 @@ double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
 
 template <class Model>
 AmrCompiledBlockBuilder make_program_block_builder(Model model) {
-  return [model](const detail::SharedAmrLayout& layout, const std::string& name,
-                 const std::vector<double>& density, bool has_density,
-                 const std::vector<double>& state, bool has_state, double gamma, int substeps,
-                 bool recon_prim, bool imex, int stride,
-                 const std::vector<std::string>& implicit_vars,
-                 const std::vector<std::string>& implicit_roles, double pos_floor,
-                 double weno_epsilon, bool wave_speed_cache) {
-    if (imex || !implicit_vars.empty() || !implicit_roles.empty())
-      throw std::invalid_argument(
-          "the IMEX test Program owns source treatment; its spatial block must be explicit");
-    return detail::build_amr_block<Model, Minmod, RusanovFlux>(
-        model, layout, name, density, has_density, gamma, substeps, recon_prim,
-        /*imex=*/false, stride, {}, NewtonOptions{}, has_state ? &state : nullptr,
-        /*newton_diagnostics=*/false, AmrTimeMethod::kEuler, pos_floor, weno_epsilon,
-        wave_speed_cache);
-  };
+  return
+      [model](const detail::SharedAmrLayout& layout, const std::string& name,
+              const std::vector<double>& density, bool has_density,
+              const std::vector<double>& state, bool has_state, double gamma, int substeps,
+              bool recon_prim, bool imex, int stride, const std::vector<std::string>& implicit_vars,
+              const std::vector<std::string>& implicit_roles, double pos_floor, double weno_epsilon,
+              bool wave_speed_cache) {
+        if (imex || !implicit_vars.empty() || !implicit_roles.empty())
+          throw std::invalid_argument(
+              "the IMEX test Program owns source treatment; its spatial block must be explicit");
+        return detail::build_amr_block<Model, Minmod, RusanovFlux>(
+            model, layout, name, density, has_density, gamma, substeps, recon_prim,
+            /*imex=*/false, stride, {}, NewtonOptions{}, has_state ? &state : nullptr,
+            /*newton_diagnostics=*/false, pos_floor, weno_epsilon, wave_speed_cache);
+      };
 }
 
 // Install one explicitly authored Lie Program:
@@ -182,47 +181,44 @@ void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool 
   auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
   context->configure_primary_clock("test.clock.macro");
   context->install([context, stiff_model, implicit_stiff, stiff_substeps](double macro_dt) {
-    context->advance_hierarchy(
-        macro_dt, [context, stiff_model, implicit_stiff, stiff_substeps](double level_dt) {
-          (void)context->solve_fields();
-          MultiFab& stiff_live = context->state(0);
-          MultiFab& neutral_live = context->state(1);
-          MultiFab& stiff_candidate = context->scratch_state(1000, 0, stiff_live);
-          MultiFab& neutral_candidate = context->scratch_state(1001, 0, neutral_live);
-          context->lincomb(stiff_candidate, Real(1), stiff_live, Real(0), stiff_live);
-          context->lincomb(neutral_candidate, Real(1), neutral_live, Real(0), neutral_live);
+    context->advance_hierarchy(macro_dt, [context, stiff_model, implicit_stiff,
+                                          stiff_substeps](double level_dt) {
+      (void)context->solve_fields();
+      MultiFab& stiff_live = context->state(0);
+      MultiFab& neutral_live = context->state(1);
+      MultiFab& stiff_candidate = context->scratch_state(1000, 0, stiff_live);
+      MultiFab& neutral_candidate = context->scratch_state(1001, 0, neutral_live);
+      context->lincomb(stiff_candidate, Real(1), stiff_live, Real(0), stiff_live);
+      context->lincomb(neutral_candidate, Real(1), neutral_live, Real(0), neutral_live);
 
-          const Real stiff_dt = Real(level_dt) / static_cast<Real>(stiff_substeps);
-          for (int substep = 0; substep < stiff_substeps; ++substep) {
-            context->set_stage_time(substep, stiff_substeps);
-            MultiFab& stiff_rate =
-                context->rhs_scratch(2000 + substep, 0, stiff_candidate);
-            if (implicit_stiff) {
-              context->neg_div_flux_default_into(0, stiff_candidate, stiff_rate, 3000 + substep);
-              context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
-              backward_euler_source(stiff_model, context->aux(), stiff_candidate, stiff_dt,
-                                    NewtonOptions{}, ImplicitMask<StiffModel::n_vars>{}, nullptr);
-            } else {
-              context->rhs_into(0, stiff_candidate, stiff_rate, 3000 + substep);
-              context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
-            }
-          }
+      const Real stiff_dt = Real(level_dt) / static_cast<Real>(stiff_substeps);
+      for (int substep = 0; substep < stiff_substeps; ++substep) {
+        context->set_stage_time(substep, stiff_substeps);
+        MultiFab& stiff_rate = context->rhs_scratch(2000 + substep, 0, stiff_candidate);
+        if (implicit_stiff) {
+          context->neg_div_flux_default_into(0, stiff_candidate, stiff_rate, 3000 + substep);
+          context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
+          backward_euler_source(stiff_model, context->aux(), stiff_candidate, stiff_dt,
+                                NewtonOptions{}, ImplicitMask<StiffModel::n_vars>{}, nullptr);
+        } else {
+          context->rhs_into(0, stiff_candidate, stiff_rate, 3000 + substep);
+          context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
+        }
+      }
 
-          context->set_stage_time(0, 1);
-          MultiFab& neutral_rate = context->rhs_scratch(2100, 0, neutral_candidate);
-          context->rhs_into(1, neutral_candidate, neutral_rate, 3100);
-          context->axpy(neutral_candidate, Real(level_dt), neutral_rate, Real(level_dt),
-                        {{1, 1, 1}});
-          context->commit_many(
-              {{&stiff_live, &stiff_candidate}, {&neutral_live, &neutral_candidate}});
-        });
+      context->set_stage_time(0, 1);
+      MultiFab& neutral_rate = context->rhs_scratch(2100, 0, neutral_candidate);
+      context->rhs_into(1, neutral_candidate, neutral_rate, 3100);
+      context->axpy(neutral_candidate, Real(level_dt), neutral_rate, Real(level_dt), {{1, 1, 1}});
+      context->commit_many({{&stiff_live, &stiff_candidate}, {&neutral_live, &neutral_candidate}});
+    });
   });
 }
 
 // Construit une facade AmrSystem a deux blocs sur une hierarchie deux niveaux. Les builders ne
 // transportent aucune decision temporelle : le Program ci-dessus est l'unique autorite IMEX/explicite.
 std::unique_ptr<AmrSystem> make_stiff_pair(int N, double L, double eps, bool imex_stiff,
-                                          const std::vector<double>& rho, int substeps = 1) {
+                                           const std::vector<double>& rho, int substeps = 1) {
   AmrSystemConfig cfg;
   cfg.n = N;
   cfg.L = L;
