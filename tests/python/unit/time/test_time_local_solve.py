@@ -168,10 +168,11 @@ def test_local_linear_solve_is_collective_fail_closed_before_commit(t):
 
     assert source.count("pops::reduce_max(local_solve_status_") == 2
     assert source.count("pops::SolveReport local_solve_report_") == 2
+    assert source.count("pops::SolveOutcome local_solve_outcome_") == 2
     assert "pops::SolveStatus::kSingular" in source
     assert "pops::SolveStatus::kInvalidEvaluation" in source
     assert "if (solve_failure_ == 0 && !pops::detail::mat_inverse<1>" in source
-    first_guard = source.index("if (!local_solve_report_")
+    first_guard = source.index("if (!local_solve_outcome_")
     first_commit = source.index("ctx.commit_many(")
     assert first_guard < first_commit
     assert "ctx.commit_many(" not in source[:first_guard]

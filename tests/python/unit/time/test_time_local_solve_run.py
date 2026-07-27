@@ -123,6 +123,8 @@ for frag in (
     "pops::Real Minv_[3][3];",
     "pops::reduce_max(local_solve_status_",
     "pops::SolveReport local_solve_report_",
+    "pops::SolveOutcome local_solve_outcome_",
+    ".consume(pops::SolveConsumption::kAccept)",
     "pops::SolveStatus::kSingular",
     "pops::SolveStatus::kInvalidEvaluation",
     "auxA(i, j, 3)",

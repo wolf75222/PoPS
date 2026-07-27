@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
   // deterministe a dt fixe). Cuda vs Serial : reproductible SOUS TOLERANCE dmax_abs, PAS bit-exact
   // (les reductions Kokkos reassocient les sommes FP). np vs np : checksums du rang proprietaire
   // invariants au nombre de rangs (bloc non decoupe, un seul proprietaire).
-  sim.solve_fields();
+  (void)pops::consume_solve_outcome(sim.solve_fields());
   step_mark("apres solve_fields");
   const double dt = 5e-3;
   const int nsteps = 5;

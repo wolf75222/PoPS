@@ -156,13 +156,15 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
   s.set_density("n1", q1);
   chk(s.n_blocks() == 2, "two blocks installed");
 
-  s.solve_fields();  // historical: f = elliptic_rhs(n0.U) + elliptic_rhs(n1.U)
+  (void)consume_solve_outcome(
+      s.solve_fields());  // historical: f = elliptic_rhs(n0.U) + elliptic_rhs(n1.U)
   const std::vector<double> phi_ref = s.potential();
 
   MultiFab& U0 = s.block_state(0);
   MultiFab& U1 = s.block_state(1);
   std::vector<const MultiFab*> stages_live{&U0, &U1};
-  s.solve_fields_from_blocks(stages_live);  // coupled: every block at its live state
+  (void)consume_solve_outcome(
+      s.solve_fields_from_blocks(stages_live));  // coupled: every block at its live state
   const std::vector<double> phi_blocks = s.potential();
 
   chk(!phi_ref.empty() && phi_ref.size() == static_cast<std::size_t>(n) * n, "potential size");
@@ -192,14 +194,14 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
   build_two_charge_blocks(ref);
   ref.set_density("n0", q0);
   ref.set_density("n1", std::vector<double>(static_cast<std::size_t>(n) * n, 0.0));  // block 1 = 0
-  ref.solve_fields();
+  (void)consume_solve_outcome(ref.solve_fields());
   const std::vector<double> phi_only0 = ref.potential();
 
   // Coupled solve on the original system: block 0 at its live state, block 1 at a ZEROED stage copy.
   MultiFab stage1 = s.block_state(1);  // deep copy of block 1's live state (same ba/dm layout)
   stage1.set_val(Real(0));             // zero the stage charge
   std::vector<const MultiFab*> stages_override{&s.block_state(0), &stage1};
-  s.solve_fields_from_blocks(stages_override);
+  (void)consume_solve_outcome(s.solve_fields_from_blocks(stages_override));
   const std::vector<double> phi_override = s.potential();
 
   const double d_override = max_abs_diff(phi_override, phi_only0);
@@ -215,7 +217,7 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
 
   // (b2) ALL-nullptr U_stages: every slot falls back to its block's LIVE state == the all-live solve --
   std::vector<const MultiFab*> stages_null{nullptr, nullptr};
-  s.solve_fields_from_blocks(stages_null);
+  (void)consume_solve_outcome(s.solve_fields_from_blocks(stages_null));
   const std::vector<double> phi_null = s.potential();
   chk(max_abs_diff(phi_null, phi_blocks) <= tol,
       "an all-nullptr U_stages falls back to every block's live state (== the all-live coupled "
@@ -238,10 +240,10 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
   }
   se.set_density("n0", q0);
   se.set_density("n1", q1);
-  se.solve_fields();  // historical, with eps = 2
+  (void)consume_solve_outcome(se.solve_fields());  // historical, with eps = 2
   const std::vector<double> phi_eps_ref = se.potential();
   std::vector<const MultiFab*> stages_eps{&se.block_state(0), &se.block_state(1)};
-  se.solve_fields_from_blocks(stages_eps);
+  (void)consume_solve_outcome(se.solve_fields_from_blocks(stages_eps));
   const std::vector<double> phi_eps_blocks = se.potential();
   double eps_maxabs = 0.0;
   for (double v : phi_eps_ref)
@@ -253,7 +255,7 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
 
   // (c) SIZE guard: a U_stages not sized to n_blocks() throws (fail-loud on a stale binding) ----------
   std::vector<const MultiFab*> bad{&s.block_state(0)};  // size 1 != 2 blocks
-  EXPECT_THROW(s.solve_fields_from_blocks(bad), std::invalid_argument)
+  EXPECT_THROW((void)s.solve_fields_from_blocks(bad), std::invalid_argument)
       << "a U_stages not sized to n_blocks() throws std::invalid_argument";
 
   if (!chk.failed())
@@ -305,7 +307,8 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   });
   system.set_density("plasma", charge_density(n, 1.0, 0.0));
 
-  const SolveReport report = system.solve_fields_from_state(slot, 0, system.block_state(0));
+  const SolveReport report = consume_solve_outcome(
+      system.solve_fields_from_state(slot, 0, system.block_state(0)));
   ASSERT_TRUE(report.solved()) << report.status_name();
   const std::vector<double> phi = system.field_potential_global(slot);
   const std::vector<double> gx = system.aux_field_component(kAuxNamedBase + 1);

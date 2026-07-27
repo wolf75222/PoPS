@@ -141,7 +141,10 @@ TEST(test_amr_system_twoblock, Runs) {
     EXPECT_EQ(rt.n_blocks(), 2) << "twoblock_engine_two_blocks";
     EXPECT_EQ(rt.nlev(), 2) << "twoblock_engine_two_levels";
 
-    rt.solve_fields();  // average_down par bloc + Poisson somme co-localise + aux
+    {
+      auto outcome = rt.solve_fields();
+      (void)outcome.consume(SolveConsumption::kAccept);
+    }  // average_down par bloc + Poisson somme co-localise + aux
 
     // RHS de REFERENCE assemble a la main sur le grossier partage : q0 n0 + q1 n1, lu aux MEMES
     // cellules (memes fabs/box que le grossier des blocs, APRES le average_down de solve_fields).

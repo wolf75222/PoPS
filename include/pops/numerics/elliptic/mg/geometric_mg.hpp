@@ -1988,8 +1988,9 @@ class GeometricMG {
       try {
         cache.linear_problem().prepare(linear_snapshot);
         cache.linear_workspace().bind(cache.linear_problem());
-        linear.emplace(solve_prepared_affine(cache.linear_problem(), cache.linear_workspace(),
-                                             cache.delta_, cache.residual_, *linear_controls));
+        linear.emplace(detail::solve_prepared_affine_in_place(
+            cache.linear_problem(), cache.linear_workspace(), cache.delta_, cache.residual_,
+            *linear_controls));
       } catch (...) {
         run_collective_materialization_stage_("boundary Newton exceptional-state restore",
                                               [&] { cache.restore_published(); });
