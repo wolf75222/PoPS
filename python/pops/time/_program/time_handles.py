@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from pops.time.handles import (
     HistoryHandle, StageHandle, StateEndpointHandle, TimeState,
 )
-from pops.time.points import Clock, StagePoint
+from pops.time.points import Clock, StagePoint, TimePoint
 from pops.time._program.value_validation import (
     merge_state_spaces, require_compatible_spaces, require_owned,
 )
@@ -32,6 +32,7 @@ class _ProgramTimeHandles(_ProgramBase):
         self._time_history_values = {}
         self._time_history_configs = {}
         self._time_history_stores = {}
+        self._history_contracts = {}
         self._time_endpoint_handles = {}
 
     @staticmethod
@@ -217,6 +218,14 @@ class _ProgramTimeHandles(_ProgramBase):
             raise ValueError("%s: the HistoryHandle was not issued by this Program" % where)
         return handle, state
 
+    def _history_contract_for_handle(self, handle: Any) -> Any:
+        handle, state = self._require_history(handle, "history contract")
+        self._validate_history_lag(state, handle.lag)
+        contract = self._history_contracts.get(state)
+        if contract is None:
+            raise RuntimeError("configured temporal history has no typed HistoryContract")
+        return contract
+
     def _history_handle_from(self, source: Any, lag: Any) -> HistoryHandle:
         source, state = self._require_history(source, "history")
         self._validate_history_lag(state, lag)
@@ -244,7 +253,11 @@ class _ProgramTimeHandles(_ProgramBase):
         if value is None:
             value = self.history(
                 "%s.%s" % (block_name(state.block), state_name(state.state)), handle.lag,
-                space=state.space, block=state.block, state_ref=state.state)
+                space=state.space,
+                block=state.block,
+                state_ref=state.state,
+                contract=self._history_contract_for_handle(handle),
+            )
             if value.point != handle.point:
                 value = self._replace_value(value, point=handle.point)
             self._time_history_values[handle] = value
@@ -253,8 +266,14 @@ class _ProgramTimeHandles(_ProgramBase):
             self._time_history_values[handle] = value
         return value
 
-    def _configure_time_history(self, state: Any, depth: Any, cold_start: Any,
-                                checkpoint_policy: Any) -> ProgramValue:
+    def _configure_time_history(
+        self,
+        state: Any,
+        depth: Any,
+        cold_start: Any,
+        checkpoint_policy: Any,
+        interpolation: Any = None,
+    ) -> ProgramValue:
         self._guard_mutable("configure state history")
         state = self._require_time_state(state, "keep_history")
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
@@ -288,6 +307,22 @@ class _ProgramTimeHandles(_ProgramBase):
             raise ValueError(
                 "keep_history: ring %r belongs to block %r, not %r"
                 % (name, self._history_blocks[name], state.block))
+        from pops.time._history.contracts import (
+            HistoryContract,
+            HistoryValidity,
+            NoInterpolation,
+        )
+
+        contract = HistoryContract(
+            owner=self.owner_path,
+            state=state.state,
+            space=state.space,
+            clock=state.clock,
+            validity=HistoryValidity(
+                TimePoint(state.clock, step=-depth), TimePoint(state.clock)),
+            interpolation=NoInterpolation() if interpolation is None else interpolation,
+            depth=depth,
+        )
         # Lower the store before publishing the configuration.  If an existing manual ring has
         # incompatible block/StateSpace provenance, ``store_history`` fails and no temporal
         # configuration is left half-installed on the Program.
@@ -304,6 +339,7 @@ class _ProgramTimeHandles(_ProgramBase):
             raise RuntimeError("keep_history installed an inconsistent persistence depth")
         config = (depth, cold_start, policy)
         self._time_history_configs[state] = config
+        self._history_contracts[state] = contract
         self._time_history_stores[state] = store
         return store
 
@@ -385,6 +421,21 @@ class _ProgramTimeHandles(_ProgramBase):
             copied_policy = out._history_persistence[name][1]
             from pops.time._history.policy import CopyCurrent
             out._time_history_configs[new_state] = (depth, CopyCurrent(), copied_policy)
+            old_contract = self._history_contracts.get(old_state)
+            if old_contract is None:
+                raise RuntimeError("configured temporal history has no typed HistoryContract")
+            from pops.time._history.contracts import HistoryContract, HistoryValidity
+
+            out._history_contracts[new_state] = HistoryContract(
+                owner=out.owner_path,
+                state=new_state.state,
+                space=new_state.space,
+                clock=new_state.clock,
+                validity=HistoryValidity(
+                    TimePoint(new_state.clock, step=-depth), TimePoint(new_state.clock)),
+                interpolation=old_contract.interpolation,
+                depth=depth,
+            )
             old_store = self._time_history_stores.get(old_state)
             if old_store is not None:
                 mapped = idmap.get(representative(old_store).id)

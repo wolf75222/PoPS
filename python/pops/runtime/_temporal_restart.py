@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pops._manifest_protocol import strict_json_loads
+from pops.time._graph.base import validate_synchronization_relation_data
 from pops.time._step.strategy import validate_step_strategy_manifest
 
 
@@ -106,6 +107,7 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
     if not isinstance(data["clocks"], list) or not data["clocks"]:
         raise ValueError("temporal program schedule must declare at least one clock")
     clocks: dict[str, int] = {}
+    clock_descriptors: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(data["clocks"]):
         if not isinstance(row, dict) or set(row) != {"id", "descriptor", "ticks_per_macro"}:
             raise ValueError("temporal program clock %d has incomplete keys" % index)
@@ -116,6 +118,7 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
             raise ValueError("temporal program schedule declares clock %s twice" % identity)
         clocks[identity] = _positive_int(
             row["ticks_per_macro"], where="temporal clock ticks_per_macro")
+        clock_descriptors[identity] = row["descriptor"]
     primary = data["primary_clock"]
     if clocks.get(primary) != 1:
         raise ValueError("primary temporal clock must exist with ticks_per_macro=1")
@@ -159,10 +162,6 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
         if (row["source_clock"] not in clocks or row["target_clock"] not in clocks
                 or row["source_clock"] == row["target_clock"]):
             raise ValueError("temporal synchronization references invalid qualified clocks")
-        relation = row["relation"]
-        if not isinstance(relation, dict) or not isinstance(relation.get("kind"), str) \
-                or not relation["kind"]:
-            raise ValueError("temporal synchronization relation is not a typed provider")
         if not isinstance(row["point"], dict):
             raise TypeError("temporal synchronization point must be typed data")
 
@@ -215,6 +214,14 @@ def _validate_program_schedule(value: Any) -> dict[str, Any]:
         if row["checkpoint_policy"] is not None \
                 and not isinstance(row["checkpoint_policy"], dict):
             raise TypeError("temporal history checkpoint policy must be typed data or null")
+    for row in data["synchronizations"]:
+        source_clock_id = row["source_clock"]
+        validate_synchronization_relation_data(
+            row["relation"],
+            source_clock=clock_descriptors[source_clock_id],
+            source_clock_id=source_clock_id,
+            history_rows=data["histories"],
+        )
     return data
 
 
