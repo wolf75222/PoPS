@@ -85,6 +85,7 @@ class StepAttemptRejected(RuntimeError):
     detail: str
     disposition: Literal["retry", "reject"]
     reason_code: int
+    failed_rank: int
 
 
 class _RuntimeEnvironmentReport(TypedDict):

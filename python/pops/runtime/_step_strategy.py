@@ -5,9 +5,10 @@ import bisect
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 from pops._bootstrap import StepAttemptRejected
+from pops.time.solve_outcome import SOLVE_STATUSES
 from pops.time._step.strategy import (
     AdaptiveCFL,
     ErrorControlledDt,
@@ -19,6 +20,17 @@ from pops.time._step.transaction import StepTransactionReport
 
 
 _StepStrategyT = TypeVar("_StepStrategyT", bound=StepStrategy)
+_SolveStatus: TypeAlias = Literal[
+    "solved",
+    "singular",
+    "breakdown",
+    "iteration_limit",
+    "invalid_evaluation",
+    "capability_failure",
+    "invalid_input",
+    "incompatible_rhs",
+]
+_StepDisposition: TypeAlias = Literal["retry", "reject"]
 ControllerFactory = Callable[
     [StepStrategy, Mapping[str, Any] | None], "StepController[Any]"
 ]
@@ -201,12 +213,22 @@ def _collective_attempt_error(
         return RuntimeError(
             "collective step attempt failed during %s: %s" % (phase, diagnostics))
 
+    status = selected["status"]
+    disposition = selected["disposition"]
+    if type(status) is not str or status not in SOLVE_STATUSES:
+        return RuntimeError(
+            "collective step attempt returned an invalid rejection status on rank %d"
+            % selected_rank)
+    if type(disposition) is not str or disposition not in ("retry", "reject"):
+        return RuntimeError(
+            "collective step attempt returned an invalid rejection disposition on rank %d"
+            % selected_rank)
     rejection = StepAttemptRejected(
         "collective step attempt rejected during %s: %s" % (phase, diagnostics))
-    rejection.status = str(selected["status"])
+    rejection.status = cast(_SolveStatus, status)
     rejection.phase = phase
     rejection.detail = diagnostics
-    rejection.disposition = str(selected["disposition"])
+    rejection.disposition = cast(_StepDisposition, disposition)
     rejection.reason_code = int(selected["reason_code"])
     rejection.failed_rank = selected_rank
     return rejection
