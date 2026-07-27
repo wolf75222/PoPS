@@ -698,11 +698,13 @@
           "token": "imex",
           "wire_id": 3,
           "cpp_id": "kImex",
-          "native_entry": "pops::AdvanceImex",
+          "native_entry": "generated ProgramGraph(additive_imex_euler)",
           "requirements": [
             "implicit source term"
           ],
-          "limitations": [],
+          "limitations": [
+            "typed implicit Program solve required; no block-local native advance"
+          ],
           "aliases": [],
           "metadata": {}
         },
@@ -710,12 +712,12 @@
           "token": "imexrk_ars222",
           "wire_id": 4,
           "cpp_id": "kImexRkArs222",
-          "native_entry": "pops::ImexRkArs222",
+          "native_entry": "generated ProgramGraph(additive_imex_ars222)",
           "requirements": [
             "implicit source term"
           ],
           "limitations": [
-            "composed native add_block only (.so ABIs do not carry the RK tableau)"
+            "typed implicit Program solve required; no block-local native advance"
           ],
           "aliases": [],
           "metadata": {}

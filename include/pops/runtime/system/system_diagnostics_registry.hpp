@@ -37,9 +37,9 @@ struct SystemDiagnosticsRegistry {
   /// Effective numerical/physical block options captured when the block/stage is added. The closures
   /// are opaque, so inspection stores the user-facing route decisions here.
   std::map<std::string, EffectiveBlockOptions> block_options;
-  /// OPT-IN IMEX Newton reports, in shared_ptr for a STABLE address (the block AdvanceImex* closures
-  /// write into it by raw pointer). Absent (missing key) for a block without newton_diagnostics ->
-  /// newton_report raises a clear error rather than returning a silently empty report.
+  /// OPT-IN IMEX Newton report carrier reserved for the typed implicit Program primitive. Spatial
+  /// block closures never capture or write it. Absent (missing key) for a block without
+  /// newton_diagnostics -> newton_report raises a clear error.
   std::map<std::string, std::shared_ptr<NewtonReport>> newton_reports;
 
   /// Effective block options of @p name, or nullptr if the block was never registered.

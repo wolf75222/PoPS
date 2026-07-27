@@ -78,8 +78,8 @@ struct SystemDomain {
   // embedded-boundary transport mode (explicit rejection rather than a silently ignored cache).
   bool ws_cache_block_ = false;
   // TRANSPORT GEOMETRY MODE (T5-PR3): None (default) -> full Cartesian transport (bit-identical);
-  // Staircase / CutCell -> the stepper routes to the masked / cut-cell advance. Effective only if a
-  // domain is fixed (eb_set_) AND the block carries the matching embedded-boundary advance.
+  // Staircase / CutCell -> the Program routes to the masked / cut-cell residual. Effective only if a
+  // domain is fixed (eb_set_) AND the block carries the matching embedded-boundary residual.
   GeometryMode geometry_mode_ = GeometryMode::None;
 
   // Number of radial / azimuthal cells in POLAR (0 => fall back to cfg.n).

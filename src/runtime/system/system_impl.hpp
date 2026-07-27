@@ -394,17 +394,17 @@ struct System::Impl {
 
   // --- compiled spatial schemes -------------------------------------------
   // Method-of-lines evaluator of a block (L/F/Model frozen): ghosts then R = -div F + S.
-  // Construction of the block closures (advance + residual + Poisson) moved to the header
+  // Construction of the block closures (residual + boundary + Poisson) moved to the header
   // (pops/runtime/block_builder.hpp: make_block / make_max_speed / make_poisson_rhs) so that the
   // production template path is instantiable outside this unit (AOT compilation of a
   // generated model). Here we only provide the grid context to pass to them.
   // GridContext: mesh + BC + aux + prepared embedded-boundary metrics. The metric owners are
   // STABLE-address MEMBERS -> the block closures read them by pointer at each step, so closure
-  // construction may precede level-set installation (as long as !eb_set_ the stepper does not select the
-  // embedded-boundary advance).
+  // construction may precede level-set installation (as long as !eb_set_ the Program does not select
+  // the embedded-boundary residual).
   GridContext grid_ctx(const std::string& block_name = {}) {
     // ADC-615: carry the resolved cut-cell / EB thresholds into the context so the EB transport
-    // advance (BlockRhsEvalEb -> assemble_rhs_eb) uses them; defaults = kEb* (bit-identical).
+    // residual (BlockRhsEvalEb -> assemble_rhs_eb) uses them; defaults = kEb* (bit-identical).
     std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
     if (!block_name.empty()) {
       auto found = boundary_plans_.find(block_name);

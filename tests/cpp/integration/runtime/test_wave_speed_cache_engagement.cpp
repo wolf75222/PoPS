@@ -18,6 +18,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/spatial_operator.hpp>
+#include <pops/numerics/time/integrators/time_steppers.hpp>
 #include <pops/runtime/builders/block/block_builder.hpp>
 
 #include <Kokkos_Core.hpp>  // Kokkos::View / atomic_add / deep_copy (compteur d'appels device-accessible)
@@ -186,10 +187,10 @@ TEST(WaveSpeedCacheEngagement, CacheIsBitExactAndCallsWaveSpeedsFewerTimes) {
 
   Counter calls("ws_calls");
   CountingIsothermal model{Real(1), /*busy=*/0, calls};
-  BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "explicit", {}, {},
-                                 nullptr, Real(0), /*wave_speed_cache=*/false);
-  BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "explicit", {}, {},
-                                nullptr, Real(0), /*wave_speed_cache=*/true);
+  BlockClosures off =
+      make_block(model, "none", "hll", ctx, false, Real(0), /*wave_speed_cache=*/false);
+  BlockClosures on =
+      make_block(model, "none", "hll", ctx, false, Real(0), /*wave_speed_cache=*/true);
 
   MultiFab Uoff(ba, dm, 3, 1), Uon(ba, dm, 3, 1), U0(ba, dm, 3, 1);
   init_state(Uoff, geom, dom);
@@ -201,12 +202,14 @@ TEST(WaveSpeedCacheEngagement, CacheIsBitExactAndCallsWaveSpeedsFewerTimes) {
 
   Kokkos::deep_copy(calls, 0LL);
   for (int s = 0; s < nsteps; ++s)
-    off.advance(Uoff, dt, 1);
+    SSPRK2Step{}.take_step(
+        [&](MultiFab& state, MultiFab& residual) { off.rhs_into(state, residual); }, Uoff, dt);
   const long long calls_off = read_counter(calls);
 
   Kokkos::deep_copy(calls, 0LL);
   for (int s = 0; s < nsteps; ++s)
-    on.advance(Uon, dt, 1);
+    SSPRK2Step{}.take_step(
+        [&](MultiFab& state, MultiFab& residual) { on.rhs_into(state, residual); }, Uon, dt);
   const long long calls_on = read_counter(calls);
 
   device_fence();
@@ -239,10 +242,8 @@ TEST(WaveSpeedCacheEngagement, CostlyWaveSpeedsStaysBitExact) {
 
   Counter calls("ws_calls_costly");
   CountingIsothermal model{Real(1), /*busy=*/100, calls};  // emule moments + factorisations
-  BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "explicit", {}, {},
-                                 nullptr, Real(0), false);
-  BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "explicit", {}, {},
-                                nullptr, Real(0), true);
+  BlockClosures off = make_block(model, "none", "hll", ctx, false, Real(0), false);
+  BlockClosures on = make_block(model, "none", "hll", ctx, false, Real(0), true);
   MultiFab Uoff(ba, dm, 3, 1), Uon(ba, dm, 3, 1);
   init_state(Uoff, geom, dom);
   init_state(Uon, geom, dom);
@@ -251,11 +252,13 @@ TEST(WaveSpeedCacheEngagement, CostlyWaveSpeedsStaysBitExact) {
 
   auto t0 = std::chrono::steady_clock::now();
   for (int s = 0; s < nsteps; ++s)
-    off.advance(Uoff, dt, 1);
+    SSPRK2Step{}.take_step(
+        [&](MultiFab& state, MultiFab& residual) { off.rhs_into(state, residual); }, Uoff, dt);
   device_fence();
   auto t1 = std::chrono::steady_clock::now();
   for (int s = 0; s < nsteps; ++s)
-    on.advance(Uon, dt, 1);
+    SSPRK2Step{}.take_step(
+        [&](MultiFab& state, MultiFab& residual) { on.rhs_into(state, residual); }, Uon, dt);
   device_fence();
   auto t2 = std::chrono::steady_clock::now();
   const double ms_off = std::chrono::duration<double, std::milli>(t1 - t0).count();

@@ -122,8 +122,8 @@ chk("wave_speed_cache" in msg,
     f"IMEX + cache rejete ({msg[:60]}...)")
 
 print("== (5) garde geometrie disque : cache + transport staircase/cutcell -> erreur ==")
-# Le cache n'est cable que sur l'avance cartesienne PLEINE : un mode disque (set_disc_domain /
-# set_geometry_mode) emprunte advance_masked / advance_eb qui l'ignorent -> rejet explicite, pas
+# Le cache n'est cable que sur le residu cartesien PLEIN : un mode disque (set_disc_domain /
+# set_geometry_mode) emprunte les residus masked / EB qui l'ignorent -> rejet explicite, pas
 # d'ignore muet. On exerce les DEUX ordres (cache d'abord puis disque, et disque d'abord puis cache).
 
 

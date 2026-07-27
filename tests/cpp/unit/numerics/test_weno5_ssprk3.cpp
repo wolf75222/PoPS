@@ -1,16 +1,10 @@
-// WENO5-Z + SSPRK3 cables a travers block_builder (make_block / build_block) : le MEME chemin de
-// production que minmod/vanleer x {rusanov, hllc, roe} x SSPRK2, etendu au limiteur weno5 (ordre 5,
-// stencil 5 points, 3 ghosts) et au schema temporel SSPRK3 (3 etages, ordre 3).
+// WENO5-Z spatial closures composed with the core SSPRK3 Program primitive.
 //
-// Quatre verifications :
+// Verifications :
 //  (1) PARITE SCHEMA : make_block("weno5", "rusanov").rhs_into == assemble_rhs<Weno5, RusanovFlux>
 //      direct (le dispatch route bien vers Weno5 ; spatial_operator branche weno5z a n_ghost >= 3).
-//  (2) SSPRK3 : build_block<..., method="ssprk3"> avance == SSPRK3Step du coeur applique a la main au
-//      meme residu (le tag temporel selectionne bien le bon foncteur RK).
-//  (3) NO-DEFAULT-CHANGE : make_block("minmod", "rusanov") defaults to canonical method="explicit"
-//      == build_block<Minmod, RusanovFlux> sans method (BIT-IDENTIQUE : residu ET avance). Le chemin
-//      historique n'est pas touche.
-//  (4) ORDRE / PRECISION : advection lineaire d'un sinus lisse periodique sur une periode complete.
+//  (2) SSPRK3 : le stepper coeur consomme directement le residu spatial, avec scratch reutilisable.
+//  (3) ORDRE / PRECISION : advection lineaire d'un sinus lisse periodique sur une periode complete.
 //      WENO5+SSPRK3 a une erreur < Minmod+SSPRK2 a meme resolution, et une pente de convergence > 2
 //      (au-dela de l'ordre 2 du MUSCL). Test court (n <= 64), CI-friendly.
 #include <gtest/gtest.h>
@@ -59,16 +53,18 @@ double advect_error(int n, const std::string& limiter, const std::string& method
   init(U);
 
   const GridContext ctx{dom, bc, geom, &aux};
-  BlockClosures clo = make_block(model, limiter, "rusanov", ctx, /*imex=*/false,
-                                 /*recon_prim=*/false, method);
+  BlockClosures clo = make_block(model, limiter, "rusanov", ctx, /*recon_prim=*/false);
   // Avance d'une PERIODE (t = L/ax = 1) a CFL fixe : u(t=1) == u0 exactement (advection periodique).
   const double dx = geom.dx();
   const double cfl = 0.4;
   const double dt = cfl * dx / 1.0;  // |a| = 1
   const int nsteps = static_cast<int>(std::ceil(1.0 / dt));
   const double dt_exact = 1.0 / nsteps;  // ajuste pour terminer pile a t=1
-  for (int s = 0; s < nsteps; ++s)
-    clo.advance(U, dt_exact, 1);
+  auto rhs = [&](MultiFab& state, MultiFab& residual) { clo.rhs_into(state, residual); };
+  if (method == "ssprk3")
+    run_explicit_substeps<SSPRK3Step>(rhs, U, dt_exact, nsteps);
+  else
+    run_explicit_substeps<SSPRK2Step>(rhs, U, dt_exact, nsteps);
 
   double err = 0;
   const ConstArray4 u = U.fab(0).const_array();
@@ -108,7 +104,7 @@ TEST(test_weno5_ssprk3, weno5_rhs_matches_direct_assemble_rhs) {
 
   MultiFab U(ba, dm, 1, 3);
   init(U);
-  BlockClosures clo = make_block(model, "weno5", "rusanov", ctx, false, false);
+  BlockClosures clo = make_block(model, "weno5", "rusanov", ctx, false);
   MultiFab R1(ba, dm, 1, 0), R2(ba, dm, 1, 0);
   clo.rhs_into(U, R1);
   fill_ghosts(U, dom, bc);
@@ -124,9 +120,9 @@ TEST(test_weno5_ssprk3, weno5_rhs_matches_direct_assemble_rhs) {
   EXPECT_GT(nrm, 1e-6) << "residu WENO5 non trivial";
 }
 
-// (2) SSPRK3 : l'avance d'un sous-pas via build_block(method="ssprk3") == SSPRK3Step du coeur
-// applique a la main au meme residu rhs_into (weno5/rusanov). Confirme le routage du tag temporel.
-TEST(test_weno5_ssprk3, ssprk3_advance_matches_manual_core_step) {
+// (2) SSPRK3 : le helper de sous-pas du coeur et un step one-shot consomment exactement la meme
+// primitive spatiale weno5/rusanov.
+TEST(test_weno5_ssprk3, spatial_residual_composes_with_core_ssprk3) {
   const int n = 48;
   const double L = 1.0;
   Box2D dom = Box2D::from_extents(n, n);
@@ -149,19 +145,17 @@ TEST(test_weno5_ssprk3, ssprk3_advance_matches_manual_core_step) {
   MultiFab U(ba, dm, 1, 3), Uref(ba, dm, 1, 3);
   init(U);
   init(Uref);
-  BlockClosures clo3 = make_block(model, "weno5", "rusanov", ctx, false, false, "ssprk3");
+  BlockClosures clo = make_block(model, "weno5", "rusanov", ctx, false);
   const double dt = 1e-3;
-  clo3.advance(U, dt, 1);  // un sous-pas SSPRK3
-  // Reference : meme residu (rhs_into du chemin ssprk2, residu identique), avance SSPRK3Step a la main.
-  BlockClosures clo2 =
-      make_block(model, "weno5", "rusanov", ctx, false, false);  // rhs_into identique
-  SSPRK3Step{}.take_step([&](MultiFab& Us, MultiFab& R) { clo2.rhs_into(Us, R); }, Uref, dt);
+  auto rhs = [&](MultiFab& state, MultiFab& residual) { clo.rhs_into(state, residual); };
+  run_explicit_substeps<SSPRK3Step>(rhs, U, dt, 1);
+  SSPRK3Step{}.take_step(rhs, Uref, dt);
   double d = 0;
   const ConstArray4 u = U.fab(0).const_array(), ur = Uref.fab(0).const_array();
   for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
     for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
       d = std::fmax(d, std::fabs(u(i, j, 0) - ur(i, j, 0)));
-  EXPECT_LT(d, 1e-14) << "build_block(ssprk3).advance == SSPRK3Step du coeur";
+  EXPECT_LT(d, 1e-14) << "Program SSPRK3 helper == one-shot SSPRK3 on the same spatial residual";
 }
 
 // (2b) REUSE DU SCRATCH (ADC-261) : une avance a n>1 sous-pas reutilise UN seul Scratch hoiste a
@@ -191,79 +185,24 @@ TEST(test_weno5_ssprk3, substep_scratch_reuse_matches_oneshot_steps) {
   MultiFab U(ba, dm, 1, 3), Uref(ba, dm, 1, 3);
   init(U);
   init(Uref);
-  BlockClosures clo3 = make_block(model, "weno5", "rusanov", ctx, false, false, "ssprk3");
-  BlockClosures clo2 =
-      make_block(model, "weno5", "rusanov", ctx, false, false);  // rhs_into identique
+  BlockClosures clo = make_block(model, "weno5", "rusanov", ctx, false);
   const double dt = 4e-3;
   const int nsub = 4;
-  clo3.advance(U, dt, nsub);  // Scratch reutilise a travers les nsub sous-pas
+  auto rhs = [&](MultiFab& state, MultiFab& residual) { clo.rhs_into(state, residual); };
   const double h = dt / nsub;
+  run_explicit_substeps<SSPRK3Step>(rhs, U, h, nsub);
   for (int s = 0; s < nsub; ++s)
-    SSPRK3Step{}.take_step([&](MultiFab& Us, MultiFab& R) { clo2.rhs_into(Us, R); }, Uref, h);
+    SSPRK3Step{}.take_step(rhs, Uref, h);
   double d = 0;
   const ConstArray4 u = U.fab(0).const_array(), ur = Uref.fab(0).const_array();
   for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
     for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
       d = std::fmax(d, std::fabs(u(i, j, 0) - ur(i, j, 0)));
-  EXPECT_LT(d, 1e-14) << "advance(n=4) == 4x take_step one-shot (reuse du scratch bit-identique)";
+  EXPECT_LT(d, 1e-14)
+      << "run_explicit_substeps(n=4) == 4x take_step one-shot (reuse du scratch bit-identique)";
 }
 
-// (3) NO-DEFAULT-CHANGE : minmod/rusanov, default == canonical "explicit" SSPRK2 route.
-// sans tag. Residu ET avance BIT-IDENTIQUES (le chemin historique n'a pas bouge d'un bit).
-TEST(test_weno5_ssprk3, minmod_default_method_matches_explicit_ssprk2) {
-  const int n = 48;
-  const double L = 1.0;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom{dom, 0.0, L, 0.0, L};
-  BoxArray ba = BoxArray::from_domain(dom, n);
-  DistributionMapping dm(ba.size(), n_ranks());
-  BCRec bc;
-  MultiFab aux(ba, dm, 3, 1);
-  aux.set_val(0.0);
-
-  pops::validation::AdvectionDiffusion model{/*ax=*/1.0, /*ay=*/0.3, /*nu=*/0.0};
-  const GridContext ctx{dom, bc, geom, &aux};
-  auto init = [&](MultiFab& mf) {
-    Array4 a = mf.fab(0).array();
-    for_each_cell(dom, [a, geom](int i, int j) {
-      a(i, j, 0) = std::sin(2 * kPi * geom.x_cell(i)) * std::cos(2 * kPi * geom.y_cell(j));
-    });
-  };
-
-  MultiFab Ua(ba, dm, 1, 2), Ub(ba, dm, 1, 2);
-  init(Ua);
-  init(Ub);
-  BlockClosures cdef =
-      make_block(model, "minmod", "rusanov", ctx, false, false);  // method par defaut
-  BlockClosures cs2 = make_block(model, "minmod", "rusanov", ctx, false, false, "explicit");
-  // residu identique
-  MultiFab Ra(ba, dm, 1, 0), Rb(ba, dm, 1, 0);
-  cdef.rhs_into(Ua, Ra);
-  cs2.rhs_into(Ub, Rb);
-  double dr = 0;
-  {
-    const ConstArray4 ra = Ra.fab(0).const_array(), rb = Rb.fab(0).const_array();
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        dr = std::fmax(dr, std::fabs(ra(i, j, 0) - rb(i, j, 0)));
-  }
-  EXPECT_EQ(dr, 0.0) << "minmod : default rhs_into == explicit SSPRK2 (bit-identical)";
-  // avance identique sur 20 pas
-  for (int s = 0; s < 20; ++s) {
-    cdef.advance(Ua, 1e-3, 1);
-    cs2.advance(Ub, 1e-3, 1);
-  }
-  double da = 0;
-  {
-    const ConstArray4 ua = Ua.fab(0).const_array(), ub = Ub.fab(0).const_array();
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        da = std::fmax(da, std::fabs(ua(i, j, 0) - ub(i, j, 0)));
-  }
-  EXPECT_EQ(da, 0.0) << "minmod : default advance == explicit SSPRK2 (bit-identical)";
-}
-
-// (4) ORDRE / PRECISION : advection 1D d'un sinus sur une periode. WENO5+SSPRK3 plus precis que
+// (3) ORDRE / PRECISION : advection 1D d'un sinus sur une periode. WENO5+SSPRK3 plus precis que
 // Minmod+SSPRK2 a meme n, et pente de convergence > 2 (au-dela de l'ordre 2 du MUSCL).
 TEST(test_weno5_ssprk3, weno5_ssprk3_more_accurate_and_higher_order_than_minmod) {
   const double e_minmod_64 = advect_error(64, "minmod", "explicit");

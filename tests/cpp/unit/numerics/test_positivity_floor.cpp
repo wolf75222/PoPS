@@ -29,6 +29,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/spatial_operator.hpp>
+#include <pops/numerics/time/integrators/time_steppers.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -182,9 +183,8 @@ static int pops_run_test_positivity_floor(int argc, char** argv) {
     init_tophat(U_admissible, dom, model, /*spike=*/false);
     fill_ghosts(U_admissible, dom, bc);
     MultiFab R0(ba, dm, EulerNoSrc::n_vars, 0), R1(ba, dm, EulerNoSrc::n_vars, 0);
-    BlockClosures c0 = make_block(model, "weno5", "rusanov", ctx, false, false);
-    BlockClosures c1 = make_block(model, "weno5", "rusanov", ctx, false, false, "explicit", {}, {},
-                                  nullptr, Real(0));
+    BlockClosures c0 = make_block(model, "weno5", "rusanov", ctx, false);
+    BlockClosures c1 = make_block(model, "weno5", "rusanov", ctx, false, Real(0));
     c0.rhs_into(U_admissible, R0);
     c1.rhs_into(U_admissible, R1);
     sync_host();
@@ -267,9 +267,10 @@ static int pops_run_test_positivity_floor(int argc, char** argv) {
     MultiFab Uf(ba, dm, EulerNoSrc::n_vars, ng);
     init_tophat(Uf, dom, model, /*spike=*/false);
     fill_ghosts(Uf, dom, bc);
-    BlockClosures cpp = make_block(model, "weno5", "rusanov", ctx, false, false, "explicit", {}, {},
-                                   nullptr, floor);
-    cpp.advance(Uf, dt * nsteps, nsteps);
+    BlockClosures cpp = make_block(model, "weno5", "rusanov", ctx, false, floor);
+    run_explicit_substeps<SSPRK2Step>(
+        [&](MultiFab& state, MultiFab& residual) { cpp.rhs_into(state, residual); }, Uf, dt,
+        nsteps);
     sync_host();
     Real min_pp = Real(1e30);
     bool finite = true;
@@ -295,8 +296,7 @@ static int pops_run_test_positivity_floor(int argc, char** argv) {
     bool threw = false;
     std::string msg;
     try {
-      BlockClosures c = make_block(scal, "minmod", "rusanov", ctx, false, false, "explicit", {}, {},
-                                   nullptr, Real(1e-8));
+      BlockClosures c = make_block(scal, "minmod", "rusanov", ctx, false, Real(1e-8));
       c.rhs_into(Us, Rs);
     } catch (const std::runtime_error& e) {
       threw = true;

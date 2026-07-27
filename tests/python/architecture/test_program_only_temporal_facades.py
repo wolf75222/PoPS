@@ -30,6 +30,11 @@ PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
+BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
+POLAR_BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
+SYSTEM_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
+SYSTEM_BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
+GRID_CONTEXT = ROOT / "include/pops/runtime/context/grid_context.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
 MANIFEST = ROOT / "tests/test_manifest.toml"
@@ -163,6 +168,34 @@ def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closur
     assert "b.imex =" not in builder
     assert "project_level_state" in runtime
     assert "project_level_state" in builder
+
+
+def test_uniform_blocks_expose_spatial_primitives_without_hidden_step_closures():
+    for path in (BLOCK_BUILDER, POLAR_BLOCK_BUILDER):
+        source = path.read_text(encoding="utf-8")
+        for legacy_closure in (
+            "AdvanceExplicit",
+            "AdvanceImex",
+            "AdvanceImexRkArs222",
+            "AdvanceExplicitMasked",
+            "AdvanceExplicitEb",
+            "AdvanceImexMasked",
+            "AdvanceImexEb",
+            "PolarAdvanceExplicit",
+        ):
+            assert legacy_closure not in source
+
+    closures = GRID_CONTEXT.read_text(encoding="utf-8")
+    store = SYSTEM_BLOCK_STORE.read_text(encoding="utf-8")
+    seam = SYSTEM_BLOCK_SEAM.read_text(encoding="utf-8")
+    for source in (closures, store):
+        assert "advance_masked" not in source
+        assert "advance_eb" not in source
+        assert "std::function<void(MultiFab&, Real, int)> advance" not in source
+    assert "bool imex;" not in seam
+    assert "std::string method;" not in seam
+    assert "rhs_into" in closures
+    assert "rhs_into" in store
 
 
 def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():

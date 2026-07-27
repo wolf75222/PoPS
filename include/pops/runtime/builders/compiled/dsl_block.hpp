@@ -21,7 +21,7 @@
 /// (see tests/test_compiled_model_parity.cpp).
 ///
 /// DEVICE (Kokkos Cuda backend): the make_block TRANSPORT path is built on NAMED FUNCTORS
-/// (build_block via AdvanceExplicit/AdvanceImex/RhsInto/BlockRhsEval, make_max_speed via MaxSpeed;
+/// (build_block via RhsInto/BlockRhsEval, make_max_speed via MaxSpeed;
 /// see block_builder.hpp), instead of lambdas first-instantiated from this calling TU. nvcc then
 /// reliably emits the nested device kernel (AssembleRhsKernel): the A==B parity (dres=0) of the
 /// transport residual is obtained on a CUDA device. This is the implementation used by the
@@ -70,23 +70,15 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
         std::string("add_compiled_model: time route 'imexrk_ars222' not wired on the compiled "
                     "path (") +
         route_info(time_route).limitations + ")");
-  const bool imex = (time_route == TimeRouteId::kImex);
   const bool recon_prim =
       (parse_recon_route(recon, "add_compiled_model") == ReconRouteId::kPrimitive);
-  // EXPLICIT RK scheme marshaled by the production path (add_native_block -> pops_install_native ->
-  // this template): the ONE canonical spelling of the typed route (ADC-641), replacing the enum ->
-  // string round-trip. route_token(kSsprk3)=="ssprk3", route_token(kForwardEuler)=="euler",
-  // route_token(kExplicitSsprk2)=="explicit", route_token(kImex)=="imex" -- and build_block decodes it
-  // once via parse_time_route (canonical "explicit" resolves to the SSPRK2 advance, "imex" is
-  // ignored past the imex flag), so the advance selected is bit-identical to the old ternary.
-  const std::string method = route_token(time_route);
   // The block may read extra auxiliary fields (aux_comps<Model> > 3, e.g. B_z of a magnetized
   // source): we widen the System's SHARED aux channel BEFORE capturing its address, so that the
   // closure reads a wide enough aux. Base model (3) -> no-op, unchanged.
   sys.ensure_aux_width(aux_comps<Model>());
   const GridContext ctx = sys.grid_context(name);
-  BlockClosures clo = make_block(model, limiter, riemann, ctx, imex, recon_prim, method, {}, {},
-                                 nullptr, static_cast<Real>(positivity_floor));
+  BlockClosures clo =
+      make_block(model, limiter, riemann, ctx, recon_prim, static_cast<Real>(positivity_floor));
   std::function<Real(const MultiFab&)> ms = make_max_speed(model, ctx);
   std::function<void(const MultiFab&, MultiFab&)> pr = make_poisson_rhs(model);
   sys.install_block(name, Model::n_vars, Model::conservative_vars(), Model::primitive_vars(), gamma,

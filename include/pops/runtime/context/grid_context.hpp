@@ -57,8 +57,8 @@ constexpr bool supports_geometry_mode(std::uint8_t supported_modes, GeometryMode
 /// (not owned) to static metrics prepared from the signed level set by System (members with stable
 /// address). They are used only to build the optional embedded-boundary transport advances
 /// (build_block); read by pointer at the step, so block and level-set authoring order does not matter.
-/// nullptr -> no embedded-boundary advance (stepper on advance, bit-identical). The metrics are
-/// installed before the first embedded-boundary step.
+/// nullptr -> no embedded-boundary residual provider. The metrics are installed before the first
+/// Program residual evaluation.
 struct GridContext {
   Box2D dom;                              ///< domain (without ghost)
   BCRec bc;                               ///< transport BC
@@ -578,21 +578,12 @@ inline PointQualifiedResidualClosures make_geometry_residual_closures(
   return closures;
 }
 
-/// Compiled block closures, frozen at add time.
+/// Compiled spatial block closures, frozen at add time.
 ///
-/// advance is the transport advance of the DEFAULT path (assemble_rhs, full Cartesian). The two
-/// optional embedded-boundary advances mimic advance exactly (same RK / IMEX scheme,
-/// same limiter / flux) but dispatch the transport residual to the level-set operator:
-///   - advance_masked: assemble_rhs_masked (0/1 mask, Staircase mode);
-///   - advance_eb: assemble_rhs_eb (cut-cell EB, CutCell mode).
-/// They read the System mask / level set BY POINTER at step time (not at
-/// construction), so block and level-set authoring order does not matter. Empty (default) as long as
-/// the block does not support EB routing: the stepper then falls back to advance (bit-identical).
+/// Time integration is owned exclusively by the installed ProgramGraph. This bundle therefore
+/// exposes residual, boundary, projection and diagnostic primitives only; it carries no Euler,
+/// SSPRK or IMEX advance closure.
 struct BlockClosures {
-  std::function<void(MultiFab&, Real, int)> advance;  ///< (U, dt, n): n substeps of dt/n
-  std::function<void(MultiFab&, Real, int)>
-      advance_masked;                                    ///< same, residual via assemble_rhs_masked
-  std::function<void(MultiFab&, Real, int)> advance_eb;  ///< same, residual via assemble_rhs_eb
   std::function<void(MultiFab&, MultiFab&)> rhs_into;    ///< R <- -div F + S (Poisson frozen)
   /// FLUX-ONLY residual R <- -div F(U) (NO default/composite source), Poisson frozen (ADC-425). The
   /// SAME transport assembly as @ref rhs_into evaluated on SourceFreeModel<Model> (zero source), so the
