@@ -389,7 +389,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     replacement.program_cache().store(11, replacement.block_state(0), 0, "artifact-A-cache");
     replacement.record_program_diagnostic("artifact-A-diagnostic", Real(1));
     try {
-      (void)replacement.solve_fields_from_state(slot, 0, replacement.block_state(0));
+      (void)consume_solve_outcome(
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
       std::printf("FAIL dynamic-boundary artifact did not install its field kernel\\n");
       ++fails;
     } catch (const std::exception& e) {
@@ -406,8 +407,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
       ++fails;
     }
     try {
-      const SolveReport report =
-          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0));
+      const SolveReport report = consume_solve_outcome(
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
       if (!report.solved()) {
         std::printf("FAIL static replacement field solve returned %s\\n", report.status_name());
         ++fails;

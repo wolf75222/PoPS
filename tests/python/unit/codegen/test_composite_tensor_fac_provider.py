@@ -627,6 +627,9 @@ class DelegatingPrepared final
     execution_queries.fetch_add(1, std::memory_order_relaxed);
     return delegate_->execution_path();
   }
+  int level_count() const noexcept override {
+    return delegate_->level_count();
+  }
   pops::MultiFab& assembly_target(std::string_view slot, int level) override {
     return delegate_->assembly_target(slot, level);
   }
@@ -639,7 +642,15 @@ class DelegatingPrepared final
   pops::SolveReport solve(
       const pops::runtime::program::HierarchyTensorSolveControls& controls) override {
     solve_calls.fetch_add(1, std::memory_order_relaxed);
-    return delegate_->solve(controls);
+    auto outcome =
+        pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(*delegate_, controls);
+    const auto action =
+        outcome.report().solved_value_available()
+            ? pops::SolveConsumption::kAccept
+            : (outcome.report().action == pops::SolveAction::kRejectAttempt
+                   ? pops::SolveConsumption::kRejectAttempt
+                   : pops::SolveConsumption::kFailRun);
+    return outcome.consume(action);
   }
  private:
   std::string contract_;
@@ -743,7 +754,7 @@ void register_provider(pops::runtime::program::AmrProgramContext& ctx) {
   ctx.register_hierarchy_tensor_solver_provider(std::make_shared<Provider>());
 }
 
-pops::SolveReport solve(
+pops::SolveOutcome solve(
     pops::runtime::program::AmrProgramContext& ctx, int block, int components,
     pops::Real relative_tolerance, pops::Real absolute_tolerance, int max_iterations) {
   return ctx.solve_hierarchy_tensor(
@@ -787,8 +798,8 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_solve_calls() noexcept 
                 *builtin_emission.configure,
             ),
             solve=(
-                "pops::SolveOutcome %s = pops::SolveOutcome::collective_world("
-                "pops_test_hierarchy::solve(ctx, %d, %d, %s, %s, %d));"
+                "pops::SolveOutcome %s = "
+                "pops_test_hierarchy::solve(ctx, %d, %d, %s, %s, %d);"
                 % (
                     request.report_name,
                     request.block_index,
