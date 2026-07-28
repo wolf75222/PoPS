@@ -226,14 +226,6 @@ TEST(ProgramRuntime, FacadeTemporalOperationsRequireProgramBeforeMutation) {
   expect_program_required([&] { system.step(0.01); }, "System::step");
   expect_program_required([&] { system.advance(0.01, 0); }, "System::advance");
   expect_program_required([&] { (void)system.step_cfl(0.4); }, "System::step_cfl");
-  expect_program_required([&] { (void)system.step_adaptive(0.4); }, "System::step_adaptive");
-
-  int program_calls = 0;
-  system.install_program_step([&](double) { ++program_calls; });
-  EXPECT_THROW((void)system.step_adaptive(0.4), std::logic_error);
-  EXPECT_EQ(program_calls, 0);
-  EXPECT_DOUBLE_EQ(system.time(), initial_time);
-  EXPECT_EQ(system.macro_step(), initial_step);
 }
 
 TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Politique de pas GENERIQUE de step_cfl / step_adaptive (audit 2026-06, chantier 1).
+"""Politique de pas GENERIQUE de step_cfl (audit 2026-06, chantier 1).
 
 step_cfl n'est plus une formule transport-only cachee : il AGREGE des bornes par bloc
 (stability_speed / stability_dt compilees par le DSL, source_frequency cote C++) et des bornes
@@ -12,7 +12,6 @@ Verifie :
   - NO-DEFAULT-CHANGE : sans borne optionnelle, dt identique et last_dt_bound()=="transport:<bloc>" ;
   - add_dt_bound contraint step_cfl (dt == borne, last_dt_bound()=="global:<label>") ;
   - une borne lache (1e9) / non-positive (-1) ne contraint PAS (dt inchange) ;
-  - step_adaptive refuse explicitement tant que le ProgramGraph multirate n'est pas abaisse ;
  (B, avec compilateur -- auto-skip sinon)
   - DSL m.stability_speed(lambda*) : pilote la CFL (dt reduit du ratio attendu) ;
   - DSL m.stability_dt(dt_adm) : borne directe (dt == dt_adm, cfl NON applique,
@@ -97,15 +96,6 @@ sim3.add_dt_bound("inactive", lambda: -1.0)
 dt3 = sim3.step_cfl(0.4)
 chk(abs(dt3 - dt0) < 1e-15, "dt inchange (bornes inactives)")
 chk(sim3.last_dt_bound() == "transport:ions", "borne active reste transport")
-
-print("== (A4) step_adaptive reste fail-closed sans ProgramGraph multirate ==")
-sim4 = build()
-sim4.add_dt_bound("cap_adapt", lambda: cap)
-try:
-    sim4.step_adaptive(0.4)
-    chk(False, "step_adaptive sans ProgramGraph multirate aurait du lever")
-except RuntimeError as exc:
-    chk("ProgramGraph" in str(exc), "refus explicite nomme le ProgramGraph multirate")
 
 # --- (C) AMR : StabilityPolicy cablee (audit vague 2) -------------------------------
 print("== (C1) AMR mono-bloc : transport + borne globale + last_dt_bound ==")

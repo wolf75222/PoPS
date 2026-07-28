@@ -801,11 +801,6 @@ class System {
   /// On demand, off the hot path (step/step_cfl unchanged).
   std::array<double, 3> dt_hotspot(const std::string& name);
 
-  /// Reserved multirate entry point. The historical native scheduler has been retired from the
-  /// facade; this currently throws even with a Program installed until multirate subcycling has an
-  /// explicit ProgramGraph lowering.
-  double step_adaptive(double cfl);
-
   /// @name Profiling (Spec 3 section 29-30, ADC-459)
   /// Per-phase / per-brick wall-clock timing of the step. Disabled by default (no hot-path cost
   /// when off). enable_profiling() then step()/step_cfl() then profile_report() returns the table;
@@ -867,9 +862,9 @@ class System {
   /// -- it composes these primitives (solve_fields(); ProgramContext::rhs_into(b, U, R, rate_id);
   /// saxpy(U, dt, R)). The authored rate identity is mandatory at the native boundary.
   /// @{
-  /// Install the mandatory macro-step body. System::step, advance, step_cfl and step_adaptive reject
-  /// before mutation while it is absent. An empty std::function is rejected: there is no public
-  /// temporal route that silently clears the whole-system Program.
+  /// Install the mandatory macro-step body. System::step, advance and step_cfl reject before
+  /// mutation while it is absent. An empty std::function is rejected: there is no public temporal
+  /// route that silently clears the whole-system Program.
   /// POPS_EXPORT: a generated problem.so resolves these across the dlopen boundary from the globally
   /// promoted host; without default visibility the .so could not find them (_pops is built with
   /// hidden visibility). The generated package itself remains RTLD_LOCAL.

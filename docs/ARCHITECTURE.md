@@ -363,7 +363,8 @@ mandatory and owns every stage and cadence. The runtime supplies data,
 operator/provider seams and the native CFL-bound reduction; it has no implicit transport,
 coupling, projection or `AmrRuntime`
 fallback. The former adaptive multirate formula remains available as a low-level `SystemCoupler`
-brick, but `System::step_adaptive` fails closed until `ProgramGraph` can lower that composition.
+reference brick, but no production facade exposes it until `ProgramGraph` can lower that
+composition.
 
 The `solve_fields` delegates to `SystemFieldSolver`
 ([`include/pops/runtime/system/system_field_solver.hpp`](../include/pops/runtime/system/system_field_solver.hpp)): it

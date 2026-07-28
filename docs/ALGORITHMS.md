@@ -731,16 +731,18 @@ $$\text{dt}_b = \frac{\text{cfl} \; h_{\text{cell}} \; \text{substeps}_b}{\text{
 where $h_{\text{cell}} = \min(dx, dy)$ in Cartesian, $\min(dr, r_{\min}\, d\theta)$ in polar (the
 physical azimuthal step is minimal at the inner radius), and $w_b$ is the max wave speed of the block.
 
-The retained low-level `SystemCoupler::step_adaptive` algorithm fixes the macro-step on the slowest block,
-$\Delta t = \text{cfl}\, h_{\text{cell}} / w_{\min}$, and subcycles each faster block
+The retained low-level `SystemCoupler::step_adaptive` algorithm fixes the macro-step on the fastest
+block,
+$\Delta t = \text{cfl}\, h_{\text{cell}} / w_{\max}$, and assigns each block the runtime stride
 
-$$n_b = \left\lceil \text{stride}_b \; \frac{w_b}{w_{\min}} \right\rceil$$
+$$m_b = \max\!\left(1,\left\lfloor\frac{w_{\max}}{w_b}\right\rfloor\right).$$
 
-times over its effective step $\Delta t^{\text{eff}}_b = m\,\Delta t$; aux is frozen on the macro-step
-(once-per-step coupling). This formula remains a tested numerical building block, but it is not yet
-lowered by `ProgramGraph`. Consequently, the production `System::step_adaptive` facade fails closed
-even when a Program is installed; multirate subcycling must first become an explicit Program
-composition. `System` and `AmrSystem` never fall back to this low-level scheduler.
+Block $b$ advances once every $m_b$ macro-steps by the effective step
+$\Delta t^{\text{eff}}_b = m_b\,\Delta t$; aux is frozen on the macro-step (once-per-step coupling).
+This formula remains a tested numerical building block, but it is not yet lowered by
+`ProgramGraph`. Consequently, no production facade exposes adaptive multirate subcycling; it must
+first become an explicit Program composition. `System` and `AmrSystem` never fall back to this
+low-level scheduler.
 Consequently, `Substeps`, `Stride`, or a `TimePolicy` descriptor by itself has no
 production scheduling effect.
 
@@ -774,9 +776,6 @@ function step_cfl(cfl):                           # choix du macro-pas par CFL
     t += dt; macro_step += 1
     return dt
 
-function step_adaptive(cfl):
-    require installed whole-system Program
-    raise "no ProgramGraph lowering for multirate subcycling"
 ```
 
 **Code.** The skeleton is [`numerics/time/scheduler.hpp`](../include/pops/numerics/time/schemes/scheduler.hpp),
