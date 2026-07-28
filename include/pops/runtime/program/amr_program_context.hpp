@@ -1040,14 +1040,44 @@ class AmrProgramContext {
         throw std::invalid_argument("AmrProgramContext::commit_many received a null state");
       if (std::find(targets.begin(), targets.end(), target) != targets.end())
         throw std::invalid_argument("AmrProgramContext::commit_many received a duplicate target");
-      if (target->ncomp() != source->ncomp() ||
-          target->box_array().boxes() != source->box_array().boxes())
+      if (target->box_array().boxes() != source->box_array().boxes() ||
+          target->dmap().ranks() != source->dmap().ranks() || target->ncomp() != source->ncomp() ||
+          target->n_grow() != source->n_grow())
         throw std::invalid_argument("AmrProgramContext::commit_many state layout mismatch");
       targets.push_back(target);
     }
-    for (const auto& [target, source] : commits)
-      if (target != source)
+    const bool has_aliased_source =
+        std::any_of(commits.begin(), commits.end(), [&targets](const auto& commit) {
+          return commit.first != commit.second &&
+                 std::find(targets.begin(), targets.end(), commit.second) != targets.end();
+        });
+    if (!has_aliased_source) {
+      for (const auto& [target, source] : commits)
+        if (target != source)
+          lincomb(*target, Real(0), *target, Real(1), *source);
+      return;
+    }
+    if (capturing())
+      throw std::invalid_argument(
+          "AmrProgramContext::commit_many aliased target/source requires a flat hierarchy; "
+          "materialize an explicit provisional state before a conservative multi-level commit");
+    std::vector<std::pair<MultiFab*, const MultiFab*>> prepared(commits);
+    std::vector<MultiFab> aliased_sources;
+    aliased_sources.reserve(prepared.size());
+    for (auto& [target, source] : prepared) {
+      if (target != source && std::find(targets.begin(), targets.end(), source) != targets.end()) {
+        source->sync_host();
+        aliased_sources.emplace_back(*source);
+        aliased_sources.back().sync_device();
+        source = &aliased_sources.back();
+      }
+    }
+    for (const auto& [target, source] : prepared) {
+      if (target != source) {
         lincomb(*target, Real(0), *target, Real(1), *source);
+        device_fence();
+      }
+    }
   }
 
   // --- matrix-free elliptic primitives over the CURRENT level (parity with ProgramContext) ----------

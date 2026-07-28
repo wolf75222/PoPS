@@ -331,6 +331,37 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
       << "an atomic group identity must never alias one of its member rate nodes";
 }
 
+TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 8;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  System sim(cfg);
+  add_gas_block(sim, "a");
+  add_gas_block(sim, "b");
+  sim.set_program_block_map({0, 1});
+  ProgramContext ctx(&sim);
+
+  MultiFab& first = ctx.state(0);
+  MultiFab& second = ctx.state(1);
+  first.set_val(Real(3));
+  second.set_val(Real(7));
+
+  ctx.commit_many({{&first, &second}, {&second, &first}});
+
+  ASSERT_GT(first.local_size(), 0);
+  ASSERT_GT(second.local_size(), 0);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(7));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
+
+  MultiFab wrong_ghost_width(first.box_array(), first.dmap(), first.ncomp(), first.n_grow() + 1);
+  EXPECT_THROW(ctx.commit_many({{&first, &second}, {&second, &wrong_ghost_width}}),
+               std::invalid_argument);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(7));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
+}
+
 TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
   ensure_kokkos();
   SystemConfig cfg;
