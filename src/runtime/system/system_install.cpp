@@ -289,44 +289,6 @@ POPS_EXPORT GridContext System::grid_context(int block) {
   return p_->grid_ctx(p_->sp[static_cast<std::size_t>(block)].name);
 }
 
-namespace {
-BCType prepared_bc_type(const std::string& token) {
-  if (token == "periodic")
-    return BCType::Periodic;
-  if (token == "foextrap")
-    return BCType::Foextrap;
-  if (token == "dirichlet")
-    return BCType::Dirichlet;
-  if (token == "external")
-    return BCType::External;
-  throw std::runtime_error("System::install_boundary_plan: unsupported face producer '" + token +
-                           "'");
-}
-
-void set_prepared_face(BCRec& bc, int face, BCType type, Real value) {
-  switch (face) {
-    case 0:
-      bc.xlo = type;
-      bc.xlo_val = value;
-      return;
-    case 1:
-      bc.xhi = type;
-      bc.xhi_val = value;
-      return;
-    case 2:
-      bc.ylo = type;
-      bc.ylo_val = value;
-      return;
-    case 3:
-      bc.yhi = type;
-      bc.yhi_val = value;
-      return;
-    default:
-      throw std::runtime_error("System::install_boundary_plan: invalid face ordinal");
-  }
-}
-}  // namespace
-
 POPS_EXPORT void System::install_block_state_route(const std::string& name,
                                                    const std::string& state_identity) {
   Impl* P = p_.get();
@@ -346,20 +308,14 @@ POPS_EXPORT void System::install_block_state_route(const std::string& name,
 POPS_EXPORT void System::install_boundary_plan(const std::string& name, const std::string& identity,
                                                int required_depth,
                                                const std::vector<std::string>& face_types,
-                                               const std::vector<double>& face_values, int ncomp,
+                                               const std::vector<double>& face_values,
+                                               const std::vector<std::string>& face_identities,
+                                               const std::vector<std::string>& component_roles,
                                                const std::vector<int>& omitted_interface_faces,
                                                const std::string& state_identity,
-                                               PreparedBoundaryReadDependencies read_dependencies) {
-  install_boundary_plan(name, identity, required_depth, face_types, face_values, ncomp,
-                        omitted_interface_faces, state_identity, std::move(read_dependencies), {});
-}
-
-POPS_EXPORT void System::install_boundary_plan(
-    const std::string& name, const std::string& identity, int required_depth,
-    const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
-    const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-    PreparedBoundaryReadDependencies read_dependencies,
-    std::vector<PeriodicIdentification2D> periodic_identifications) {
+                                               PreparedBoundaryReadDependencies read_dependencies,
+                                               std::vector<PeriodicIdentification2D>
+                                                   periodic_identifications) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_boundary_plan");
   if (name.empty() || state_identity.empty())
@@ -371,25 +327,34 @@ POPS_EXPORT void System::install_boundary_plan(
         "System::install_boundary_plan state differs from the exact block state route");
   if (P->boundary_plans_.count(name) != 0)
     throw std::runtime_error("System::install_boundary_plan duplicate block '" + name + "'");
-  if (ncomp < 1 || face_types.size() != 4 ||
-      face_values.size() != static_cast<std::size_t>(4 * ncomp))
-    throw std::runtime_error(
-        "System::install_boundary_plan requires four face types and ncomp*4 values");
-  std::vector<BCRec> components(static_cast<std::size_t>(ncomp));
-  for (int comp = 0; comp < ncomp; ++comp) {
-    for (int face = 0; face < 4; ++face) {
-      set_prepared_face(components[static_cast<std::size_t>(comp)], face,
-                        prepared_bc_type(face_types[static_cast<std::size_t>(face)]),
-                        static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + face)]));
-    }
-  }
+  auto hyperbolic = prepare_hyperbolic_boundary<2>(
+      face_types, face_values, face_identities, component_roles,
+      !periodic_identifications.empty());
   auto plan = std::make_shared<PreparedBoundaryPlan>(
-      identity, required_depth, std::move(components), omitted_interface_faces, state_identity,
+      identity, required_depth, std::move(hyperbolic), omitted_interface_faces, state_identity,
       std::move(read_dependencies), std::move(periodic_identifications));
   for (const auto& [_, installed] : P->boundary_plans_)
     if (installed->state_identity() == state_identity)
       throw std::runtime_error("System::install_boundary_plan duplicate qualified state identity");
   P->boundary_plans_.emplace(name, std::move(plan));
+}
+
+POPS_EXPORT void System::install_boundary_plan(
+    const std::string& name, const std::string& identity, int required_depth,
+    const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
+    const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+    PreparedBoundaryReadDependencies read_dependencies,
+    std::vector<PeriodicIdentification2D> periodic_identifications) {
+  if (ncomp < 1)
+    throw std::runtime_error("System::install_boundary_plan requires at least one component");
+  std::vector<std::string> face_identities;
+  face_identities.reserve(4);
+  for (int face = 0; face < 4; ++face)
+    face_identities.push_back(identity + ".face." + std::to_string(face));
+  install_boundary_plan(name, identity, required_depth, face_types, face_values, face_identities,
+                        std::vector<std::string>(static_cast<std::size_t>(ncomp), "Scalar"),
+                        omitted_interface_faces, state_identity, std::move(read_dependencies),
+                        std::move(periodic_identifications));
 }
 
 POPS_EXPORT void System::install_field_storage_route(const std::string& field_identity,
@@ -514,8 +479,7 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   if (stride < 1)
     throw std::runtime_error("System::install_block : stride >= 1");
   Impl* P = p_.get();
-  if (P->eb_set_ && !supports_geometry_mode(closures.supported_geometry_modes,
-                                            P->geometry_mode_))
+  if (P->eb_set_ && !supports_geometry_mode(closures.supported_geometry_modes, P->geometry_mode_))
     throw std::runtime_error(
         "System::install_block: block '" + name +
         "' has no numerical provider for the active embedded-boundary geometry");
@@ -523,9 +487,8 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None &&
       boundary_plan != P->boundary_plans_.end() &&
       boundary_plan->second->has_component_boundaries())
-    throw std::runtime_error(
-        "System::install_block: embedded-boundary block '" + name +
-        "' has a native boundary component without a geometry-aware provider");
+    throw std::runtime_error("System::install_block: embedded-boundary block '" + name +
+                             "' has a native boundary component without a geometry-aware provider");
   P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), ncomp, substeps, evolve,
                                 stride, gamma, std::move(closures.rhs_into), std::move(max_speed),
                                 std::move(poisson_rhs)});
@@ -690,12 +653,14 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
   opt.positivity_floor = positivity_floor;
 }
 
-void System::add_external_riemann_block(
-    const std::string& name, const std::string& so_path, const std::string& brick_id,
-    const std::string& sha256, const std::string& limiter, const std::string& recon,
-    const std::string& time, double gamma, int substeps, bool evolve, int stride,
-    int expected_nvars, int expected_naux, const std::string& expected_model_identity,
-    double positivity_floor, double weno_epsilon) {
+void System::add_external_riemann_block(const std::string& name, const std::string& so_path,
+                                        const std::string& brick_id, const std::string& sha256,
+                                        const std::string& limiter, const std::string& recon,
+                                        const std::string& time, double gamma, int substeps,
+                                        bool evolve, int stride, int expected_nvars,
+                                        int expected_naux,
+                                        const std::string& expected_model_identity,
+                                        double positivity_floor, double weno_epsilon) {
   require_assembling(p_->lifecycle_, "add_external_riemann_block");
   auto library = std::make_shared<runtime::program::ExternalBrickHandle>(
       so_path, brick_id, sha256, expected_nvars, expected_naux, expected_model_identity);
@@ -1125,10 +1090,8 @@ struct AnalyticLevelSetPhysicalGhostKernel {
   }
 
   POPS_HD void operator()(int i, int j) const {
-    const bool physical_x =
-        !periodicity.x && (i < domain.lo[0] || i > domain.hi[0]);
-    const bool physical_y =
-        !periodicity.y && (j < domain.lo[1] || j > domain.hi[1]);
+    const bool physical_x = !periodicity.x && (i < domain.lo[0] || i > domain.hi[0]);
+    const bool physical_y = !periodicity.y && (j < domain.lo[1] || j > domain.hi[1]);
     if (!physical_x && !physical_y)
       return;
 
@@ -1153,8 +1116,7 @@ struct AnalyticLevelSetMaskKernel {
   Array4 active_mask;
 
   POPS_HD void operator()(int i, int j) const {
-    active_mask(i, j, 0) =
-        level_set_values(i, j, 0) < Real(0) ? Real(1) : Real(0);
+    active_mask(i, j, 0) = level_set_values(i, j, 0) < Real(0) ? Real(1) : Real(0);
   }
 };
 
@@ -1171,8 +1133,7 @@ struct AnalyticInverseVolumeFractionKernel {
     }
     const detail::CutFraction fraction = detail::cut_fraction_from_samples(
         center, level_set_values(i - 1, j, 0), level_set_values(i + 1, j, 0),
-        level_set_values(i, j - 1, 0), level_set_values(i, j + 1, 0), dx, dy,
-        cut_theta_min);
+        level_set_values(i, j - 1, 0), level_set_values(i, j + 1, 0), dx, dy, cut_theta_min);
     const Real effective = fraction.kappa > kappa_min ? fraction.kappa : kappa_min;
     inverse_volume_fraction(i, j, 0) = Real(1) / effective;
   }
@@ -1180,9 +1141,8 @@ struct AnalyticInverseVolumeFractionKernel {
 }  // namespace
 
 void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
-                                    const std::vector<double>& literals,
-                                    const std::string& mode, double kappa_min,
-                                    double face_open_eps, double cut_theta_min) {
+                                    const std::vector<double>& literals, const std::string& mode,
+                                    double kappa_min, double face_open_eps, double cut_theta_min) {
   Impl* P = p_.get();
   struct PreparedAnalyticLevelSet {
     GeometryMode geometry_mode = GeometryMode::None;
@@ -1207,8 +1167,7 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
               "System::set_analytic_level_set : kappa_min / face_open_eps / "
               "cut_theta_min must be <= 1");
         if (P->polar_)
-          throw std::runtime_error(
-              "System::set_analytic_level_set : Cartesian geometry required");
+          throw std::runtime_error("System::set_analytic_level_set : Cartesian geometry required");
         const GeometryMode geometry_mode =
             parse_geometry_mode(mode, "System::set_analytic_level_set");
         if (geometry_mode != GeometryMode::None && P->ws_cache_block_)
@@ -1223,9 +1182,9 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
               "cut-cell shared-interface provider");
         for (const auto& block : P->sp)
           if (!supports_geometry_mode(block.supported_geometry_modes, geometry_mode))
-            throw std::runtime_error(
-                "System::set_analytic_level_set: block '" + block.name +
-                "' has no numerical provider for embedded-boundary mode '" + mode + "'");
+            throw std::runtime_error("System::set_analytic_level_set: block '" + block.name +
+                                     "' has no numerical provider for embedded-boundary mode '" +
+                                     mode + "'");
         if (geometry_mode != GeometryMode::None)
           for (const auto& [name, plan] : P->boundary_plans_)
             if (plan->has_component_boundaries())
@@ -1242,8 +1201,7 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
           thresholds.face_open_eps = static_cast<Real>(face_open_eps);
         if (cut_theta_min > 0.0)
           thresholds.cut_theta_min = static_cast<Real>(cut_theta_min);
-        return PreparedAnalyticLevelSet{
-            geometry_mode, thresholds, std::move(compiled.front())};
+        return PreparedAnalyticLevelSet{geometry_mode, thresholds, std::move(compiled.front())};
       });
 
   const GeometryMode gmode = prepared.geometry_mode;
@@ -1257,28 +1215,25 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
   // native halo topology.  In particular, a periodic seam must copy the opposite valid value rather
   // than evaluate the expression at a fictitious coordinate outside the domain.
   for (int li = 0; li < staged_level_set_values.local_size(); ++li)
-    for_each_cell(staged_level_set_values.box(li),
-                  AnalyticLevelSetValueKernel{
-                      view, P->geom, staged_level_set_values.fab(li).array()});
+    for_each_cell(
+        staged_level_set_values.box(li),
+        AnalyticLevelSetValueKernel{view, P->geom, staged_level_set_values.fab(li).array()});
   fill_boundary(staged_level_set_values, P->dom, P->per_);
 
   // Non-periodic physical ghosts have no halo source.  They retain the analytic extension needed by
   // the centered cut-fraction stencil; mixed-periodic corners wrap only their periodic coordinate.
   for (int li = 0; li < staged_level_set_values.local_size(); ++li)
     for_each_cell(staged_level_set_values.fab(li).grown_box(),
-                  AnalyticLevelSetPhysicalGhostKernel{
-                      view, P->geom, P->dom, P->per_,
-                      staged_level_set_values.fab(li).array()});
+                  AnalyticLevelSetPhysicalGhostKernel{view, P->geom, P->dom, P->per_,
+                                                      staged_level_set_values.fab(li).array()});
 
   Real local_non_finite = Real(0);
   for (int li = 0; li < staged_level_set_values.local_size(); ++li) {
     const Box2D sampled = staged_level_set_values.fab(li).grown_box();
     local_non_finite = std::max(
         local_non_finite,
-        for_each_cell_reduce_max(
-            sampled,
-            AnalyticLevelSetFiniteIndicator{
-                staged_level_set_values.fab(li).const_array()}));
+        for_each_cell_reduce_max(sampled, AnalyticLevelSetFiniteIndicator{
+                                              staged_level_set_values.fab(li).const_array()}));
   }
   if (all_reduce_max(static_cast<double>(local_non_finite)) != 0.0)
     throw std::domain_error(
@@ -1290,11 +1245,10 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
     const ConstArray4 phi = staged_level_set_values.fab(li).const_array();
     for_each_cell(staged_mask.fab(li).grown_box(),
                   AnalyticLevelSetMaskKernel{phi, staged_mask.fab(li).array()});
-    for_each_cell(
-        staged_inverse_volume_fraction.box(li),
-        AnalyticInverseVolumeFractionKernel{
-            phi, staged_inverse_volume_fraction.fab(li).array(), dx, dy,
-            staged_thresholds.kappa_min, staged_thresholds.cut_theta_min});
+    for_each_cell(staged_inverse_volume_fraction.box(li),
+                  AnalyticInverseVolumeFractionKernel{
+                      phi, staged_inverse_volume_fraction.fab(li).array(), dx, dy,
+                      staged_thresholds.kappa_min, staged_thresholds.cut_theta_min});
   }
   if (gmode != GeometryMode::None && sum(staged_mask, 0) <= Real(0))
     throw std::domain_error(
@@ -1313,8 +1267,8 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
 
 void System::set_disc_domain(double cx, double cy, double R, const std::string& mode,
                              double kappa_min, double face_open_eps, double cut_theta_min) {
-  const std::vector<std::string> opcodes{
-      "x", "constant", "sub", "y", "constant", "sub", "hypot", "constant", "sub"};
+  const std::vector<std::string> opcodes{"x",   "constant", "sub",      "y",  "constant",
+                                         "sub", "hypot",    "constant", "sub"};
   const std::vector<double> literals{0.0, cx, 0.0, 0.0, cy, 0.0, 0.0, R, 0.0};
   (void)analytic::collectively_prepare_analytic_request(
       "System::set_disc_domain", {{"mode", mode}},
@@ -1360,9 +1314,9 @@ void System::set_geometry_mode(const std::string& mode) {
         "shared-interface provider");
   for (const auto& block : P->sp)
     if (!supports_geometry_mode(block.supported_geometry_modes, gmode))
-      throw std::runtime_error(
-          "System::set_geometry_mode: block '" + block.name +
-          "' has no numerical provider for embedded-boundary mode '" + mode + "'");
+      throw std::runtime_error("System::set_geometry_mode: block '" + block.name +
+                               "' has no numerical provider for embedded-boundary mode '" + mode +
+                               "'");
   if (gmode != GeometryMode::None)
     for (const auto& [name, plan] : P->boundary_plans_)
       if (plan->has_component_boundaries())
@@ -1722,36 +1676,34 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
   }
   P->couplings.push_back([ins, outs, kconsts, n_in, n_const, n_terms](
                              Real dt, const std::vector<MultiFab*>& states) {
-      // MPI-safe: iteration over the LOCAL fabs of the first input block (or output if no
-      // input). local_size()==0 on a rank without a box -> empty loop, no-op (no hard-coded fab(0)).
-      const int sref = n_in > 0 ? ins[0].sidx : outs[0].sidx;
-      MultiFab& Uref = *states[static_cast<std::size_t>(sref)];
-      for (int li = 0; li < Uref.local_size(); ++li) {
-        CoupledSourceKernel kern;
-        kern.dt = dt;
-        kern.n_in = n_in;
-        kern.n_const = n_const;
-        kern.n_terms = n_terms;
-        for (int c = 0; c < n_in; ++c) {
-          kern.in[c] =
-              states[static_cast<std::size_t>(ins[static_cast<std::size_t>(c)].sidx)]
-                  ->fab(li)
-                  .array();
-          kern.in_comp[c] = ins[static_cast<std::size_t>(c)].comp;
-        }
-        for (int c = 0; c < n_const; ++c)
-          kern.consts[c] = kconsts[static_cast<std::size_t>(c)];
-        for (int t = 0; t < n_terms; ++t) {
-          kern.out[t] =
-              states[static_cast<std::size_t>(outs[static_cast<std::size_t>(t)].sidx)]
-                  ->fab(li)
-                  .array();
-          kern.out_comp[t] = outs[static_cast<std::size_t>(t)].comp;
-          kern.prog[t] = outs[static_cast<std::size_t>(t)].prog;
-        }
-        for_each_cell(Uref.box(li), kern);  // NAMED functor, device-clean additive forward-Euler
+    // MPI-safe: iteration over the LOCAL fabs of the first input block (or output if no
+    // input). local_size()==0 on a rank without a box -> empty loop, no-op (no hard-coded fab(0)).
+    const int sref = n_in > 0 ? ins[0].sidx : outs[0].sidx;
+    MultiFab& Uref = *states[static_cast<std::size_t>(sref)];
+    for (int li = 0; li < Uref.local_size(); ++li) {
+      CoupledSourceKernel kern;
+      kern.dt = dt;
+      kern.n_in = n_in;
+      kern.n_const = n_const;
+      kern.n_terms = n_terms;
+      for (int c = 0; c < n_in; ++c) {
+        kern.in[c] = states[static_cast<std::size_t>(ins[static_cast<std::size_t>(c)].sidx)]
+                         ->fab(li)
+                         .array();
+        kern.in_comp[c] = ins[static_cast<std::size_t>(c)].comp;
       }
-    });
+      for (int c = 0; c < n_const; ++c)
+        kern.consts[c] = kconsts[static_cast<std::size_t>(c)];
+      for (int t = 0; t < n_terms; ++t) {
+        kern.out[t] = states[static_cast<std::size_t>(outs[static_cast<std::size_t>(t)].sidx)]
+                          ->fab(li)
+                          .array();
+        kern.out_comp[t] = outs[static_cast<std::size_t>(t)].comp;
+        kern.prog[t] = outs[static_cast<std::size_t>(t)].prog;
+      }
+      for_each_cell(Uref.box(li), kern);  // NAMED functor, device-clean additive forward-Euler
+    }
+  });
   // Inspect metadata (ADC-595): a raw add_coupled_source declares NO conservation contract, so it
   // registers an "unchecked" view (empty ConservationContract) carrying the label and the frequency
   // bound. add_coupling_operator overwrites this behavior by pushing the DECLARED contract instead.

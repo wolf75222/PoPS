@@ -50,7 +50,12 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         "state": {"qualified_id": "case::block::state"},
         "required_depth": 1,
         "faces": [
-            {"ordinal": ordinal, "type": "foextrap", "values": [0.0]}
+            {
+                "ordinal": ordinal,
+                "producer": "case::block::boundary::face::%d" % ordinal,
+                "type": "foextrap",
+                "values": [0.0],
+            }
             for ordinal in range(4)
         ],
         "omitted_interface_faces": [],
@@ -109,7 +114,8 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         interface=Interface(), native_handle=native_handle,
     )
     artifact = SimpleNamespace(
-        blocks=(SimpleNamespace(name="block", model=SimpleNamespace(n_vars=1)),),
+        blocks=(SimpleNamespace(
+            name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
         layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
     )
