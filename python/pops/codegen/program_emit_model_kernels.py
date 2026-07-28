@@ -506,13 +506,23 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
     return lines
 
 
-def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_var: Any,
-                                       block_idx: Any = 0) -> list:
+def _emit_solve_local_nonlinear_kernel(
+    model: Any,
+    v: Any,
+    guess_var: Any,
+    out_var: Any,
+    status_var: Any,
+    active_mask_var: Any,
+    block_idx: Any = 0,
+) -> list:
     """Lower ``solve_local_nonlinear`` (spec op 10) to a per-cell Newton kernel: from the initial guess
     U0 (the @p guess_var state), iterate ``J dU = -r``, ``U -= dU`` until ``max_c |r_c| < tol`` or the
-    fixed budget, then write the converged U into @p out_var. Reuses ``pops::for_each_cell`` + the SAME
-    stack dense inverse ``pops::detail::mat_inverse<N>`` as `solve_local_linear` -- no heap / std::function
-    / Eigen in the device kernel (only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
+    fixed budget, then write the provisional U into @p out_var and one terminal code into
+    @p status_var (0=converged, 1=iteration limit, 2=singular Jacobian, 3=non-finite evaluation).
+    The caller collectively reduces that code and consumes the resulting ``SolveReport`` before the
+    scratch can become publishable. Reuses ``pops::for_each_cell`` + the SAME stack dense inverse
+    ``pops::detail::mat_inverse<N>`` as `solve_local_linear` -- no heap / std::function / Eigen in
+    the device kernel (only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
 
     The residual is evaluated by an inlined device lambda built from the residual sub-block (the
     iterate stack, the frozen guess, named ``source`` / ``apply`` per-cell Exprs, affine combines). The
@@ -536,6 +546,26 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(term_exprs) else None
     body = _kernel_open(out_var, guess_var, params_block)
+    lambda_index = next(
+        index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const pops::Array4 newton_statusA_ = %s.fab(li).array();" % status_var,
+        "  const bool newton_has_active_mask_ = %s != nullptr;" % active_mask_var,
+        "  const pops::ConstArray4 newton_activeA_ = "
+        "newton_has_active_mask_ ? %s->fab(li).const_array() : pops::ConstArray4{};"
+        % active_mask_var,
+    ]
+    body += [
+        "    if (newton_has_active_mask_ && "
+        "!(newton_activeA_(i, j, 0) >= pops::Real(0.5))) {",
+    ]
+    for c in range(n):
+        body.append("      outA(i, j, %d) = %sA(i, j, %d);" % (c, guess_var, c))
+    body += [
+        "      newton_statusA_(i, j, 0) = pops::Real(0);",
+        "      return;",
+        "    }",
+    ]
     # Per-cell aux + the live primitives are NOT pre-bound here: the prims depend on the ITERATE (they
     # are recomputed inside the residual lambda from Ueval). Only the aux locals are cell constants.
     body += ["    " + ln for ln in _cell_locals(impl, term_exprs, guess_var, with_cons=False,
@@ -562,13 +592,23 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     body.append("    pops::Real U_[%d];" % n)
     for c in range(n):
         body.append("    U_[%d] = Gval[%d];" % (c, c))
-    body.append("    pops::Real r_[%d];" % n)
+    body.append("    int failure_ = 1;")
+    body.append("    for (int c_ = 0; c_ < %d; ++c_) {" % n)
+    body.append("      if (!Kokkos::isfinite(U_[c_])) failure_ = 3;")
+    body.append("    }")
     body.append("    for (int it_ = 0; it_ < %d; ++it_) {" % max_iter)
+    body.append("      if (failure_ == 3) break;")
+    body.append("      pops::Real r_[%d];" % n)
     body.append("      residual_eval(U_, r_);")
     # Convergence on max_c |r_c| (the per-cell residual infinity norm).
     body.append("      pops::Real rmax_ = pops::Real(0);")
-    body.append("      for (int c_ = 0; c_ < %d; ++c_) rmax_ = std::fmax(rmax_, std::fabs(r_[c_]));" % n)
-    body.append("      if (rmax_ < static_cast<pops::Real>(%s)) break;" % tol)
+    body.append("      for (int c_ = 0; c_ < %d; ++c_) {" % n)
+    body.append("        if (!Kokkos::isfinite(r_[c_])) { failure_ = 3; break; }")
+    body.append("        rmax_ = std::fmax(rmax_, std::fabs(r_[c_]));")
+    body.append("      }")
+    body.append("      if (failure_ == 3) break;")
+    body.append(
+        "      if (rmax_ < static_cast<pops::Real>(%s)) { failure_ = 0; break; }" % tol)
     # FD Jacobian J_[i][j] = (r_i(U + eps e_j) - r_i(U)) / eps, eps relative to |U_j| (floored).
     body.append("      pops::Real J_[%d][%d];" % (n, n))
     body.append("      pops::Real Up_[%d];" % n)
@@ -579,19 +619,42 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
                 "* std::fmax(std::fabs(U_[j_]), static_cast<pops::Real>(1));" % fd_eps_lit)
     body.append("        Up_[j_] += eps_;")
     body.append("        residual_eval(Up_, rp_);")
-    body.append("        for (int i_ = 0; i_ < %d; ++i_) J_[i_][j_] = (rp_[i_] - r_[i_]) / eps_;" % n)
+    body.append("        for (int i_ = 0; i_ < %d; ++i_) {" % n)
+    body.append("          if (!Kokkos::isfinite(rp_[i_])) { failure_ = 3; break; }")
+    body.append("          J_[i_][j_] = (rp_[i_] - r_[i_]) / eps_;")
+    body.append("          if (!Kokkos::isfinite(J_[i_][j_])) { failure_ = 3; break; }")
+    body.append("        }")
+    body.append("        if (failure_ == 3) break;")
     body.append("      }")
+    body.append("      if (failure_ == 3) break;")
     # Newton step J dU = -r via the SAME stack dense inverse solve_local_linear uses; U -= dU.
     body.append("      pops::Real Jinv_[%d][%d];" % (n, n))
-    body.append("      pops::detail::mat_inverse<%d>(J_, Jinv_);" % n)
+    body.append(
+        "      if (!pops::detail::mat_inverse<%d>(J_, Jinv_)) { failure_ = 2; break; }" % n)
     body.append("      for (int i_ = 0; i_ < %d; ++i_) {" % n)
     body.append("        pops::Real du_ = pops::Real(0);")
     body.append("        for (int k_ = 0; k_ < %d; ++k_) du_ += Jinv_[i_][k_] * r_[k_];" % n)
+    body.append("        if (!Kokkos::isfinite(du_)) { failure_ = 3; break; }")
     body.append("        U_[i_] -= du_;")
+    body.append("        if (!Kokkos::isfinite(U_[i_])) { failure_ = 3; break; }")
     body.append("      }")
+    body.append("      if (failure_ == 3) break;")
+    body.append("    }")
+    body.append("    if (failure_ == 1) {")
+    body.append("      pops::Real final_r_[%d];" % n)
+    body.append("      residual_eval(U_, final_r_);")
+    body.append("      pops::Real final_max_ = pops::Real(0);")
+    body.append("      for (int c_ = 0; c_ < %d; ++c_) {" % n)
+    body.append("        if (!Kokkos::isfinite(final_r_[c_])) { failure_ = 3; break; }")
+    body.append("        final_max_ = std::fmax(final_max_, std::fabs(final_r_[c_]));")
+    body.append("      }")
+    body.append(
+        "      if (failure_ == 1 && final_max_ < static_cast<pops::Real>(%s)) failure_ = 0;"
+        % tol)
     body.append("    }")
     for c in range(n):
         body.append("    outA(i, j, %d) = U_[%d];" % (c, c))
+    body.append("    newton_statusA_(i, j, 0) = static_cast<pops::Real>(failure_);")
     body += _kernel_close()
     return body
 

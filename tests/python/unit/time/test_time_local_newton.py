@@ -6,8 +6,9 @@ U0, ``emit_cpp_program`` emits a device kernel that re-evaluates an inlined resi
 from the residual sub-block -- named ``source`` / ``apply`` per-cell Exprs + the iterate / frozen guess
 + affine combines), forms an in-kernel finite-difference Jacobian, and solves the Newton step
 ``J dU = -r`` with the SAME manifest-sized dense inverse ``pops::detail::mat_inverse<N>`` ``solve_local_linear``
-uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::function / Eigen in the kernel
-(only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
+uses -- iterating to ``max_c |r_c| < tol`` or the budget. A collective per-cell status reduction
+constructs the native ``SolveReport`` before ``SolveOutcome`` can expose the scratch. No heap /
+std::function / Eigen in the kernel (only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
 
 (A) Validation + codegen (pure Python, always runs): the builder rejects a non-callable residual, a
     non-State guess, a non-positive max_iter, a non-local residual op, and manifest-sized dense
@@ -203,16 +204,27 @@ def section_a(t):
         "for (int it_ = 0;",
         "J_[1][1]",
         "std::fmax(rmax_, std::fabs(r_",
-        "if (rmax_ < static_cast<pops::Real>(1e-12)) break;",
+        "if (rmax_ < static_cast<pops::Real>(1e-12)) { failure_ = 0; break; }",
         "const pops::Real eps_",
         "U_[i_] -= du_;",
         "pops::for_each_cell(",
+        "ctx.pointwise_status_max(0,",
+        "pops::SolveStatus::kIterationLimit",
+        "pops::SolveStatus::kSingular",
+        "pops::SolveStatus::kInvalidEvaluation",
+        "action=fail_run",
     ):
         chk(frag in src, "the Newton kernel has %r" % frag)
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
     chk("Gval[0] = u" in src, "the frozen guess is read into a stack vector")
     chk("U_[0] = Gval[0]" in src, "the Newton iterate is seeded to the guess")
     chk("rout[0] =" in src and "Ueval[0]" in src, "the residual is re-evaluated at the iterate")
+    report_guard = src.index("if (!local_newton_report_")
+    commit_write = src.index("ctx.commit_many(", report_guard)
+    chk(
+        report_guard < commit_write,
+        "the consumed SolveOutcome guards the provisional scratch before the state commit",
+    )
     # No forbidden constructs in the device kernel.
     for forbidden in ("std::function", "std::vector", "Eigen::", "new ", "malloc"):
         chk(forbidden not in src, "the Newton kernel has no %r (device-clean)" % forbidden)

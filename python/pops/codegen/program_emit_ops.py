@@ -492,7 +492,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "solve_local_nonlinear":
         # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
         # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
-        # uses. The output is a fresh scratch state; the guess input seeds the iterate.
+        # uses. The provisional output remains in a fresh scratch until the collectively reduced
+        # per-cell status has formed a SolveReport and the exact SolveOutcome action accepts it.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
         if target == "system":
@@ -501,8 +502,32 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        status = "local_newton_status_%d" % v.id
+        active_mask = "local_newton_active_mask_%d" % v.id
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
+                     % (status, int(v.id), var[v.id]))
+        lines.append(
+            "const pops::MultiFab* %s = ctx.pointwise_active_mask(%d, %s);"
+            % (active_mask, bidx, status))
         lines += _emit_solve_local_nonlinear_kernel(
-            node_model, v, var[guess_in.id], var[v.id], bidx)
+            node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx)
+        code = "local_newton_code_%d" % v.id
+        report = "local_newton_report_%d" % v.id
+        lines.append(
+            "const int %s = static_cast<int>(ctx.pointwise_status_max(%d, %s, %s));"
+            % (code, bidx, status, active_mask))
+        lines.append("pops::SolveReport %s;" % report)
+        lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
+        lines.append(
+            "else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit);"
+            % (code, report))
+        lines.append(
+            "else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular);"
+            % (code, report))
+        lines.append(
+            "else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
+        _append_solve_report_guard(
+            program, v, report, lines, label="local_nonlinear")
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
@@ -560,8 +585,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
     elif v.op in ("solve_outcome", "solve_outcome_component"):
         # Python graph/authoring requires an explicit consumed outcome before a solve result can feed
-        # effects. Runtime lowering keeps the existing Krylov call as the value-producing operation;
-        # these nodes are zero-cost aliases that preserve that explicit contract in the IR.
+        # effects. The solve-producing operation has already constructed and guarded its native
+        # SolveReport using the exact action attached to this outcome. These projections are therefore
+        # zero-cost aliases of a scratch that is reachable only after the guard accepted it.
         (source,) = v.inputs
         if v.op == "solve_outcome_component" and "out_block" in v.attrs:
             solve = source.inputs[0]
