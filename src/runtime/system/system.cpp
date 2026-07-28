@@ -100,13 +100,6 @@ double System::step_cfl(double cfl, double speed_floor, double max_dt, double mi
   return p_->execute_step_transaction(
       [&] { return p_->program_driver_.step_cfl(cfl, speed_floor, max_dt, min_dt); });
 }
-double System::step_adaptive(double cfl) {
-  p_->program_.require_step_installed("System::step_adaptive");
-  (void)cfl;
-  throw std::logic_error(
-      "System::step_adaptive has no ProgramGraph lowering; express multirate subcycling in the "
-      "installed whole-system Program");
-}
 
 // System clock (IO v1, audit wave 2): macro_step is REQUIRED by the restart (the
 // hold-then-catch-up stride cadence reads macro_step % stride; t alone is not enough).

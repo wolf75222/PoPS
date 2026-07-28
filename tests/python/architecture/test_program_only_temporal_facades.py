@@ -22,6 +22,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
+SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
+SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
@@ -104,7 +106,6 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
         "void System::step(double dt)",
         "void System::advance(double dt, int nsteps)",
         "double System::step_cfl(",
-        "double System::step_adaptive(double cfl)",
     ):
         body = _function_body(source, signature)
         assert "require_step_installed(" in body
@@ -113,8 +114,9 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
 
     assert "program_driver_.step(dt)" in _function_body(source, "void System::step(double dt)")
     assert "program_driver_.step_cfl(" in _function_body(source, "double System::step_cfl(")
-    adaptive = _function_body(source, "double System::step_adaptive(double cfl)")
-    assert "has no ProgramGraph lowering" in adaptive
+    assert "step_adaptive" not in source
+    assert "step_adaptive" not in SYSTEM_HEADER.read_text(encoding="utf-8")
+    assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
 
 
 def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
