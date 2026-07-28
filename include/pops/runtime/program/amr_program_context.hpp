@@ -2212,7 +2212,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     capture_program_attempt_snapshot_(saved);
     conservative_ledger_.begin();
     try {
-      begin_interface_flux_attempt_();
       reset_step();
       ensure_level_clocks_();
       // A GLOBAL Program cadence may call this same closure several times inside one accepted
@@ -2228,6 +2227,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         regrid_if_due_at_(window_start_step, facade_->time());
         automatic_regrid_macro_step_ = static_cast<int>(window_start_step);
       }
+      // Regrid owns the only topology mutation in an accepted attempt. Bind the interface-fragment
+      // transaction afterwards so its epoch and level count describe the hierarchy that the Program
+      // body will actually evaluate.
+      begin_interface_flux_attempt_();
       // A head-of-step regrid is the only place the hierarchy may have changed.  Prepare one
       // topology-shaped old/new image per parent level here, then reuse those allocations for every
       // recursive subcycle and every subsequent attempt on the same hierarchy.
@@ -3059,11 +3062,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     const std::uint64_t topology_epoch = eng_->topology_epoch();
     if (!interface_flux_ledger_)
       interface_flux_ledger_.emplace(topology_epoch);
-    if (interface_flux_ledger_->topology_epoch() != topology_epoch)
-      throw std::runtime_error(
-          "AMR interface-flux fragment transaction crossed a frozen hierarchy topology epoch");
     if (interface_flux_ledger_->in_transaction())
       throw std::logic_error("AMR interface-flux fragment attempt is already active");
+    if (interface_flux_ledger_->topology_epoch() != topology_epoch)
+      interface_flux_ledger_.emplace(topology_epoch);
     if (!interface_flux_ledger_->empty())
       interface_flux_ledger_->clear();
     interface_flux_ledger_->begin();
@@ -3072,8 +3074,19 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void commit_interface_flux_attempt_() const {
     if (!interface_flux_ledger_)
       return;
+    // A head-of-step regrid may have removed the fine level before this attempt entered the
+    // Program body. begin_interface_flux_attempt_() is then intentionally a no-op; the matching
+    // commit must be one too instead of treating the resident, inactive two-level workspace as a
+    // broken transaction.
+    if (nlev() != 2) {
+      accepted_interface_flux_report_.clear();
+      return;
+    }
     if (!interface_flux_ledger_->in_transaction())
       throw std::logic_error("AMR interface-flux fragment attempt is not active at commit");
+    if (interface_flux_ledger_->topology_epoch() != eng_->topology_epoch())
+      throw std::runtime_error(
+          "AMR interface-flux fragment transaction crossed a frozen hierarchy topology epoch");
     interface_flux_ledger_->commit();
     std::vector<InterfaceFluxFragmentAuditEntry> accepted;
     accepted.reserve(interface_flux_ledger_->published_size());
