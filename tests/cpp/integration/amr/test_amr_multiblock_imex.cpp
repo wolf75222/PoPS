@@ -42,6 +42,7 @@
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 
+#include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 
 #include <cmath>
@@ -302,7 +303,8 @@ std::unique_ptr<AmrSystem> make_stiff_pair(int N, double L, double eps, bool ime
   system->set_density("stiff", rho);
   system->set_density("neutral", rho);
   system->set_poisson("charge_density", "geometric_mg", "periodic");
-  system->set_refinement(1e29);
+  test::install_prepared_threshold_union(*system,
+                                         {{"stiff", "rho", 1e29}, {"neutral", "rho", 1e29}});
   system->set_temporal_relations({2}, {1}, {"integral_only"});
   install_stiff_pair_program(*system, stiff_model, imex_stiff, substeps);
   return system;
@@ -325,7 +327,8 @@ std::unique_ptr<AmrSystem> make_nonlinear_source_pair(int n, double rate,
   system->set_density("decay", initial);
   system->set_density("neutral", initial);
   system->set_poisson("charge_density", "geometric_mg", "periodic");
-  system->set_refinement(1e29);
+  test::install_prepared_threshold_union(*system,
+                                         {{"decay", "rho", 1e29}, {"neutral", "rho", 1e29}});
   system->set_temporal_relations({2}, {1}, {"integral_only"});
   install_nonlinear_source_program(*system, decay);
   return system;

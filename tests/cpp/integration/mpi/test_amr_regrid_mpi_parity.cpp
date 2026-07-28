@@ -103,8 +103,8 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   sys.add_block("a", exb_charge(q0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.add_block("b", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.set_poisson("charge_density", "geometric_mg", "periodic");
-  test::install_prepared_thresholds_and_shared_aux_gradient(
-      sys, {{"a", "n", 1.5}, {"b", "n", 1.5}}, Real(1e-3));
+  test::install_prepared_thresholds_and_shared_aux_gradient(sys, {{"a", "n", 1.5}, {"b", "n", 1.5}},
+                                                            Real(1e-3));
   sys.set_density("a", rho0);
   sys.set_density("b", rho1);
   test::install_forward_euler_program(sys);

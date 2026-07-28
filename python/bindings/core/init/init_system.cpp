@@ -182,9 +182,9 @@ void bind_system_assembly(py::class_<System>& cls) {
       .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
            "Bind one exact state Handle identity to native block storage.")
-      .def("_install_boundary_field_route", &System::install_boundary_field_route,
+      .def("_install_field_storage_route", &System::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
-           "Bind one exact boundary field Handle to native provider storage.")
+           "Bind one exact solved-field Handle to native provider storage.")
       .def("_discard_boundary_plans", &System::discard_boundary_plans,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(

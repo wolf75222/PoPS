@@ -333,8 +333,8 @@ class System {
   POPS_EXPORT void install_block_state_route(const std::string& name,
                                              const std::string& state_identity);
   /// Bind one exact solved-field Handle identity to its authenticated provider storage slot.
-  POPS_EXPORT void install_boundary_field_route(const std::string& field_identity,
-                                                const std::string& provider_slot);
+  POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
+                                               const std::string& provider_slot);
   /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
   POPS_EXPORT void discard_boundary_plans();
   /// Attach one explicitly qualified native boundary operation to an already installed block plan.

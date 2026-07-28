@@ -149,11 +149,11 @@ struct AmrSystemConfig {
 };
 
 /// Frozen parameters passed to the deferred build of the compiled path (add_compiled_model). Materialized
-/// by AmrSystem at ensure_built time: the geometry + the refine/poisson/density choices known
+/// by AmrSystem at ensure_built time: the geometry, Poisson and initial-state choices known
 /// at that moment. The amr_dsl_block header consumes them to instantiate AmrCouplerMP<Model>.
 ///
 /// STRUCTURE (ADC-610). Settings are grouped into NAMED sub-structs by ownership/role
-/// (mesh, regrid, poisson, initial data, named aux) instead of one flat
+/// (mesh, poisson, initial data, named aux) instead of one flat
 /// append-only bag. A new setting goes INTO its semantic group -- the historical "add at the tail so an
 /// older .so loader falls back silently" idiom is RETIRED because it no longer describes how this struct
 /// evolves. The ABI story is now the VERSIONED KEY, not tail-only placement: this struct crosses the
@@ -182,11 +182,6 @@ struct AmrBuildParams {
     [[nodiscard]] double length_x() const noexcept { return L; }
     [[nodiscard]] double length_y() const noexcept { return Ly == 0.0 ? L : Ly; }
   } mesh;
-  /// Refinement criterion frozen at build.
-  struct Regrid {
-    double threshold =
-        static_cast<double>(kAmrRefinementDisabledThreshold);  ///< no refinement (sentinel)
-  } regrid;
   /// Coarse Poisson boundary condition + conductive wall (resolved by set_poisson).
   struct Poisson {
     BCRec bc;                     ///< coarse Poisson BC
@@ -453,9 +448,8 @@ class AmrSystem {
       const std::vector<std::string>& leaf_subject_kinds,
       const std::vector<std::string>& leaf_subject_identities,
       const std::vector<std::string>& leaf_blocks, const std::vector<std::string>& leaf_variables,
-      const std::vector<int>& leaf_field_component_indices,
-      const std::vector<int>& leaf_ops, const std::vector<double>& leaf_thresholds,
-      const std::vector<int>& leaf_stencil_indices,
+      const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
+      const std::vector<double>& leaf_thresholds, const std::vector<int>& leaf_stencil_indices,
       const std::vector<runtime::amr::PreparedTaggingProgram::Stencil>& stencils,
       const std::vector<std::int32_t>& refine_ops, const std::vector<std::int32_t>& refine_args,
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,

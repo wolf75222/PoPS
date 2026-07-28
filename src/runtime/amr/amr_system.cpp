@@ -728,11 +728,6 @@ struct AmrSystem::Impl {
     bp.mesh.distribute_coarse = cfg.distribute_coarse;
     bp.mesh.coarse_max_grid = cfg.coarse_max_grid;
     bp.mesh.load_balance = load_balance_authority_;
-    // The legacy builder carrier still uses this value only as an allocation gate. Its value is
-    // derived solely from prepared-authority presence and is never evaluated as a tag predicate.
-    bp.regrid.threshold = tagging_spec
-                              ? 0.0
-                              : static_cast<double>(kAmrRefinementDisabledThreshold);
     // POISSON group: coarse Poisson BC + conductive wall.
     bp.poisson.bc = poisson_bc();
     bp.poisson.wall = wall_active();
@@ -819,10 +814,9 @@ struct AmrSystem::Impl {
         // so a loader regenerated against this header floors the Density-role face states like a native
         // block (forwarded to dispatch_amr_block -> build_amr_block). b.pos_floor == 0 for an OLDER .so
         // (it never marshals the field) -> inactive, bit-identical. No reject.
-        rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.state,
-                                                   b.has_state, b.gamma, b.substeps, b.recon_prim,
-                                                   b.stride, {}, {}, b.pos_floor,
-                                                   b.weno_epsilon, b.wave_speed_cache));
+        rblocks.push_back(b.compiled_block_builder(
+            S, b.name, b.density, b.has_density, b.state, b.has_state, b.gamma, b.substeps,
+            b.recon_prim, b.stride, {}, {}, b.pos_floor, b.weno_epsilon, b.wave_speed_cache));
         continue;
       }
       // Native ModelSpec path: model dispatch -> concrete type, then spatial scheme dispatch
@@ -1031,17 +1025,17 @@ struct AmrSystem::Impl {
           throw std::runtime_error("resolved AMR tagging has an unknown subject kind");
         }
         leaves.push_back(Program::Leaf{
-          field_index, static_cast<std::size_t>(component),
-          tagging_spec->leaf_ops[index], tagging_spec->leaf_thresholds[index],
-          tagging_spec->leaf_stencil_indices[index] < 0
-              ? POPS_TAGGING_NO_STENCIL_V1
-              : static_cast<std::size_t>(tagging_spec->leaf_stencil_indices[index])});
+            field_index, static_cast<std::size_t>(component), tagging_spec->leaf_ops[index],
+            tagging_spec->leaf_thresholds[index],
+            tagging_spec->leaf_stencil_indices[index] < 0
+                ? POPS_TAGGING_NO_STENCIL_V1
+                : static_cast<std::size_t>(tagging_spec->leaf_stencil_indices[index])});
       }
-      runtime->set_tagging_program(
-          std::move(stencils), std::move(leaves), tagging_spec->refine_ops,
-          tagging_spec->refine_args, tagging_spec->coarsen_ops, tagging_spec->coarsen_args,
-          tagging_spec->min_cycles, tagging_spec->equality_policy, tagging_spec->conflict_policy,
-          tagging_spec->clock_identity, tagging_spec->provider_identity);
+      runtime->set_tagging_program(std::move(stencils), std::move(leaves), tagging_spec->refine_ops,
+                                   tagging_spec->refine_args, tagging_spec->coarsen_ops,
+                                   tagging_spec->coarsen_args, tagging_spec->min_cycles,
+                                   tagging_spec->equality_policy, tagging_spec->conflict_policy,
+                                   tagging_spec->clock_identity, tagging_spec->provider_identity);
     }
     // Canonical B_z and model-NAMED aux fields share one native static-field authority. The runtime
     // validates that a block declared each component, publishes coarse->fine immediately, and
@@ -2003,9 +1997,8 @@ void AmrSystem::set_bootstrap_tagging(
     const std::vector<std::string>& leaf_subject_kinds,
     const std::vector<std::string>& leaf_subject_identities,
     const std::vector<std::string>& leaf_blocks, const std::vector<std::string>& leaf_variables,
-    const std::vector<int>& leaf_field_component_indices,
-    const std::vector<int>& leaf_ops, const std::vector<double>& leaf_thresholds,
-    const std::vector<int>& leaf_stencil_indices,
+    const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
+    const std::vector<double>& leaf_thresholds, const std::vector<int>& leaf_stencil_indices,
     const std::vector<runtime::amr::PreparedTaggingProgram::Stencil>& stencils,
     const std::vector<std::int32_t>& refine_ops, const std::vector<std::int32_t>& refine_args,
     const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
@@ -2016,11 +2009,10 @@ void AmrSystem::set_bootstrap_tagging(
   if (p_->built || p_->tagging_spec || leaf_count == 0 ||
       leaf_subject_identities.size() != leaf_count || leaf_blocks.size() != leaf_count ||
       leaf_variables.size() != leaf_count || leaf_field_component_indices.size() != leaf_count ||
-      leaf_ops.size() != leaf_count ||
-      leaf_thresholds.size() != leaf_count || leaf_stencil_indices.size() != leaf_count ||
-      refine_ops.empty() || refine_ops.size() != refine_args.size() ||
-      coarsen_ops.size() != coarsen_args.size() || min_cycles < 0 || clock_identity.empty() ||
-      provider_identity.empty())
+      leaf_ops.size() != leaf_count || leaf_thresholds.size() != leaf_count ||
+      leaf_stencil_indices.size() != leaf_count || refine_ops.empty() ||
+      refine_ops.size() != refine_args.size() || coarsen_ops.size() != coarsen_args.size() ||
+      min_cycles < 0 || clock_identity.empty() || provider_identity.empty())
     throw std::runtime_error(
         "AmrSystem::set_bootstrap_tagging requires one exact pre-build graph manifest");
   if (std::any_of(leaf_subject_identities.begin(), leaf_subject_identities.end(),
@@ -3895,7 +3887,7 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
   }
   report.amr_refinement.tagging_execution_provider_identity =
       p_->amr_tagger_component_ ? p_->amr_tagger_component_->provider_identity()
-                               : "pops.amr.tagging.native-kokkos-vm@1";
+                                : "pops.amr.tagging.native-kokkos-vm@1";
   report.amr_refinement.phi_grad_threshold =
       static_cast<double>(kAmrPhiRefinementDisabledThreshold);
   report.amr_refinement.phi_refinement_enabled = false;

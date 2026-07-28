@@ -27,6 +27,7 @@ struct PreparedNamedThresholdTag {
   std::string variable;
   double threshold = 0.0;
   PreparedThresholdRelation relation = PreparedThresholdRelation::Above;
+  std::string state_identity;
 };
 
 inline std::string direct_amr_state_identity(const std::string& block) {
@@ -35,7 +36,8 @@ inline std::string direct_amr_state_identity(const std::string& block) {
 
 inline void install_prepared_threshold_union(
     AmrSystem& system, std::initializer_list<PreparedNamedThresholdTag> criteria,
-    std::string provider_identity = "test::prepared-named-threshold-union@1") {
+    std::string provider_identity = "test::prepared-named-threshold-union@1",
+    std::string clock_identity = "test::prepared-tagging-clock") {
   if (criteria.size() == 0)
     throw std::invalid_argument("test named threshold union requires a refine root");
   std::vector<std::string> subject_kinds, subject_identities, blocks, variables;
@@ -61,7 +63,9 @@ inline void install_prepared_threshold_union(
                            : POPS_TAGGING_BELOW_V1;
     const auto leaf_index = static_cast<std::int32_t>(blocks.size());
     subject_kinds.emplace_back("state");
-    subject_identities.push_back(direct_amr_state_identity(criterion.block));
+    subject_identities.push_back(criterion.state_identity.empty()
+                                     ? direct_amr_state_identity(criterion.block)
+                                     : criterion.state_identity);
     blocks.push_back(criterion.block);
     variables.push_back(criterion.variable);
     field_component_indices.push_back(-1);
@@ -75,10 +79,10 @@ inline void install_prepared_threshold_union(
     refine_ops.push_back(POPS_TAGGING_ANY_OF_V1);
     refine_args.push_back(static_cast<std::int32_t>(criteria.size()));
   }
-  system.set_bootstrap_tagging(
-      subject_kinds, subject_identities, blocks, variables, field_component_indices, leaf_ops,
-      thresholds, stencil_indices, {}, refine_ops, refine_args, {}, {}, 0, "hold", "error",
-      "test::prepared-tagging-clock", std::move(provider_identity));
+  system.set_bootstrap_tagging(subject_kinds, subject_identities, blocks, variables,
+                               field_component_indices, leaf_ops, thresholds, stencil_indices, {},
+                               refine_ops, refine_args, {}, {}, 0, "hold", "error",
+                               std::move(clock_identity), std::move(provider_identity));
 }
 
 inline void install_prepared_thresholds_and_shared_aux_gradient(
@@ -116,7 +120,9 @@ inline void install_prepared_thresholds_and_shared_aux_gradient(
                            : POPS_TAGGING_BELOW_V1;
     const auto leaf_index = static_cast<std::int32_t>(leaf_ops.size());
     subject_kinds.emplace_back("state");
-    subject_identities.push_back(direct_amr_state_identity(criterion.block));
+    subject_identities.push_back(criterion.state_identity.empty()
+                                     ? direct_amr_state_identity(criterion.block)
+                                     : criterion.state_identity);
     blocks.push_back(criterion.block);
     variables.push_back(criterion.variable);
     field_component_indices.push_back(-1);
@@ -143,10 +149,10 @@ inline void install_prepared_thresholds_and_shared_aux_gradient(
   refine_args.push_back(gradient_index);
   refine_ops.push_back(POPS_TAGGING_ANY_OF_V1);
   refine_args.push_back(2);
-  system.set_bootstrap_tagging(
-      subject_kinds, subject_identities, blocks, variables, field_component_indices, leaf_ops,
-      thresholds, stencil_indices, stencils, refine_ops, refine_args, {}, {}, 0, "hold", "error",
-      "test::prepared-tagging-clock", std::move(provider_identity));
+  system.set_bootstrap_tagging(subject_kinds, subject_identities, blocks, variables,
+                               field_component_indices, leaf_ops, thresholds, stencil_indices,
+                               stencils, refine_ops, refine_args, {}, {}, 0, "hold", "error",
+                               "test::prepared-tagging-clock", std::move(provider_identity));
 }
 
 inline void install_prepared_threshold_decisions(
@@ -249,15 +255,15 @@ inline void install_prepared_thresholds_and_shared_aux_gradient(
     refine_args.push_back(static_cast<std::int32_t>(criteria.size()));
   }
   const auto gradient_index = static_cast<std::int32_t>(leaves.size());
-  leaves.push_back(Program::Leaf{block_count, 0, POPS_TAGGING_GRADIENT_ABOVE_V1,
-                                 gradient_threshold, 0});
+  leaves.push_back(
+      Program::Leaf{block_count, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, gradient_threshold, 0});
   refine_ops.push_back(POPS_TAGGING_GRADIENT_ABOVE_V1);
   refine_args.push_back(gradient_index);
   refine_ops.push_back(POPS_TAGGING_ANY_OF_V1);
   refine_args.push_back(2);
-  runtime.set_tagging_program(
-      std::move(stencils), std::move(leaves), std::move(refine_ops), std::move(refine_args), {},
-      {}, 0, 0, 0, "test::prepared-tagging-clock", std::move(provider_identity));
+  runtime.set_tagging_program(std::move(stencils), std::move(leaves), std::move(refine_ops),
+                              std::move(refine_args), {}, {}, 0, 0, 0,
+                              "test::prepared-tagging-clock", std::move(provider_identity));
 }
 
 }  // namespace pops::test

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from pops.model import Handle, OwnerPath
 from pops.numerics.indicator_stencils import SECOND_ORDER_AXIS, gradient_stencil
 from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
@@ -16,7 +18,7 @@ class _CaptureTagging:
 
 
 def test_field_gradient_uses_qualified_prepared_output_route() -> None:
-    field = Handle("phi", kind="field", owner=OwnerPath.case("main"))
+    field = Handle("potential", kind="field", owner=OwnerPath.case("main"))
     identity = field.canonical_identity()
     stencil = gradient_stencil(SECOND_ORDER_AXIS, dimension=2).to_data()
 
@@ -64,7 +66,7 @@ def test_field_gradient_uses_qualified_prepared_output_route() -> None:
         SimpleNamespace(tagging=_Tagging()),
         {},
         clock_identity="test::clock",
-        field_plans={"phi": plan},
+        field_plans={"electrostatic": plan},
     )
 
     assert native.arguments is not None
@@ -75,3 +77,35 @@ def test_field_gradient_uses_qualified_prepared_output_route() -> None:
         ["phi"],
         [0],
     )
+
+
+def test_field_gradient_refuses_ambiguous_solved_field_identity() -> None:
+    field = Handle("potential", kind="field", owner=OwnerPath.case("main"))
+    plan = SimpleNamespace(
+        operator=SimpleNamespace(unknown=field),
+        native_options={"output_route": {"components": ("phi",)}},
+    )
+    other_plan = SimpleNamespace(
+        operator=SimpleNamespace(unknown=field),
+        native_options={"output_route": {"components": ("phi",)}},
+    )
+    bootstrap = SimpleNamespace(
+        tagging=SimpleNamespace(
+            qualified_id="test::resolved-tagging",
+            runtime_tagging_data=lambda _params: {
+                "schema_version": 1,
+                "graph_type": "amr_tagging_runtime",
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError, match="multiple resolved field plans claim solved-field identity"
+    ):
+        flow_bootstrap_tagging(
+            _CaptureTagging(),
+            bootstrap,
+            {},
+            clock_identity="test::clock",
+            field_plans={"electrostatic": plan, "screened": other_plan},
+        )

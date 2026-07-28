@@ -132,6 +132,21 @@ def flow_bootstrap_tagging(
         registrations[node_type] = lowering.get("qualified_id")
 
     resolved_field_plans = field_plans if isinstance(field_plans, Mapping) else {}
+    field_plans_by_identity: dict[str, Any] = {}
+    for field_name, plan in resolved_field_plans.items():
+        unknown = getattr(getattr(plan, "operator", None), "unknown", None)
+        identity = getattr(unknown, "qualified_id", None)
+        if not isinstance(identity, str) or not identity:
+            raise TypeError(
+                "pops.bind: resolved field plan %r has no qualified solved-field identity"
+                % field_name
+            )
+        if identity in field_plans_by_identity:
+            raise ValueError(
+                "pops.bind: multiple resolved field plans claim solved-field identity %s"
+                % identity
+            )
+        field_plans_by_identity[identity] = plan
     leaves: list[tuple[str, str, str, str, int, int, float, int]] = []
     stencils: list[dict[str, Any]] = []
     stencil_indices: dict[str, int] = {}
@@ -165,10 +180,8 @@ def flow_bootstrap_tagging(
                         "pops.bind: native state tag leaves must be block-qualified")
                 block_name = block["local_id"]
             else:
-                local_id = indicator.get("local_id")
-                plan = resolved_field_plans.get(local_id)
-                unknown = getattr(getattr(plan, "operator", None), "unknown", None)
-                if plan is None or getattr(unknown, "qualified_id", None) != subject_identity:
+                plan = field_plans_by_identity.get(subject_identity)
+                if plan is None:
                     raise ValueError(
                         "pops.bind: native field tag leaf has no authenticated field plan")
                 options = getattr(plan, "native_options", None)

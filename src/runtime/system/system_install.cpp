@@ -382,14 +382,14 @@ POPS_EXPORT void System::install_boundary_plan(const std::string& name, const st
   P->boundary_plans_.emplace(name, std::move(plan));
 }
 
-POPS_EXPORT void System::install_boundary_field_route(const std::string& field_identity,
-                                                      const std::string& provider_slot) {
+POPS_EXPORT void System::install_field_storage_route(const std::string& field_identity,
+                                                     const std::string& provider_slot) {
   Impl* P = p_.get();
-  require_assembling(P->lifecycle_, "install_boundary_field_route");
+  require_assembling(P->lifecycle_, "install_field_storage_route");
   if (field_identity.empty() || provider_slot.empty() ||
-      !P->boundary_field_routes_.emplace(field_identity, provider_slot).second)
+      !P->field_storage_routes_.emplace(field_identity, provider_slot).second)
     throw std::runtime_error(
-        "System boundary field route requires unique non-empty qualified identities");
+        "System field storage route requires unique non-empty qualified identities");
 }
 
 POPS_EXPORT void System::discard_boundary_plans() {
@@ -400,7 +400,7 @@ POPS_EXPORT void System::discard_boundary_plans() {
         "System::discard_boundary_plans is restricted to a failed pre-block transaction");
   P->boundary_plans_.clear();
   P->block_state_identities_.clear();
-  P->boundary_field_routes_.clear();
+  P->field_storage_routes_.clear();
 }
 
 POPS_EXPORT void System::install_ghost_boundary_component(

@@ -28,6 +28,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
+#include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 
 #include <algorithm>
@@ -227,8 +228,8 @@ static std::unique_ptr<AmrSystem> make_temporal_contract_system(
                              "clocked");
   system->set_density("clocked", initial);
   system->set_poisson("charge_density", "geometric_mg", "periodic");
-  // A configured (but never re-evaluated) criterion selects the two-level hierarchy template.
-  system->set_refinement(1e29);
+  // A prepared (but never re-evaluated) criterion selects the two-level hierarchy template.
+  test::install_prepared_threshold_union(*system, {{"clocked", "u", 1e29}});
   const amr::Rational ratio = relation.temporal_ratio();
   system->set_temporal_relations({ratio.numerator}, {ratio.denominator},
                                  {relation.remainder_policy() == amr::RemainderPolicy::IntegralOnly
@@ -276,7 +277,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       system->set_poisson("charge_density", "geometric_mg", "periodic");
       system->set_density("A", rho0);
       system->set_density("B", rho1);
-      system->set_refinement(1e29);
+      test::install_prepared_threshold_union(*system, {{"A", "n", 1e29}, {"B", "n", 1e29}});
       system->set_temporal_relations({2}, {1}, {"integral_only"});
       system->set_program_block_map({0, 1});
       system->install_program_step([](double) {});

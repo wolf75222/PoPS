@@ -100,8 +100,7 @@ static std::vector<PatchBox> run_case(int N, double thr, const std::string& vari
   sim.add_block("gas0", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("gas1", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  test::install_prepared_threshold_union(
-      sim, {{"gas0", variable, thr}, {"gas1", variable, thr}});
+  test::install_prepared_threshold_union(sim, {{"gas0", variable, thr}, {"gas1", variable, thr}});
   sim.set_conservative_state("gas0", s0);
   sim.set_conservative_state("gas1", make_state(N, 1.0, 2.0, 0, 1.0, 0, 0));  // uniforme
   test::install_forward_euler_program(sim);
@@ -138,8 +137,8 @@ TEST(test_amr_regrid_variable, Runs) {
                             4,
                             {VariableRole::Scalar, VariableRole::MomentumX, VariableRole::Density,
                              VariableRole::Energy}};
-    EXPECT_EQ(
-        detail::resolve_selected_component("prepared AMR tagging", "weird", weird, "rho", ""), 2)
+    EXPECT_EQ(detail::resolve_selected_component("prepared AMR tagging", "weird", weird, "rho", ""),
+              2)
         << "resolver_density_not_at_comp0_name";
   }
 
@@ -157,8 +156,7 @@ TEST(test_amr_regrid_variable, Runs) {
 
   // Le defaut (densite uniforme < seuil) ne tague rien -> regrid no-op -> seed central conserve
   // (coin fin = n/2 = 32). Refiner sur l'energie deplace le patch vers la bosse bas-gauche (coin << 32).
-  EXPECT_LT(min_fine_corner(energy), min_fine_corner(density))
-      << "name_E_patch_reaches_lower_left";
+  EXPECT_LT(min_fine_corner(energy), min_fine_corner(density)) << "name_E_patch_reaches_lower_left";
   EXPECT_FALSE(same_boxes(energy, density)) << "name_E_layout_differs_from_density";
 
   // NON-REGRESSION composante 0 : sur une bosse de DENSITE (comp 0) en bas-gauche, le selecteur par
