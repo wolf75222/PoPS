@@ -89,15 +89,6 @@ riemann = SimpleNamespace(
     Roe=lambda: _riemann(
         "roe", "pops::RoeFlux",
         ["physical_flux", "provider_pack", "stability_bound", "roe_dissipation"]),
-    # Explicit canonical Euler 2D routes (ADC-590): force EulerHLLCFlux2D / EulerRoeFlux2D
-    # (4-var rho/mx/my/E + pressure), never a fallback. Use HLLC()/Roe() for a generic model
-    # that emits the capability (m.enable_hllc()/m.enable_roe()).
-    EulerHLLC2D=lambda: _riemann("euler_hllc", "pops::EulerHLLCFlux2D",
-                                 ["physical_flux", "provider_pack", "stability_bound", "pressure",
-                                  "euler_2d_layout", "no_hllc_star_state"]),
-    EulerRoe2D=lambda: _riemann("euler_roe", "pops::EulerRoeFlux2D",
-                                ["physical_flux", "provider_pack", "stability_bound", "pressure",
-                                 "euler_2d_layout", "no_roe_dissipation"]),
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="riemann"),
 )
 
@@ -126,10 +117,8 @@ ScalarUpwind = riemann.ScalarUpwind
 HLL = riemann.HLL
 HLLC = riemann.HLLC
 Roe = riemann.Roe
-EulerHLLC2D = riemann.EulerHLLC2D
-EulerRoe2D = riemann.EulerRoe2D
 User = riemann.User
 
-__all__ = ["riemann", "waves", "Rusanov", "ScalarUpwind", "HLL", "HLLC", "Roe", "EulerHLLC2D", "EulerRoe2D",
+__all__ = ["riemann", "waves", "Rusanov", "ScalarUpwind", "HLL", "HLLC", "Roe",
            "User", "WaveSpeedProvider", "ExplicitPair", "FromJacobian", "FromPressure",
            "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of", "available", "validate"]

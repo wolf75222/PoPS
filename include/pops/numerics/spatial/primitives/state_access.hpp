@@ -78,10 +78,7 @@ struct SourceFreeModel {
   }
   // Roe / HLLC CAPABILITIES (HasRoeDissipation / HasHLLCStructure): forwarded ONLY if M exposes
   // them (requires clause), exactly like pressure / wave_speeds above and like composite.hpp.
-  // WITHOUT these, an IMEX explicit half-step on riemann='roe' / 'hllc' loses the model's GENERIC
-  // hooks, so RoeFlux / HLLCFlux silently fall back to the canonical Euler-4var path -- which fails
-  // to even COMPILE for a non-Euler model (e.g. a moment hierarchy: n_vars != 4, no pressure). The
-  // 4-var Euler models compiled before only because that fallback happens to fit them.
+  // WITHOUT these, route resolution rejects Roe/HLLC before an IMEX half-step can be built.
   POPS_HD Real contact_speed(const State& ul, const State& ur, Real pl, Real pr, Real sl, Real sr,
                              int dir) const
     requires requires(const M& mm, const State a_, const State b_, Real p, Real q, Real x, Real y,

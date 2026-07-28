@@ -280,9 +280,8 @@ class AmrSystem {
   ///                coarse/fine order and halo requirements from this spatial descriptor and
   ///                selects the minimum sufficient conservative provider.
   /// @param riemann "rusanov" | "hll" (generic signed-wave, requires model.wave_speeds) | "hllc"
-  ///                | "roe" (generic when the model supplies the Riemann capability
-  ///                HasHLLCStructure / HasRoeDissipation; else the canonical Euler 2D layout,
-  ///                4 variables + pressure)
+  ///                | "roe" (requires the model's exact HasHLLCStructure /
+  ///                HasRoeDissipation capability; no layout inference or fallback)
   /// @param time    "explicit" (SSPRK2) | "euler" (forward Euler) | "ssprk3"
   ///                (SSPRK3, order 3, reflux per stage; explicit transport, EXCLUSIVE of imex) |
   ///                "imex". This is immutable authoring metadata consumed by Program normalization;

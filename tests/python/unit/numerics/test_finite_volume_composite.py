@@ -2,8 +2,8 @@
 """Pre-runtime capability checks for typed Riemann and reconstruction descriptors.
 
 The model-aware refusals (HLL without signed wave speeds, HLLC without the star-state hook,
-Roe without declared dissipation, an Euler-specific route on another layout, and WENO5 with an
-insufficient explicit halo) use the same descriptor protocol as native installation.  These tests
+Roe without declared dissipation, and WENO5 with an insufficient explicit halo) use the same
+descriptor protocol as native installation.  These tests
 therefore exercise the final typed public surface without retaining historical root re-exports or
 string-catalog compatibility paths.
 """
@@ -15,7 +15,6 @@ pytest.importorskip("pops")
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.numerics.reconstruction import WENO5, validate_ghost_depth  # noqa: E402
 from pops.numerics.riemann import (  # noqa: E402
-    EulerHLLC2D,
     HLL,
     HLLC,
     Roe,
@@ -89,15 +88,6 @@ def test_roe_refuses_model_without_dissipation():
     assert available(Roe(), {"model": _model(roe=True)}).status == "yes"
 
 
-# --- NEGATIVE: an explicit Euler route refuses a non-Euler (3-var) layout ----------------------
-def test_euler_route_refuses_non_euler_layout():
-    ctx = {"model": _model(n_vars=3, prim_names=("rho", "u", "v"))}
-    status = available(EulerHLLC2D(), ctx)
-    assert status.status == "no"
-    with pytest.raises(ValueError):
-        validate(EulerHLLC2D(), ctx)
-
-
 # --- NEGATIVE: WENO5 requires ghost_depth >= 3 against an explicit halo ------------------------
 def test_weno5_refuses_explicit_shallow_halo():
     # An EXPLICIT block halo of 2 is below the WENO5 3-cell requirement -> refuse. The default
@@ -117,7 +107,7 @@ def test_rusanov_always_available():
 
 # --- NO FALSE POSITIVE: a context with no model cannot refuse -----------------------------------
 def test_no_model_context_does_not_refuse():
-    for flux in (HLL(), HLLC(), Roe(), EulerHLLC2D()):
+    for flux in (HLL(), HLLC(), Roe()):
         assert available(flux, None).status == "yes"
         assert available(flux, {}).status == "yes"
         assert validate(flux, None) is True

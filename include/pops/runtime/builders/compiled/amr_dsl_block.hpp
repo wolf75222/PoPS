@@ -615,9 +615,6 @@ AmrRuntimeBlock dispatch_amr_block_hllc(const Model& m, const std::string& lim,
                                         double gamma, int substeps, bool recon_prim, int stride,
                                         const std::vector<double>* state, double pos_floor,
                                         double weno_epsilon, bool wave_speed_cache) {
-  // ADC-590 split: the generic HLLCFlux is capability-only (static_assert without
-  // HasHLLCStructure); the canonical Euler layout routes the
-  // explicit EulerHLLCFlux2D (bit-identical on the true Euler brick).
   if constexpr (HasHLLCStructure<Model>) {
     return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
                             "add_block(AmrSystem, multi-block)", [&](auto tag) {
@@ -626,21 +623,11 @@ AmrRuntimeBlock dispatch_amr_block_hllc(const Model& m, const std::string& lim,
                                   m, S, name, density, has_density, gamma, substeps, recon_prim,
                                   stride, state, pos_floor, weno_epsilon, wave_speed_cache);
                             });
-  } else if constexpr (Model::n_vars == 4 &&
-                       requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
-                            "add_block(AmrSystem, multi-block)", [&](auto tag) {
-                              using L = typename decltype(tag)::type;
-                              return build_amr_block<Model, L, EulerHLLCFlux2D>(
-                                  m, S, name, density, has_density, gamma, substeps, recon_prim,
-                                  stride, state, pos_floor, weno_epsilon, wave_speed_cache);
-                            });
   } else {
     throw std::runtime_error(
-        "add_block(AmrSystem, multi-block): flux 'hllc' requires a "
-        "compressible Euler 2D transport (4 variables + pressure) OR the "
-        "model's HLLC capability (pressure + wave_speeds + contact_speed + "
-        "hllc_star_state, cf. HasHLLCStructure); this transport -> "
+        "add_block(AmrSystem, multi-block): flux 'hllc' requires the model's HLLC capability "
+        "(pressure + wave_speeds + contact_speed + hllc_star_state, cf. "
+        "HasHLLCStructure); this transport -> "
         "'hll'/'rusanov'");
   }
 }
@@ -652,8 +639,6 @@ AmrRuntimeBlock dispatch_amr_block_roe(const Model& m, const std::string& lim,
                                        double gamma, int substeps, bool recon_prim, int stride,
                                        const std::vector<double>* state, double pos_floor,
                                        double weno_epsilon, bool wave_speed_cache) {
-  // ADC-590 split: generic RoeFlux is capability-only; the canonical Euler layout routes the
-  // explicit EulerRoeFlux2D.
   if constexpr (HasRoeDissipation<Model>) {
     return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
                             "add_block(AmrSystem, multi-block)", [&](auto tag) {
@@ -662,27 +647,17 @@ AmrRuntimeBlock dispatch_amr_block_roe(const Model& m, const std::string& lim,
                                   m, S, name, density, has_density, gamma, substeps, recon_prim,
                                   stride, state, pos_floor, weno_epsilon, wave_speed_cache);
                             });
-  } else if constexpr (Model::n_vars == 4 &&
-                       requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
-                            "add_block(AmrSystem, multi-block)", [&](auto tag) {
-                              using L = typename decltype(tag)::type;
-                              return build_amr_block<Model, L, EulerRoeFlux2D>(
-                                  m, S, name, density, has_density, gamma, substeps, recon_prim,
-                                  stride, state, pos_floor, weno_epsilon, wave_speed_cache);
-                            });
   } else {
     throw std::runtime_error(
-        "add_block(AmrSystem, multi-block): flux 'roe' requires a "
-        "compressible Euler 2D transport (4 variables + pressure) OR the "
-        "model's Roe capability (roe_dissipation, cf. HasRoeDissipation); "
+        "add_block(AmrSystem, multi-block): flux 'roe' requires the model's Roe capability "
+        "(roe_dissipation, cf. HasRoeDissipation); "
         "this transport -> 'hll'/'rusanov'");
   }
 }
 
-/// Dispatch of the spatial scheme (limiter x Riemann flux) -> build_amr_block. hllc/roe require the
-/// model's Riemann capability HasHLLCStructure / HasRoeDissipation, OR the canonical Euler 2D layout:
-/// 4 variables + pressure. Time integration and implicit solves are not part of this spatial seam.
+/// Dispatch of the spatial scheme (limiter x Riemann flux) -> build_amr_block. HLLC/Roe require
+/// the model's exact Riemann capability HasHLLCStructure / HasRoeDissipation. Time integration and
+/// implicit solves are not part of this spatial seam.
 template <class Model>
 AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const std::string& riem,
                                    const SharedAmrLayout& S, const std::string& name,
@@ -709,7 +684,6 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
   // compressible seam compiles one flux per TU). Behavior is unchanged: same leaves, same hllc/roe
   // capability guards, same throws. exb/isothermal route here as before (their guards prune hllc/roe).
   // ADC-641: parse the validated tag ONCE into the typed RiemannRouteId; the switch decodes it and the
-  // euler_* fall-through keeps the fusion self-documenting.
   switch (parse_riemann_route(riem, "add_block(AmrSystem, multi-block)")) {
     case RiemannRouteId::kRusanov:
       return dispatch_amr_block_rusanov(m, lim, S, name, density, has_density, gamma, substeps,
@@ -719,18 +693,11 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
       return dispatch_amr_block_hll(m, lim, S, name, density, has_density, gamma, substeps,
                                     recon_prim, stride, state, pos_floor, weno_epsilon,
                                     wave_speed_cache);
-    // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux (via
-    // HasHLLCStructure) and the explicit EulerHLLCFlux2D are bit-identical (ADC-590). The native
-    // compressible transport that reaches AMR carries the capability, so both route here; euler_hllc
-    // on a non-Euler transport is refused by the dispatch_amr_block_hllc capability guard (same
-    // message). Same for roe / euler_roe.
     case RiemannRouteId::kHllc:
-    case RiemannRouteId::kEulerHllc:
       return dispatch_amr_block_hllc(m, lim, S, name, density, has_density, gamma, substeps,
                                      recon_prim, stride, state, pos_floor, weno_epsilon,
                                      wave_speed_cache);
     case RiemannRouteId::kRoe:
-    case RiemannRouteId::kEulerRoe:
       return dispatch_amr_block_roe(m, lim, S, name, density, has_density, gamma, substeps,
                                     recon_prim, stride, state, pos_floor, weno_epsilon,
                                     wave_speed_cache);

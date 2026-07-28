@@ -120,90 +120,7 @@ TEST(test_block_builder, external_seam_matches_direct_path_and_advances) {
   EXPECT_TRUE(mn > 0.0 && std::isfinite(mn)) << "etat physique apres avance";
 }
 
-// (5) ADC-590 -- BIT-IDENTITY du flux : sur le vrai Euler, le chemin GENERIQUE (HLLCFlux / RoeFlux
-// via HasHLLCStructure / HasRoeDissipation, cabl par les nouvelles capabilites de la brique) donne
-// EXACTEMENT le meme flux que le chemin EXPLICITE (EulerHLLCFlux2D / EulerRoeFlux2D). C'est la preuve
-// au niveau flux que la conversion de la brique Euler en modele a-capabilites ne bouge aucun bit.
-TEST(test_block_builder, generic_flux_bit_identical_to_explicit_on_composite_euler) {
-  Model model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}};
-  static_assert(HasHLLCStructure<Model>,
-                "CompositeModel<Euler,..> doit exposer HasHLLCStructure (ADC-590)");
-  static_assert(HasRoeDissipation<Model>,
-                "CompositeModel<Euler,..> doit exposer HasRoeDissipation (ADC-590)");
-  HLLCFlux ghllc;
-  EulerHLLCFlux2D ehllc;
-  RoeFlux groe;
-  EulerRoeFlux2D eroe;
-  const Model::State UL{1.0, 0.1, 0.02, 2.5}, UR{1.3, 0.05, -0.01, 2.7};
-  FluxProviderValues<Model> provider_values{};
-  const auto providers = bind_flux_providers<Model>(provider_values);
-  double dh = 0, dr = 0;
-  for (int d = 0; d < 2; ++d) {
-    const FaceContext face = FaceContext::axis_aligned(d);
-    const auto fh_g = evaluate_numerical_flux(ghllc, model, UL, providers, UR, providers, face)
-                          .checked_density()
-                          .value;
-    const auto fh_e = evaluate_numerical_flux(ehllc, model, UL, providers, UR, providers, face)
-                          .checked_density()
-                          .value;
-    const auto fr_g = evaluate_numerical_flux(groe, model, UL, providers, UR, providers, face)
-                          .checked_density()
-                          .value;
-    const auto fr_e = evaluate_numerical_flux(eroe, model, UL, providers, UR, providers, face)
-                          .checked_density()
-                          .value;
-    for (int c = 0; c < 4; ++c) {
-      dh = std::fmax(dh, std::fabs(fh_g[c] - fh_e[c]));
-      dr = std::fmax(dr, std::fabs(fr_g[c] - fr_e[c]));
-    }
-  }
-  EXPECT_EQ(dh, 0.0) << "HLLCFlux generique == EulerHLLCFlux2D explicite (bit-identique, ADC-590)";
-  EXPECT_EQ(dr, 0.0) << "RoeFlux generique == EulerRoeFlux2D explicite (bit-identique, ADC-590)";
-}
-
-// (6) route EXPLICITE euler_hllc / euler_roe : make_block construit avec EulerHLLCFlux2D /
-// EulerRoeFlux2D et, sur le vrai Euler, le residu == celui du chemin generique hllc / roe.
-TEST(test_block_builder, explicit_euler_hllc_route_matches_generic_hllc) {
-  const int n = 48;
-  const double L = 1.0;
-  Box2D dom = Box2D::from_extents(n, n);
-  Geometry geom{dom, 0.0, L, 0.0, L};
-  BoxArray ba = BoxArray::from_domain(dom, n);
-  DistributionMapping dm(ba.size(), n_ranks());
-  BCRec bc;
-  MultiFab U(ba, dm, 4, 2), aux(ba, dm, 3, 1);
-  aux.set_val(0.0);
-  {
-    Array4 a = U.fab(0).array();
-    for_each_cell(dom, [a, geom](int i, int j) {
-      const double x = geom.x_cell(i) - 0.5, y = geom.y_cell(j) - 0.5;
-      const double rho = 1.0 + 0.3 * std::exp(-(x * x + y * y) / 0.02);
-      a(i, j, 0) = rho;
-      a(i, j, 1) = 0.1 * rho * std::sin(2 * kPi * geom.x_cell(i));
-      a(i, j, 2) = 0.0;
-      a(i, j, 3) = 1.0 / (1.4 - 1.0) + 0.5 * a(i, j, 1) * a(i, j, 1) / rho;
-    });
-  }
-  Model model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}};
-  const GridContext ctx{dom, bc, geom, &aux};
-
-  BlockClosures ceh = make_block(model, "minmod", "euler_hllc", ctx, true);
-  BlockClosures ch = make_block(model, "minmod", "hllc", ctx, true);
-  MultiFab Reh(ba, dm, 4, 0), Rh(ba, dm, 4, 0);
-  ceh.rhs_into(U, Reh);
-  ch.rhs_into(U, Rh);
-  double de = 0;
-  for (int c = 0; c < 4; ++c) {
-    const ConstArray4 a = Reh.fab(0).const_array(), b = Rh.fab(0).const_array();
-    for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
-      for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
-        de = std::fmax(de, std::fabs(a(i, j, c) - b(i, j, c)));
-  }
-  EXPECT_EQ(de, 0.0) << "make_block euler_hllc == hllc sur le vrai Euler (bit-identique)";
-}
-
-// (7) REFUS : un transport isotherme 3-var (sans pression, sans capability HLLC) est REFUSE par
-// hllc ET par euler_hllc, avec un message qui NOMME les capabilites / la couche Euler canonique.
+// (5) REFUS : un transport isotherme sans capability HLLC est refuse before template selection.
 TEST(test_block_builder, isothermal_model_without_hllc_capability_is_rejected) {
   const int n = 48;
   const double L = 1.0;
@@ -229,7 +146,5 @@ TEST(test_block_builder, isothermal_model_without_hllc_capability_is_rejected) {
     }
   };
   EXPECT_TRUE(refused_with("hllc", "capability"))
-      << "isotherme + hllc refuse (nomme la capability, ADC-590)";
-  EXPECT_TRUE(refused_with("euler_hllc", "Euler 2D"))
-      << "isotherme + euler_hllc refuse (nomme la couche Euler canonique)";
+      << "isotherme + hllc refuse (nomme la capability)";
 }

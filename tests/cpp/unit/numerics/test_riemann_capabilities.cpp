@@ -1,21 +1,15 @@
 // CAPABILITIES Riemann (audit 2026-06 + ADC-590) : HLLC et Roe sont des algorithmes GENERIQUES dont
 // la structure physique (onde de contact, dissipation de Roe) est fournie par le MODELE via les
-// traits HasHLLCStructure / HasRoeDissipation. ADC-590 : la brique pops::Euler PORTE desormais ces
-// capabilites (formules canoniques verbatim), donc HLLCFlux / RoeFlux (generic-only) l'acceptent ; le
-// chemin canonique 2D Euler explicite vit dans EulerHLLCFlux2D / EulerRoeFlux2D.
+// traits HasHLLCStructure / HasRoeDissipation. La brique pops::Euler porte ces capabilites, donc
+// HLLCFlux / RoeFlux l'acceptent par exactement le meme contrat qu'un modele non canonique.
 //
 // Verifications :
 //  (1) DETECTION : pops::Euler satisfait maintenant HasHLLCStructure / HasRoeDissipation (ADC-590) ;
 //      HookedEuler (memes hooks ecrits a la main) aussi.
-//  (2) EQUIVALENCE : sur pops::Euler, le chemin GENERIQUE (HLLCFlux / RoeFlux via les traits) rend le
-//      MEME flux, BIT POUR BIT, que le chemin EXPLICITE (EulerHLLCFlux2D / EulerRoeFlux2D, l'ancienne
-//      branche canonique deplacee) -- HLLC et Roe, subsonique et supersonique, x et y. C'est la
-//      preuve au niveau flux que la conversion de la brique ne bouge aucun bit.
-//  (3) NON-EULER : un modele ISOTHERME 3 VARIABLES (n_vars != 4, hors du layout Euler) fournit ses
-//      hooks HLLC -> le solveur contact-resolving marche : consistance F*(U,U) == flux(U), et un
-//      CISAILLEMENT STATIONNAIRE (un = 0, saut tangentiel) est preserve EXACTEMENT (flux tangentiel
-//      nul) la ou HLL le diffuse. C'est exactement ce qu'apporte la resolution de l'onde
-//      intermediaire, prouvee hors Euler.
+//  (2) ORACLE : pops::Euler et un provider indepedant portant les memes fermetures produisent le
+//      meme flux par l'unique pipeline HLLCFlux / RoeFlux, en subsonique/supersonique et x/y.
+//  (3) NON-EULER : un modele ISOTHERME 5 VARIABLES avec deux passifs fournit ses hooks HLLC :
+//      consistance F*(U,U) == flux(U), cisaillement et passifs stationnaires preserves exactement.
 #include <gtest/gtest.h>
 
 #include <pops/numerics/fv/numerical_flux.hpp>
@@ -77,12 +71,10 @@ struct HookedEuler : pops::Euler {
     const Real a2 = dr - dp / c2;
     const Real a3 = rho * dut;
     const Real a5 = (dp + rho * c * dun) / (Real(2) * c2);
-    const Real eps = pops::kRoeEntropyFixFraction * c;
-    auto absfix = [eps](Real l) {
-      const Real al = l < 0 ? -l : l;
-      return al < eps ? Real(0.5) * (l * l / eps + eps) : al;
-    };
-    const Real al1 = absfix(un - c), al2 = (un < 0 ? -un : un), al5 = absfix(un + c);
+    const pops::HartenEntropyFix entropy_fix{Real(0.1)};
+    const Real al1 = entropy_fix(un - c, c);
+    const Real al2 = un < Real(0) ? -un : un;
+    const Real al5 = entropy_fix(un + c, c);
     State d{};
     d[0] = al1 * a1 + al2 * a2 + al5 * a5;
     d[in] = al1 * a1 * (un - c) + al2 * a2 * un + al5 * a5 * (un + c);
@@ -93,15 +85,55 @@ struct HookedEuler : pops::Euler {
   }
 };
 
+// Same Euler physics with state layout (E, m_y, rho, m_x). The numerical policies must not know
+// this permutation: the provider alone maps its declared representation.
+struct PermutedEuler {
+  using State = pops::StateVec<4>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 4;
+
+  pops::Euler canonical{1.4};
+
+  POPS_HD static pops::Euler::State unpack(const State& value) {
+    return pops::Euler::State{value[2], value[3], value[1], value[0]};
+  }
+  POPS_HD static State pack(const pops::Euler::State& value) {
+    return State{value[3], value[2], value[0], value[1]};
+  }
+  POPS_HD Real pressure(const State& value) const { return canonical.pressure(unpack(value)); }
+  POPS_HD State flux(const State& value, const Aux& aux, int axis) const {
+    return pack(canonical.flux(unpack(value), aux, axis));
+  }
+  POPS_HD Real max_wave_speed(const State& value, const Aux& aux, int axis) const {
+    return canonical.max_wave_speed(unpack(value), aux, axis);
+  }
+  POPS_HD void wave_speeds(const State& value, const Aux& aux, int axis, Real& lower,
+                           Real& upper) const {
+    canonical.wave_speeds(unpack(value), aux, axis, lower, upper);
+  }
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real lower, Real upper, int axis) const {
+    return canonical.contact_speed(unpack(left), unpack(right), pressure_left, pressure_right,
+                                   lower, upper, axis);
+  }
+  POPS_HD State hllc_star_state(const State& value, Real pressure_value, Real speed, Real contact,
+                                int axis) const {
+    return pack(canonical.hllc_star_state(unpack(value), pressure_value, speed, contact, axis));
+  }
+  POPS_HD State roe_dissipation(const State& left, const Aux& left_aux, const State& right,
+                                const Aux& right_aux, int axis) const {
+    return pack(canonical.roe_dissipation(unpack(left), left_aux, unpack(right), right_aux, axis));
+  }
+};
+
 // ---------------------------------------------------------------------------------------------
-// IsoHLLC : fluide ISOTHERME 3 variables (rho, m_x, m_y) avec capability HLLC -- le cas que le
-// chemin canonique (n_vars == 4) ne peut PAS traiter. p = cs2 * rho ; ondes u -+ c, c = sqrt(cs2).
-// Etat etoile : rho* = rho (s - un)/(s - s*) ; m_n* = rho* s* ; m_t* = rho* u_t.
+// IsoHLLC : fluide isotherme avec deux scalaires passifs (rho, m_x, m_y, q0, q1). La fermeture
+// HLLC et le layout complet appartiennent au provider, pas au flux numerique.
 // ---------------------------------------------------------------------------------------------
 struct IsoHLLC {
-  using State = pops::StateVec<3>;
+  using State = pops::StateVec<5>;
   using Aux = pops::Aux;
-  static constexpr int n_vars = 3;
+  static constexpr int n_vars = 5;
   Real cs2 = 0.5;
 
   POPS_HD State flux(const State& u, const Aux&, int dir) const {
@@ -112,6 +144,8 @@ struct IsoHLLC {
     F[0] = u[in];
     F[in] = u[in] * un + cs2 * u[0];
     F[it] = u[it] * un;
+    F[3] = u[3] * un;
+    F[4] = u[4] * un;
     return F;
   }
   POPS_HD Real max_wave_speed(const State& u, const Aux&, int dir) const {
@@ -147,12 +181,14 @@ struct IsoHLLC {
     Us[0] = fac;
     Us[in] = fac * sStar;
     Us[it] = fac * (U[it] / r);
+    Us[3] = fac * (U[3] / r);
+    Us[4] = fac * (U[4] / r);
     return Us;
   }
 };
 
 using State4 = pops::StateVec<4>;
-using State3 = pops::StateVec<3>;
+using StateIso = pops::StateVec<5>;
 
 State4 cons(double rho, double u, double v, double p, double gamma) {
   State4 U{};
@@ -202,21 +238,23 @@ TEST(test_riemann_capabilities, compile_time_detection) {
                 "HookedEuler doit satisfaire HasHLLCStructure");
   static_assert(pops::HasRoeDissipation<HookedEuler>,
                 "HookedEuler doit satisfaire HasRoeDissipation");
+  static_assert(pops::HasHLLCStructure<PermutedEuler>);
+  static_assert(pops::HasRoeDissipation<PermutedEuler>);
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");
   SUCCEED() << "detection des capabilities (Euler a-capabilites, Hooked/Iso capability)";
 }
 
-TEST(test_riemann_capabilities, generic_path_bit_identical_to_explicit_euler_path) {
+TEST(test_riemann_capabilities, euler_preserves_provider_oracle_through_generic_pipeline) {
   pops::Euler e;
   e.gamma = 1.4;
+  HookedEuler oracle;
+  oracle.gamma = 1.4;
   pops::HLLCFlux hllc;
   pops::RoeFlux roe;
-  pops::EulerHLLCFlux2D ehllc;  // route EXPLICITE : ancienne branche canonique deplacee (ADC-590)
-  pops::EulerRoeFlux2D eroe;
   Aux a{};
 
-  // (2) EQUIVALENCE BIT-IDENTIQUE (ADC-590) : sur pops::Euler, le chemin GENERIQUE (HLLCFlux / RoeFlux
-  // via les traits) == le chemin EXPLICITE (EulerHLLCFlux2D / EulerRoeFlux2D). Egalite EXACTE (0 ulp).
+  // The independent provider body is the accepted pre-cutover oracle. Both values travel through
+  // the same layout-blind numerical policy; only their constitutive capability differs.
   const State4 pairs[][2] = {
       {cons(1.2, 0.3, -0.1, 1.5, 1.4), cons(0.7, -0.2, 0.4, 0.9, 1.4)},   // subsonique
       {cons(1.0, 8.0, 0.5, 1.0, 1.4), cons(1.5, 12.0, -0.3, 1.3, 1.4)},   // supersonique +
@@ -225,12 +263,63 @@ TEST(test_riemann_capabilities, generic_path_bit_identical_to_explicit_euler_pat
   for (const auto& pr : pairs)
     for (int dir = 0; dir < 2; ++dir) {
       const double dh = maxdiff(face_density(hllc, e, pr[0], a, pr[1], a, dir),
-                                face_density(ehllc, e, pr[0], a, pr[1], a, dir));
-      EXPECT_EQ(dh, 0.0) << "HLLC generique != EulerHLLCFlux2D explicite (dir " << dir << ")";
+                                face_density(hllc, oracle, pr[0], a, pr[1], a, dir));
+      EXPECT_EQ(dh, 0.0) << "HLLC provider oracle changed (dir " << dir << ")";
       const double dr = maxdiff(face_density(roe, e, pr[0], a, pr[1], a, dir),
-                                face_density(eroe, e, pr[0], a, pr[1], a, dir));
-      EXPECT_EQ(dr, 0.0) << "Roe generique != EulerRoeFlux2D explicite (dir " << dir << ")";
+                                face_density(roe, oracle, pr[0], a, pr[1], a, dir));
+      EXPECT_EQ(dr, 0.0) << "Roe provider oracle changed (dir " << dir << ")";
     }
+}
+
+TEST(test_riemann_capabilities, state_layout_permutation_is_provider_owned) {
+  pops::Euler canonical{1.4};
+  PermutedEuler permuted;
+  pops::HLLCFlux hllc;
+  pops::RoeFlux roe;
+  Aux aux{};
+  const State4 left = cons(1.2, 0.3, -0.1, 1.5, 1.4);
+  const State4 right = cons(0.7, -0.2, 0.4, 0.9, 1.4);
+  const PermutedEuler::State permuted_left = PermutedEuler::pack(left);
+  const PermutedEuler::State permuted_right = PermutedEuler::pack(right);
+
+  for (int axis = 0; axis < 2; ++axis) {
+    const auto hllc_reference = face_density(hllc, canonical, left, aux, right, aux, axis);
+    const auto hllc_permuted = PermutedEuler::unpack(
+        face_density(hllc, permuted, permuted_left, aux, permuted_right, aux, axis));
+    const auto roe_reference = face_density(roe, canonical, left, aux, right, aux, axis);
+    const auto roe_permuted = PermutedEuler::unpack(
+        face_density(roe, permuted, permuted_left, aux, permuted_right, aux, axis));
+    EXPECT_EQ(maxdiff(hllc_reference, hllc_permuted), 0.0);
+    EXPECT_EQ(maxdiff(roe_reference, roe_permuted), 0.0);
+  }
+}
+
+TEST(test_riemann_capabilities, orientation_reversal_is_common_to_hllc_and_roe) {
+  pops::Euler model{1.4};
+  const State4 left = cons(1.2, 0.3, -0.1, 1.5, 1.4);
+  const State4 right = cons(0.7, -0.2, 0.4, 0.9, 1.4);
+  pops::FluxProviderValues<pops::Euler> values{};
+  const auto providers = pops::bind_flux_providers<pops::Euler>(values);
+  for (int axis = 0; axis < 2; ++axis) {
+    const auto positive_face =
+        pops::FaceContext::axis_aligned(axis, Real(1), pops::FaceOrientation::kPositive);
+    const auto negative_face =
+        pops::FaceContext::axis_aligned(axis, Real(1), pops::FaceOrientation::kNegative);
+    const auto assert_reversal = [&](const auto& policy) {
+      const auto positive = pops::evaluate_numerical_flux(policy, model, left, providers, right,
+                                                          providers, positive_face)
+                                .checked_density()
+                                .value;
+      const auto reversed = pops::evaluate_numerical_flux(policy, model, right, providers, left,
+                                                          providers, negative_face)
+                                .checked_density()
+                                .value;
+      for (int component = 0; component < 4; ++component)
+        EXPECT_EQ(reversed[component], -positive[component]);
+    };
+    assert_reversal(pops::HLLCFlux{});
+    assert_reversal(pops::RoeFlux{});
+  }
 }
 
 TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
@@ -238,10 +327,12 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
   IsoHLLC iso;
   pops::HLLCFlux hllc;
   Aux a{};
-  State3 U{};
+  StateIso U{};
   U[0] = 1.3;
   U[1] = 0.4;
   U[2] = -0.7;
+  U[3] = 2.0;
+  U[4] = -0.3;
   for (int dir = 0; dir < 2; ++dir) {
     const double d = maxdiff(face_density(hllc, iso, U, a, U, a, dir), iso.flux(U, a, dir));
     EXPECT_LE(d, 1e-13) << "consistance HLLC isotherme (dir " << dir << ")";
@@ -255,15 +346,21 @@ TEST(test_riemann_capabilities, non_euler_isothermal_preserves_stationary_shear)
   pops::HLLCFlux hllc;
   pops::HLLFlux hll;
   Aux a{};
-  State3 UL{}, UR{};
+  StateIso UL{}, UR{};
   UL[0] = 1.0;
   UL[1] = 0.0;
   UL[2] = 2.0;  // u_t = +2
   UR[0] = 1.0;
   UR[1] = 0.0;
   UR[2] = -3.0;  // u_t = -3
-  const State3 Fc = face_density(hllc, iso, UL, a, UR, a, 0);
-  const State3 Fh = face_density(hll, iso, UL, a, UR, a, 0);
+  UL[3] = 2.5;
+  UL[4] = -1.0;
+  UR[3] = -0.5;
+  UR[4] = 4.0;
+  const StateIso Fc = face_density(hllc, iso, UL, a, UR, a, 0);
+  const StateIso Fh = face_density(hll, iso, UL, a, UR, a, 0);
   EXPECT_LE(std::fabs(Fc[2]), 1e-14) << "HLLC isotherme : cisaillement stationnaire diffuse";
   EXPECT_GE(std::fabs(Fh[2]), 1e-2) << "temoin HLL : le cisaillement devrait etre diffuse";
+  EXPECT_LE(std::fabs(Fc[3]), 1e-14) << "HLLC isotherme : scalaire passif diffuse";
+  EXPECT_LE(std::fabs(Fc[4]), 1e-14) << "HLLC isotherme : scalaire passif diffuse";
 }

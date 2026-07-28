@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 2
 
-COMPONENT_CATALOG_SHA256 = '7e7d7647a1608e6995ac6feb60fab19cf961ceefca3cc2c99d79489eba3896e4'
+COMPONENT_CATALOG_SHA256 = '84c68fcee96663f71e7e7fa7589ec1ddee0d1037e741a678e4afd83c9749620a'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'a888411acc87909cae516240b39c1e74d4a3db60e4537b9cd855b42a50984e46'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'c0e14d4a3dd082612d052b2ce293e17de712c6916e39f430d0ff311ed0f24ef8'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:a888411acc87909cae516240b39c1e74d4a3db60e4537b9cd855b42a50984e46'
+ROUTE_REGISTRY_SIGNATURE = 'v2:c0e14d4a3dd082612d052b2ce293e17de712c6916e39f430d0ff311ed0f24ef8'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -32,31 +32,11 @@ ROUTE_TABLES = {'riemann': (('rusanov',
                'wave_speeds',
                'contact_speed',
                'hllc_star_state'),
-              ('polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure',)),
+              ('polar metric provider not wired; requires exact HasHLLCStructure capability',)),
              ('roe',
               'pops::RoeFlux',
               ('physical_flux', 'provider_pack', 'stability_bound', 'roe_dissipation'),
-              ('polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation',)),
-             ('euler_hllc',
-              'pops::EulerHLLCFlux2D',
-              ('physical_flux',
-               'provider_pack',
-               'stability_bound',
-               'pressure',
-               'euler_2d_layout',
-               'no_hllc_star_state'),
-              ('4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; '
-               'polar not wired',)),
-             ('euler_roe',
-              'pops::EulerRoeFlux2D',
-              ('physical_flux',
-               'provider_pack',
-               'stability_bound',
-               'pressure',
-               'euler_2d_layout',
-               'no_roe_dissipation'),
-              ('4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; '
-               'polar not wired',))),
+              ('polar metric provider not wired; requires exact HasRoeDissipation capability',))),
  'limiter': (('none', 'pops::NoSlope', (), ()),
              ('minmod', 'pops::Minmod', (), ()),
              ('vanleer', 'pops::VanLeer', (), ()),
@@ -141,15 +121,7 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
              'roe': {'needs_wave_speeds': False,
                      'needs_hllc_struct': False,
                      'needs_roe_diss': True,
-                     'polar_ok': False},
-             'euler_hllc': {'needs_wave_speeds': False,
-                            'needs_hllc_struct': False,
-                            'needs_roe_diss': False,
-                            'polar_ok': False},
-             'euler_roe': {'needs_wave_speeds': False,
-                           'needs_hllc_struct': False,
-                           'needs_roe_diss': False,
-                           'polar_ok': False}},
+                     'polar_ok': False}},
  'limiter': {'none': {'n_ghost': 1, 'formal_order': 1, 'muscl_compatible': False},
              'minmod': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
              'vanleer': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
@@ -193,7 +165,7 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
 
 ROUTE_CPP_BINDINGS = {'riemann': {'enum': 'RiemannRouteId',
              'table': 'kRiemannRoutes',
-             'ids': ('kRusanov', 'kHll', 'kHllc', 'kRoe', 'kEulerHllc', 'kEulerRoe')},
+             'ids': ('kRusanov', 'kHll', 'kHllc', 'kRoe')},
  'limiter': {'enum': 'LimiterRouteId',
              'table': 'kLimiterRoutes',
              'ids': ('kNone', 'kMinmod', 'kVanLeer', 'kWeno5')},
