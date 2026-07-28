@@ -816,6 +816,33 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   const std::string field = "screened";
   ASSERT_TRUE(consume_expected_solved(runtime.solve_named_fields(&field)).solved());
   ASSERT_EQ(runtime.nlev(), 2);
+  const MultiFab accepted_fine_state = runtime.level_state(0, 1);
+  const MultiFab accepted_fine_phi = runtime.provider_potential_level(field, 1);
+  const MultiFab accepted_fine_aux = runtime.aux(1);
+  MultiFab perturbed_fine_state = accepted_fine_state;
+  add_valid_constant(perturbed_fine_state, Real(0.125));
+  const ::pops::runtime::multiblock::BoundaryEvaluationPoint fine_point{
+      "main", 7, 1, 0, 3, ::pops::amr::Rational(1, 2), 0.01, 0.075};
+  SolveOutcome perturbed =
+      runtime.solve_named_fields_from_state_at(fine_point, field, 0, perturbed_fine_state);
+  EXPECT_EQ(max_abs_diff(runtime.level_state(0, 1), accepted_fine_state), Real(0))
+      << "the provisional fine stage state must be restored before outcome consumption";
+  EXPECT_EQ(max_abs_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi), Real(0));
+  EXPECT_EQ(max_abs_diff(runtime.aux(1), accepted_fine_aux), Real(0))
+      << "the fine provider publication must remain private before Accept";
+  ASSERT_TRUE(consume_expected_solved(std::move(perturbed)).solved());
+  EXPECT_GT(max_valid_scalar_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi),
+            Real(1e-6))
+      << "the composite provider must assemble from the exact fine-level stage state";
+  EXPECT_EQ(max_abs_diff(runtime.level_state(0, 1), accepted_fine_state), Real(0));
+
+  SolveOutcome restored =
+      runtime.solve_named_fields_from_state_at(fine_point, field, 0, accepted_fine_state);
+  ASSERT_TRUE(consume_expected_solved(std::move(restored)).solved());
+  EXPECT_LT(max_valid_scalar_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi),
+            Real(1e-8))
+      << "re-solving from the frozen accepted state restores the field-coupled evaluation";
+
   for (int level = 0; level < runtime.nlev(); ++level)
     EXPECT_EQ(max_valid_component_error(runtime.provider_potential_level(field, level),
                                         runtime.aux(level), phi_component),

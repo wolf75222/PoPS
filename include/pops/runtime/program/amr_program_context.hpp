@@ -713,21 +713,19 @@ class AmrProgramContext {
     if (point.level < 0 || point.level >= eng_->nlev())
       throw std::out_of_range(
           "AmrProgramContext::solve_fields_from_state_at level is out of range");
-    if (point.level != 0)
+    if (point.level != level_)
+      throw std::invalid_argument(
+          "AmrProgramContext::solve_fields_from_state_at point level differs from the active "
+          "Program level");
+    if (!eng_->named_field_stage_state_is_level_qualified(provider_slot, point.level))
       deferred_op("solve_fields_from_state_at_fine_level",
-                  "a fine-level stage perturbation requires a composite field solver");
+                  "a fine-level dynamic field boundary requires level-qualified dependency views");
     named_solve_reports_.erase(provider_slot);
-    MultiFab& live = eng_->level_state(static_cast<std::size_t>(sys_block(b)), point.level);
-    MultiFab& saved = stage_state_scratch_for_(b, point.level, live);
-    PureFieldAlgebra::copy_allocated(saved, live);
     SolveOutcome outcome = [&]() -> SolveOutcome {
       try {
-        PureFieldAlgebra::copy_allocated(live, u_stage);
-        SolveOutcome candidate = eng_->solve_named_fields(&provider_slot);
-        PureFieldAlgebra::copy_allocated(live, saved);
-        return candidate;
+        return eng_->solve_named_fields_from_state_at(
+            point, provider_slot, static_cast<std::size_t>(sys_block(b)), u_stage);
       } catch (...) {
-        PureFieldAlgebra::copy_allocated(live, saved);
         named_solve_reports_.insert_or_assign(provider_slot, SolveReport{});
         throw;
       }
