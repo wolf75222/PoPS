@@ -426,11 +426,19 @@ def _result_evidence(value: Any) -> Any:
     return to_data() if callable(to_data) else value
 
 
+def require_restart_bit_identical(value: Any, *, where: str) -> bool:
+    """Require the exact restart reproducibility policy at every private handoff."""
+    if type(value) is not bool:
+        raise TypeError("%s bit_identical must be an exact bool" % where)
+    return value
+
+
 def restore_checkpoint_payload(
     owner: Any,
     executor: Any,
     payload: bytes,
     *,
+    bit_identical: bool,
     phase_prefix: str = "native restart",
 ) -> Any:
     """Preflight and atomically apply one in-memory payload on the installed communicator.
@@ -442,6 +450,22 @@ def restore_checkpoint_payload(
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
     topology = checkpoint_topology(owner)
+    policy = None
+    policy_error = None
+    try:
+        policy = require_restart_bit_identical(
+            bit_identical, where="restart preparation policy"
+        )
+    except BaseException as error:
+        policy_error = error
+    policy_rows = consensus(
+        topology,
+        "%s policy" % phase_prefix,
+        error=policy_error,
+        value=policy,
+    )
+    if any(row["value"] is not policy for row in policy_rows):
+        raise ValueError("%s bit_identical policy differs across ranks" % phase_prefix)
     method_names = (
         "_prepare_checkpoint_restart",
         "_begin_checkpoint_restart",
@@ -477,7 +501,9 @@ def restore_checkpoint_payload(
     prepared = None
     prepare_error = None
     try:
-        prepared = methods["_prepare_checkpoint_restart"](payload)
+        prepared = methods["_prepare_checkpoint_restart"](
+            payload, bit_identical=policy
+        )
     except BaseException as error:
         prepare_error = error
     consensus(topology, "%s preflight" % phase_prefix, error=prepare_error)
@@ -574,6 +600,7 @@ def restore_checkpoint_path(
     executor: Any,
     path: Any,
     *,
+    bit_identical: bool,
     phase_prefix: str = "native restart",
 ) -> Any:
     """Collectively read and restore one shared checkpoint through native transports.
@@ -584,6 +611,9 @@ def restore_checkpoint_path(
     """
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
+    policy = require_restart_bit_identical(
+        bit_identical, where="restart path policy"
+    )
     topology = checkpoint_topology(owner)
     target = None
     target_text = None
@@ -605,7 +635,12 @@ def restore_checkpoint_path(
         raise ValueError("%s target differs across ranks" % phase_prefix)
     payload = root_bytes(topology, "%s read" % phase_prefix, target.read_bytes)
     return restore_checkpoint_payload(
-        owner, executor, payload, phase_prefix=phase_prefix)
+        owner,
+        executor,
+        payload,
+        bit_identical=policy,
+        phase_prefix=phase_prefix,
+    )
 
 
 __all__ = [
@@ -615,6 +650,7 @@ __all__ = [
     "collective_checkpoint_capture",
     "consensus",
     "decode_checkpoint_bytes",
+    "require_restart_bit_identical",
     "restore_checkpoint_path",
     "restore_checkpoint_payload",
     "root_effect",

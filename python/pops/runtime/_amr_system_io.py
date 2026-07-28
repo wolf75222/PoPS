@@ -45,9 +45,17 @@ class _AmrSystemIO(_AmrSystem):
             getattr(self, "_history_persistence", None) or {},
         )
 
-    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedAMRSystemRestart:
+    def _prepare_checkpoint_restart(
+        self,
+        payload: bytes,
+        *,
+        bit_identical: bool,
+    ) -> _PreparedAMRSystemRestart:
         """Authenticate and preflight the complete AMR payload without native mutation."""
-        from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.output._checkpoint_collective import (
+            decode_checkpoint_bytes,
+            require_restart_bit_identical,
+        )
         from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
         from pops.runtime._checkpoint_manifest import (
             authenticate_checkpoint_payload,
@@ -55,6 +63,7 @@ class _AmrSystemIO(_AmrSystem):
         )
         from pops.runtime._amr_checkpoint_v3 import prepare_v3
 
+        require_restart_bit_identical(bit_identical, where="AMR restart")
         data = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
         require_exact_payload_version(
@@ -116,11 +125,17 @@ class _AmrSystemIO(_AmrSystem):
             self.__dict__.pop("_checkpoint_restart_committed", None)
             del self._checkpoint_restart_python_snapshot
 
-    def restart(self, path: Any) -> Any:
+    def restart(self, path: Any, *, bit_identical: bool = False) -> Any:
         """Restore the direct AMR engine through the native collective transaction protocol."""
         from pops.output._checkpoint_collective import restore_checkpoint_path
 
-        return restore_checkpoint_path(self, self, path, phase_prefix="AMR direct-engine restart")
+        return restore_checkpoint_path(
+            self,
+            self,
+            path,
+            bit_identical=bit_identical,
+            phase_prefix="AMR direct-engine restart",
+        )
 
 
 __all__ = ["_AmrSystemIO"]
