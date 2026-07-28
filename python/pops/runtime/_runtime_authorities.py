@@ -71,9 +71,20 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 or [row.get("ordinal") for row in faces] != [0, 1, 2, 3]:
             raise ValueError("prepared boundary plan must contain canonical xlo/xhi/ylo/yhi rows")
         types = [row.get("type") for row in faces]
-        if any(value not in {"periodic", "foextrap", "dirichlet", "external"}
+        if any(value not in {
+                "periodic", "foextrap", "dirichlet", "slip_wall", "external"}
                for value in types):
             raise NotImplementedError("prepared boundary plan selected an unavailable face producer")
+        face_identities = [row.get("producer") for row in faces]
+        if any(not isinstance(value, str) or not value for value in face_identities):
+            raise TypeError(
+                "prepared boundary faces require non-empty owner-qualified producer identities")
+        component_roles = getattr(component, "cons_roles", None)
+        if not isinstance(component_roles, (list, tuple)) \
+                or len(component_roles) != ncomp \
+                or any(not isinstance(role, str) or not role for role in component_roles):
+            raise TypeError(
+                "compiled block must expose one authenticated physical role per component")
         values = []
         for comp in range(ncomp):
             for row in faces:
@@ -94,7 +105,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             required_depth,
             types,
             values,
-            ncomp,
+            face_identities,
+            list(component_roles),
             list(first.get("omitted_interface_faces", [])),
             state_identity,
         )

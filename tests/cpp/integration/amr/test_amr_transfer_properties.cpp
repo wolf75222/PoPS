@@ -102,8 +102,13 @@ AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = fal
     const std::string state_identity = block.state_identity;
     block.boundary_plan = std::make_shared<PreparedBoundaryPlan>(
         "case::bootstrap::transport::boundary", 1,
-        std::vector<BCRec>(static_cast<std::size_t>(block.ncomp), BCRec{}), std::vector<int>{},
-        state_identity);
+        prepare_hyperbolic_boundary<2>(
+            {"periodic", "periodic", "periodic", "periodic"},
+            std::vector<double>(static_cast<std::size_t>(4 * block.ncomp), 0.0),
+            {"case::bootstrap::xlo", "case::bootstrap::xhi", "case::bootstrap::ylo",
+             "case::bootstrap::yhi"},
+            std::vector<std::string>(static_cast<std::size_t>(block.ncomp), "Custom")),
+        std::vector<int>{}, state_identity);
     const PreparedBoundaryPlan* const expected_plan = block.boundary_plan.get();
     block.boundary_field_registry = std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
     block.level_rhs_core_at_point_prepared =

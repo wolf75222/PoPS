@@ -5,7 +5,7 @@ import pytest
 import pops
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import ResolvedTransportBoundarySet
-from pops.boundary.transport import Inflow, Outflow
+from pops.boundary.transport import Inflow, Outflow, SlipWall
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.math import ddt, div
@@ -13,6 +13,7 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
+from pops.physics import Axial, Density, Momentum
 from pops.representations import Conservative
 from pops.spaces import CellState
 
@@ -135,3 +136,67 @@ def test_transport_conditions_require_instance_handles_and_exact_component_cover
     case.numerics(numerics, block=block)
     with pytest.raises(ValueError, match="prescribe exactly 1 components, got 2"):
         case._resolved_numerics_for("tracer")
+
+
+def test_slip_wall_requires_roles_and_lowers_one_model_aware_face_law():
+    frame, _, _, _, numerics, case, block, block_state = _authoring()
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: Outflow(state=block_state),
+        frame.boundaries.x_max: Outflow(state=block_state),
+        frame.boundaries.y_min: SlipWall(state=block_state),
+        frame.boundaries.y_max: Outflow(state=block_state),
+    }))
+    case.numerics(numerics, block=block)
+    with pytest.raises(ValueError, match="declared normal polar-vector component"):
+        case._resolved_numerics_for("tracer")
+
+    domain = Rectangle("fluid_unit", (0.0, 0.0), (1.0, 1.0))
+    fluid_frame = domain.frame(Cartesian2D())
+    x_axis, y_axis = fluid_frame.axes
+    model = pops.Model("wall_model", frame=fluid_frame)
+    state = model.state(
+        "U",
+        components=("rho", "mx", "my", "bz"),
+        representation=Conservative(),
+        space=CellState(frame=fluid_frame),
+        roles={
+            "rho": Density(),
+            "mx": Momentum(axis=x_axis),
+            "my": Momentum(axis=y_axis),
+            "bz": Axial(axis=y_axis),
+        },
+    )
+    rho, mx, my, bz = state
+    flux = model.flux(
+        "flux",
+        frame=fluid_frame,
+        state=state,
+        components={
+            x_axis: (rho, mx, my, bz),
+            y_axis: (rho, mx, my, bz),
+        },
+        waves={x_axis: (1.0, 1.0, 1.0, 1.0), y_axis: (1.0, 1.0, 1.0, 1.0)},
+    )
+    rate = model.rate("rate", equation=ddt(state) == -div(flux))
+    method = FiniteVolume(
+        flux=flux,
+        variables=variables.Conservative(state),
+        reconstruction=reconstruction.FirstOrder(),
+        riemann=riemann.Rusanov(),
+    )
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, method)
+    wall_case = pops.Case("wall_case")
+    wall_block = wall_case.block("fluid", model=model)
+    wall_state = wall_block[state]
+    plan.boundaries.add(TransportBoundarySet({
+        boundary: SlipWall(state=wall_state)
+        for boundary in fluid_frame.boundaries.all
+    }))
+    wall_case.numerics(plan, block=wall_block)
+
+    authority = wall_case._resolved_numerics_for("fluid").boundaries[0]
+    assert {row.condition_type for row in authority.conditions} == {"slip_wall"}
+    runtime = authority.runtime_boundary_data({})
+    assert [row["type"] for row in runtime["faces"]] == ["slip_wall"] * 4
+    assert all(row["values"] == [0.0, 0.0, 0.0, 0.0] for row in runtime["faces"])

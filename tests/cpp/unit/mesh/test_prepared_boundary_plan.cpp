@@ -18,14 +18,15 @@ MultiFab scalar_field(const Box2D& domain, int ncomp = 1, int ngrow = 0) {
   return MultiFab(boxes, DistributionMapping(boxes.size(), n_ranks()), ncomp, ngrow);
 }
 
-BCRec physical_bc() {
-  BCRec bc;
-  bc.xlo = BCType::Foextrap;
-  bc.xhi = BCType::Dirichlet;
-  bc.xhi_val = Real(4);
-  bc.ylo = BCType::Foextrap;
-  bc.yhi = BCType::Foextrap;
-  return bc;
+PreparedHyperbolicBoundary<2> physical_boundary(std::vector<double> xhi_values = {4.0},
+                                                std::vector<std::string> roles = {"Scalar"}) {
+  std::vector<double> values;
+  values.reserve(4 * xhi_values.size());
+  for (double value : xhi_values)
+    values.insert(values.end(), {0.0, value, 0.0, 0.0});
+  return prepare_hyperbolic_boundary<2>({"foextrap", "dirichlet", "foextrap", "foextrap"}, values,
+                                        {"case::xlo", "case::xhi", "case::ylo", "case::yhi"},
+                                        roles);
 }
 
 PreparedBoundaryComponentSpec linearization_spec(bool jvp, std::string target, std::string output) {
@@ -60,18 +61,18 @@ PreparedBoundaryComponentSpec linearization_spec(bool jvp, std::string target, s
 
 TEST(test_prepared_boundary_plan, explicit_read_dependencies_are_exact_and_strict) {
   PreparedBoundaryPlan plan(
-      "case::boundary::read-dependencies", 1, {physical_bc()}, {}, "case::state::primary",
+      "case::boundary::read-dependencies", 1, physical_boundary(), {}, "case::state::primary",
       PreparedBoundaryReadDependencies{{"case::state::other"}, {"case::field::potential"}});
   EXPECT_EQ(plan.required_state_identities(), std::vector<std::string>{"case::state::other"});
   EXPECT_EQ(plan.required_field_identities(), std::vector<std::string>{"case::field::potential"});
 
   EXPECT_THROW(
       PreparedBoundaryPlan(
-          "case::boundary::duplicate-state", 1, {physical_bc()}, {}, "case::state::primary",
+          "case::boundary::duplicate-state", 1, physical_boundary(), {}, "case::state::primary",
           PreparedBoundaryReadDependencies{{"case::state::other", "case::state::other"}, {}}),
       std::runtime_error);
   EXPECT_THROW(
-      PreparedBoundaryPlan("case::boundary::empty-field", 1, {physical_bc()}, {},
+      PreparedBoundaryPlan("case::boundary::empty-field", 1, physical_boundary(), {},
                            "case::state::primary", PreparedBoundaryReadDependencies{{}, {""}}),
       std::runtime_error);
 }
@@ -82,11 +83,11 @@ TEST(test_prepared_boundary_plan, prepared_read_tokens_are_owner_bound_and_epoch
   MultiFab coupled = scalar_field(domain, 1, 1);
   MultiFab auxiliary = scalar_field(domain, 1, 0);
   auto plan = std::make_shared<PreparedBoundaryPlan>(
-      "case::boundary::prepared-reads", 1, std::vector<BCRec>{physical_bc()}, std::vector<int>{},
+      "case::boundary::prepared-reads", 1, physical_boundary(), std::vector<int>{},
       "case::state::primary",
       PreparedBoundaryReadDependencies{{"case::state::coupled"}, {"case::field::auxiliary"}});
   auto foreign_plan = std::make_shared<PreparedBoundaryPlan>(
-      "case::boundary::foreign-reads", 1, std::vector<BCRec>{physical_bc()}, std::vector<int>{},
+      "case::boundary::foreign-reads", 1, physical_boundary(), std::vector<int>{},
       "case::state::primary", PreparedBoundaryReadDependencies{{"case::state::coupled"}, {}});
   const auto coupled_read = plan->prepare_state_read("case::state::coupled");
   const auto auxiliary_read = plan->prepare_field_read("case::field::auxiliary");
@@ -130,10 +131,8 @@ TEST(test_prepared_boundary_plan, executes_same_level_and_component_physical_pro
       values(i, j, 1) = Real(2);
     });
   }
-  BCRec first = physical_bc();
-  BCRec second = physical_bc();
-  second.xhi_val = Real(9);
-  PreparedBoundaryPlan plan("case::block::ghost-plan", 1, {first, second});
+  PreparedBoundaryPlan plan("case::block::ghost-plan", 1,
+                            physical_boundary({4.0, 9.0}, {"Scalar", "Scalar"}));
 
   plan.fill_same_level_and_physical(state, domain);
 
@@ -142,6 +141,63 @@ TEST(test_prepared_boundary_plan, executes_same_level_and_component_physical_pro
   EXPECT_EQ(field(-1, 2, 1), Real(2));
   EXPECT_EQ(field(4, 2, 0), Real(7));   // 2*4 - interior(1)
   EXPECT_EQ(field(4, 2, 1), Real(16));  // 2*9 - interior(2)
+}
+
+TEST(test_prepared_boundary_plan, model_aware_slip_wall_reverses_only_normal_polar_component) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  MultiFab state = scalar_field(domain, 4, 1);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      values(i, j, 0) = Real(1);
+      values(i, j, 1) = Real(2);
+      values(i, j, 2) = Real(3);
+      values(i, j, 3) = Real(4);
+    });
+  }
+  auto boundary = prepare_hyperbolic_boundary<2>(
+      {"slip_wall", "slip_wall", "foextrap", "foextrap"}, std::vector<double>(16, 0.0),
+      {"case::fluid::xlo", "case::fluid::xhi", "case::fluid::ylo", "case::fluid::yhi"},
+      {"Density", "MomentumX", "MomentumY", "Energy"});
+  PreparedBoundaryPlan plan("case::fluid::slip-plan", 1, std::move(boundary));
+
+  plan.fill_same_level_and_physical(state, domain);
+
+  const Fab2D& field = state.fab(0);
+  EXPECT_EQ(field(-1, 2, 0), Real(1));
+  EXPECT_EQ(field(-1, 2, 1), Real(-2));
+  EXPECT_EQ(field(-1, 2, 2), Real(3));
+  EXPECT_EQ(field(-1, 2, 3), Real(4));
+  EXPECT_EQ(field(2, -1, 1), Real(2));
+  EXPECT_EQ(field(2, -1, 2), Real(3));
+}
+
+TEST(test_prepared_boundary_plan, polar_and_axial_reflections_are_distinct_in_1d_2d_3d_frames) {
+  const auto polar_1d = HyperbolicComponentTransform<1>::polar_vector(0);
+  EXPECT_EQ(polar_1d.reflection_sign(0), Real(-1));
+
+  const auto polar_normal_2d = HyperbolicComponentTransform<2>::polar_vector(0);
+  const auto polar_tangent_2d = HyperbolicComponentTransform<2>::polar_vector(1);
+  const auto axial_normal_2d = HyperbolicComponentTransform<2>::axial_vector(0);
+  const auto axial_tangent_2d = HyperbolicComponentTransform<2>::axial_vector(1);
+  EXPECT_EQ(polar_normal_2d.reflection_sign(0), Real(-1));
+  EXPECT_EQ(polar_tangent_2d.reflection_sign(0), Real(1));
+  EXPECT_EQ(axial_normal_2d.reflection_sign(0), Real(1));
+  EXPECT_EQ(axial_tangent_2d.reflection_sign(0), Real(-1));
+
+  const auto polar_z_3d = HyperbolicComponentTransform<3>::polar_vector(2);
+  const auto axial_z_3d = HyperbolicComponentTransform<3>::axial_vector(2);
+  EXPECT_EQ(polar_z_3d.reflection_sign(0), Real(1));
+  EXPECT_EQ(axial_z_3d.reflection_sign(0), Real(-1));
+  EXPECT_EQ(polar_z_3d.reflection_sign(2), Real(-1));
+  EXPECT_EQ(axial_z_3d.reflection_sign(2), Real(1));
+}
+
+TEST(test_prepared_boundary_plan, slip_wall_fails_without_declared_normal_polar_role) {
+  EXPECT_THROW(prepare_hyperbolic_boundary<2>(
+                   {"slip_wall", "slip_wall", "foextrap", "foextrap"}, std::vector<double>(8, 0.0),
+                   {"case::xlo", "case::xhi", "case::ylo", "case::yhi"}, {"Density", "MomentumY"}),
+               std::invalid_argument);
 }
 
 TEST(test_prepared_boundary_plan, materializes_move_only_lane_session_before_execution) {
@@ -155,7 +211,7 @@ TEST(test_prepared_boundary_plan, materializes_move_only_lane_session_before_exe
     Array4 values = state.fab(local).array();
     for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(3); });
   }
-  PreparedBoundaryPlan plan("case::block::session-plan", 1, {physical_bc()});
+  PreparedBoundaryPlan plan("case::block::session-plan", 1, physical_boundary());
   const auto lane = ExecutionLane::world("case::block::session-lane");
   auto original = plan.make_session(lane);
   auto session = std::move(original);
@@ -166,65 +222,22 @@ TEST(test_prepared_boundary_plan, materializes_move_only_lane_session_before_exe
   EXPECT_EQ(state.fab(0)(4, 2, 0), Real(5));
 }
 
-TEST(test_prepared_boundary_plan, grid_sessions_apply_robin_with_each_level_geometry) {
-  const Box2D coarse_domain = Box2D::from_extents(2, 2);
-  const Box2D fine_domain = Box2D::from_extents(4, 4);
-  MultiFab coarse = scalar_field(coarse_domain, 1, 1);
-  MultiFab fine = scalar_field(fine_domain, 1, 1);
-  coarse.set_val(Real(2));
-  fine.set_val(Real(2));
-
-  BCRec robin;
-  robin.xlo = BCType::Robin;
-  robin.xhi = BCType::Foextrap;
-  robin.ylo = BCType::Foextrap;
-  robin.yhi = BCType::Foextrap;
-  robin.xlo_alpha = Real(1);
-  robin.xlo_beta = Real(1);
-  robin.xlo_val = Real(0);
-  robin.dx = Real(37);  // Deliberately not either level metric.
-  auto plan = std::make_shared<PreparedBoundaryPlan>("case::block::robin-plan", 1,
-                                                     std::vector<BCRec>{robin});
-
-  // A Box2D has no physical metric.  Keeping the historical overload for metric-independent laws
-  // is harmless, but Robin must never reuse the declaration-time placeholder spacing.
-  EXPECT_THROW(plan->fill_same_level_and_physical(coarse, coarse_domain), std::invalid_argument);
-  const auto metricless_lane = ExecutionLane::world("case::block::robin-metricless-lane");
-  auto metricless_session = plan->make_session(metricless_lane);
-  EXPECT_THROW(metricless_session.fill_same_level_and_physical(coarse, coarse_domain),
+TEST(test_prepared_boundary_plan, rejects_field_only_robin_as_transport_semantics) {
+  EXPECT_THROW(prepare_hyperbolic_boundary<2>(
+                   {"robin", "foextrap", "foextrap", "foextrap"}, {0.0, 0.0, 0.0, 0.0},
+                   {"case::xlo", "case::xhi", "case::ylo", "case::yhi"}, {"Scalar"}),
                std::invalid_argument);
-
-  GridContext coarse_context;
-  coarse_context.dom = coarse_domain;
-  coarse_context.geom = Geometry(coarse_domain, Real(0), Real(1), Real(0), Real(1));
-  coarse_context.boundary_plan = plan;
-  GridContext fine_context;
-  fine_context.dom = fine_domain;
-  fine_context.geom = Geometry(fine_domain, Real(0), Real(1), Real(0), Real(1));
-  fine_context.boundary_plan = plan;
-
-  const auto coarse_lane = ExecutionLane::world("case::block::robin-coarse-lane");
-  const auto fine_lane = ExecutionLane::world("case::block::robin-fine-lane");
-  PreparedGridBoundarySession coarse_session(coarse_context, coarse_lane);
-  PreparedGridBoundarySession fine_session(fine_context, fine_lane);
-  coarse_session.fill(coarse);
-  fine_session.fill(fine);
-
-  // alpha=beta=1, value=0 gives u_g=((1/h)-1/2)/((1/h)+1/2) u_i.
-  EXPECT_EQ(plan->component_bc(0).dx, Real(37));  // Execution did not mutate shared authority.
-  EXPECT_NEAR(coarse.fab(0)(-1, 0, 0), Real(1.2), 1e-12);         // h = 1/2
-  EXPECT_NEAR(fine.fab(0)(-1, 0, 0), Real(14) / Real(9), 1e-12);  // h = 1/4
 }
 
 TEST(test_prepared_boundary_plan, rejects_incomplete_periodic_pairs_and_insufficient_ghosts) {
-  BCRec mixed = physical_bc();
-  mixed.xlo = BCType::Periodic;
-  EXPECT_THROW(PreparedBoundaryPlan("case::bad-periodic::ghost-plan", 1, {mixed}),
-               std::runtime_error);
+  EXPECT_THROW(prepare_hyperbolic_boundary<2>(
+                   {"periodic", "foextrap", "foextrap", "foextrap"}, {0.0, 0.0, 0.0, 0.0},
+                   {"case::xlo", "case::xhi", "case::ylo", "case::yhi"}, {"Scalar"}),
+               std::invalid_argument);
 
   const Box2D domain = Box2D::from_extents(2, 2);
   MultiFab state = scalar_field(domain, 1, 1);
-  PreparedBoundaryPlan deep("case::deep::ghost-plan", 2, {physical_bc()});
+  PreparedBoundaryPlan deep("case::deep::ghost-plan", 2, physical_boundary());
   EXPECT_THROW(deep.fill_same_level_and_physical(state, domain), std::runtime_error);
 }
 
@@ -234,8 +247,8 @@ TEST(test_prepared_boundary_plan, grid_context_routes_exact_nary_storage_registr
   MultiFab coupled = scalar_field(domain, 2, 1);
   MultiFab auxiliary = scalar_field(domain, 3, 1);
   MultiFab output = scalar_field(domain, 1, 0);
-  auto plan = std::make_shared<PreparedBoundaryPlan>("case::nary::ghost-plan", 1,
-                                                     std::vector<BCRec>{physical_bc()});
+  auto plan =
+      std::make_shared<PreparedBoundaryPlan>("case::nary::ghost-plan", 1, physical_boundary());
   GridContext context;
   context.dom = domain;
   context.geom = Geometry(domain, Real(0), Real(1), Real(0), Real(1));

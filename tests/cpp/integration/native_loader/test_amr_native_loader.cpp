@@ -1089,12 +1089,13 @@ TEST(test_amr_native_loader, BoundaryPlanSessionsOwnFreshLaneQualifiedComponentS
     spec.target_json = R"({"identity":"case::boundary::ghost-target"})";
     spec.execution = prepared_execution();
 
-    pops::BCRec bc;
-    bc.xlo = pops::BCType::Foextrap;
-    bc.xhi = pops::BCType::Foextrap;
-    bc.ylo = pops::BCType::Foextrap;
-    bc.yhi = pops::BCType::Foextrap;
-    pops::PreparedBoundaryPlan plan("case::boundary::plan", 1, {bc}, {}, spec.state_identity);
+    auto hyperbolic = pops::prepare_hyperbolic_boundary<2>(
+        {"foextrap", "foextrap", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+        {"case::boundary::xlo", "case::boundary::xhi", "case::boundary::ylo",
+         "case::boundary::yhi"},
+        {"Scalar"});
+    pops::PreparedBoundaryPlan plan("case::boundary::plan", 1, std::move(hyperbolic), {},
+                                    spec.state_identity);
     plan.install_ghost_component(std::move(spec), component);
 
     const auto lane =

@@ -30,6 +30,36 @@ from .lowering_coverage import (
     LoweringRejection,
 )
 
+_NATIVE_ROLE_ALIASES = {
+    "axial_x": "AxialX",
+    "axial_y": "AxialY",
+    "axial_z": "AxialZ",
+    "density": "Density",
+    "momentum_x": "MomentumX",
+    "momentum_y": "MomentumY",
+    "momentum_z": "MomentumZ",
+    "energy": "Energy",
+    "pressure": "Pressure",
+    "velocity_x": "VelocityX",
+    "velocity_y": "VelocityY",
+    "velocity_z": "VelocityZ",
+    "temperature": "Temperature",
+    "scalar": "Scalar",
+}
+_NATIVE_ROLE_TOKENS = frozenset(_NATIVE_ROLE_ALIASES.values())
+
+
+def _lower_native_role(value: Any) -> str | None:
+    from pops.physics.roles import ComponentRole, native_role_token
+
+    if isinstance(value, ComponentRole):
+        return native_role_token(value)
+    if isinstance(value, str):
+        if value in _NATIVE_ROLE_TOKENS:
+            return value
+        return _NATIVE_ROLE_ALIASES.get(value)
+    return None
+
 
 def _module_to_model(module: Any, state_space: Any = None) -> Any:
     """Lower a :class:`pops.model.Module` to a :class:`pops.dsl.Model`
@@ -112,13 +142,9 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     if registry.owner_path != module.owner_path:
         raise ValueError("compile_problem: Module ParamRegistry owner drift")
     object.__setattr__(m, "_param_registry", registry)
-    _spec_role = {"density": "Density", "momentum_x": "MomentumX", "momentum_y": "MomentumY",
-                  "momentum_z": "MomentumZ", "energy": "Energy", "pressure": "Pressure",
-                  "velocity_x": "VelocityX", "velocity_y": "VelocityY", "velocity_z": "VelocityZ",
-                  "temperature": "Temperature"}
     roles = None
     if state.roles:
-        roles = [_spec_role.get(state.roles.get(c)) for c in state.components]
+        roles = [_lower_native_role(state.roles.get(c)) for c in state.components]
         if all(r is None for r in roles):
             roles = None
     cvars = m.conservative_vars(*state.components, roles=roles)

@@ -320,12 +320,14 @@ class System {
   POPS_EXPORT GridContext grid_context(const std::string& name);
   /// Index-qualified twin for an already authenticated Program block map.
   POPS_EXPORT GridContext grid_context(int block);
-  /// Install one executable built-in ghost plan. `face_types` is xlo,xhi,ylo,yhi using
-  /// periodic/foextrap/dirichlet; `face_values` is component-major (ncomp*4).
+  /// Install one executable built-in hyperbolic ghost plan. Face identities remain block/owner
+  /// qualified and component roles declare reflection behavior; no component index is interpreted.
   POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
                                          int required_depth,
                                          const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values, int ncomp,
+                                         const std::vector<double>& face_values,
+                                         const std::vector<std::string>& face_identities,
+                                         const std::vector<std::string>& component_roles,
                                          const std::vector<int>& omitted_interface_faces = {},
                                          const std::string& state_identity = {},
                                          PreparedBoundaryReadDependencies read_dependencies = {});

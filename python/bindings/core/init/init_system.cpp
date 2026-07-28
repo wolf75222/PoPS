@@ -171,14 +171,16 @@ void bind_system_assembly(py::class_<System>& cls) {
           "_install_boundary_plan",
           [](System& system, const std::string& name, const std::string& identity,
              int required_depth, const std::vector<std::string>& face_types,
-             const std::vector<double>& face_values, int ncomp,
+             const std::vector<double>& face_values,
+             const std::vector<std::string>& face_identities,
+             const std::vector<std::string>& component_roles,
              const std::vector<int>& omitted_interface_faces, const std::string& state_identity) {
             system.install_boundary_plan(name, identity, required_depth, face_types, face_values,
-                                         ncomp, omitted_interface_faces, state_identity,
-                                         PreparedBoundaryReadDependencies{});
+                                         face_identities, component_roles, omitted_interface_faces,
+                                         state_identity, PreparedBoundaryReadDependencies{});
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
-          py::arg("face_values"), py::arg("ncomp"),
+          py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
           "Install one resolved per-block ghost-production plan before block construction.")

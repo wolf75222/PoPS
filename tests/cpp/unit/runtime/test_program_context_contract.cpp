@@ -173,9 +173,14 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   sim.install_block_state_route("b", b_state);
   const std::vector<std::string> faces(4, "periodic");
   const std::vector<double> values(4, 0.0);
-  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state,
-                            PreparedBoundaryReadDependencies{{b_state}, {}});
-  sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, 1, {}, b_state);
+  const std::vector<std::string> a_faces = {"case::block::a::xlo", "case::block::a::xhi",
+                                            "case::block::a::ylo", "case::block::a::yhi"};
+  const std::vector<std::string> b_faces = {"case::block::b::xlo", "case::block::b::xhi",
+                                            "case::block::b::ylo", "case::block::b::yhi"};
+  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, a_faces, {"Scalar"},
+                            {}, a_state, PreparedBoundaryReadDependencies{{b_state}, {}});
+  sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, b_faces, {"Scalar"},
+                            {}, b_state);
   const auto a_plan = sim.grid_context("a").boundary_plan;
   ASSERT_NE(a_plan, nullptr);
   const auto b_read = a_plan->prepare_state_read(b_state);
