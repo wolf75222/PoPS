@@ -470,7 +470,8 @@ class SlipWall:
         from pops.physics.roles import ComponentRole, native_role_token
 
         components = _state_components(self.state, where="SlipWall")
-        roles = getattr(self.state.space, "roles", None)
+        space = getattr(self.state, "space", None)
+        roles = getattr(space, "roles", None)
         if not isinstance(roles, Mapping) or set(roles) != set(components):
             raise ValueError(
                 "SlipWall requires one explicit typed physical role for every state component")
