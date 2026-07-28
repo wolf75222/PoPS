@@ -30,6 +30,7 @@ from ._layout_plan_contracts import (
     plan_payload,
     reject_concurrent_overwrite_mappings,
     subject_kind,
+    validate_reverse_mapping,
 )
 
 
@@ -192,6 +193,7 @@ class LayoutPlanBuilder:
         synchronization: LayoutSynchronization,
         source_representation: LayoutRepresentation,
         target_representation: LayoutRepresentation,
+        reverse_of: LayoutMappingRequirement | None = None,
     ) -> tuple[LayoutMappingRequirement, ...]:
         """Require a qualified directional data transfer between two materialized layouts."""
         for handle in (source_layout, target_layout):
@@ -208,10 +210,21 @@ class LayoutPlanBuilder:
             raise ValueError("mapping source must be assigned to source_layout before mapping")
         if assignments.get((target.kind, target.qualified_id)) != target_layout:
             raise ValueError("mapping target must be assigned to target_layout before mapping")
+        reverse_identity = None
+        if reverse_of is not None:
+            if type(reverse_of) is not LayoutMappingRequirement:
+                raise TypeError("reverse_of must be an exact LayoutMappingRequirement")
+            registered = self._requirements.get(reverse_of.qualified_id)
+            if registered != reverse_of:
+                raise ValueError(
+                    "reverse mapping must reference a requirement declared by this builder")
+            reverse_identity = reverse_of.qualified_id
         forward = LayoutMappingRequirement(
             source_layout, target_layout, source_port, target_port,
-            operation, synchronization,
+            operation, synchronization, reverse_identity,
         )
+        if reverse_of is not None:
+            validate_reverse_mapping(forward, reverse_of)
         rows = [forward]
         for row in rows:
             if row.qualified_id in self._requirements:
