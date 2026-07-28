@@ -6,8 +6,9 @@ U0, ``emit_cpp_program`` emits a device kernel that re-evaluates an inlined resi
 from the residual sub-block -- named ``source`` / ``apply`` per-cell Exprs + the iterate / frozen guess
 + affine combines), forms an in-kernel finite-difference Jacobian, and solves the Newton step
 ``J dU = -r`` with the SAME manifest-sized dense inverse ``pops::detail::mat_inverse<N>`` ``solve_local_linear``
-uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::function / Eigen in the kernel
-(only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
+uses -- iterating to ``max_c |r_c| < tol`` or the budget. A collective per-cell status reduction
+constructs the native ``SolveReport`` before ``SolveOutcome`` can expose the scratch. No heap /
+std::function / Eigen in the kernel (only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
 
 (A) Validation + codegen (pure Python, always runs): the builder rejects a non-callable residual, a
     non-State guess, a non-positive max_iter, a non-local residual op, and manifest-sized dense
@@ -264,13 +265,15 @@ def section_a(t):
         "if (rmax_ <= static_cast<pops::Real>(1e-12))",
         "const pops::Real eps_",
         "U_[i_] -= du_;",
-        "pops::reduce_max(local_solve_status_",
         "pops::SolveReport local_solve_report_",
         "pops::SolveOutcome local_solve_outcome_",
         "pops::SolveStatus::kIterationLimit",
         "pops::SolveStatus::kSingular",
         "pops::SolveStatus::kInvalidEvaluation",
         "pops::for_each_cell(",
+        "ctx.pointwise_active_mask(0,",
+        "ctx.pointwise_status_max(0,",
+        "action=fail_run",
     ):
         chk(frag in src, "the Newton kernel has %r" % frag)
     guard = src.index("if (!local_solve_outcome_")
