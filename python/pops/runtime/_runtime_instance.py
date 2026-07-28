@@ -1216,7 +1216,16 @@ class RuntimeInstance:
                 return self._accepted_step_transaction(advance, at_end=at_end)
             except StepAttemptRejected as error:
                 # _accepted_step_transaction has already restored every native/Python store here.
-                # Only the detached proposal cursor may advance to the next retry.
+                # Retain the rejected-attempt fact in the accepted temporal authority before the
+                # detached proposal cursor advances.  The provisional fields and controller state
+                # stay rolled back, while a later accepted retry restores the synchronized status
+                # without losing this cumulative statistic.
+                temporal = getattr(native, "_temporal_restart_state", None)
+                if temporal is not None:
+                    temporal.reject(
+                        time=native.time(),
+                        macro_step=native.macro_step(),
+                    )
                 if sequence.retry(error):
                     continue
                 raise
