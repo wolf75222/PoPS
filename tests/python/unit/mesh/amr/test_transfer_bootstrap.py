@@ -75,7 +75,6 @@ from pops.numerics.variables import Conservative
 from pops.time import Clock
 from pops.identity import make_identity
 from pops.runtime._amr_bootstrap_execution import BootstrapReceipt, execute_bootstrap
-from tests.python.support.layout_plan import final_amr_layout
 
 
 OWNER = OwnerPath.case("transfer-bootstrap")
@@ -341,6 +340,18 @@ def test_public_provider_identity_is_stable_under_declaration_reordering():
     } == {
         row.action.provider.qualified_id for row in resolved_reverse.entries
     }
+
+
+def test_public_transfer_rejects_duplicate_subject_registration():
+    plan, _, state, _ = _layout()
+    authored = AMRTransfer()
+    authored.state(state, StateTransfer())
+    authored.state(state, StateTransfer())
+
+    with pytest.raises(
+        ValueError, match="duplicate AMR transfer provider registration"
+    ):
+        authored.resolve(plan)
 
 
 def test_field_and_cache_materializer_identities_are_owner_qualified_not_local_names():
