@@ -169,7 +169,7 @@ def test_adams_bashforth_rejects_unsupported_orders(order):
 def test_final_factory_signatures_have_no_in_place_program_or_free_selector_surface():
     assert tuple(inspect.signature(lt.IMEX).parameters) == (
         "state", "explicit_operator", "implicit_operator", "fields_operator", "tableau",
-        "solve_action")
+        "solve_action", "implicit_solver")
     assert tuple(inspect.signature(lt.AdamsBashforth).parameters) == (
         "state", "rate", "order", "fields", "solve_action")
     assert tuple(inspect.signature(lt.Lie).parameters) == ("state", "first", "second")
