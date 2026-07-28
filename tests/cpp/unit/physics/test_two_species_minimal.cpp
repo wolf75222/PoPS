@@ -57,6 +57,13 @@ struct IonProduction {
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
 };
 
+struct ZeroSystemRhs {
+  template <class System>
+  void operator()(const System&, MultiFab& rhs) const {
+    rhs.set_val(Real(0));
+  }
+};
+
 using ElectronBlock = EquationBlock<ElectronRelax, FirstOrder, ImplicitTime<UserTimeIntegrator, 1>>;
 using IonBlock = EquationBlock<IonProduction, FirstOrder, ExplicitTime<SSPRK2, 1>>;
 
@@ -94,8 +101,11 @@ TEST_F(TwoSpeciesMinimal, IonExplicitBlockAdvancesExactly) {
   ElectronBlock electrons{"electrons", ElectronRelax{}, Ue_, bc_};
   IonBlock ions{"ions", IonProduction{}, Ui_, bc_};
   CoupledSystem system{electrons, ions};
-  ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
-  auto sim = test_support::make_reference_system_driver(system, geom_, ba_, bc_, charge);
+  // These time-integration checks do not exercise Poisson.  A spatially constant,
+  // non-neutral periodic charge has no Poisson solution and must now fail closed
+  // instead of being silently accepted after an iteration limit.
+  auto sim =
+      test_support::make_reference_system_driver(system, geom_, ba_, bc_, ZeroSystemRhs{});
 
   sim.step(kDt, ImplicitSourceStepper{});
 
@@ -107,8 +117,8 @@ TEST_F(TwoSpeciesMinimal, ElectronImplicitBlockIsBackwardEulerExactAndBounded) {
   ElectronBlock electrons{"electrons", ElectronRelax{}, Ue_, bc_};
   IonBlock ions{"ions", IonProduction{}, Ui_, bc_};
   CoupledSystem system{electrons, ions};
-  ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
-  auto sim = test_support::make_reference_system_driver(system, geom_, ba_, bc_, charge);
+  auto sim =
+      test_support::make_reference_system_driver(system, geom_, ba_, bc_, ZeroSystemRhs{});
 
   sim.step(kDt, ImplicitSourceStepper{});
 
@@ -126,7 +136,8 @@ TEST_F(TwoSpeciesMinimal, PoissonRhsSumsAcrossSpeciesAndIsNonZero) {
   CoupledSystem system{electrons, ions};
   // Poisson rhs = Sum_s q_s n_s = (+1) n_i + (-1) n_e = n_i - n_e.
   ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
-  auto sim = test_support::make_reference_system_driver(system, geom_, ba_, bc_, charge);
+  auto sim =
+      test_support::make_reference_system_driver(system, geom_, ba_, bc_, ZeroSystemRhs{});
 
   sim.step(kDt, ImplicitSourceStepper{});
 

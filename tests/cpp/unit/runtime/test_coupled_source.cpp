@@ -36,6 +36,13 @@ struct Inert {
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
 };
 
+struct ZeroSystemRhs {
+  template <class System>
+  void operator()(const System&, MultiFab& rhs) const {
+    rhs.set_val(Real(0));
+  }
+};
+
 // Echange lineaire entre les deux premiers blocs : n0 += dt k (n1 - n0),
 // n1 -= dt k (n1 - n0). Lit l'etat des DEUX blocs -> c'est tout l'interet d'une
 // CoupledSource. Conserve n0 + n1 exactement (le flux quitte 1 et entre dans 0).
@@ -83,8 +90,10 @@ TEST(CoupledSource, LinearExchangeConservesTotalMassBetweenBlocks) {
   BlockA a{"a", Inert{}, U0, bc};
   BlockB b{"b", Inert{}, U1, bc};
   CoupledSystem system{a, b};
-  auto sim = test_support::make_reference_system_driver(
-      system, geom, ba, bc, ChargeDensityRhs{{{Real(1), 0}, {Real(-1), 0}}});
+  // The source under test ignores the field.  Its spatially constant non-neutral
+  // periodic charge has no Poisson solution, so keep this test on a solvable zero
+  // field instead of relying on a discarded iteration-limit outcome.
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, bc, ZeroSystemRhs{});
 
   const Real dt = Real(0.1);
   sim.coupled_source_step(LinearExchange{Real(0.5)}, dt);
