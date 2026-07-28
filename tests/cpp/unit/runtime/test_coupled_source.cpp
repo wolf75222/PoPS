@@ -4,14 +4,15 @@
 // pour exprimer un echange entre especes. Ici : un echange lineaire qui transfere
 // de la masse du bloc 1 vers le bloc 0 a un taux k(n1 - n0). Conservatif par
 // construction (ce que les sources locales ne pourraient pas garantir : elles ne
-// voient pas l'autre espece). Applique par SystemCoupler::coupled_source_step.
+// voient pas l'autre espece). Applique par le driver de reference test-only.
 
 #include <gtest/gtest.h>
+
+#include "reference_system_driver.hpp"
 
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/source/coupled_source.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -82,8 +83,8 @@ TEST(CoupledSource, LinearExchangeConservesTotalMassBetweenBlocks) {
   BlockA a{"a", Inert{}, U0, bc};
   BlockB b{"b", Inert{}, U1, bc};
   CoupledSystem system{a, b};
-  auto sim =
-      make_system_coupler(system, geom, ba, bc, ChargeDensityRhs{{{Real(1), 0}, {Real(-1), 0}}});
+  auto sim = test_support::make_reference_system_driver(
+      system, geom, ba, bc, ChargeDensityRhs{{{Real(1), 0}, {Real(-1), 0}}});
 
   const Real dt = Real(0.1);
   sim.coupled_source_step(LinearExchange{Real(0.5)}, dt);

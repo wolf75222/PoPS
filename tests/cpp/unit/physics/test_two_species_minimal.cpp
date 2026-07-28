@@ -4,7 +4,7 @@
 // IMPLICITES (source de relaxation raide) + ions EXPLICITES (SSPRK2) + Poisson
 // rhs = n_i - n_e, assemble par ChargeDensityRhs a N especes. L'utilisateur ne
 // compose que des briques (modele local, schema spatial, politique temps, charge)
-// et appelle SystemCoupler ; aucun solveur implicite n'est ecrit a la main (le
+// et appelle le driver de reference test-only ; aucun solveur implicite n'est ecrit a la main (le
 // defaut ImplicitSourceStepper s'en charge).
 //
 // Couvre aussi : RHS Poisson non nul a N blocs (jalon 2.1.1 / 2.5.1) et le defaut
@@ -12,9 +12,10 @@
 
 #include <gtest/gtest.h>
 
+#include "reference_system_driver.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -94,7 +95,7 @@ TEST_F(TwoSpeciesMinimal, IonExplicitBlockAdvancesExactly) {
   IonBlock ions{"ions", IonProduction{}, Ui_, bc_};
   CoupledSystem system{electrons, ions};
   ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
-  auto sim = make_system_coupler(system, geom_, ba_, bc_, charge);
+  auto sim = test_support::make_reference_system_driver(system, geom_, ba_, bc_, charge);
 
   sim.step(kDt, ImplicitSourceStepper{});
 
@@ -107,7 +108,7 @@ TEST_F(TwoSpeciesMinimal, ElectronImplicitBlockIsBackwardEulerExactAndBounded) {
   IonBlock ions{"ions", IonProduction{}, Ui_, bc_};
   CoupledSystem system{electrons, ions};
   ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
-  auto sim = make_system_coupler(system, geom_, ba_, bc_, charge);
+  auto sim = test_support::make_reference_system_driver(system, geom_, ba_, bc_, charge);
 
   sim.step(kDt, ImplicitSourceStepper{});
 
@@ -125,7 +126,7 @@ TEST_F(TwoSpeciesMinimal, PoissonRhsSumsAcrossSpeciesAndIsNonZero) {
   CoupledSystem system{electrons, ions};
   // Poisson rhs = Sum_s q_s n_s = (+1) n_i + (-1) n_e = n_i - n_e.
   ChargeDensityRhs charge{{{Real(-1), 0}, {Real(1), 0}}};  // [electrons, ions]
-  auto sim = make_system_coupler(system, geom_, ba_, bc_, charge);
+  auto sim = test_support::make_reference_system_driver(system, geom_, ba_, bc_, charge);
 
   sim.step(kDt, ImplicitSourceStepper{});
 

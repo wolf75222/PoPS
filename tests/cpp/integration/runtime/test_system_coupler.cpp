@@ -3,9 +3,10 @@
 
 #include <gtest/gtest.h>
 
+#include "reference_system_driver.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -67,7 +68,7 @@ static_assert(EquationBlockLike<IonBlock>);
 static_assert(ElectronBlock::Time::treatment == TimeTreatment::Implicit);
 static_assert(IonBlock::Time::treatment == TimeTreatment::Explicit);
 
-TEST(SystemCoupler, ImplicitElectronBlockAndExplicitIonBlockAdvanceUnderZeroSystemRhs) {
+TEST(ReferenceSystemDriver, ImplicitElectronBlockAndExplicitIonBlockAdvanceUnderZeroSystemRhs) {
   const Box2D dom = Box2D::from_extents(4, 4);
   const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   const BoxArray ba = BoxArray::from_domain(dom, 4);
@@ -81,7 +82,7 @@ TEST(SystemCoupler, ImplicitElectronBlockAndExplicitIonBlockAdvanceUnderZeroSyst
   ElectronBlock electrons{"electrons", ElectronSource{}, Ue, bc};
   IonBlock ions{"ions", IonSource{}, Ui, bc};
   CoupledSystem system{electrons, ions};
-  auto sim = make_system_coupler(system, geom, ba, bc, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, bc, ZeroSystemRhs{});
 
   int implicit_calls = 0;
   sim.step(Real(0.1), [&](auto&, auto& block, Real h, int, int) {

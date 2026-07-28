@@ -823,10 +823,6 @@ void bind_system_stepping(py::class_<System>& cls) {
            "bound "
            "of block 'name' -- to locate a collapsing dt. On demand, off the hot path.",
            py::arg("name"))
-      .def("step_adaptive", &System::step_adaptive,
-           "Reserved fail-closed entry point. Requires an installed whole-system Program, then "
-           "raises until adaptive multirate subcycling has a ProgramGraph lowering.",
-           py::arg("cfl"))
       // Explicit host inspection/state-transfer primitives.  Production time programs execute in
       // the prepared native runtime; these bulk copies exist for initialization, checkpoints,
       // diagnostics and numerical verification, never as a per-cell Python stepping route.

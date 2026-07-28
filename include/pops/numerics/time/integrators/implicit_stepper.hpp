@@ -17,7 +17,7 @@
 /// @file
 /// @brief Implicit / IMEX block step as a named CONTRACT. Concept ImplicitBlockStepper,
 ///        ready-to-use default backward_euler_source (local Newton on the model stiff source)
-///        and the ImplicitSourceStepper object that wires it into SystemCoupler::step.
+///        and the ImplicitSourceStepper object used by isolated numerical tests.
 ///        Includes the partial-IMEX mask (ImplicitMask), the analytic Jacobian trait
 ///        (HasSourceJacobian) and the Newton options (NewtonOptions / NewtonReport).
 ///
@@ -648,7 +648,7 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
 }
 
 // Default implicit stepper: backward-Euler (Newton) on the model source.
-// Models ImplicitBlockStepper; passed as is to SystemCoupler::step as the implicit
+// Models ImplicitBlockStepper; passed as is to the test-only reference driver as the implicit
 // advance callback. The user writes no solver.
 struct ImplicitSourceStepper {
   int iters = 2;

@@ -83,11 +83,11 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     ``add_block`` takes a private native ``ModelSpec`` plus private spatial and time adapters.
     Public authoring uses ``pops.Model`` through ``pops.Case``; discretization and reusable
     integration Programs live in ``pops.numerics`` and ``pops.lib.time`` respectively.
-    Everything else (set_poisson, set_density, step, step_cfl, step_adaptive, diagnostics,
+    Everything else (set_poisson, set_density, step, step_cfl, diagnostics,
     primitives eval_rhs/get_state/set_state) is forwarded to the compiled facade.
     Temporal operations require the whole-system Program installed by ``pops.bind``; there is no
-    native fallback. ``step_adaptive`` is reserved and fails closed until multirate subcycling has a
-    ``ProgramGraph`` lowering.
+    native fallback. Adaptive multirate subcycling has no production facade until it is expressed
+    by a typed ``ProgramGraph`` composition.
 
     GEOMETRY: ordinary Cartesian authoring is lowered from ``CartesianGrid`` to the private
     ``SystemConfig`` before this engine is constructed. ``mesh=`` is an advanced geometry seam;

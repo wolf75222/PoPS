@@ -281,8 +281,8 @@ class AmrSystemCoupler {
     rhs_assembler_(system_, mg_.rhs());  // f = Sum_s q_s n_s on the coarse level
     mg_.solve();
 
-    // coarse aux = (phi, grad phi) via the SAME clean path as the single-level
-    // SystemCoupler (Codex review 9.4): fill the ghosts of phi according to bcPhi_, then
+    // coarse aux = (phi, grad phi) via the SAME clean path as single-level SystemAssembler (Codex
+    // review 9.4): fill the ghosts of phi according to bcPhi_, then
     // field_postprocess, then fill the ghosts of aux according to aux_bc_ (derived from bcPhi_).
     // Handles the non-periodic case (Foextrap) instead of a hard-coded periodic fill_boundary.
     fill_ghosts(mg_.phi(), dom_, bcPhi_);
