@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Validate and run the deterministic M3 AMR/multi-layout conformance matrix."""
+
 from __future__ import annotations
 
 import argparse
 import ast
 from collections import Counter, defaultdict
 from collections.abc import Iterable
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -57,12 +60,13 @@ def _skip_or_xfail_markers(node: ast.AST) -> list[str]:
     markers = []
     for decorator in getattr(node, "decorator_list", ()):
         name = _dotted_name(decorator)
-        if name.endswith((".skip", ".skipif", ".xfail")) or name in {
-                "skip", "skipif", "xfail"}:
+        if name.endswith((".skip", ".skipif", ".xfail")) or name in {"skip", "skipif", "xfail"}:
             markers.append(name)
     for child in ast.walk(node):
         if isinstance(child, ast.Call) and _dotted_name(child.func) in {
-                "pytest.skip", "pytest.xfail"}:
+            "pytest.skip",
+            "pytest.xfail",
+        }:
             markers.append(_dotted_name(child.func))
     return markers
 
@@ -70,6 +74,52 @@ def _skip_or_xfail_markers(node: ast.AST) -> list[str]:
 def _ctest_suites() -> dict[str, dict]:
     data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
     return {str(row["name"]): row for row in data.get("cpp", {}).get("suite", ())}
+
+
+def _python_mpi_entrypoints() -> dict[str, int]:
+    data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
+    entries: dict[str, int] = {}
+    for suite in data.get("python", {}).get("suite", ()):
+        for row in suite.get("mpi_entrypoints", ()):
+            path = str(row.get("path", ""))
+            nproc = row.get("nproc")
+            if not path or isinstance(nproc, bool) or not isinstance(nproc, int) or nproc < 1:
+                raise ValueError("invalid Python MPI entrypoint %r" % row)
+            if path in entries:
+                raise ValueError("duplicate Python MPI entrypoint %s" % path)
+            entries[path] = nproc
+    return entries
+
+
+def _validate_python_nodeid(nodeid: object, where: str, errors: list[str]) -> str | None:
+    if not isinstance(nodeid, str) or nodeid.count("::") != 1:
+        errors.append("%s must contain one exact file::test nodeid" % where)
+        return None
+    relative, function_name = nodeid.split("::")
+    test_path = ROOT / relative
+    if not test_path.is_file():
+        errors.append("%s references missing test file %s" % (where, relative))
+        return None
+    tree = ast.parse(test_path.read_text(encoding="utf-8"), filename=str(test_path))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    function = functions.get(function_name)
+    if function is None:
+        errors.append("%s references missing test function %s" % (where, nodeid))
+        return None
+    markers = _skip_or_xfail_markers(function)
+    module_nodes = [
+        node
+        for node in tree.body
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    markers.extend(_skip_or_xfail_markers(ast.Module(body=module_nodes, type_ignores=[])))
+    if markers:
+        errors.append("%s is not mandatory; found %s" % (nodeid, sorted(set(markers))))
+    return relative
 
 
 def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
@@ -101,10 +151,20 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     requirement_coverage: dict[str, set[str]] = defaultdict(set)
     native_positive_issues: set[str] = set()
     cpp_suites = _ctest_suites()
+    try:
+        python_mpi_entrypoints = _python_mpi_entrypoints()
+    except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
+        errors.append("cannot read Python MPI entrypoints: %s" % exc)
+        python_mpi_entrypoints = {}
     for index, row in enumerate(checks, 1):
         where = "check[%d]" % index
         base = {"issue", "requirement", "polarity", "kind", "target"}
-        expected = base | ({"nodeid"} if row.get("kind") == "pytest" else {"test_regex"})
+        if row.get("kind") == "pytest":
+            expected = base | {"nodeid"}
+        elif row.get("kind") == "mpi_python":
+            expected = base | {"nodeid", "nproc"}
+        else:
+            expected = base | {"test_regex"}
         if set(row) != expected:
             errors.append("%s has unknown or missing fields: %s" % (where, sorted(row)))
             continue
@@ -130,32 +190,26 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             nodeid = row.get("nodeid")
             if target not in ALLOWED_PYTEST_TARGETS:
                 errors.append("%s has unknown pytest target %r" % (where, target))
-            if not isinstance(nodeid, str) or nodeid.count("::") != 1:
-                errors.append("%s must contain one exact file::test nodeid" % where)
-                continue
-            relative, function_name = nodeid.split("::")
-            test_path = ROOT / relative
-            if not test_path.is_file():
-                errors.append("%s references missing test file %s" % (where, relative))
-                continue
-            tree = ast.parse(test_path.read_text(encoding="utf-8"), filename=str(test_path))
-            functions = {
-                node.name: node for node in tree.body
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            }
-            function = functions.get(function_name)
-            if function is None:
-                errors.append("%s references missing test function %s" % (where, nodeid))
-                continue
-            markers = _skip_or_xfail_markers(function)
-            module_nodes = [
-                node for node in tree.body
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            ]
-            markers.extend(_skip_or_xfail_markers(ast.Module(body=module_nodes, type_ignores=[])))
-            if markers:
-                errors.append("%s is not mandatory; found %s" % (nodeid, sorted(set(markers))))
+            relative = _validate_python_nodeid(nodeid, where, errors)
             if polarity == "positive" and relative in NATIVE_PYTEST_FILES:
+                native_positive_issues.add(str(issue))
+        elif kind == "mpi_python":
+            nodeid = row.get("nodeid")
+            nproc = row.get("nproc")
+            if target not in ALLOWED_PYTEST_TARGETS:
+                errors.append("%s has unknown MPI Python target %r" % (where, target))
+            relative = _validate_python_nodeid(nodeid, where, errors)
+            if isinstance(nproc, bool) or not isinstance(nproc, int) or nproc < 1:
+                errors.append("%s MPI Python row requires a positive integer nproc" % where)
+            elif relative is not None:
+                manifest_nproc = python_mpi_entrypoints.get(relative)
+                if manifest_nproc is None:
+                    errors.append("%s is not a manifest-owned MPI Python entrypoint" % relative)
+                elif manifest_nproc != nproc:
+                    errors.append(
+                        "%s requires nproc=%d, not %d" % (relative, manifest_nproc, nproc)
+                    )
+            if polarity == "positive":
                 native_positive_issues.add(str(issue))
         elif kind == "ctest":
             selector = row.get("test_regex")
@@ -175,7 +229,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             if polarity == "positive":
                 native_positive_issues.add(str(issue))
         else:
-            errors.append("%s kind must be pytest or ctest" % where)
+            errors.append("%s kind must be pytest, mpi_python, or ctest" % where)
 
     duplicates = sorted(identity for identity, count in identities.items() if count > 1)
     if duplicates:
@@ -193,23 +247,40 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     return data, errors
 
 
-def _run(command: list[str]) -> None:
+def _run(command: list[str], *, env: dict[str, str] | None = None) -> None:
     print("+", " ".join(command), flush=True)
-    subprocess.run(command, cwd=ROOT, check=True)
+    subprocess.run(command, cwd=ROOT, check=True, env=env)
+
+
+def _mpi_python_command(mpi_exec: str, nproc: int, relative: str) -> list[str]:
+    if shutil.which(mpi_exec) is None:
+        raise RuntimeError("required MPI launcher %r is unavailable" % mpi_exec)
+    return [mpi_exec, "-n", str(nproc), sys.executable, str(ROOT / relative)]
+
+
+def _required_mpi_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["POPS_REQUIRE_MPI_TESTS"] = "1"
+    return environment
 
 
 def _chunks(values: list[str], size: int) -> Iterable[list[str]]:
     for index in range(0, len(values), size):
-        yield values[index:index + size]
+        yield values[index : index + size]
 
 
 def _run_ctest(build_dir: Path, target: str, selector: str) -> None:
     listed = subprocess.run(
         ["ctest", "--test-dir", str(build_dir), "-N", "-R", selector],
-        cwd=ROOT, check=True, text=True, capture_output=True)
+        cwd=ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
     if "Total Tests: 0" in listed.stdout or "Test #" not in listed.stdout:
-        raise RuntimeError("M3 CTest target %r (%s) is not built in %s"
-                           % (target, selector, build_dir))
+        raise RuntimeError(
+            "M3 CTest target %r (%s) is not built in %s" % (target, selector, build_dir)
+        )
     _run(["ctest", "--test-dir", str(build_dir), "--output-on-failure", "-R", selector])
 
 
@@ -219,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--python-only", action="store_true")
     parser.add_argument("--build-dir", type=Path, default=ROOT / "build-mpi")
+    parser.add_argument("--mpi-exec", default="mpiexec")
     args = parser.parse_args(argv)
 
     data, errors = validate_manifest(args.manifest)
@@ -228,18 +300,33 @@ def main(argv: list[str] | None = None) -> int:
             print(" -", error, file=sys.stderr)
         return 2
     checks = data["check"]
-    print("M3 gate source matrix: OK (%d executable, %d deferred)"
-          % (len(checks), len(data["deferred"])))
+    print(
+        "M3 gate source matrix: OK (%d executable, %d deferred)"
+        % (len(checks), len(data["deferred"]))
+    )
     if args.check_only:
         return 0
 
     nodeids = [row["nodeid"] for row in checks if row["kind"] == "pytest"]
     for chunk in _chunks(nodeids, 24):
         _run([sys.executable, "-m", "pytest", "-q", *chunk])
+    mpi_entrypoints = sorted(
+        {
+            (row["nodeid"].split("::", 1)[0], row["nproc"])
+            for row in checks
+            if row["kind"] == "mpi_python"
+        }
+    )
+    for relative, nproc in mpi_entrypoints:
+        _run(
+            _mpi_python_command(args.mpi_exec, nproc, relative),
+            env=_required_mpi_environment(),
+        )
     if not args.python_only:
         for row in sorted(
-                (row for row in checks if row["kind"] == "ctest"),
-                key=lambda value: (value["target"], value["test_regex"])):
+            (row for row in checks if row["kind"] == "ctest"),
+            key=lambda value: (value["target"], value["test_regex"]),
+        ):
             _run_ctest(args.build_dir, row["target"], row["test_regex"])
     return 0
 
