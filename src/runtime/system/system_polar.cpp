@@ -9,8 +9,7 @@ namespace pops::detail {
 
 BuiltBlock build_block_polar(const ModelSpec& model, const std::string& limiter,
                              const std::string& riemann, const PolarGridContext& pctx,
-                             bool recon_prim, const std::string& method, Real positivity_floor,
-                             const MultiFab* aux) {
+                             bool recon_prim, Real positivity_floor, const MultiFab* aux) {
   BuiltBlock out;
   dispatch_model_polar(model, [&](auto m) {
     using M = decltype(m);
@@ -25,7 +24,7 @@ BuiltBlock build_block_polar(const ModelSpec& model, const std::string& limiter,
     // wall_radial = true: solid wall at both radial edges (no-penetration) -> zero radial flux at
     // r_min / r_max -> mass Sum n r dr dtheta conserved TO MACHINE precision (diocotron ring bounded by
     // two conducting walls). This is the BC that makes the coupled step conservative.
-    out.clo = make_block_polar(m, limiter, riemann, pctx, recon_prim, method, /*wall_radial=*/true,
+    out.clo = make_block_polar(m, limiter, riemann, pctx, recon_prim, /*wall_radial=*/true,
                                positivity_floor);
     // POLAR StabilityPolicy (audit wave 3): same policy as the Cartesian -- stability lambda* (trait)
     // otherwise max_wave_speed; source/admissible-step bounds if declared, EMPTY closures otherwise

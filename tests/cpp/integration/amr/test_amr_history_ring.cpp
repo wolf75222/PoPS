@@ -85,11 +85,11 @@ static_assert(PhysicalModel<QuadraticGrowthModel>);
 static AmrCompiledBlockBuilder quadratic_growth_block_builder() {
   return [](const detail::SharedAmrLayout& layout, const std::string& name,
             const std::vector<double>& density, bool has_density, const std::vector<double>& state,
-            bool has_state, double gamma, int substeps, bool recon_prim, bool imex, int stride,
+            bool has_state, double gamma, int substeps, bool recon_prim, int stride,
             const std::vector<std::string>& implicit_vars,
             const std::vector<std::string>& implicit_roles, double pos_floor, double weno_epsilon,
             bool wave_speed_cache) {
-    if (imex || !implicit_vars.empty() || !implicit_roles.empty())
+    if (!implicit_vars.empty() || !implicit_roles.empty())
       throw std::invalid_argument(
           "the quadratic rollback fixture requires an explicit spatial block");
     return detail::build_amr_block<QuadraticGrowthModel, Minmod, RusanovFlux>(

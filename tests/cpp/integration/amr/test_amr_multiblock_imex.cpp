@@ -193,10 +193,10 @@ AmrCompiledBlockBuilder make_program_block_builder(Model model) {
       [model](const detail::SharedAmrLayout& layout, const std::string& name,
               const std::vector<double>& density, bool has_density,
               const std::vector<double>& state, bool has_state, double gamma, int substeps,
-              bool recon_prim, bool imex, int stride, const std::vector<std::string>& implicit_vars,
+              bool recon_prim, int stride, const std::vector<std::string>& implicit_vars,
               const std::vector<std::string>& implicit_roles, double pos_floor, double weno_epsilon,
               bool wave_speed_cache) {
-        if (imex || !implicit_vars.empty() || !implicit_roles.empty())
+        if (!implicit_vars.empty() || !implicit_roles.empty())
           throw std::invalid_argument(
               "the IMEX test Program owns source treatment; its spatial block must be explicit");
         return detail::build_amr_block<Model, Minmod, RusanovFlux>(

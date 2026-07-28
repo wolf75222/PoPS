@@ -46,19 +46,15 @@ struct BuiltBlock {
 
 /// The non-model inputs of a Cartesian block build (a thin bundle so the seam signature stays fixed).
 /// Held by value: these are cheap setup-time copies (GridContext is already value-semantic and copied
-/// per add_block; NewtonOptions is a POD), which avoids any lifetime coupling to add_block locals.
+/// per add_block), which avoids any lifetime coupling to add_block locals.
 struct BlockBuildArgs {
   std::string name;
   std::string limiter;
   std::string riemann;
   GridContext ctx;
-  bool imex;
   bool recon_prim;
-  std::string method;
   std::vector<std::string> implicit_vars;
   std::vector<std::string> implicit_roles;
-  NewtonOptions nopts;
-  NewtonReport* nreport;  // non-owning (report lives in System::Impl::newton_reports_)
   Real positivity_floor;
   bool wave_speed_cache;
   Real weno_epsilon = kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical)
@@ -66,7 +62,7 @@ struct BlockBuildArgs {
 
 /// VERBATIM Cartesian visitor body of the former dispatch_model lambda (system.cpp), with the transport
 /// brick @p tr already chosen, and the per-leaf BlockClosures produced by @p make. @p make is
-/// `(auto m, const std::vector<int>& impl, const BlockBuildArgs& a) -> BlockClosures`: a per-(transport)
+/// `(auto m, const BlockBuildArgs& a) -> BlockClosures`: a per-(transport)
 /// seam (build_block_for) passes the full make_block dispatcher, while a per-(transport,flux) seam
 /// (system_compressible_<flux>.cpp) passes make_block_<flux> so ONLY that flux's build_block leaves are
 /// instantiated in its TU (ADC-335 flux subdivision). Instantiated only in the seam TU that calls it.
@@ -83,9 +79,10 @@ BuiltBlock build_block_for_make(TR tr, const ModelSpec& model, const BlockBuildA
     // add_block widens the SHARED channel host-side (ensure_aux_width preserves the aux ADDRESS captured
     // by the closures, so applying it after make_block is equivalent).
     out.aux_width = aux_comps<M>();
-    const std::vector<int> impl_components =
-        resolve_implicit_components(a.name, out.cons_vs, a.implicit_vars, a.implicit_roles);
-    out.clo = make(m, impl_components, a);
+    // Authoring selectors are validated against the exact block variables here, but no spatial
+    // closure consumes them. Their solve belongs to an executable implicit Program primitive.
+    (void)resolve_implicit_components(a.name, out.cons_vs, a.implicit_vars, a.implicit_roles);
+    out.clo = make(m, a);
     out.max_speed = make_max_speed(m, a.ctx);
     out.add_poisson_rhs = make_poisson_rhs(m);
     out.src_freq = make_source_frequency(m, a.ctx);
@@ -102,10 +99,9 @@ BuiltBlock build_block_for_make(TR tr, const ModelSpec& model, const BlockBuildA
 template <class TR>
 BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& a) {
   return build_block_for_make(
-      std::move(tr), model, a, [](auto m, const std::vector<int>& impl, const BlockBuildArgs& aa) {
-        return make_block(m, aa.limiter, aa.riemann, aa.ctx, aa.imex, aa.recon_prim, aa.method,
-                          impl, aa.nopts, aa.nreport, aa.positivity_floor, aa.wave_speed_cache,
-                          aa.weno_epsilon);
+      std::move(tr), model, a, [](auto m, const BlockBuildArgs& aa) {
+        return make_block(m, aa.limiter, aa.riemann, aa.ctx, aa.recon_prim,
+                          aa.positivity_floor, aa.wave_speed_cache, aa.weno_epsilon);
       });
 }
 
@@ -135,7 +131,6 @@ BuiltBlock build_block_compressible_roe(const ModelSpec& model, const BlockBuild
 // the ring by add_block before this is called. @p aux is &System::Impl::aux (the polar makers read it).
 BuiltBlock build_block_polar(const ModelSpec& model, const std::string& limiter,
                              const std::string& riemann, const PolarGridContext& pctx,
-                             bool recon_prim, const std::string& method, Real positivity_floor,
-                             const MultiFab* aux);
+                             bool recon_prim, Real positivity_floor, const MultiFab* aux);
 
 }  // namespace pops::detail

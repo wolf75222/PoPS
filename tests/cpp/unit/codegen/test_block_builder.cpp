@@ -21,6 +21,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/spatial_operator.hpp>
+#include <pops/numerics/time/integrators/time_steppers.hpp>
 
 #include <cmath>
 #include <string>
@@ -67,7 +68,7 @@ TEST(test_block_builder, external_seam_matches_direct_path_and_advances) {
   const GridContext ctx{dom, bc, geom, &aux};
 
   // (1) make_block (minmod + HLLC, primitif) : son residu == assemble_rhs direct du meme schema.
-  BlockClosures clo = make_block(model, "minmod", "hllc", ctx, /*imex=*/false, /*recon_prim=*/true);
+  BlockClosures clo = make_block(model, "minmod", "hllc", ctx, /*recon_prim=*/true);
   MultiFab R1(ba, dm, 4, 0), R2(ba, dm, 4, 0);
   clo.rhs_into(U, R1);
   fill_ghosts(U, dom, bc);
@@ -105,8 +106,9 @@ TEST(test_block_builder, external_seam_matches_direct_path_and_advances) {
 
   // (4) l'avance SSPRK2 tourne (chemin de production) et conserve la masse sur un etat lisse.
   const double mass0 = sum(U);
-  for (int s = 0; s < 10; ++s)
-    clo.advance(U, 2e-3, 1);
+  run_explicit_substeps<SSPRK2Step>(
+      [&](MultiFab& state, MultiFab& residual) { clo.rhs_into(state, residual); }, U, Real(2e-3),
+      10);
   double mn = 1e300;
   {
     const ConstArray4 u = U.fab(0).const_array();
@@ -185,8 +187,8 @@ TEST(test_block_builder, explicit_euler_hllc_route_matches_generic_hllc) {
   Model model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}};
   const GridContext ctx{dom, bc, geom, &aux};
 
-  BlockClosures ceh = make_block(model, "minmod", "euler_hllc", ctx, false, true);
-  BlockClosures ch = make_block(model, "minmod", "hllc", ctx, false, true);
+  BlockClosures ceh = make_block(model, "minmod", "euler_hllc", ctx, true);
+  BlockClosures ch = make_block(model, "minmod", "hllc", ctx, true);
   MultiFab Reh(ba, dm, 4, 0), Rh(ba, dm, 4, 0);
   ceh.rhs_into(U, Reh);
   ch.rhs_into(U, Rh);
@@ -220,7 +222,7 @@ TEST(test_block_builder, isothermal_model_without_hllc_capability_is_rejected) {
   Us.set_val(1.0);
   auto refused_with = [&](const char* riem, const char* frag) {
     try {
-      make_block(iso, "minmod", riem, ctx, false, false);
+        make_block(iso, "minmod", riem, ctx, false);
       return false;
     } catch (const std::runtime_error& e) {
       return std::string(e.what()).find(frag) != std::string::npos;

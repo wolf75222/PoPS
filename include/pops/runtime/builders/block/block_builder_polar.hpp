@@ -11,7 +11,6 @@
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/operators/polar_operator.hpp>  // assemble_rhs_polar (REUSED verbatim)
 #include <pops/numerics/spatial/primitives/wave_speed.hpp>
-#include <pops/numerics/time/integrators/time_steppers.hpp>  // SSPRK2Step / SSPRK3Step (core RK math)
 #include <pops/parallel/comm.hpp>          // all_reduce_max (MPI-safe collective reduction)
 #include <pops/physics/bricks/bricks.hpp>  // ExBVelocityPolar, CompositeModel, source/elliptic bricks
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
@@ -28,8 +27,8 @@
 #include <vector>
 
 /// @file
-/// @brief POLAR counterpart of block_builder.hpp: builds a block's closures (time advance +
-///        residual + Poisson contribution + wave speed) on an ANNULAR grid (PolarGeometry), by
+/// @brief POLAR counterpart of block_builder.hpp: builds a block's spatial closures
+///        (residual + Poisson contribution + wave speed) on an ANNULAR grid (PolarGeometry), by
 ///        REUSING assemble_rhs_polar (include/pops/numerics/spatial_operator_polar.hpp). This is the
 ///        Polar Phase 2b path: polar transport THROUGH System.step.
 ///
@@ -148,22 +147,6 @@ struct PolarBlockRhsEval {
   }
 };
 
-/// EXPLICIT polar advance: n substeps of the @c Stepper stepper (SSPRK2 by default, SSPRK3 optional)
-/// on the polar transport residual. Counterpart of cartesian detail::AdvanceExplicit.
-template <class Limiter, class Flux, class Model, class Stepper = SSPRK2Step>
-struct PolarAdvanceExplicit {
-  Model m;
-  PolarGridContext ctx;
-  bool recon_prim;
-  bool wall_radial;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  void operator()(MultiFab& U, Real dt, int n) const {
-    const Real h = dt / static_cast<Real>(n);
-    const PolarBlockRhsEval<Limiter, Flux, Model> rhs{m, &ctx, recon_prim, wall_radial, pos_floor};
-    run_explicit_substeps<Stepper>(rhs, U, h, n);
-  }
-};
-
 /// Frozen polar residual (fill_ghosts + assemble_rhs_polar) installed as the block's rhs_into (eval_rhs).
 template <class Limiter, class Flux, class Model>
 struct PolarRhsInto {
@@ -262,36 +245,18 @@ inline void derive_aux_polar(const MultiFab& phi, MultiFab& aux, const PolarGeom
   }
 }
 
-/// Closures (advance + residual) of a POLAR block for a frozen spatial scheme (Limiter x Flux). The RK
-/// math comes from the core TimeStepper (SSPRK2 / SSPRK3). NAMED FUNCTORS (see namespace detail).
-/// Counterpart of cartesian build_block, but without IMEX (Phase 2b scalar ExB transport: no stiff
-/// source). @p wall_radial: solid radial wall (no-penetration) -> mass conservation to machine precision.
+/// Spatial closures of a POLAR block for a frozen scheme (Limiter x Flux). Counterpart of Cartesian
+/// build_block. @p wall_radial: solid radial wall (no-penetration) -> mass conservation to machine
+/// precision.
 template <class Limiter, class Flux, class Model>
 BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, bool recon_prim,
-                                const std::string& method, bool wall_radial,
-                                Real pos_floor = Real(0)) {
+                                bool wall_radial, Real pos_floor = Real(0)) {
   BlockClosures bc;
-  // Decode @p method ONCE through the typed TimeRouteId (ADC-641): polar wires only ssprk2 / ssprk3, so
-  // the switch has two arms plus a default. Any other route (euler / imex / imexrk_ars222) keeps the
-  // historical "unknown explicit time method" throw, byte-identical.
-  switch (parse_time_route(method, "System (polar)")) {
-    case TimeRouteId::kSsprk3:
-      bc.advance = detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{
-          m, ctx, recon_prim, wall_radial, pos_floor};
-      break;
-    case TimeRouteId::kExplicitSsprk2:
-      bc.advance = detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{
-          m, ctx, recon_prim, wall_radial, pos_floor};
-      break;
-    default:
-      throw std::runtime_error("System (polar): unknown explicit time method '" + method +
-                               "' (ssprk2|ssprk3)");
-  }
   bc.rhs_into =
       detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
   // A polar Program owns the same exact stage/clock identity as a Cartesian Program even though
   // the current radial-wall/theta-periodic ghost producer is time independent.  Install a genuine
-  // point-qualified polar residual instead of falling back to the legacy unqualified advance.
+  // point-qualified polar residual instead of falling back to an unqualified spatial route.
   bc.rhs_at_point =
       detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
   return bc;
@@ -312,8 +277,7 @@ BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, boo
 /// precision; see build_block_polar).
 template <class Model>
 BlockClosures make_block_polar(const Model& m, const std::string& lim, const std::string& riem,
-                               const PolarGridContext& ctx, bool recon_prim,
-                               const std::string& method, bool wall_radial,
+                               const PolarGridContext& ctx, bool recon_prim, bool wall_radial,
                                Real pos_floor = Real(0)) {
   // CENTRALIZED VALIDATION (registry dispatch_tags.hpp) BEFORE the dispatch: in polar, rusanov AND
   // hll are wired (hll since the rest of the audit); HLLC/Roe and unknown tags raise the polar
@@ -330,8 +294,8 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
       return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",
                               [&](auto tag) {
                                 using L = typename decltype(tag)::type;
-                                return build_block_polar<L, RusanovFlux>(m, ctx, recon_prim, method,
-                                                                         wall_radial, pos_floor);
+                                return build_block_polar<L, RusanovFlux>(
+                                    m, ctx, recon_prim, wall_radial, pos_floor);
                               });
     case RiemannRouteId::kHll:
       // GATE IDENTICAL TO THE CARTESIAN ONE (block_builder.hpp make_block, 'hll' branch): HLL is
@@ -346,8 +310,8 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
         return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",
                                 [&](auto tag) {
                                   using L = typename decltype(tag)::type;
-                                  return build_block_polar<L, HLLFlux>(m, ctx, recon_prim, method,
-                                                                       wall_radial, pos_floor);
+                                  return build_block_polar<L, HLLFlux>(
+                                      m, ctx, recon_prim, wall_radial, pos_floor);
                                 });
       } else {
         throw std::runtime_error(
@@ -371,7 +335,8 @@ std::function<Real(const MultiFab&)> make_max_speed_polar(const Model& m, const 
 namespace detail {
 /// Optional STEP BOUND closures of the POLAR block (StabilityPolicy, audit wave 3):
 /// same device reductions as the cartesian ones (POINTWISE kernels with no geometry assumption -- the
-/// geometry enters only through the physical step h of the stepper, min(dr, r_min*dtheta)). NAMED
+/// geometry enters only through the physical step h of the Program CFL service,
+/// min(dr, r_min*dtheta)). NAMED
 /// functors (same cross-TU device contract as PolarMaxSpeed).
 template <class Model>
 struct PolarStabilitySpeed {
@@ -405,7 +370,7 @@ std::function<Real(const MultiFab&)> make_cfl_speed_polar(const Model& m, const 
 }
 
 /// Max source frequency of the POLAR block (HasSourceFrequency trait); EMPTY without the trait (the
-/// stepper does not query it, historical step policy).
+/// Program CFL service does not query it, historical step policy).
 template <class Model>
 std::function<Real(const MultiFab&)> make_source_frequency_polar(const Model& m,
                                                                  const MultiFab* aux) {

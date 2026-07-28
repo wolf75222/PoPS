@@ -12,15 +12,12 @@
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb (cut-cell EB) + detail::DiscLevelSet (T5-PR2)
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>
-#include <pops/numerics/time/integrators/time_steppers.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann, limiter_n_ghost)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (shared lightweight header)
 #include <pops/runtime/numerical_defaults.hpp>
 
-#include <cmath>  // std::sqrt (ARS(2,2,2) coefficients: gamma = 1 - 1/sqrt(2), host)
 #include <functional>
 #include <memory>  // std::shared_ptr (shared scratch of the HLL wave speed cache, opt-in)
 #include <stdexcept>
@@ -30,7 +27,7 @@
 #include <vector>
 
 /// @file
-/// @brief Builds the closures of a block (time advance + residual + Poisson contribution) from a
+/// @brief Builds the spatial closures of a block (residual + Poisson contribution) from a
 ///        COMPILED model (CompositeModel) and a grid context.
 ///
 /// This code used to live in System::Impl; it is extracted into a header so that the SAME template
@@ -276,135 +273,6 @@ struct BoundaryJvpInto {
                   const MultiFab& V, MultiFab& J,
                   const PreparedGridBoundarySession& boundary) const {
     apply_grid_boundary_jvp(U, V, J, boundary, point);
-  }
-};
-
-/// EXPLICIT advance: n substeps of the @c Stepper stepper (SSPRK2 by default, SSPRK3 optional) on the
-/// transport+source residual. The RK scheme is a template parameter (NAMED FUNCTOR from the core:
-/// SSPRK2Step / SSPRK3Step) -> same device-clean contract as SSPRK2Step. SSPRK2 reproduces the
-/// historical advance exactly (bit-identical).
-template <class Limiter, class Flux, class Model, class Stepper = SSPRK2Step>
-struct AdvanceExplicit {
-  Model m;
-  GridContext ctx;
-  bool recon_prim;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  std::shared_ptr<MultiFab> ws_cache;  ///< HLL wave speed cache (opt-in); nullptr -> per-face path
-  Real weno_eps = kWenoEpsilon;        ///< ADC-645: WENO-Z regulariser (default = historical)
-  void operator()(MultiFab& U, Real dt, int n) const {
-    const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEval<Limiter, Flux, Model> rhs{m,         &ctx,     recon_prim,
-                                                 pos_floor, ws_cache, weno_eps};
-    run_explicit_substeps<Stepper>(rhs, U, h, n);
-  }
-};
-
-/// IMEX advance: per substep, EXPLICIT half-step (source-free transport) + stiff IMPLICIT source.
-/// @c mask: implicit mask CARRIED BY THE BLOCK (overrides the model default is_implicit), resolved
-/// once when the block is added against its variable names/roles. Inactive mask (default) ->
-/// backward_euler falls back on model_is_implicit -> advance bit-identical to the historical one.
-template <class Limiter, class Flux, class Model>
-struct AdvanceImex {
-  Model m;
-  GridContext ctx;
-  bool recon_prim;
-  ImplicitMask<Model::n_vars> mask{};
-  NewtonOptions nopts{};            // block Newton options (defaults = historical: 2 iters, 1e-7)
-  NewtonReport* nreport = nullptr;  // OPT-IN diagnostics (stable address, owned by System::Impl)
-  Real pos_floor = Real(0);         ///< Zhang-Shu positivity limiter (<= 0: inactive)
-  Real weno_eps = kWenoEpsilon;     ///< ADC-645: WENO-Z regulariser (default = historical)
-  void operator()(MultiFab& U, Real dt, int n) const {
-    const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>> rhs{
-        SourceFreeModel<Model>{m}, &ctx, recon_prim, pos_floor, {}, weno_eps};
-    if (nreport)
-      nreport->reset();  // report AGGREGATED over the n substeps of THIS advance
-    for (int s = 0; s < n; ++s) {
-      ForwardEuler{}.take_step(rhs, U, h);  // explicit half-step: source-free transport
-      backward_euler_source(m, *ctx.aux, U, h, nopts, mask,
-                            nreport);  // implicit source (stiff relaxation)
-    }
-  }
-};
-
-/// IMEX-RK ARS(2,2,2) advance (Ascher, Ruuth, Spiteri 1997; "Implicit-explicit Runge-Kutta methods
-/// for time-dependent partial differential equations", Appl. Numer. Math. 25): explicit transport
-/// (L = -div F) coupled to the stiff implicit source (per-cell LOCAL backward-Euler), ORDER 2. It is a
-/// family DISTINCT from and PARALLEL to AdvanceImex (which remains the default order-1 backward-Euler,
-/// UNTOUCHED and bit-identical). Coefficients: gamma = 1 - 1/sqrt(2), delta = 1 - 1/(2 gamma).
-///
-/// Tableaux (stiffly accurate, implicit part SDIRK; c = [0, gamma, 1] for both):
-///   explicit: A_E = [[0, 0, 0], [gamma, 0, 0], [delta, 1-delta, 0]],  b_E = [delta, 1-delta, 0]
-///   implicit: A_I = [[0, 0, 0], [0, gamma, 0], [0, 1-gamma, gamma]],  b_I = [0, 1-gamma, gamma]
-///
-/// b_E == last row of A_E and b_I == last row of A_I -> STIFFLY ACCURATE scheme -> the final solution
-/// IS the last stage (U^{n+1} = U^(3)), no final recombination. With L = the SourceFreeModel transport
-/// and S = the source of the full model, the per-stage recurrence is:
-///   U^(1) = U^n                                        (first row of A_I is zero: no solve, S^(1) unused)
-///   L1    = L(U^n)
-///   U^(2) = U^n + dt*gamma*L1 + dt*gamma*S(U^(2))       (implicit solve: backward_euler_source at step
-///                                                        dt*gamma on the base U^n + dt*gamma*L1)
-///   L2    = L(U^(2))
-///   U^(3) = U^n + dt*delta*L1 + dt*(1-delta)*L2 + dt*(1-gamma)*S^(2) + dt*gamma*S(U^(3))
-///   U^{n+1} = U^(3)
-/// The term dt*gamma*S^(2) is NOT re-evaluated: by construction of the stage-2 solve,
-/// dt*gamma*S^(2) = U^(2) - base2 (the solve increment), so dt*(1-gamma)*S^(2) = ((1-gamma)/gamma) *
-/// (U^(2) - base2). NO extra source kernel: we REUSE BlockRhsEval<SourceFreeModel> (transport, SAME
-/// mechanism as the explicit half-step of AdvanceImex), backward_euler_source (local implicit solve)
-/// and saxpy/lincomb (stages). Device-clean (no new kernel).
-///
-/// FULLY IMPLICIT SOURCE: the partial IMEX mask is NOT wired here (the consistency relation
-/// dt*gamma*S^(2) = U^(2) - base2 assumes a homogeneous stage solve; a per-component forward-backward
-/// treatment would mix the explicit/implicit tableaux). System::add_block therefore rejects
-/// implicit_vars/implicit_roles with time='imexrk_ars222'. The Newton options (nopts), on the other
-/// hand, are carried through: they parametrize BOTH implicit stage solves.
-///
-/// The stage MultiFabs are allocated ONCE per advance (outside the substep loop): Un (U^n), L1/L2
-/// (transport residuals), base2 (stage-2 base, re-read at stage 3) without ghosts (read on valid
-/// cells); work (stage state) with the ghosts of U (it is passed to the transport residual).
-template <class Limiter, class Flux, class Model>
-struct AdvanceImexRkArs222 {
-  Model m;
-  GridContext ctx;
-  bool recon_prim;
-  NewtonOptions nopts{};            // Newton options of the stage solves (defaults = historical)
-  NewtonReport* nreport = nullptr;  // OPT-IN diagnostics (stable address, owned by System::Impl)
-  Real pos_floor = Real(0);         ///< Zhang-Shu positivity limiter (<= 0: inactive)
-  Real weno_eps = kWenoEpsilon;     ///< ADC-645: WENO-Z regulariser (default = historical)
-  void operator()(MultiFab& U, Real dt, int n) const {
-    const Real h = dt / static_cast<Real>(n);
-    const Real gamma = Real(1) - Real(1) / std::sqrt(Real(2));
-    const Real delta = Real(1) - Real(1) / (Real(2) * gamma);
-    const Real cS2 = (Real(1) - gamma) / gamma;  // factor of (U^(2) - base2) at stage 3
-    const ImplicitMask<Model::n_vars> mask{};    // FULLY implicit source (inactive mask)
-    // Source-free transport residual (L = -div F): SAME mechanism as the explicit half-step of AdvanceImex.
-    const BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>> rhs{
-        SourceFreeModel<Model>{m}, &ctx, recon_prim, pos_floor, {}, weno_eps};
-    const int nc = U.ncomp();
-    MultiFab Un(U.box_array(), U.dmap(), nc, 0);             // U^n
-    MultiFab L1(U.box_array(), U.dmap(), nc, 0);             // L(U^n)
-    MultiFab L2(U.box_array(), U.dmap(), nc, 0);             // L(U^(2))
-    MultiFab base2(U.box_array(), U.dmap(), nc, 0);          // U^n + dt*gamma*L1
-    MultiFab work(U.box_array(), U.dmap(), nc, U.n_grow());  // stage state (passed to transport)
-    if (nreport)
-      nreport->reset();  // report AGGREGATED over the substeps AND the 2 stage solves
-    for (int s = 0; s < n; ++s) {
-      // Stage 1: U^(1) = U^n; L1 = L(U^n).
-      lincomb(Un, Real(1), U, Real(0), U);  // Un = U^n (valid cells)
-      rhs(U, L1);                           // L1 = L(U^n)  (fill_ghosts(U) + assemble_rhs)
-      // Stage 2: U^(2) = base2 + dt*gamma*S(U^(2)),  base2 = U^n + dt*gamma*L1.
-      lincomb(base2, Real(1), Un, h * gamma, L1);     // base2 = U^n + dt*gamma*L1
-      lincomb(work, Real(1), base2, Real(0), base2);  // work = base2
-      backward_euler_source(m, *ctx.aux, work, h * gamma, nopts, mask, nreport);  // work = U^(2)
-      rhs(work, L2);                                                              // L2 = L(U^(2))
-      // Stage 3: U <- base3 = U^n + dt*delta*L1 + dt*(1-delta)*L2 + ((1-gamma)/gamma)*(U^(2) - base2).
-      lincomb(U, Real(1), Un, h * delta, L1);  // U = U^n + dt*delta*L1
-      saxpy(U, h * (Real(1) - delta), L2);     // + dt*(1-delta)*L2
-      saxpy(U, cS2, work);                     // + ((1-gamma)/gamma)*U^(2)
-      saxpy(U, -cS2, base2);                   // - ((1-gamma)/gamma)*base2  -> U = base3
-      backward_euler_source(m, *ctx.aux, U, h * gamma, nopts, mask,
-                            nreport);  // U = U^(3) = U^{n+1}
-    }
   }
 };
 
@@ -664,143 +532,13 @@ struct GeometryProgramCore {
   void operator()(MultiFab& U, MultiFab& R) const { eval.eval_program_core(U, R); }
 };
 
-/// MASKED EXPLICIT advance: n substeps of the @c Stepper stepper on the MASKED transport residual.
-/// Mimics AdvanceExplicit exactly (same RK math, same limiter / flux): only the residual changes.
-template <class Limiter, class Flux, class Model, class Stepper = SSPRK2Step>
-struct AdvanceExplicitMasked {
-  Model m;
-  GridContext ctx;
-  const MultiFab* mask;
-  bool recon_prim;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  Real weno_eps = kWenoEpsilon;
-  void operator()(MultiFab& U, Real dt, int n) const {
-    const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalMasked<Limiter, Flux, Model> rhs{m,          ctx,       mask,
-                                                       recon_prim, pos_floor, weno_eps};
-    run_explicit_substeps_active<Stepper>(rhs, U, h, n, *mask);
-  }
-};
-
-/// CUT-CELL / EB EXPLICIT advance: n substeps of the @c Stepper stepper on the EB transport residual.
-/// Mimics AdvanceExplicit exactly: only the residual (assemble_rhs_eb) changes.
-template <class Limiter, class Flux, class Model, class Stepper = SSPRK2Step>
-struct AdvanceExplicitEb {
-  Model m;
-  GridContext ctx;
-  const MultiFab* inverse_volume_fraction;
-  bool recon_prim;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
-  Real weno_eps = kWenoEpsilon;
-  void operator()(MultiFab& U, Real dt, int n) const {
-    const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalEb<Limiter, Flux, Model> rhs{m,          ctx,       inverse_volume_fraction,
-                                                   recon_prim, pos_floor, weno_eps};
-    run_explicit_substeps_active<Stepper>(rhs, U, h, n, *ctx.domain_mask);
-  }
-};
-
-/// MASKED IMEX advance: MASKED EXPLICIT half-step (source-free transport) + stiff IMPLICIT source.
-/// Mimics AdvanceImex: the transport (forward-Euler) reads the MASKED source-free residual; the
-/// implicit source uses the same prepared active-cell policy.  Inactive storage therefore remains
-/// unchanged through both halves of the IMEX step.
-template <class Limiter, class Flux, class Model>
-struct AdvanceImexMasked {
-  Model m;
-  GridContext ctx;
-  const MultiFab* mask;
-  bool recon_prim;
-  ImplicitMask<Model::n_vars> mask_impl{};
-  NewtonOptions nopts{};
-  NewtonReport* nreport = nullptr;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive)
-  Real weno_eps = kWenoEpsilon;
-  void operator()(MultiFab& U, Real dt, int n) const {
-    const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalMasked<Limiter, Flux, SourceFreeModel<Model>> rhs{
-        SourceFreeModel<Model>{m}, ctx, mask, recon_prim, pos_floor, weno_eps};
-    if (nreport)
-      nreport->reset();
-    ForwardEuler::Scratch scratch(U);
-    for (int s = 0; s < n; ++s) {
-      ForwardEuler{}.take_step_active(rhs, U, h, scratch, *mask);
-      backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport, mask);
-    }
-  }
-};
-
-/// CUT-CELL / EB IMEX advance: EB EXPLICIT half-step (source-free transport) + stiff IMPLICIT source.
-/// Mimics AdvanceImex: transport via assemble_rhs_eb and implicit source restricted to the same
-/// prepared active-cell set.
-template <class Limiter, class Flux, class Model>
-struct AdvanceImexEb {
-  Model m;
-  GridContext ctx;
-  const MultiFab* inverse_volume_fraction;
-  bool recon_prim;
-  ImplicitMask<Model::n_vars> mask_impl{};
-  NewtonOptions nopts{};
-  NewtonReport* nreport = nullptr;
-  Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive)
-  Real weno_eps = kWenoEpsilon;
-  void operator()(MultiFab& U, Real dt, int n) const {
-    const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalEb<Limiter, Flux, SourceFreeModel<Model>> rhs{
-        SourceFreeModel<Model>{m}, ctx, inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
-    if (nreport)
-      nreport->reset();
-    ForwardEuler::Scratch scratch(U);
-    for (int s = 0; s < n; ++s) {
-      ForwardEuler{}.take_step_active(rhs, U, h, scratch, *ctx.domain_mask);
-      backward_euler_source(m, *ctx.aux, U, h, nopts, mask_impl, nreport, ctx.domain_mask);
-    }
-  }
-};
 }  // namespace detail
 
-/// Builds the device-clean POD implicit mask of an N-variable model from a list of component indices
-/// (empty -> INACTIVE mask -> model default, bit-identical). Any index outside [0, N) is ignored here
-/// (the validation / clear message lives on the System::add_block side, which resolves names/roles into
-/// indices and throws on an absent name/role).
-template <int N>
-POPS_COLD_FN ImplicitMask<N> make_implicit_mask(const std::vector<int>& implicit_components) {
-  ImplicitMask<N> mask;
-  if (implicit_components.empty())
-    return mask;  // inactive: model default
-  mask.active = true;
-  for (int c : implicit_components)
-    if (c >= 0 && c < N)
-      mask.flag[c] = true;
-  return mask;
-}
-
-/// Closures (advance + residual) for a frozen spatial scheme (Limiter x Flux). The RK math comes from
-/// the core TimeStepper: in explicit, SSPRK2 (default), SSPRK3 or ForwardEuler ("euler", order 1,
-/// fidelity to first-order references -- validation, never default) according to @p method;
-/// ForwardEuler + backward_euler_source in IMEX. The closures are NAMED FUNCTORS (cf. namespace detail)
-/// and not lambdas: the add_compiled_model path (first instantiation from an external TU) then emits
-/// cleanly under nvcc. @p method affects ONLY the explicit advance (IMEX keeps its ForwardEuler
-/// half-step + implicit source); canonical route "explicit" selects SSPRK2. In IMEX
-/// (@p imex), @p method "imexrk_ars222" selects the IMEX-RK ARS(2,2,2) family (order 2, advance
-/// PARALLEL to AdvanceImex, full cartesian only); any other value keeps the historical backward-Euler
-/// IMEX (order 1, bit-identical).
-/// @p implicit_components: indices of the conserved variables to handle IMPLICITLY in the IMEX source
-/// (mask CARRIED BY THE BLOCK, overrides the model default). EMPTY (default) -> inactive mask -> model
-/// default is_implicit -> bit-identical. No effect outside IMEX (the explicit has no implicit step).
-/// The optional EMBEDDED-BOUNDARY transport advances (advance_masked / advance_eb) are built when @p ctx
-/// carries the System prepared geometry (ctx.domain_mask / ctx.eb_inverse_volume_fraction);
-/// otherwise they stay empty for the low-level engine. The public Program path never falls back to
-/// Cartesian transport: capability validation and the geometry-qualified residual selector reject a
-/// missing provider explicitly. STABLE addresses of Impl members, read by pointer at step time ->
-/// block and level-set installation order is indifferent. The
-/// embedded-boundary advances MIMIC advance (same RK / IMEX, same limiter / flux); only the transport
-/// residual is dispatched (assemble_rhs_masked / _eb).
+/// Spatial closures for a frozen scheme (Limiter x Flux). Time integration, substeps and implicit
+/// solves belong exclusively to the installed ProgramGraph; this builder materializes only residual,
+/// boundary, projection and diagnostic primitives.
 template <class Limiter, class Flux, class Model>
-POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, bool imex,
-                                       bool recon_prim, const std::string& method = "explicit",
-                                       const std::vector<int>& implicit_components = {},
-                                       const NewtonOptions& newton_opts = {},
-                                       NewtonReport* newton_report = nullptr,
+POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, bool recon_prim,
                                        Real pos_floor = Real(0), bool wave_speed_cache = false,
                                        Real weno_eps = kWenoEpsilon) {
   const MultiFab* domain_mask = ctx.domain_mask;
@@ -817,81 +555,12 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       supports_embedded_boundary_reconstruction_v<Limiter> && !DiffusiveModel<Model>;
   if constexpr (supports_embedded_boundary)
     bc.supported_geometry_modes = kAllGeometrySupport;
-  const ImplicitMask<Model::n_vars> impl_mask =
-      make_implicit_mask<Model::n_vars>(implicit_components);
-  // SHARED scratch of the HLL wave speed cache (opt-in): a single MultiFab for the explicit advance and
-  // rhs_into (never called concurrently). nullptr when the option is OFF -> BlockRhsEval keeps the
-  // per-face path (bit-identical). Allocated at the real layout on the first call (cf. BlockRhsEval).
+  // SHARED scratch of the HLL wave speed cache (opt-in): a single MultiFab for the residual family
+  // (never called concurrently by one Program stage). nullptr when the option is OFF -> BlockRhsEval
+  // keeps the per-face path (bit-identical). Allocated at the real layout on the first call
+  // (cf. BlockRhsEval).
   std::shared_ptr<MultiFab> ws_cache =
       wave_speed_cache ? std::make_shared<MultiFab>() : std::shared_ptr<MultiFab>{};
-  // Decode @p method ONCE through the typed TimeRouteId (ADC-641): the imex branch keeps its
-  // imexrk_ars222-vs-historical split and the explicit branch is a switch; both are bit-identical to the
-  // old method=="..." string ladder. The canonical "explicit" route decodes to SSPRK2; legacy
-  // scheme aliases are rejected by parse_time_route rather than silently normalized.
-  const TimeRouteId time_route = parse_time_route(method, "System");
-  if (time_route == TimeRouteId::kImexRkArs222)
-    bc.supported_geometry_modes = kCartesianGeometrySupport;
-  if (imex) {
-    if (time_route == TimeRouteId::kImexRkArs222) {
-      // IMEX-RK FAMILY, ARS(2,2,2) scheme (order 2): advance PARALLEL to AdvanceImex, FULLY implicit
-      // source (impl_mask ignored: the facade already rejects a partial mask with this scheme). FULL
-      // CARTESIAN ONLY: we do NOT build an embedded-boundary advance (advance_masked / advance_eb stay
-      // empty) -> Program lowering must reject an embedded-boundary geometry mode explicitly, never
-      // select a silent Cartesian advance.
-      bc.advance = detail::AdvanceImexRkArs222<Limiter, Flux, Model>{
-          m, ctx, recon_prim, newton_opts, newton_report, pos_floor, weno_eps};
-    } else {
-      // Historical IMEX (local backward-Euler, order 1): UNTOUCHED, bit-identical.
-      bc.advance = detail::AdvanceImex<Limiter, Flux, Model>{
-          m, ctx, recon_prim, impl_mask, newton_opts, newton_report, pos_floor, weno_eps};
-      if (supports_embedded_boundary && domain_mask)
-        bc.advance_masked = detail::AdvanceImexMasked<Limiter, Flux, Model>{
-            m,           ctx,           domain_mask, recon_prim, impl_mask,
-            newton_opts, newton_report, pos_floor,   weno_eps};
-      if (supports_embedded_boundary && eb_inverse_volume_fraction)
-        bc.advance_eb = detail::AdvanceImexEb<Limiter, Flux, Model>{m,
-                                                                    ctx,
-                                                                    eb_inverse_volume_fraction,
-                                                                    recon_prim,
-                                                                    impl_mask,
-                                                                    newton_opts,
-                                                                    newton_report,
-                                                                    pos_floor,
-                                                                    weno_eps};
-    }
-  } else if (time_route == TimeRouteId::kForwardEuler) {
-    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, ForwardEuler>{
-        m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
-    if (supports_embedded_boundary && domain_mask)
-      bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, ForwardEuler>{
-          m, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
-    if (supports_embedded_boundary && eb_inverse_volume_fraction)
-      bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, ForwardEuler>{
-          m, ctx, eb_inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
-  } else if (time_route == TimeRouteId::kSsprk3) {
-    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{
-        m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
-    if (supports_embedded_boundary && domain_mask)
-      bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK3Step>{
-          m, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
-    if (supports_embedded_boundary && eb_inverse_volume_fraction)
-      bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK3Step>{
-          m, ctx, eb_inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
-  } else if (time_route == TimeRouteId::kExplicitSsprk2) {
-    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{
-        m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
-    if (supports_embedded_boundary && domain_mask)
-      bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK2Step>{
-          m, ctx, domain_mask, recon_prim, pos_floor, weno_eps};
-    if (supports_embedded_boundary && eb_inverse_volume_fraction)
-      bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK2Step>{
-          m, ctx, eb_inverse_volume_fraction, recon_prim, pos_floor, weno_eps};
-  } else {
-    // kImex reaches here only when imex==false (a compiled Program's hyperbolic stage never asks for the
-    // implicit source); every other explicit route was handled above.
-    throw std::runtime_error("System: unknown explicit time method '" + method +
-                             "' (explicit|euler|ssprk3)");
-  }
   bc.rhs_into =
       detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
   bc.rhs_at_point =
@@ -901,8 +570,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   // flux / ghost / geometry / positivity handling is bit-identical to rhs_into -- only the model's
   // default/composite source is dropped. A compiled time Program's hyperbolic stage reads it so a
   // Lie/Strang split assembles "flux but no source" without the default source leaking in (spec
-  // criterion 17). NO HLL cache: the explicit/IMEX advances and rhs_into share ws_cache (never
-  // concurrent), but a flux-only RHS can interleave with them, so it keeps the per-face path. The
+  // criterion 17). NO HLL cache: the full and core residuals share ws_cache (never concurrent), but a
+  // flux-only RHS can interleave with them, so it keeps the per-face path. The
   // residual is identical either way with limiter='none'; the HLL wave-speed cache -- rejected on the
   // aot/production backends compiled Programs use -- is the only path where cached cell-center speeds
   // differ from the per-face reconstruction, so for a compiled Program the cache is a perf scratch,
@@ -972,9 +641,9 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
     bc.source_only_masked = detail::SourceIntoMasked<Model>{m, ctx, domain_mask};
   bc.hotspot =
       detail::HotspotFn<Model>{m, ctx};  // dt_hotspot diagnostic (ADC-182), off the hot path
-  // PROJECTION PONCTUELLE post-pas (ADC-177) : fabriquee SEULEMENT si le modele declare le trait
-  // (HasPointwiseProjection, cf. core/physical_model.hpp) ; vide sinon -> le stepper ne l'interroge
-  // jamais (chemin historique bit-identique). Partagee par add_block ET add_compiled_model (les deux
+  // PROJECTION PONCTUELLE Program (ADC-177) : fabriquee SEULEMENT si le modele declare le trait
+  // (HasPointwiseProjection, cf. core/physical_model.hpp) ; vide sinon. Partagee par add_block ET
+  // add_compiled_model (les deux
   // passent par make_block) : un .so 'production' la transporte donc nativement.
   if constexpr (HasPointwiseProjection<Model>) {
     bc.project = detail::PointwiseProject<Model>{m, ctx};
@@ -989,10 +658,6 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
 /// "weno5" = WENO5-Z reconstruction (order 5, 5-point stencil, 3 ghosts); spatial_operator routes
 /// through the policy's explicit stencil protocol (the caller allocates its declared ghost radius,
 /// cf. block_n_ghost).
-/// @p method chooses the EXPLICIT advance (explicit/SSPRK2 by default, ssprk3 | euler optional);
-/// no effect in IMEX.
-/// @p implicit_components: IMEX implicit mask carried by the block (indices; empty = model default,
-/// bit-identical). cf. build_block.
 // Per-flux limiter ladders, split out of make_block (ADC-335) so each flux's build_block leaves can be
 // instantiated in their OWN translation unit (python/system_compressible_<flux>.cpp). Each body is the
 // VERBATIM content of make_block's old `if (riem == "<flux>")` branch (same capability if-constexpr,
@@ -1002,28 +667,21 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
 // make_block dispatcher (kept) and, for the per-flux seam path, to the caller (System).
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_rusanov(const Model& m, const std::string& lim,
-                                              const GridContext& ctx, bool imex, bool recon_prim,
-                                              const std::string& method,
-                                              const std::vector<int>& implicit_components,
-                                              const NewtonOptions& newton_opts,
-                                              NewtonReport* newton_report, Real pos_floor,
+                                              const GridContext& ctx, bool recon_prim,
+                                              Real pos_floor,
                                               Real weno_eps = kWenoEpsilon) {
   return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
     using L = typename decltype(tag)::type;
-    return build_block<L, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                       newton_opts, newton_report, pos_floor,
+    return build_block<L, RusanovFlux>(m, ctx, recon_prim, pos_floor,
                                        /*wave_speed_cache=*/false, weno_eps);
   });
 }
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim,
-                                          const GridContext& ctx, bool imex, bool recon_prim,
-                                          const std::string& method,
-                                          const std::vector<int>& implicit_components,
-                                          const NewtonOptions& newton_opts,
-                                          NewtonReport* newton_report, Real pos_floor,
-                                          bool wave_speed_cache, Real weno_eps = kWenoEpsilon) {
+                                          const GridContext& ctx, bool recon_prim, Real pos_floor,
+                                          bool wave_speed_cache,
+                                          Real weno_eps = kWenoEpsilon) {
   // HLL (Harten-Lax-van Leer, 2 waves): less diffusive than Rusanov (dissipation ~ signed |sR-sL|
   // instead of symmetric 2*max|v|), but does NOT require pressure (unlike HLLC/Roe) -- only SIGNED
   // wave speeds model.wave_speeds. Available as soon as a model exposes its signed eigenvalues (the
@@ -1040,9 +698,7 @@ POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim
     // flux (BlockRhsEval guarded by Flux == HLLFlux). rusanov/hllc/roe ignore it.
     return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
       using L = typename decltype(tag)::type;
-      return build_block<L, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                     newton_opts, newton_report, pos_floor, wave_speed_cache,
-                                     weno_eps);
+      return build_block<L, HLLFlux>(m, ctx, recon_prim, pos_floor, wave_speed_cache, weno_eps);
     });
   } else {
     throw std::runtime_error(
@@ -1054,11 +710,7 @@ POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& lim,
-                                           const GridContext& ctx, bool imex, bool recon_prim,
-                                           const std::string& method,
-                                           const std::vector<int>& implicit_components,
-                                           const NewtonOptions& newton_opts,
-                                           NewtonReport* newton_report, Real pos_floor,
+                                           const GridContext& ctx, bool recon_prim, Real pos_floor,
                                            Real weno_eps = kWenoEpsilon) {
   // HLLC (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasHLLCStructure (contact_speed +
   // hllc_star_state). The native Euler brick now provides the capability, so the canonical Euler 2D
@@ -1068,8 +720,7 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
   if constexpr (HasHLLCStructure<Model>) {
     return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
       using L = typename decltype(tag)::type;
-      return build_block<L, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                      newton_opts, newton_report, pos_floor,
+      return build_block<L, HLLCFlux>(m, ctx, recon_prim, pos_floor,
                                       /*wave_speed_cache=*/false, weno_eps);
     });
   } else {
@@ -1083,11 +734,8 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::string& lim,
-                                                 const GridContext& ctx, bool imex, bool recon_prim,
-                                                 const std::string& method,
-                                                 const std::vector<int>& implicit_components,
-                                                 const NewtonOptions& newton_opts,
-                                                 NewtonReport* newton_report, Real pos_floor,
+                                                 const GridContext& ctx, bool recon_prim,
+                                                 Real pos_floor,
                                                  Real weno_eps = kWenoEpsilon) {
   // EXPLICIT canonical Euler 2D HLLC (ADC-590): the euler_hllc route pins EulerHLLCFlux2D directly.
   // Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true Euler brick
@@ -1096,8 +744,7 @@ POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::stri
                 requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
     return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
       using L = typename decltype(tag)::type;
-      return build_block<L, EulerHLLCFlux2D>(m, ctx, imex, recon_prim, method, implicit_components,
-                                             newton_opts, newton_report, pos_floor,
+      return build_block<L, EulerHLLCFlux2D>(m, ctx, recon_prim, pos_floor,
                                              /*wave_speed_cache=*/false, weno_eps);
     });
   } else {
@@ -1110,11 +757,7 @@ POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::stri
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim,
-                                          const GridContext& ctx, bool imex, bool recon_prim,
-                                          const std::string& method,
-                                          const std::vector<int>& implicit_components,
-                                          const NewtonOptions& newton_opts,
-                                          NewtonReport* newton_report, Real pos_floor,
+                                          const GridContext& ctx, bool recon_prim, Real pos_floor,
                                           Real weno_eps = kWenoEpsilon) {
   // ROE (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasRoeDissipation (full
   // d = |A_roe| dU). The native Euler brick now provides the capability, so the canonical Euler 2D
@@ -1124,8 +767,7 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
   if constexpr (HasRoeDissipation<Model>) {
     return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
       using L = typename decltype(tag)::type;
-      return build_block<L, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components,
-                                     newton_opts, newton_report, pos_floor,
+      return build_block<L, RoeFlux>(m, ctx, recon_prim, pos_floor,
                                      /*wave_speed_cache=*/false, weno_eps);
     });
   } else {
@@ -1139,11 +781,8 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::string& lim,
-                                                const GridContext& ctx, bool imex, bool recon_prim,
-                                                const std::string& method,
-                                                const std::vector<int>& implicit_components,
-                                                const NewtonOptions& newton_opts,
-                                                NewtonReport* newton_report, Real pos_floor,
+                                                const GridContext& ctx, bool recon_prim,
+                                                Real pos_floor,
                                                 Real weno_eps = kWenoEpsilon) {
   // EXPLICIT canonical ideal-gas Euler 2D Roe (ADC-590): the euler_roe route pins EulerRoeFlux2D
   // directly. Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true
@@ -1152,8 +791,7 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
                 requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
     return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
       using L = typename decltype(tag)::type;
-      return build_block<L, EulerRoeFlux2D>(m, ctx, imex, recon_prim, method, implicit_components,
-                                            newton_opts, newton_report, pos_floor,
+      return build_block<L, EulerRoeFlux2D>(m, ctx, recon_prim, pos_floor,
                                             /*wave_speed_cache=*/false, weno_eps);
     });
   } else {
@@ -1166,11 +804,8 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
-                                      const std::string& riem, const GridContext& ctx, bool imex,
-                                      bool recon_prim, const std::string& method = "explicit",
-                                      const std::vector<int>& implicit_components = {},
-                                      const NewtonOptions& newton_opts = {},
-                                      NewtonReport* newton_report = nullptr,
+                                      const std::string& riem, const GridContext& ctx,
+                                      bool recon_prim,
                                       Real pos_floor = Real(0), bool wave_speed_cache = false,
                                       Real weno_eps = kWenoEpsilon) {
   // CENTRALIZED VALIDATION (registry dispatch_tags.hpp) BEFORE the dispatch: same tag acceptances /
@@ -1186,23 +821,17 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
   // The default is the defense-in-depth registry/dispatch guard (unreachable past validate_riemann).
   switch (parse_riemann_route(riem, "System")) {
     case RiemannRouteId::kRusanov:
-      return make_block_rusanov(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                                newton_opts, newton_report, pos_floor, weno_eps);
+      return make_block_rusanov(m, lim, ctx, recon_prim, pos_floor, weno_eps);
     case RiemannRouteId::kHll:
-      return make_block_hll(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
-                            newton_report, pos_floor, wave_speed_cache, weno_eps);
+      return make_block_hll(m, lim, ctx, recon_prim, pos_floor, wave_speed_cache, weno_eps);
     case RiemannRouteId::kHllc:
-      return make_block_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                             newton_opts, newton_report, pos_floor, weno_eps);
+      return make_block_hllc(m, lim, ctx, recon_prim, pos_floor, weno_eps);
     case RiemannRouteId::kRoe:
-      return make_block_roe(m, lim, ctx, imex, recon_prim, method, implicit_components, newton_opts,
-                            newton_report, pos_floor, weno_eps);
+      return make_block_roe(m, lim, ctx, recon_prim, pos_floor, weno_eps);
     case RiemannRouteId::kEulerHllc:
-      return make_block_euler_hllc(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                                   newton_opts, newton_report, pos_floor, weno_eps);
+      return make_block_euler_hllc(m, lim, ctx, recon_prim, pos_floor, weno_eps);
     case RiemannRouteId::kEulerRoe:
-      return make_block_euler_roe(m, lim, ctx, imex, recon_prim, method, implicit_components,
-                                  newton_opts, newton_report, pos_floor, weno_eps);
+      return make_block_euler_roe(m, lim, ctx, recon_prim, pos_floor, weno_eps);
   }
   throw_registry_dispatch_mismatch("System", "flux", riem);
 }
@@ -1301,8 +930,8 @@ std::function<Real(const MultiFab&)> make_max_speed(const Model& m, const GridCo
 }
 
 /// Closure of the block max source frequency (bound dt <= cfl * substeps / (stride * mu)). EMPTY (null
-/// std::function) if the model does not declare the trait -> the stepper ignores it (historical
-/// behavior).
+/// std::function) if the model does not declare the trait -> the Program CFL service ignores it
+/// (historical behavior).
 template <class Model>
 std::function<Real(const MultiFab&)> make_source_frequency(const Model& m, const GridContext& ctx) {
   if constexpr (HasSourceFrequency<Model>)
@@ -1312,7 +941,8 @@ std::function<Real(const MultiFab&)> make_source_frequency(const Model& m, const
 }
 
 /// Closure of the block min admissible step (bound dt <= stability_dt * substeps / stride, WITHOUT
-/// cfl). EMPTY if the model does not declare the trait -> ignored by the stepper (historical).
+/// cfl). EMPTY if the model does not declare the trait -> ignored by the Program CFL service
+/// (historical).
 template <class Model>
 std::function<Real(const MultiFab&)> make_stability_dt(const Model& m, const GridContext& ctx) {
   if constexpr (HasStabilityDt<Model>)

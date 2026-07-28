@@ -41,12 +41,11 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // (validate_newton_options, in implicit_stepper.hpp). Whether non-default options are ALLOWED
   // (the time='imex' gate below) stays here -- it differs from the AMR path.
   validate_newton_options(newton, "System::add_block");
-  // @p time carries the TREATMENT and, in explicit, the RK SCHEME: "explicit" = SSPRK2
+  // @p time carries the Program authoring treatment and, in explicit, the RK SCHEME: "explicit" = SSPRK2
   // (canonical default), "ssprk3" = SSPRK3 (order 3), "euler" = ForwardEuler (order 1, fidelity to
   // first-order references -- validation), "imex" = explicit transport + local backward-Euler implicit
   // stiff source (order 1), "imexrk_ars222" = IMEX-RK family scheme ARS(2,2,2)
-  // (order 2, distinct PARALLEL advance, Cartesian only). The RK math stays a CORE FUNCTOR
-  // (build_block). "imex" and "imexrk_ars222" share the @c imex flag; @c method distinguishes them.
+  // (order 2). The spatial builder does not decode or execute any of these methods.
   if (time != "explicit" && time != "ssprk3" && time != "euler" && time != "imex" &&
       time != "imexrk_ars222")
     throw std::runtime_error(
@@ -59,7 +58,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   const bool imexrk = (time == "imexrk_ars222");
   const bool imex = (time == "imex" || imexrk);  // both go through the implicit source step
   const bool recon_prim = (recon == "primitive");
-  // Wave speed cache (opt-in): only engages for the HLL flux and the explicit advance. Requesting it
+  // Wave speed cache (opt-in): only engages for the HLL residual. Requesting it
   // elsewhere would be SILENTLY without effect -> explicit error (no silent ignore). The polar path has
   // its own factory (make_block_polar) without this cache.
   if (wave_speed_cache) {
@@ -71,27 +70,25 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     if (imex)
       throw std::runtime_error("System::add_block : wave_speed_cache not supported with time='" +
                                time +
-                               "' (wired on the explicit advance ; use time "
+                               "' (the cached residual is not available to an implicit Program ; use time "
                                "'explicit'/'ssprk3'/'euler')");
     if (P->polar_)
       throw std::runtime_error(
           "System::add_block : wave_speed_cache not supported on the polar "
           "geometry (ring)");
-    // EMBEDDED-BOUNDARY transport mode already active: the stepper routes to advance_masked /
-    // advance_eb, which do not carry the cache -> requesting it would be WITHOUT EFFECT. Explicit
+    // EMBEDDED-BOUNDARY transport mode already active: its geometry-qualified residuals do not carry
+    // the cache -> requesting it would be WITHOUT EFFECT. Explicit
     // rejection (no silent ignore). The reverse order (set_disc_domain AFTER a cached block) is
     // rejected by set_disc_domain / set_geometry_mode.
     if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
       throw std::runtime_error(
           "System::add_block : wave_speed_cache incompatible with an active "
           "embedded-boundary transport mode (staircase/cutcell) ; the cache is only "
-          "wired on the full Cartesian advance (remove wave_speed_cache or mode='none')");
+          "wired on the full Cartesian residual (remove wave_speed_cache or mode='none')");
     P->ws_cache_block_ = true;  // a block requested the cache -> locks the switch to disc mode
   }
-  // The EXPLICIT RK scheme threaded to build_block: the ONE canonical spelling of the typed route
-  // (ADC-641), replacing the imexrk?...:(ssprk3?...) string ladder. build_block decodes it once via
-  // parse_time_route ("explicit" resolves to the SSPRK2 advance, "imex" is ignored past the imex flag),
-  // so the advance selected is bit-identical.
+  // Canonical Program-authoring spelling retained for reports and Program normalization. Spatial
+  // block construction never decodes it into a second time integrator.
   const std::string method = route_token(parse_time_route(time, "System::add_block"));
   // The implicit mask (implicit_vars / implicit_roles) applies only to the IMEX source step. Requesting
   // it in explicit is an ERROR (no silent ignore): the explicit has no implicit step.
@@ -154,7 +151,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
           "(ring : coupling by explicit local source, no stiff source to handle implicitly "
           "at this stage). Use 'explicit'/'ssprk3'.");
     const PolarGridContext pctx = P->grid_ctx_polar();
-    bb = detail::build_block_polar(model, limiter, riemann, pctx, recon_prim, method,
+    bb = detail::build_block_polar(model, limiter, riemann, pctx, recon_prim,
                                    static_cast<Real>(positivity_floor), &P->aux);
     // ADC-291: widen the shared aux to the polar block's read width (canonical extras AND model-named
     // extra[k]), mirroring the Cartesian branch below. ensure_aux_width keeps the aux ADDRESS captured
@@ -163,17 +160,11 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     P->ensure_aux_width(bb.aux_width);
   } else {
     const GridContext ctx = P->grid_ctx(name);
-    // Newton options of the IMEX implicit source (defaults = historical constants, bit-identical).
-    // The report lives in diagnostics_.newton_reports in a shared_ptr -> STABLE address captured by
-    // the closures even when the map reallocates at a later add_block. It is allocated for explicit
-    // diagnostics and for fail_policy warn/throw, because those policies must surface as structured
-    // report events rather than stderr text.
-    const NewtonOptions& nopts = newton;
-    NewtonReport* nreport = nullptr;
-    if (newton_diagnostics || nopts.fail_policy != NewtonOptions::kFailNone) {
+    // Preserve the requested diagnostic carrier until the typed implicit Program primitive owns and
+    // writes it. The spatial closures never capture this state.
+    if (newton_diagnostics || newton.fail_policy != NewtonOptions::kFailNone) {
       auto rep = std::make_shared<NewtonReport>();
       P->diagnostics_.newton_reports[name] = rep;
-      nreport = rep.get();
     }
     // Transport-axis seam (ADC-335): each per-transport TU (python/system_<transport>.cpp) runs the
     // SAME source/elliptic dispatch + make_block + makers as before (detail::build_block_for), but
@@ -186,13 +177,9 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
                                       limiter,
                                       riemann,
                                       ctx,
-                                      imex,
                                       recon_prim,
-                                      method,
                                       implicit_vars,
                                       implicit_roles,
-                                      nopts,
-                                      nreport,
                                       static_cast<Real>(positivity_floor),
                                       wave_speed_cache,
                                       static_cast<Real>(weno_epsilon)};
@@ -276,7 +263,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
                 std::move(add_poisson_rhs), substeps, evolve, stride);
   EffectiveBlockOptions block_options =
       make_system_block_options(name, model, "native_model", limiter, riemann, recon, time, method,
-                                imex, substeps, evolve, stride, implicit_vars, implicit_roles,
+                                substeps, evolve, stride, implicit_vars, implicit_roles,
                                 newton, newton_diagnostics, positivity_floor, wave_speed_cache,
                                 weno_epsilon);
   block_options.ncomp = ncomp;
@@ -536,8 +523,7 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
         "System::install_block: embedded-boundary block '" + name +
         "' has a native boundary component without a geometry-aware provider");
   P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), ncomp, substeps, evolve,
-                                stride, gamma, std::move(closures.advance),
-                                std::move(closures.rhs_into), std::move(max_speed),
+                                stride, gamma, std::move(closures.rhs_into), std::move(max_speed),
                                 std::move(poisson_rhs)});
   if (!P->block_state_identities_.empty()) {
     const auto state_route = P->block_state_identities_.find(name);
@@ -551,12 +537,6 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   P->sp.back().supported_geometry_modes = closures.supported_geometry_modes;
   P->sp.back().cons_vars = cons_vars;
   P->sp.back().prim_vars = prim_vars;
-  // EMBEDDED-BOUNDARY transport advances (project T5-PR3): retained for the low-level engine and
-  // empty unless build_block built them from prepared mask/inverse-kappa owners. They are not a
-  // facade fallback: the Program route selects geometry-qualified residuals and fails closed when
-  // their provider is absent.
-  P->sp.back().advance_masked = std::move(closures.advance_masked);
-  P->sp.back().advance_eb = std::move(closures.advance_eb);
   P->sp.back().hotspot = std::move(closures.hotspot);  // dt_hotspot diagnostic (ADC-182)
   // Projection ponctuelle post-pas (ADC-177) : vide sauf si le modele declare le trait
   // HasPointwiseProjection (make_block). Vide -> le stepper ne l'interroge pas (bit-identique).
@@ -651,9 +631,8 @@ std::array<double, 3> System::dt_hotspot(const std::string& name) {
   return {static_cast<double>(w), static_cast<double>(i), static_cast<double>(j)};
 }
 
-// Newton report (OPT-IN IMEX diagnostics) of the block: flat copy of the NewtonReport aggregated by the
-// LAST advance of the block (reset at the start of the advance by AdvanceImex*). Clear error if the block did
-// not enable newton_diagnostics (no silently empty report).
+// Newton report (OPT-IN IMEX diagnostics) of the block. The carrier is written only by an installed
+// typed implicit Program primitive; spatial block construction owns no implicit solve.
 System::SourceNewtonReport System::newton_report(const std::string& name) const {
   p_->index(name);  // raises if unknown block
   const NewtonReport* rp = p_->diagnostics_.newton_report_ptr(name);
@@ -698,10 +677,9 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
   opt.recon = recon;
   opt.time = time;
   // The canonical spelling of the typed route (ADC-641), replacing the if (time=="imex")...else "ssprk2"
-  // string ladder. Diagnostic-only (EffectiveBlockOptions.time_method); the advance is selected by the
-  // native loader from @p time itself.
+  // string ladder. Diagnostic-only (EffectiveBlockOptions.time_method); the installed Program route is
+  // normalized from @p time itself.
   opt.time_method = route_token(parse_time_route(time, "System::add_native_block"));
-  opt.imex = (time == "imex");
   opt.substeps = substeps;
   opt.stride = stride;
   opt.evolve = evolve;
@@ -734,7 +712,6 @@ void System::add_external_riemann_block(
   opt.recon = recon;
   opt.time = time;
   opt.time_method = route_token(parse_time_route(time, "System::add_external_riemann_block"));
-  opt.imex = time == "imex";
   opt.substeps = substeps;
   opt.stride = stride;
   opt.evolve = evolve;
@@ -1228,7 +1205,7 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
           throw std::runtime_error(
               "System::set_analytic_level_set : mode '" + mode +
               "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
-              "cache, only wired on the full Cartesian advance ; remove wave_speed_cache "
+              "cache, only wired on the full Cartesian residual ; remove wave_speed_cache "
               "or use mode='none')");
         if (geometry_mode != GeometryMode::None && P->blocks_.has_interfaces(0))
           throw std::runtime_error(
@@ -1353,19 +1330,19 @@ void System::set_geometry_mode(const std::string& mode) {
                      "set_geometry_mode");  // frozen once pops.bind completes (ADC-592)
   const GeometryMode gmode = parse_geometry_mode(mode, "System::set_geometry_mode");
   // An embedded-boundary mode (staircase/cutcell) only makes sense with a fixed domain: otherwise the
-  // stepper would fall back on the full transport (the mask / level set does not exist), a silent
+  // Program would fall back on the full transport (the mask / level set does not exist), a silent
   // footgun -> we reject.
   if (gmode != GeometryMode::None && !P->eb_set_)
     throw std::runtime_error(
         "System::set_geometry_mode : embedded-boundary mode '" + mode +
         "' requested without a fixed level-set domain ; install a level set first");
-  // wave_speed_cache (ADC-199) is not carried by the embedded-boundary advances -> explicit
+  // wave_speed_cache (ADC-199) is not carried by the embedded-boundary residuals -> explicit
   // rejection rather than a cache silently ignored in staircase/cutcell mode.
   if (gmode != GeometryMode::None && P->ws_cache_block_)
     throw std::runtime_error(
         "System::set_geometry_mode : mode '" + mode +
         "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
-        "cache, only wired on the full Cartesian advance ; remove wave_speed_cache "
+        "cache, only wired on the full Cartesian residual ; remove wave_speed_cache "
         "or use mode='none')");
   if (gmode != GeometryMode::None && P->blocks_.has_interfaces(0))
     throw std::runtime_error(

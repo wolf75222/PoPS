@@ -113,7 +113,7 @@ inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newt
 inline EffectiveBlockOptions make_system_block_options(
     const std::string& name, const ModelSpec& model, const std::string& route,
     const std::string& limiter, const std::string& riemann, const std::string& recon,
-    const std::string& time, const std::string& method, bool imex, int substeps, bool evolve,
+    const std::string& time, const std::string& method, int substeps, bool evolve,
     int stride, const std::vector<std::string>& implicit_vars,
     const std::vector<std::string>& implicit_roles, const NewtonOptions& newton,
     bool newton_diagnostics, double positivity_floor, bool wave_speed_cache, double weno_epsilon) {
@@ -129,7 +129,6 @@ inline EffectiveBlockOptions make_system_block_options(
   out.recon = recon;
   out.time = time;
   out.time_method = method;
-  out.imex = imex;
   out.substeps = substeps;
   out.stride = stride;
   out.evolve = evolve;
@@ -394,17 +393,17 @@ struct System::Impl {
 
   // --- compiled spatial schemes -------------------------------------------
   // Method-of-lines evaluator of a block (L/F/Model frozen): ghosts then R = -div F + S.
-  // Construction of the block closures (advance + residual + Poisson) moved to the header
+  // Construction of the block closures (residual + boundary + Poisson) moved to the header
   // (pops/runtime/block_builder.hpp: make_block / make_max_speed / make_poisson_rhs) so that the
   // production template path is instantiable outside this unit (AOT compilation of a
   // generated model). Here we only provide the grid context to pass to them.
   // GridContext: mesh + BC + aux + prepared embedded-boundary metrics. The metric owners are
   // STABLE-address MEMBERS -> the block closures read them by pointer at each step, so closure
-  // construction may precede level-set installation (as long as !eb_set_ the stepper does not select the
-  // embedded-boundary advance).
+  // construction may precede level-set installation (as long as !eb_set_ the Program does not select
+  // the embedded-boundary residual).
   GridContext grid_ctx(const std::string& block_name = {}) {
     // ADC-615: carry the resolved cut-cell / EB thresholds into the context so the EB transport
-    // advance (BlockRhsEvalEb -> assemble_rhs_eb) uses them; defaults = kEb* (bit-identical).
+    // residual (BlockRhsEvalEb -> assemble_rhs_eb) uses them; defaults = kEb* (bit-identical).
     std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
     if (!block_name.empty()) {
       auto found = boundary_plans_.find(block_name);

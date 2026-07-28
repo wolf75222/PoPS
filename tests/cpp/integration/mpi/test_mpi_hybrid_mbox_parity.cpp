@@ -97,7 +97,7 @@ static void residual_norms(const BoxArray& ba, const DistributionMapping& dm, co
   }
   GridContext ctx{dom, BCRec{}, geom, &aux};  // BCRec{} = tout periodique
   BlockClosures clo =
-      make_block(model, "minmod", "rusanov", ctx, /*imex=*/false, /*recon_prim=*/false);
+      make_block(model, "minmod", "rusanov", ctx, /*recon_prim=*/false);
   clo.rhs_into(U, R);  // fill_ghosts(U) [halos multi-box / MPI] + assemble_rhs (-div F + source)
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::fence();  // barriere avant lecture HOTE du residu device (no-op sous Serial)

@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 2
 
-COMPONENT_CATALOG_SHA256 = 'a062a364bf03438728e78d943e94354f65e6cc9ffb0c0bc5c94a8c4f79609e3c'
+COMPONENT_CATALOG_SHA256 = '7e7d7647a1608e6995ac6feb60fab19cf961ceefca3cc2c99d79489eba3896e4'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = '19c6ff094dccba623cef94214e2b448bc8293be4692f14e0e948ba5d452eeb40'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'a888411acc87909cae516240b39c1e74d4a3db60e4537b9cd855b42a50984e46'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:19c6ff094dccba623cef94214e2b448bc8293be4692f14e0e948ba5d452eeb40'
+ROUTE_REGISTRY_SIGNATURE = 'v2:a888411acc87909cae516240b39c1e74d4a3db60e4537b9cd855b42a50984e46'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -69,11 +69,14 @@ ROUTE_TABLES = {'riemann': (('rusanov',
  'time': (('explicit', 'pops::SSPRK2', (), ()),
           ('ssprk3', 'pops::SSPRK3', (), ()),
           ('euler', 'pops::ForwardEuler', (), ('validation use, never default',)),
-          ('imex', 'pops::AdvanceImex', ('implicit source term',), ()),
-          ('imexrk_ars222',
-           'pops::ImexRkArs222',
+          ('imex',
+           'generated ProgramGraph(additive_imex_euler)',
            ('implicit source term',),
-           ('composed native add_block only (.so ABIs do not carry the RK tableau)',))),
+           ('typed implicit Program solve required; no block-local native advance',)),
+          ('imexrk_ars222',
+           'generated ProgramGraph(additive_imex_ars222)',
+           ('implicit source term',),
+           ('typed implicit Program solve required; no block-local native advance',))),
  'field_solver': (('geometric_mg', 'pops::GeometricMG', (), ()),
                   ('fft',
                    'pops::PoissonFFTSolver',

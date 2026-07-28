@@ -136,8 +136,8 @@ inline constexpr RouteInfo kTimeRoutes[] = {
   {0, "explicit", "pops::SSPRK2", "", ""},
   {1, "ssprk3", "pops::SSPRK3", "", ""},
   {2, "euler", "pops::ForwardEuler", "", "validation use, never default"},
-  {3, "imex", "pops::AdvanceImex", "implicit source term", ""},
-  {4, "imexrk_ars222", "pops::ImexRkArs222", "implicit source term", "composed native add_block only (.so ABIs do not carry the RK tableau)"},
+  {3, "imex", "generated ProgramGraph(additive_imex_euler)", "implicit source term", "typed implicit Program solve required; no block-local native advance"},
+  {4, "imexrk_ars222", "generated ProgramGraph(additive_imex_ars222)", "implicit source term", "typed implicit Program solve required; no block-local native advance"},
 };
 inline constexpr const char* kTimeRouteTokensCsv = "explicit|ssprk3|euler|imex|imexrk_ars222";
 
@@ -307,9 +307,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 2;
-inline constexpr const char* kComponentCatalogSha256 = "a062a364bf03438728e78d943e94354f65e6cc9ffb0c0bc5c94a8c4f79609e3c";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "19c6ff094dccba623cef94214e2b448bc8293be4692f14e0e948ba5d452eeb40";
-inline constexpr const char* kRouteRegistrySignature = "v2:19c6ff094dccba623cef94214e2b448bc8293be4692f14e0e948ba5d452eeb40";
+inline constexpr const char* kComponentCatalogSha256 = "7e7d7647a1608e6995ac6feb60fab19cf961ceefca3cc2c99d79489eba3896e4";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "a888411acc87909cae516240b39c1e74d4a3db60e4537b9cd855b42a50984e46";
+inline constexpr const char* kRouteRegistrySignature = "v2:a888411acc87909cae516240b39c1e74d4a3db60e4537b9cd855b42a50984e46";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

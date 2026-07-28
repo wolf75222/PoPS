@@ -57,11 +57,11 @@ class SystemBlockStore {
   /// from set_block_conversion / native_loader stays a trivial move.
   using CellConvert = std::function<void(const double* in, double* out)>;
 
-  /// Compiled closures frozen at block add time (composite model + spatial scheme + time).
+  /// Compiled spatial closures frozen at block add time (composite model + spatial scheme).
   /// Type-erased ONLY at the block list level; the kernel stays compiled.
   /// MEMBER ORDER FROZEN: install_block (python/system.cpp) and native_loader (push_dynamic /
   /// add_compiled_model) initialize this struct by positional AGGREGATE
-  /// {name, U, ncomp, substeps, evolve, stride, gamma, advance, rhs_into, max_speed, add_poisson_rhs};
+  /// {name, U, ncomp, substeps, evolve, stride, gamma, rhs_into, max_speed, add_poisson_rhs};
   /// do not reorder these members nor insert any before add_poisson_rhs.
   ///
   /// DESIGN DECISION (ADC-610, named-option-groups audit): this struct is DELIBERATELY kept flat, unlike
@@ -70,8 +70,8 @@ class SystemBlockStore {
   ///   (1) it is a POSITIONAL AGGREGATE (the frozen brace-init above): grouping members into sub-structs
   ///       would break every {..} construction site (install_block, native_loader push_dynamic /
   ///       add_compiled_model) with no ordering safety gained;
-  ///   (2) the SystemProgramDriver templates read these members by name on the hot path, so a regroup churns
-  ///       the stepper without changing ownership;
+  ///   (2) the SystemProgramDriver templates read these members by name on the hot path, so a regroup
+  ///       churns the Program driver without changing ownership;
   ///   (3) unlike AmrBuildParams, BlockState does NOT cross the dlopen `.so` boundary by value, so there is
   ///       no ABI-versioning payoff.
   /// The members below are therefore left flat but ANNOTATED with named-group comments (IDENTITY / SCHEME /
@@ -86,7 +86,6 @@ class SystemBlockStore {
     bool evolve;     // false = frozen species (fixed background, not advanced)
     int stride = 1;  // cadence: advance once every stride macro-steps
     double gamma;    // for the rest energy (4 var)
-    std::function<void(MultiFab&, Real, int)> advance;   // (U, dt, n): n substeps of dt/n
     std::function<void(MultiFab&, MultiFab&)> rhs_into;  // R <- -div F + S (Poisson frozen)
     std::function<Real(const MultiFab&)> max_speed;      // max |wave speed| of the block
     std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;  // += elliptic_rhs(U)
@@ -99,24 +98,12 @@ class SystemBlockStore {
     // model exposes no conversion, e.g. pure scalar or .so generated before this work).
     // Consumed by set_primitive_state / get_primitive_state (init/diagnostic in primitive).
     CellConvert prim_to_cons, cons_to_prim;
-    // --- EMBEDDED-BOUNDARY TRANSPORT (opt-in; empty default -> Cartesian path) ---
-    // GEOMETRY-AWARE TRANSPORT ADVANCES. Empty (default) -> no embedded-boundary routing:
-    // the stepper advances via `advance` (full Cartesian path, BIT-IDENTICAL). Non empty, they MIMIC
-    // `advance` (same RK / IMEX scheme, same limiter / flux) but dispatch the transport residual
-    // to the selected metric operator, and are SELECTED only if the System is in Staircase mode
-    // (resp. CutCell) AND a signed embedded boundary is installed. Built at block add time
-    // AT THE SAME TIME as `advance`, they read the System mask / level set by pointer at step time
-    // (stable address): block/geometry authoring order is irrelevant. Trailing + empty default:
-    // the positional aggregate init of the other members stays unchanged.
-    std::function<void(MultiFab&, Real, int)>
-        advance_masked;  // residual via assemble_rhs_masked (Staircase)
-    std::function<void(MultiFab&, Real, int)> advance_eb;  // residual via assemble_rhs_eb (CutCell)
     // dt_hotspot DIAGNOSTIC (ADC-182): (U, w, i, j) -> GLOBAL cell dominating the transport CFL bound
     // of the block + its speed w = max(wx, wy). ON DEMAND only (System::dt_hotspot):
     // never queried by step/step_cfl (hot path bit-identical). Trailing + empty default.
     std::function<void(const MultiFab&, Real&, int&, int&)> hotspot;
     // OPTIONAL STEP BOUNDS of the block (audit 2026-06, step_cfl work). EMPTY (default) -> the
-    // stepper does not query them: STRICTLY historical step policy (transport only,
+    // Program CFL service does not query them: STRICTLY historical step policy (transport only,
     // bit-identical). Set by set_block_dt_bounds when the model declares the traits
     // HasSourceFrequency / HasStabilityDt (cf. core/physical_model.hpp for the semantics).
     // Trailing + empty default: the positional aggregate init of the other members stays unchanged.
@@ -125,7 +112,7 @@ class SystemBlockStore {
     std::function<Real(const MultiFab&)>
         stability_dt;  // min over cells of the admissible step (0 = no constraint)
     // PROJECTION PONCTUELLE post-pas (ADC-177) : U <- project(U, aux) sur les cellules VALIDES,
-    // appliquee par le stepper a la FIN de chaque macro-pas ENTIER (apres transport + etage source +
+    // appliquee par le Program driver a la FIN de chaque macro-pas ENTIER (apres transport + etage source +
     // couplages ; jamais par etage RK). VIDE (defaut) -> jamais interrogee (cout nul, chemin
     // bit-identique). Trailing + defaut vide : l'init par agregat positionnel reste inchangee.
     std::function<void(MultiFab&)> project;

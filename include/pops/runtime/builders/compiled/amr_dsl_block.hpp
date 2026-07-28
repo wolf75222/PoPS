@@ -792,15 +792,15 @@ void add_compiled_model(
         "add_compiled_model(AmrSystem): wave_speed_cache is supported by explicit AMR transport "
         "only");
   // The runtime builder captures the concrete Model/scheme and materializes an AmrRuntimeBlock on
-  // the shared layout for both one and many blocks. The public builder signature still carries the
-  // authoring-time IMEX fields for loader ABI compatibility, but set_compiled_block validates those
-  // fields before this deferred spatial builder is invoked. The lambda materializes only concrete
-  // spatial Program primitives; it contains no device kernel.
+  // the shared layout for both one and many blocks. set_compiled_block validates the canonical time
+  // token before this deferred spatial builder is invoked; the builder itself receives only spatial
+  // metadata. The lambda materializes concrete spatial Program primitives and contains no device
+  // kernel.
   auto runtime_builder = [model, limiter, riemann](
                              const detail::SharedAmrLayout& S, const std::string& bname,
                              const std::vector<double>& density, bool has_density,
                              const std::vector<double>& state, bool has_state, double bgamma,
-                             int bsub, bool brecon_prim, bool /*bimex*/, int bstride,
+                             int bsub, bool brecon_prim, int bstride,
                              const std::vector<std::string>& /*ivars*/,
                              const std::vector<std::string>& /*iroles*/, double bpos_floor,
                              double bweno_epsilon, bool bwave_speed_cache) {
@@ -812,7 +812,7 @@ void add_compiled_model(
         has_state ? &state : nullptr, bpos_floor, bweno_epsilon, bwave_speed_cache);
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(runtime_builder), name,
-                         recon_prim, imex, time, stride, implicit_vars, implicit_roles, pos_floor,
+                         recon_prim, time, stride, implicit_vars, implicit_roles, pos_floor,
                          weno_epsilon, wave_speed_cache);
 }
 
