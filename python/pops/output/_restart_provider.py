@@ -16,6 +16,12 @@ from ._checkpoint_collective import (
 )
 
 
+def _recorded_hierarchy() -> Any:
+    from .restart import RestoreRecordedHierarchy
+
+    return RestoreRecordedHierarchy()
+
+
 @dataclass(frozen=True, slots=True)
 class ReopenedRestart:
     target: Path
@@ -252,10 +258,19 @@ class RestartV3:
 
     __pops_ir_immutable__ = True
     bit_identical: bool = False
+    hierarchy: Any = field(default_factory=_recorded_hierarchy)
 
     def __post_init__(self) -> None:
         if type(self.bit_identical) is not bool:
             raise TypeError("RestartV3.bit_identical must be an exact bool")
+        from .restart import RegridOnRestart, require_restart_hierarchy
+
+        policy = require_restart_hierarchy(self.hierarchy, where="RestartV3.hierarchy")
+        object.__setattr__(self, "hierarchy", policy)
+        if self.bit_identical and type(policy) is RegridOnRestart:
+            raise ValueError(
+                "RestartV3 cannot combine bit_identical=True with RegridOnRestart()"
+            )
 
     def consumer_data(self) -> dict[str, Any]:
         return {
@@ -263,13 +278,32 @@ class RestartV3:
             "provider_id": "pops.restart.accepted-state-v5",
             "extension": ".npz",
             "bit_identical": self.bit_identical,
+            "guarantee": (
+                "bit_identical_accepted_state"
+                if self.bit_identical
+                else self.hierarchy.guarantee
+            ),
+            "hierarchy": self.hierarchy.to_data(),
+            "hierarchy_identity": self.hierarchy.identity.token,
             # A serial runtime is the one-member case of this collective operation.  Providers
             # without this explicit capability (notably parallel HDF5) remain fail-closed when no
             # distributed communicator is present.
             "supports_singleton_collective": True,
+            "supports_regrid_on_restart": False,
         }
 
+    def validate_configuration(self) -> None:
+        """Reject a semantic policy that this exact provider cannot execute."""
+        from .restart import RegridOnRestart
+
+        if type(self.hierarchy) is RegridOnRestart:
+            raise NotImplementedError(
+                "pops.restart.accepted-state-v5 does not implement RegridOnRestart(); "
+                "it supports only exact RestoreRecordedHierarchy() replay"
+            )
+
     def snapshot(self, runtime: Any, directory: Any) -> Any:
+        self.validate_configuration()
         return self.validate_snapshot(_RestartSnapshot(runtime, directory))
 
     @staticmethod
@@ -279,11 +313,13 @@ class RestartV3:
         return validate_checkpoint_snapshot(snapshot)
 
     def write(self, snapshot: Any, target: Any) -> Path:
+        self.validate_configuration()
         if type(snapshot) is not _RestartSnapshot:
             raise TypeError("RestartV3.write requires its exact prepared restart snapshot")
         return snapshot.publish(target)
 
     def reopen(self, runtime: Any, path: Any) -> ReopenedRestart:
+        self.validate_configuration()
         from ._checkpoint_collective import root_bytes
 
         topology = checkpoint_topology(runtime)
@@ -323,6 +359,7 @@ class RestartV3:
         return ReopenedRestart(Path(target), payload, cursors)
 
     def restore(self, runtime: Any, reopened: Any) -> Any:
+        self.validate_configuration()
         if type(reopened) is not ReopenedRestart:
             raise TypeError("RestartV3.restore requires an exact ReopenedRestart")
         return runtime._restore_checkpoint(reopened.payload, reopened.cursors)

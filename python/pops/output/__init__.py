@@ -9,6 +9,7 @@ from ._consumer_contracts import (
 )
 from .consumers import Checkpoint, ConsoleMonitor, ScientificOutput
 from ._console_monitor import ConsoleSample
+from .restart import RegridOnRestart, RestartHierarchy, RestoreRecordedHierarchy
 from .levels import AllLevels, CoarseOnly, LevelSelection, SelectedLevels
 from .formats import (
     ExternalWriter, FormatInterface, HDF5, MpiRelayToRoot, NPZ, ParaView, ParaViewPreset,
@@ -56,6 +57,7 @@ __all__ = [
     "DurableJournal", "LiveFailurePolicy", "LiveVisualization", "ParallelMode", "RaiseOnFlush",
     "ReportOnly", "Retry",
     "ScientificOutput", "SkipSampleReported",
+    "RegridOnRestart", "RestartHierarchy", "RestoreRecordedHierarchy",
     "AllLevels", "CoarseOnly", "SelectedLevels",
     "LevelSelection",
     "FormatInterface", "ExternalWriter", "HDF5", "NPZ", "ParaView", "ParaViewPreset",
