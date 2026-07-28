@@ -272,7 +272,7 @@ void install(System& system, const std::string& slot, const std::string& plan_id
     system.register_configured_field_solver_provider("geometric_mg", slot,
                                                      system_geometric_options());
   system.set_field_solver_plan(slot, plan_identity, "provider:" + slot, "output-owner", "plasma",
-                               "potential", {"rhs-provider"}, {"plasma"}, {"potential"},
+                               "potential:" + slot, {"rhs-provider"}, {"plasma"}, {"potential"},
                                {provider_coefficient}, slot);
 }
 
@@ -300,7 +300,7 @@ AmrFieldHierarchyPolicyAuthority composite_hierarchy_policy() {
 void install(AmrSystem& system, const std::string& slot, const std::string& plan_identity,
              double provider_coefficient = 1.0) {
   system.set_field_solver_plan(slot, plan_identity, "provider:" + slot, "output-owner", "plasma",
-                               "potential", {"rhs-provider"}, {"plasma"}, {"potential"},
+                               "potential:" + slot, {"rhs-provider"}, {"plasma"}, {"potential"},
                                {provider_coefficient}, "geometric_mg", composite_hierarchy_policy(),
                                amr_geometric_options());
   system.set_field_nullspace(
