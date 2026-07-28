@@ -195,43 +195,31 @@ Roe linearizes the system by the $\sqrt{\rho}$-weighted average:
 $$\hat F^{Roe} = \tfrac12\big(F_L + F_R\big) - \tfrac12 \sum_k |\tilde\lambda_k|\,\alpha_k\,r_k,$$
 
 waves $\{u_n - c,\ u_n,\ u_n,\ u_n + c\}$ with celerity $c$ deduced from the Roe enthalpy $H$, and
-Harten's entropy fix ($\varepsilon = 0.1\,c$) on the acoustic waves 1 and 5 to avoid
-the non-entropic shock (sonic glitch). HLLC and Roe use the canonical Euler 2D layout
-(`n_vars == 4`) as a fallback -- normal/tangential momentum indices according to `dir`, $\gamma - 1$
-deduced from the state (ideal gas), no `gamma` member required -- but are GENERIC when the model
-supplies the optional hooks `contact_speed`/`hllc_star_state` (`HasHLLCStructure`) or
-`roe_dissipation` (`HasRoeDissipation`); the Euler path then stays bit-identical.
+Harten's entropy fix on the acoustic waves to avoid the non-entropic shock (sonic glitch). The
+entropy policy and its width belong to the Roe physical provider; the generic numerical flux never
+assumes an ideal-gas layout.
 
 ```
-function HLLC(m, UL, AL, UR, AR, dir):                 # canonical Euler 2D fallback (n_vars == 4)
-    in = (dir==0 ? 1 : 2);  it = (dir==0 ? 2 : 1)      # qte de mvt normale / tangentielle
-    rL, rR   = UL[0], UR[0]
-    unL, unR = UL[in]/rL, UR[in]/rR
-    pL, pR   = m.pressure(UL), m.pressure(UR)
-    sL, sR   = hll_speeds(m, UL,AL, UR,AR, dir)         # Davis : min/max des vitesses signees
-    FL, FR   = m.flux(UL,AL,dir), m.flux(UR,AR,dir)
+function HLLC(provider, left, right, face):
+    sL, sR = provider.wave_bounds(left, right, face)
+    FL, FR = provider.flux(left, face), provider.flux(right, face)
     if sL >= 0: return FL                               # supersonique a droite -> flux amont
     if sR <= 0: return FR
-    sStar = (pR - pL + rL*unL*(sL-unL) - rR*unR*(sR-unR))    # Toro 10.37
-          / (rL*(sL-unL) - rR*(sR-unR))
-    if sStar >= 0:                                      # etat etoile gauche
-        fac = rL*(sL - unL) / (sL - sStar)
-        Us[0]=fac; Us[in]=fac*sStar; Us[it]=fac*(UL[it]/rL)
-        Us[3]=fac*(UL[3]/rL + (sStar-unL)*(sStar + pL/(rL*(sL-unL))))
-        return FL + sL*(Us - UL)
-    else:                                              # etat etoile droit (symetrique)
-        fac = rR*(sR - unR) / (sR - sStar)
-        ... return FR + sR*(Us - UR)
+    sStar = provider.contact_speed(left, right, sL, sR, face)
+    side = left if sStar >= 0 else right
+    speed = sL if sStar >= 0 else sR
+    UStar = provider.star_state(side, speed, sStar, face)
+    return provider.flux(side, face) + speed*(UStar - side.state)
 ```
 
 **Code.** Stateless policies in
 [`include/pops/numerics/fv/numerical_flux.hpp`](../include/pops/numerics/fv/numerical_flux.hpp): `RusanovFlux`,
 `HLLFlux`, `HLLCFlux`, `RoeFlux` (all `POPS_HD`). `RusanovFlux` loops component by component with
 `m.max_wave_speed`; `HLLFlux`/`HLLCFlux` share the free function `hll_speeds` (Davis estimates,
-requires `m.wave_speeds`); `HLLCFlux`/`RoeFlux` additionally require `m.pressure`. A non-Euler model
-may instead supply `HasHLLCStructure` (`contact_speed`, `hllc_star_state`) or `HasRoeDissipation`
-(`roe_dissipation`) to drive the generic HLLC/Roe path; absent these, the canonical Euler 2D branch
-is used. The
+requires `m.wave_speeds`). `HLLCFlux` requires `HasHLLCStructure` (`pressure`, `contact_speed`,
+`hllc_star_state`) and `RoeFlux` requires `HasRoeDissipation` (`roe_dissipation`). Euler conforms
+through those same capabilities. A missing capability is rejected during route resolution; there
+is no component-count inference and no implicit HLL/Rusanov substitution. The
 compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to `RusanovFlux{}` for serial
 references. The flux is passed by template: `compute_face_fluxes<Limiter, NumericalFlux, Model>` and
 `assemble_rhs<Limiter, NumericalFlux, Model>` are templated on the flux policy, chosen
@@ -265,10 +253,10 @@ applies its matrix function to the full Jacobian.
 
 **Constraints / remarks.** `RusanovFlux` is the only flux compatible with the minimal `PhysicalModel`
 (it reads only `max_wave_speed`): it is the robust default for scalar transport, at the cost of an
-increased diffusion ($\alpha$ upper bound). `HLLFlux` still smooths the contact discontinuity (a single
-star region). `HLLCFlux`/`RoeFlux` assume `n_vars == 4` (Euler 2D) only on the fallback path; a model
-providing the `HasHLLCStructure` / `HasRoeDissipation` hooks drives the generic path. Undefined
-behavior arises only for a non-Euler model that supplies neither the canonical layout nor the hooks.
+increased diffusion ($\alpha$ upper bound). `HLLFlux` still smooths the contact discontinuity (a
+single star region). `HLLCFlux`/`RoeFlux` never inspect a concrete state layout: all physical
+structure comes from `HasHLLCStructure` / `HasRoeDissipation`. A model without the required
+capability cannot resolve that provider.
 HLLC on a vacuum state (zero density) divides by zero in the star factor and
 needs an upstream safeguard. Roe uses `std::sqrt` for the $\sqrt{\rho}$ average (device-clean
 under Kokkos/nvcc); its key property $F_R - F_L = \tilde A\,(U_R - U_L)$ gives the exact upwind flux in

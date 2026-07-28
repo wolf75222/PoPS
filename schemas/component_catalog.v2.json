@@ -479,7 +479,7 @@
             "hllc_star_state"
           ],
           "limitations": [
-            "polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure"
+            "polar metric provider not wired; requires exact HasHLLCStructure capability"
           ],
           "aliases": [],
           "metadata": {
@@ -501,61 +501,13 @@
             "roe_dissipation"
           ],
           "limitations": [
-            "polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation"
+            "polar metric provider not wired; requires exact HasRoeDissipation capability"
           ],
           "aliases": [],
           "metadata": {
             "needs_wave_speeds": false,
             "needs_hllc_struct": false,
             "needs_roe_diss": true,
-            "polar_ok": false
-          }
-        },
-        {
-          "token": "euler_hllc",
-          "wire_id": 4,
-          "cpp_id": "kEulerHllc",
-          "native_entry": "pops::EulerHLLCFlux2D",
-          "requirements": [
-            "physical_flux",
-            "provider_pack",
-            "stability_bound",
-            "pressure",
-            "euler_2d_layout",
-            "no_hllc_star_state"
-          ],
-          "limitations": [
-            "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"
-          ],
-          "aliases": [],
-          "metadata": {
-            "needs_wave_speeds": false,
-            "needs_hllc_struct": false,
-            "needs_roe_diss": false,
-            "polar_ok": false
-          }
-        },
-        {
-          "token": "euler_roe",
-          "wire_id": 5,
-          "cpp_id": "kEulerRoe",
-          "native_entry": "pops::EulerRoeFlux2D",
-          "requirements": [
-            "physical_flux",
-            "provider_pack",
-            "stability_bound",
-            "pressure",
-            "euler_2d_layout",
-            "no_roe_dissipation"
-          ],
-          "limitations": [
-            "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"
-          ],
-          "aliases": [],
-          "metadata": {
-            "needs_wave_speeds": false,
-            "needs_hllc_struct": false,
-            "needs_roe_diss": false,
             "polar_ok": false
           }
         }

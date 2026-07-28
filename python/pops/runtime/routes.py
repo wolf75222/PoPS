@@ -15,9 +15,10 @@ this module contains behavior only and cannot drift into a second registry.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Callable
+from typing import Any
 
 from ._generated_component_routes import (
     CAPABILITY_VOCAB_VERSION as CAPABILITY_VOCAB_VERSION,
@@ -270,8 +271,6 @@ RIEMANN_RUSANOV = _REGISTRY["riemann"]["rusanov"]
 RIEMANN_HLL = _REGISTRY["riemann"]["hll"]
 RIEMANN_HLLC = _REGISTRY["riemann"]["hllc"]
 RIEMANN_ROE = _REGISTRY["riemann"]["roe"]
-RIEMANN_EULER_HLLC = _REGISTRY["riemann"]["euler_hllc"]
-RIEMANN_EULER_ROE = _REGISTRY["riemann"]["euler_roe"]
 
 LIMITER_NONE = _REGISTRY["limiter"]["none"]
 LIMITER_MINMOD = _REGISTRY["limiter"]["minmod"]
@@ -315,24 +314,6 @@ _RIEMANN_MODEL_REQUIREMENT_PREDICATES = MappingProxyType({
         lambda model: bool(getattr(model, "has_roe", False)),
         "requires model capability 'roe_dissipation': call m.enable_roe(), "
         "m.roe_dissipation(...), or m.roe_from_jacobian(...) on the model",
-    ),
-    "euler_2d_layout": _ModelRequirementPredicate(
-        lambda model: (
-            getattr(model, "n_vars", 0) == 4
-            and "p" in getattr(model, "prim_names", ())
-        ),
-        "requires a canonical 4-variable Euler transport (n_vars == 4, primitive 'p', "
-        "layout rho/rho_u/rho_v/E)",
-    ),
-    "no_hllc_star_state": _ModelRequirementPredicate(
-        lambda model: not bool(getattr(model, "has_hllc", False)),
-        "requires absence of the generic 'hllc_star_state' capability; select a provider whose "
-        "contract consumes that capability",
-    ),
-    "no_roe_dissipation": _ModelRequirementPredicate(
-        lambda model: not bool(getattr(model, "has_roe", False)),
-        "requires absence of the generic 'roe_dissipation' capability; select a provider whose "
-        "contract consumes that capability",
     ),
 })
 

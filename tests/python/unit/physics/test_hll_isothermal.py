@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Flux HLL expose pour les modeles a vitesses d'onde signees, SANS exiger une pression (3-var).
 
-HLLC/Roe sont gardes par `n_vars==4 && pressure` (transport compressible). HLL (2 ondes, Davis) ne
-demande QUE `model.wave_speeds` (vitesses signees) -- pas de pression. Le DSL emet wave_speeds des
+HLLC/Roe exigent leurs capacites physiques exactes (contact/star state ou dissipation de Roe).
+HLL (2 ondes, Davis) ne demande QUE `model.wave_speeds` (vitesses signees) -- pas de pression. Le DSL emet wave_speeds des
 qu'une primitive 'p' est DECLAREE (meme si 'p' n'est pas dans primitive_vars, cas du modele isotherme
 magnetise Hoffart : rho, m_x, m_y + 'p'=theta*rho declaree). HLL devient donc utilisable la ou hllc/roe
 sont rejetes. Moins diffusif que Rusanov (dissipation ~ |sR-sL| signee au lieu de 2*max|v| symetrique).

@@ -206,16 +206,10 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
           case RiemannRouteId::kHll:
             bb = detail::build_block_compressible_hll(model, args);
             break;
-          // On the true Euler brick the EXPLICIT euler_hllc route and the generic hllc route are the
-          // SAME arithmetic (the native Euler now provides HasHLLCStructure with the canonical-Euler
-          // formulas, so HLLCFlux == the former EulerHLLCFlux2D fallback bit-for-bit): both share this
-          // seam leaf (ADC-590). euler_hllc's 4-var+pressure gate is satisfied by CompressibleFlux.
           case RiemannRouteId::kHllc:
-          case RiemannRouteId::kEulerHllc:
             bb = detail::build_block_compressible_hllc(model, args);
             break;
           case RiemannRouteId::kRoe:
-          case RiemannRouteId::kEulerRoe:
             bb = detail::build_block_compressible_roe(model, args);
             break;
           default:

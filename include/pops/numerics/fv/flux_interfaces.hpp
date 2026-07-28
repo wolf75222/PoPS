@@ -52,6 +52,23 @@ struct FaceContext {
   }
 };
 
+/// Typed Harten entropy correction owned by a Roe physical provider.
+///
+/// The numerical Roe flux only consumes the provider's final ``|A| dU`` action.  Choosing and
+/// parameterizing an entropy correction is therefore constitutive evidence, not a hidden
+/// solver-wide constant.
+struct HartenEntropyFix {
+  Real relative_width = Real(0.1);
+
+  POPS_HD Real operator()(Real eigenvalue, Real spectral_scale) const {
+    const Real absolute = eigenvalue < Real(0) ? -eigenvalue : eigenvalue;
+    const Real width = relative_width * spectral_scale;
+    if (width <= Real(0) || absolute >= width)
+      return absolute;
+    return Real(0.5) * (eigenvalue * eigenvalue / width + width);
+  }
+};
+
 enum class StabilityUnit : std::uint8_t { kLengthPerTime, kInverseTime, kTime };
 enum class StabilityConvention : std::uint8_t {
   kNormalSpectralRadius,

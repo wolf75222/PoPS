@@ -9,6 +9,7 @@
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>
+#include <pops/numerics/fv/flux_interfaces.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>
@@ -102,15 +103,9 @@ struct Euler {
   }
 
   // -------------------------------------------------------------------------------------------
-  // RIEMANN CAPABILITIES (ADC-590): the native Euler brick now PROVIDES the HLLC / Roe physical
-  // structure so HLLCFlux / RoeFlux take their GENERIC path (HasHLLCStructure / HasRoeDissipation)
-  // instead of a hidden Euler fallback. The arithmetic is copied VERBATIM from the historical
-  // canonical Euler 2D branches of numerical_flux.hpp (Toro 10.37 star speed, the fac/Us star
-  // construction, the sqrt-rho Roe average + 3-wave eigenstructure + Harten eps = 0.1 c
-  // dissipation) so the trait path is BIT-IDENTICAL to the former fallback -- the AMR riemann /
-  // spatial parity oracles prove it. These same formulas are what the DSL emits from the fluid
-  // roles for a 4-var Euler (module_emit_riemann.py), so a native Euler and a DSL enable_hllc /
-  // enable_roe Euler agree ulp-for-ulp.
+  // RIEMANN CAPABILITIES: Euler provides its physical HLLC closure and Roe dissipation through
+  // the same HasHLLCStructure / HasRoeDissipation contracts as every other model. Numerical-flux
+  // policies never inspect this concrete layout.
   // -------------------------------------------------------------------------------------------
 
   /// HLLC contact wave speed s* (Toro eq. 10.37). Canonical Euler 2D layout (rho, m_x, m_y, E):
@@ -140,10 +135,10 @@ struct Euler {
     return Us;
   }
 
-  /// Roe dissipation d = |A_roe| (U_R - U_L) for the canonical ideal-gas Euler 2D system: FULL
+  /// Roe dissipation d = |A_roe| (U_R - U_L) for the ideal-gas Euler model: FULL
   /// eigenwave decomposition (F_R - F_L = A_roe (U_R - U_L) exactly), sqrt(rho) Roe average, gamma-1
-  /// from the ideal-gas EOS, Harten entropy fix eps = kRoeEntropyFixFraction * c on the acoustic
-  /// waves. RoeFlux (HasRoeDissipation) then does F = 1/2 (F_L + F_R) - 1/2 d.
+  /// from the ideal-gas EOS, and a typed Harten entropy policy on the acoustic waves. RoeFlux
+  /// (HasRoeDissipation) then does F = 1/2 (F_L + F_R) - 1/2 d.
   POPS_HD State roe_dissipation(const State& UL, const Aux&, const State& UR, const Aux&,
                                 int dir) const {
     const int in = (dir == 0) ? 1 : 2;  // normal momentum
@@ -173,14 +168,11 @@ struct Euler {
     const Real a3 = rho * dut;                              // shear, un
     const Real a5 = (dp + rho * c * dun) / (Real(2) * c2);  // un + c wave
 
-    // |eigenvalue| with Harten entropy fix on the acoustic waves (1, 5). eps = 0.1 c matches
-    // kRoeEntropyFixFraction (numerical_flux.hpp), the Euler/Roe entropy policy.
-    const Real eps = Real(0.1) * c;
-    auto absfix = [eps](Real l) {
-      const Real al = l < 0 ? -l : l;
-      return al < eps ? Real(0.5) * (l * l / eps + eps) : al;
-    };
-    const Real al1 = absfix(un - c), al2 = (un < 0 ? -un : un), al5 = absfix(un + c);
+    // Entropy correction is an explicit provider policy, not a numerical-flux fallback.
+    const HartenEntropyFix entropy_fix{Real(0.1)};
+    const Real al1 = entropy_fix(un - c, c);
+    const Real al2 = un < Real(0) ? -un : un;
+    const Real al5 = entropy_fix(un + c, c);
 
     // dissipation Sum |lambda_k| a_k r_k, basis (rho, mom_n, mom_t, E)
     State d{};

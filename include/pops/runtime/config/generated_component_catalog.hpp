@@ -88,18 +88,14 @@ enum class RiemannRouteId : int {
   kHll = 1,
   kHllc = 2,
   kRoe = 3,
-  kEulerHllc = 4,
-  kEulerRoe = 5,
 };
 inline constexpr RouteInfo kRiemannRoutes[] = {
   {0, "rusanov", "pops::RusanovFlux", "physical_flux,provider_pack,stability_bound", ""},
   {1, "hll", "pops::HLLFlux", "physical_flux,provider_pack,stability_bound,wave_speeds", ""},
-  {2, "hllc", "pops::HLLCFlux", "physical_flux,provider_pack,stability_bound,pressure,wave_speeds,contact_speed,hllc_star_state", "polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure"},
-  {3, "roe", "pops::RoeFlux", "physical_flux,provider_pack,stability_bound,roe_dissipation", "polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation"},
-  {4, "euler_hllc", "pops::EulerHLLCFlux2D", "physical_flux,provider_pack,stability_bound,pressure,euler_2d_layout,no_hllc_star_state", "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"},
-  {5, "euler_roe", "pops::EulerRoeFlux2D", "physical_flux,provider_pack,stability_bound,pressure,euler_2d_layout,no_roe_dissipation", "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"},
+  {2, "hllc", "pops::HLLCFlux", "physical_flux,provider_pack,stability_bound,pressure,wave_speeds,contact_speed,hllc_star_state", "polar metric provider not wired; requires exact HasHLLCStructure capability"},
+  {3, "roe", "pops::RoeFlux", "physical_flux,provider_pack,stability_bound,roe_dissipation", "polar metric provider not wired; requires exact HasRoeDissipation capability"},
 };
-inline constexpr const char* kRiemannRouteTokensCsv = "rusanov|hll|hllc|roe|euler_hllc|euler_roe";
+inline constexpr const char* kRiemannRouteTokensCsv = "rusanov|hll|hllc|roe";
 
 enum class LimiterRouteId : int {
   kNone = 0,
@@ -256,8 +252,6 @@ inline constexpr RiemannTag kRiemanns[] = {
   {"hll", true, false, false, true},
   {"hllc", false, true, false, false},
   {"roe", false, false, true, false},
-  {"euler_hllc", false, false, false, false},
-  {"euler_roe", false, false, false, false},
 };
 
 struct TransportTag { const char* name; int n_vars; bool polar_ok; const char* summary; };
@@ -307,9 +301,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 2;
-inline constexpr const char* kComponentCatalogSha256 = "7e7d7647a1608e6995ac6feb60fab19cf961ceefca3cc2c99d79489eba3896e4";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "a888411acc87909cae516240b39c1e74d4a3db60e4537b9cd855b42a50984e46";
-inline constexpr const char* kRouteRegistrySignature = "v2:a888411acc87909cae516240b39c1e74d4a3db60e4537b9cd855b42a50984e46";
+inline constexpr const char* kComponentCatalogSha256 = "84c68fcee96663f71e7e7fa7589ec1ddee0d1037e741a678e4afd83c9749620a";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "c0e14d4a3dd082612d052b2ce293e17de712c6916e39f430d0ff311ed0f24ef8";
+inline constexpr const char* kRouteRegistrySignature = "v2:c0e14d4a3dd082612d052b2ce293e17de712c6916e39f430d0ff311ed0f24ef8";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

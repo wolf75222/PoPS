@@ -234,7 +234,7 @@
   "tests/python/unit/output/test_paraview_state.py": 2.0,
   "tests/python/unit/output/test_post_commit_observers.py": 5.0,
   "tests/python/unit/physics/test_board_authoring_atomicity.py": 1.0,
-  "tests/python/unit/physics/test_euler_riemann_routes.py": 0.5,
+  "tests/python/unit/physics/test_generic_riemann_routes.py": 0.5,
   "tests/python/unit/physics/test_exact_physics_scalars.py": 1.0,
   "tests/python/unit/physics/test_fv_hll_minmod.py": 0.5,
   "tests/python/unit/physics/test_hll_isothermal.py": 67.7,

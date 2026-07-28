@@ -13,8 +13,7 @@ else:
 
 
 _GENERIC_CAPABILITY_ENABLERS = {"hllc": "enable_hllc", "roe": "enable_roe"}
-_PRESSURE_ROLE_FLUXES = frozenset({"hllc", "roe", "euler_hllc", "euler_roe"})
-_EULER_LAYOUT_FLUXES = frozenset({"euler_hllc", "euler_roe"})
+_PRESSURE_ROLE_FLUXES = frozenset({"hllc", "roe"})
 
 
 class _RiemannAuthoringMixin(_BoardModel):
@@ -60,11 +59,6 @@ class _RiemannAuthoringMixin(_BoardModel):
                     "riemann %s requires model capability 'hllc_star_state' for state %r: the "
                     "fluid roles %s are needed (declare m.state(..., roles={...})); missing %s"
                     % (kind.upper(), self._state_name(), sorted(fluid), sorted(missing)))
-            if kind in _EULER_LAYOUT_FLUXES and len(hyp.cons_names) != 4:
-                raise ValueError(
-                    "riemann %s requires a canonical 4-variable Euler layout (rho, rho_u, rho_v, E) "
-                    "for state %r; use riemann='hllc'/'roe' for a generic model"
-                    % (kind.upper(), self._state_name()))
         elif kind == "hll":
             if (wave_speeds is None and not hyp._eig and hyp._wave_speeds is None
                     and hyp._ws_jacobian is None):

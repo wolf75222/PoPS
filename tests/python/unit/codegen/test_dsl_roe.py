@@ -176,8 +176,8 @@ def test_board_roe_runs_euler_and_preserves_stationary_shear(
     euler_dt = 2.0e-4
 
     euler = _compile_public(
-        _euler("final_euler_roe"),
-        case_name="final_euler_roe_case",
+        _euler("final_generic_roe"),
+        case_name="final_generic_roe_case",
         block_name="gas",
         n=n,
         dt=euler_dt,

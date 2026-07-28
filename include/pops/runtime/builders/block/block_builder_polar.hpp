@@ -271,8 +271,8 @@ BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, boo
 ///                 presence of model.wave_speeds. The polar isothermal fluid (IsothermalFluxPolar:
 ///                 inherits IsothermalFlux::wave_speeds) is eligible -> HLL less diffusive than Rusanov
 ///                 on the ring. The scalar ExB (ExBVelocityPolar, no wave_speeds) -> CLEAR rejection.
-/// HLLC/Roe stay NOT wired in polar (assume n_vars==4 Euler with energy, without a polar energy-flux
-/// brick) -> explicit rejection. "weno5" routes assemble_rhs_polar onto the WENO5-Z reconstruction
+/// HLLC/Roe stay NOT wired in polar because no oriented metric provider supplies their contact/Roe
+/// capability yet -> explicit rejection. "weno5" routes assemble_rhs_polar onto the WENO5-Z reconstruction
 /// (3 ghosts) like the cartesian one. @p wall_radial: solid radial wall (mass conservation to machine
 /// precision; see build_block_polar).
 template <class Model>
@@ -286,9 +286,8 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
   validate_riemann(riem, /*polar=*/true, "System (polar)");
   validate_limiter(lim, "System (polar)");
   // Parse the validated tag ONCE (ADC-641): only rusanov / hll are wired in polar, so the switch has two
-  // arms plus a default. The default keeps the historical "valid tag, not wired in polar" path (hllc /
-  // roe / euler_* -- already rejected by validate_riemann(polar=true) above, so it is defense in depth);
-  // it also suppresses -Wswitch on the 2-of-6 partial switch.
+  // arms plus a default. The default keeps the "valid tag, not wired in polar" path for HLLC/Roe,
+  // already rejected by validate_riemann(polar=true), and suppresses -Wswitch on the partial switch.
   switch (parse_riemann_route(riem, "System (polar)")) {
     case RiemannRouteId::kRusanov:
       return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",

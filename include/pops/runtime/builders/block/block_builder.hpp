@@ -712,11 +712,8 @@ template <class Model>
 POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& lim,
                                            const GridContext& ctx, bool recon_prim, Real pos_floor,
                                            Real weno_eps = kWenoEpsilon) {
-  // HLLC (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasHLLCStructure (contact_speed +
-  // hllc_star_state). The native Euler brick now provides the capability, so the canonical Euler 2D
-  // transport still reaches this path (bit-identical). A 4-var-pressure model WITHOUT the capability
-  // is refused here (no more implicit fallback): the canonical Euler layout is served by the explicit
-  // euler_hllc route (make_block_euler_hllc / EulerHLLCFlux2D).
+  // HLLC is capability-only: the model supplies the contact closure and star-state construction.
+  // Euler reaches this exact path because its physical provider satisfies HasHLLCStructure.
   if constexpr (HasHLLCStructure<Model>) {
     return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
       using L = typename decltype(tag)::type;
@@ -727,31 +724,7 @@ POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& li
     throw std::runtime_error(
         "System: flux 'hllc' requires the model's HLLC capability "
         "(HasHLLCStructure: pressure + wave_speeds + contact_speed + hllc_star_state); "
-        "for a canonical Euler 2D layout (4 variables + pressure) use riemann='euler_hllc', "
-        "for a generic model call m.enable_hllc(); this transport -> 'hll'/'rusanov'");
-  }
-}
-
-template <class Model>
-POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::string& lim,
-                                                 const GridContext& ctx, bool recon_prim,
-                                                 Real pos_floor,
-                                                 Real weno_eps = kWenoEpsilon) {
-  // EXPLICIT canonical Euler 2D HLLC (ADC-590): the euler_hllc route pins EulerHLLCFlux2D directly.
-  // Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true Euler brick
-  // this is the SAME arithmetic as the generic hllc path (HLLCFlux via HasHLLCStructure).
-  if constexpr (Model::n_vars == 4 &&
-                requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
-      using L = typename decltype(tag)::type;
-      return build_block<L, EulerHLLCFlux2D>(m, ctx, recon_prim, pos_floor,
-                                             /*wave_speed_cache=*/false, weno_eps);
-    });
-  } else {
-    throw std::runtime_error(
-        "System: flux 'euler_hllc' requires a canonical compressible Euler 2D transport "
-        "(4 variables + pressure, rho/rho_u/rho_v/E); for a generic model with an HLLC "
-        "capability use riemann='hllc' (m.enable_hllc()); this transport -> 'hll'/'rusanov'");
+        "install an explicit contact/star-state provider; this transport -> 'hll'/'rusanov'");
   }
 }
 
@@ -759,11 +732,8 @@ template <class Model>
 POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim,
                                           const GridContext& ctx, bool recon_prim, Real pos_floor,
                                           Real weno_eps = kWenoEpsilon) {
-  // ROE (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasRoeDissipation (full
-  // d = |A_roe| dU). The native Euler brick now provides the capability, so the canonical Euler 2D
-  // transport still reaches this path (bit-identical). A 4-var-pressure model WITHOUT the capability
-  // is refused here: the canonical Euler layout is served by the explicit euler_roe route
-  // (make_block_euler_roe / EulerRoeFlux2D).
+  // Roe is capability-only: the physical provider supplies the complete d = |A_roe| dU action.
+  // Euler and non-Euler models therefore consume the same numerical-flux implementation.
   if constexpr (HasRoeDissipation<Model>) {
     return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
       using L = typename decltype(tag)::type;
@@ -773,32 +743,8 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
   } else {
     throw std::runtime_error(
         "System: flux 'roe' requires the model's Roe capability "
-        "(HasRoeDissipation: roe_dissipation d = |A_roe| dU); for a canonical Euler 2D layout "
-        "(4 variables + pressure) use riemann='euler_roe', for a generic model call "
-        "m.enable_roe(); this transport -> 'hll'/'rusanov'");
-  }
-}
-
-template <class Model>
-POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::string& lim,
-                                                const GridContext& ctx, bool recon_prim,
-                                                Real pos_floor,
-                                                Real weno_eps = kWenoEpsilon) {
-  // EXPLICIT canonical ideal-gas Euler 2D Roe (ADC-590): the euler_roe route pins EulerRoeFlux2D
-  // directly. Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true
-  // Euler brick this is the SAME arithmetic as the generic roe path (RoeFlux via HasRoeDissipation).
-  if constexpr (Model::n_vars == 4 &&
-                requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
-      using L = typename decltype(tag)::type;
-      return build_block<L, EulerRoeFlux2D>(m, ctx, recon_prim, pos_floor,
-                                            /*wave_speed_cache=*/false, weno_eps);
-    });
-  } else {
-    throw std::runtime_error(
-        "System: flux 'euler_roe' requires a canonical compressible Euler 2D transport "
-        "(4 variables + pressure, rho/rho_u/rho_v/E); for a generic model with a Roe "
-        "capability use riemann='roe' (m.enable_roe()); this transport -> 'hll'/'rusanov'");
+        "(HasRoeDissipation: roe_dissipation d = |A_roe| dU); install an explicit analytic "
+        "or Jacobian-derived provider; this transport -> 'hll'/'rusanov'");
   }
 }
 
@@ -815,10 +761,8 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
   // guard (unreachable after validate_riemann).
   validate_riemann(riem, /*polar=*/false, "System");
   validate_limiter(lim, "System");
-  // Parse the validated tag ONCE into the typed RiemannRouteId (ADC-641): the switch decodes it. The
-  // euler_hllc / euler_roe arms are NOT fused with hllc / roe here (System routes each to its own
-  // make_block_<flux> helper, unlike the AMR seam), mirroring the historical System behavior exactly.
-  // The default is the defense-in-depth registry/dispatch guard (unreachable past validate_riemann).
+  // Parse the validated tag ONCE into the typed RiemannRouteId (ADC-641). Each public provider owns
+  // exactly one leaf; the default is a defense-in-depth registry/dispatch guard.
   switch (parse_riemann_route(riem, "System")) {
     case RiemannRouteId::kRusanov:
       return make_block_rusanov(m, lim, ctx, recon_prim, pos_floor, weno_eps);
@@ -828,10 +772,6 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
       return make_block_hllc(m, lim, ctx, recon_prim, pos_floor, weno_eps);
     case RiemannRouteId::kRoe:
       return make_block_roe(m, lim, ctx, recon_prim, pos_floor, weno_eps);
-    case RiemannRouteId::kEulerHllc:
-      return make_block_euler_hllc(m, lim, ctx, recon_prim, pos_floor, weno_eps);
-    case RiemannRouteId::kEulerRoe:
-      return make_block_euler_roe(m, lim, ctx, recon_prim, pos_floor, weno_eps);
   }
   throw_registry_dispatch_mismatch("System", "flux", riem);
 }
