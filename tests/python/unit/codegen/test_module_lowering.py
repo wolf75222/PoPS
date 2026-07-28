@@ -36,6 +36,8 @@ from pops.codegen.module_lowering import (  # noqa: E402
     _lower_native_role, _module_to_model, lower_and_validate, remap_lowering_error)
 from pops.frames import X_AXIS, Z_AXIS  # noqa: E402
 from pops.physics import Axial, Density, Momentum, Scalar  # noqa: E402
+from pops.physics._coupled_abi import role_canonical  # noqa: E402
+from pops.runtime._bricks_time import Role  # noqa: E402
 
 
 def test_module_role_lowering_preserves_typed_boundary_semantics():
@@ -46,6 +48,7 @@ def test_module_role_lowering_preserves_typed_boundary_semantics():
     assert _lower_native_role(Scalar()) == "Scalar"
     assert _lower_native_role("momentum_y") == "MomentumY"
     assert _lower_native_role("Custom") is None
+    assert role_canonical("AxialZ") == Role.AxialZ == "axial_z"
 
 
 def _facade_model(name="ep"):
