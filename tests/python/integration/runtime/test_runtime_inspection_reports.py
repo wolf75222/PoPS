@@ -7,7 +7,7 @@ from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime s
 
 pops = pytest.importorskip("pops")
 from pops.layouts import Uniform  # noqa: E402
-from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
+from tests.python.support.layout_plan import cartesian_grid  # noqa: E402
 
 
 def test_system_inspect_is_structured_and_array_free():

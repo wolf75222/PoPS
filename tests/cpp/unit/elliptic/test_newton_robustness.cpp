@@ -679,3 +679,220 @@ TEST_F(NewtonRobustnessTest, analytic_jacobian_matches_finite_difference_root) {
   std::printf("OK  (5) jacobien analytique : meme racine que les FD (ecart %.1e), iters %.0f\n",
               jdiff, static_cast<double>(repj.max_iters_used));
 }
+
+namespace {
+
+struct SquareRootResidual {
+  POPS_HD void operator()(const Real (&x)[1], Real (&residual)[1]) const {
+    residual[0] = x[0] * x[0] - Real(2);
+  }
+};
+
+struct SquareRootJacobian {
+  POPS_HD bool operator()(const Real (&x)[1], Real (&jacobian)[1][1]) const {
+    jacobian[0][0] = Real(2) * x[0];
+    return true;
+  }
+};
+
+struct ConstantResidual {
+  POPS_HD void operator()(const Real (&)[1], Real (&residual)[1]) const { residual[0] = Real(1); }
+};
+
+struct ZeroJacobian {
+  POPS_HD bool operator()(const Real (&)[1], Real (&jacobian)[1][1]) const {
+    jacobian[0][0] = Real(0);
+    return true;
+  }
+};
+
+struct InvalidResidual {
+  POPS_HD void operator()(const Real (&)[1], Real (&residual)[1]) const {
+    residual[0] = std::numeric_limits<Real>::quiet_NaN();
+  }
+};
+
+struct PositiveDomain {
+  POPS_HD bool operator()(const Real (&x)[1], int* component) const {
+    if (component != nullptr)
+      *component = x[0] >= Real(0) ? -1 : 0;
+    return x[0] >= Real(0);
+  }
+};
+
+struct LinearResidual {
+  POPS_HD void operator()(const Real (&x)[1], Real (&residual)[1]) const {
+    residual[0] = x[0] - Real(1);
+  }
+};
+
+struct WrongDirectionJacobian {
+  POPS_HD bool operator()(const Real (&)[1], Real (&jacobian)[1][1]) const {
+    jacobian[0][0] = Real(-1);
+    return true;
+  }
+};
+
+struct TinyScaledResidual {
+  POPS_HD void operator()(const Real (&x)[1], Real (&residual)[1]) const {
+    residual[0] = Real(1e-20) * (x[0] - Real(1));
+  }
+};
+
+struct TinyScaledJacobian {
+  POPS_HD bool operator()(const Real (&)[1], Real (&jacobian)[1][1]) const {
+    jacobian[0][0] = Real(1e-20);
+    return true;
+  }
+};
+
+struct HugeJacobian {
+  POPS_HD bool operator()(const Real (&)[1], Real (&jacobian)[1][1]) const {
+    jacobian[0][0] = std::numeric_limits<Real>::max();
+    return true;
+  }
+};
+
+pops::PreparedLocalNonlinearControls scalar_controls() {
+  pops::PreparedLocalNonlinearControls controls;
+  controls.max_iterations = 20;
+  controls.absolute_tolerance = Real(1e-13);
+  return controls;
+}
+
+}  // namespace
+
+TEST(PreparedLocalNonlinear, FiniteDifferenceAnalyticAndAdUseOneOutcomeContract) {
+  const Real initial[1] = {Real(2)};
+  const auto controls = scalar_controls();
+  const auto finite_difference = pops::prepare_local_nonlinear_problem<1>(
+      SquareRootResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, controls);
+  const auto analytic = pops::prepare_local_nonlinear_problem<1>(
+      SquareRootResidual{},
+      pops::AnalyticLocalJacobian<1, SquareRootJacobian>{SquareRootJacobian{}},
+      pops::AcceptAllLocalCandidates<1>{}, controls);
+  const auto automatic_differentiation = pops::prepare_local_nonlinear_problem<1>(
+      SquareRootResidual{},
+      pops::AutomaticDifferentiationLocalJacobian<1, SquareRootJacobian>{SquareRootJacobian{}},
+      pops::AcceptAllLocalCandidates<1>{}, controls);
+
+  const auto fd = pops::solve_prepared_local_nonlinear(finite_difference, initial);
+  const auto exact = pops::solve_prepared_local_nonlinear(analytic, initial);
+  const auto ad = pops::solve_prepared_local_nonlinear(automatic_differentiation, initial);
+  ASSERT_TRUE(fd.solved());
+  ASSERT_TRUE(exact.solved());
+  ASSERT_TRUE(ad.solved());
+  EXPECT_NEAR(fd.value[0], std::sqrt(Real(2)), 1e-11);
+  EXPECT_NEAR(exact.value[0], fd.value[0], 1e-11);
+  EXPECT_NEAR(ad.value[0], exact.value[0], 1e-13);
+  EXPECT_EQ(initial[0], Real(2));
+}
+
+TEST(PreparedLocalNonlinear, PivotThresholdIsRelativeToTheScaledEquation) {
+  auto controls = scalar_controls();
+  controls.absolute_tolerance = Real(1e-30);
+  const Real initial[1] = {Real(2)};
+  const auto problem = pops::prepare_local_nonlinear_problem<1>(
+      TinyScaledResidual{},
+      pops::AnalyticLocalJacobian<1, TinyScaledJacobian>{TinyScaledJacobian{}},
+      pops::AcceptAllLocalCandidates<1>{}, controls);
+  const auto result = pops::solve_prepared_local_nonlinear(problem, initial);
+  ASSERT_TRUE(result.solved());
+  EXPECT_NEAR(result.value[0], Real(1), 1e-13);
+}
+
+TEST(PreparedLocalNonlinear, EveryFailureClassIsExplicitAndLeavesTheGuessUntouched) {
+  Real initial[1] = {Real(10)};
+  auto budget_controls = scalar_controls();
+  budget_controls.max_iterations = 1;
+  const auto budget_problem = pops::prepare_local_nonlinear_problem<1>(
+      SquareRootResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, budget_controls);
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(budget_problem, initial).status,
+            pops::LocalNonlinearStatus::kIterationLimit);
+
+  const auto singular_problem = pops::prepare_local_nonlinear_problem<1>(
+      ConstantResidual{}, pops::AnalyticLocalJacobian<1, ZeroJacobian>{ZeroJacobian{}},
+      pops::AcceptAllLocalCandidates<1>{}, scalar_controls());
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(singular_problem, initial).status,
+            pops::LocalNonlinearStatus::kSingularJacobian);
+
+  const auto invalid_problem = pops::prepare_local_nonlinear_problem<1>(
+      InvalidResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, scalar_controls());
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(invalid_problem, initial).status,
+            pops::LocalNonlinearStatus::kInvalidEvaluation);
+
+  const auto overflow_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::AnalyticLocalJacobian<1, HugeJacobian>{HugeJacobian{}},
+      pops::AcceptAllLocalCandidates<1>{}, scalar_controls(), Real(2), Real(1));
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(overflow_problem, initial).status,
+            pops::LocalNonlinearStatus::kInvalidEvaluation);
+
+  Real inadmissible_initial[1] = {Real(-1)};
+  const auto inadmissible_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::FiniteDifferenceLocalJacobian<1>{}, PositiveDomain{},
+      scalar_controls());
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(inadmissible_problem, inadmissible_initial).status,
+            pops::LocalNonlinearStatus::kInadmissibleCandidate);
+
+  auto safeguard_controls = scalar_controls();
+  safeguard_controls.safeguard = pops::LocalSafeguardKind::kBacktrackingLineSearch;
+  safeguard_controls.max_backtracks = 3;
+  safeguard_controls.minimum_step = Real(0.01);
+  Real safeguard_initial[1] = {Real(0)};
+  const auto safeguard_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{},
+      pops::AnalyticLocalJacobian<1, WrongDirectionJacobian>{WrongDirectionJacobian{}},
+      pops::AcceptAllLocalCandidates<1>{}, safeguard_controls);
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(safeguard_problem, safeguard_initial).status,
+            pops::LocalNonlinearStatus::kSafeguardFailure);
+
+  const auto unsupported_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::UnsupportedLocalJacobian<1>{}, pops::AcceptAllLocalCandidates<1>{},
+      scalar_controls());
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(unsupported_problem, safeguard_initial).status,
+            pops::LocalNonlinearStatus::kUnsupportedCapability);
+
+  auto invalid_controls = scalar_controls();
+  invalid_controls.absolute_tolerance = Real(0);
+  invalid_controls.relative_tolerance = Real(0);
+  invalid_controls.step_tolerance = Real(0);
+  const auto invalid_controls_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, invalid_controls);
+  EXPECT_EQ(
+      pops::solve_prepared_local_nonlinear(invalid_controls_problem, safeguard_initial).status,
+      pops::LocalNonlinearStatus::kUnsupportedCapability);
+
+  auto ignored_damping_controls = scalar_controls();
+  ignored_damping_controls.initial_step = Real(0.5);
+  const auto ignored_damping_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, ignored_damping_controls);
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(ignored_damping_problem, safeguard_initial).status,
+            pops::LocalNonlinearStatus::kUnsupportedCapability);
+
+  auto unknown_safeguard_controls = scalar_controls();
+  unknown_safeguard_controls.safeguard = static_cast<pops::LocalSafeguardKind>(99);
+  const auto unknown_safeguard_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, unknown_safeguard_controls);
+  EXPECT_EQ(pops::solve_prepared_local_nonlinear(unknown_safeguard_problem, safeguard_initial).status,
+            pops::LocalNonlinearStatus::kUnsupportedCapability);
+
+  int decoded_i = -1;
+  int decoded_j = -1;
+  int decoded_component = -1;
+  pops::detail::decode_local_nonlinear_failure(
+      pops::detail::encode_local_nonlinear_failure(17, 23, 4), decoded_i, decoded_j,
+      decoded_component);
+  EXPECT_EQ(decoded_i, 17);
+  EXPECT_EQ(decoded_j, 23);
+  EXPECT_EQ(decoded_component, 4);
+
+  EXPECT_EQ(initial[0], Real(10));
+  EXPECT_EQ(inadmissible_initial[0], Real(-1));
+  EXPECT_EQ(safeguard_initial[0], Real(0));
+}

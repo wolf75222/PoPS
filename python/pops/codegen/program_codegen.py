@@ -432,9 +432,9 @@ def _check_lowerable(
     _check_schedules_lowerable(program, target=target)
     for v in program._values:
         _check_op_lowerable(program, v, model, field_plans or {})
-    # Dense local and coupled solves are specialized to the complete manifest-sized system.  The
-    # emitted ``mat_inverse<N>`` owns exactly N x N stack storage and bounded loops; no central
-    # component-count allowlist, truncating buffer, or scientific-model branch selects N.
+    # Dense local linear solves and prepared local nonlinear solves are specialized to the complete
+    # manifest-sized system. Their stack storage and loops use exactly N; no central component-count
+    # allowlist, truncating buffer, or scientific-model branch selects N.
 
 
 # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work
