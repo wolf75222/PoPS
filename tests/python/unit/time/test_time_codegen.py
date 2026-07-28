@@ -81,6 +81,16 @@ def _emit(program, model=None):
         program, model=model, field_plans=_field_plans(program))
 
 
+def _canonical_explicit_rk(t, factory):
+    from pops.physics._facade import Model
+
+    model = Model(factory.__name__ + "_model")
+    model.conservative_vars("u")
+    rate = model.rate("rate", flux=True, sources=())
+    block, state = state_refs(t.Program("refs"), "blk", model=model)
+    return factory(block[state], rate=rate)
+
+
 def test_forward_euler_abi(t):
     P = _forward_euler(t)
     src = _emit(P)
@@ -119,6 +129,25 @@ def test_multistage_lowers(t):
     assert "ctx.scratch_state(" in src, "SSPRK2 needs an intermediate scratch state"
     assert "ctx.commit_many(" in src, "the committed stage writes every endpoint atomically"
     assert "0.5" in src, "SSPRK2 weights (0.5) should appear in the generated source"
+
+
+def test_canonical_ssprk_amr_codegen_preserves_exact_distinct_ledger_weights(t):
+    from pops.lib import time as lt
+
+    expected = {
+        lt.SSPRK2: ("{{1, 1, 2}}", "{{1, 1, 2}}"),
+        lt.SSPRK3: ("{{1, 1, 6}}", "{{1, 1, 6}}", "{{1, 2, 3}}"),
+    }
+    for factory, stage_metadata in expected.items():
+        src = emit_cpp_program(
+            _canonical_explicit_rk(t, factory), target="amr_system")
+        axpy = [line.strip() for line in src.splitlines() if "ctx.axpy(" in line]
+        final_stage_axpy = axpy[-len(stage_metadata):]
+
+        assert src.count("ctx.neg_div_flux_default_into(") == len(stage_metadata)
+        assert len(final_stage_axpy) == len(stage_metadata)
+        for line, metadata in zip(final_stage_axpy, stage_metadata, strict=True):
+            assert line.endswith(", dt, %s);" % metadata), line
 
 
 def test_includes_present(t):
