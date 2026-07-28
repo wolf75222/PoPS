@@ -159,11 +159,18 @@ if [[ -n "$WHEEL_DIR" && "$WHEEL_DIR" != /* ]]; then
 fi
 cmake_settings=(-C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
 if [[ $WITH_MPI -eq 1 ]]; then
-  # Environment seeding applies only to a fresh CMake cache.  These explicit settings also switch
-  # an existing serial scikit-build cache to the requested MPI + parallel-HDF5 contract.
+  # Environment seeding applies only to a fresh CMake cache.  These explicit settings switch an
+  # existing scikit-build cache to the requested MPI + parallel-HDF5 contract.
   cmake_settings+=(
     -C cmake.define.POPS_USE_MPI=ON
     -C cmake.define.POPS_USE_HDF5=ON
+  )
+else
+  # The ordinary invocation is an exact serial request even after a previous ``--mpi`` build reused
+  # this persistent wheel-tag cache.
+  cmake_settings+=(
+    -C cmake.define.POPS_USE_MPI=OFF
+    -C cmake.define.POPS_USE_HDF5=OFF
   )
 fi
 if [[ -n "$WHEEL_DIR" ]]; then
