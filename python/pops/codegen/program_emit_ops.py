@@ -74,7 +74,8 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
 
 def _append_pointwise_solve_report(
         program: Any, solve: Any, status: str, lines: list[str], *,
-        label: str, stem: str) -> None:
+        label: str, stem: str, active_mask: str | None = None,
+        block: int | None = None) -> None:
     """Reduce typed per-cell status and consume one collective ``SolveReport``.
 
     Pointwise kernels own the report they create, so they author its failure disposition before
@@ -89,9 +90,14 @@ def _append_pointwise_solve_report(
 
     code = "%s_code_%d" % (stem, solve.id)
     report = "%s_report_%d" % (stem, solve.id)
-    lines.append(
-        "const int %s = static_cast<int>(pops::reduce_max(%s, 0));"
-        % (code, status))
+    if active_mask is None:
+        reduction = "pops::reduce_max(%s, 0)" % status
+    else:
+        if block is None:
+            raise ValueError("pointwise masked solve reduction requires a runtime block index")
+        reduction = "ctx.pointwise_status_max(%d, %s, %s)" % (
+            block, status, active_mask)
+    lines.append("const int %s = static_cast<int>(%s);" % (code, reduction))
     lines.append("pops::SolveReport %s;" % report)
     lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
     lines.append(
@@ -511,7 +517,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "solve_local_nonlinear":
         # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
         # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
-        # uses. The output is a fresh scratch state; the guess input seeds the iterate.
+        # uses. The provisional output remains in a fresh scratch until the collectively reduced
+        # per-cell status has formed a SolveReport and the exact SolveOutcome action accepts it.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
         status = "local_solve_status_%d" % v.id
@@ -523,10 +530,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[v.id], int(v.id), var[base.id]))
         lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
                      % (status, int(v.id), var[v.id]))
+        active_mask = "local_solve_active_mask_%d" % v.id
+        lines.append(
+            "const pops::MultiFab* %s = ctx.pointwise_active_mask(%d, %s);"
+            % (active_mask, bidx, status))
         lines += _emit_solve_local_nonlinear_kernel(
-            node_model, v, var[guess_in.id], var[v.id], status, bidx)
+            node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx)
         _append_pointwise_solve_report(
-            program, v, status, lines, label="local_nonlinear", stem="local_solve")
+            program, v, status, lines, label="local_nonlinear", stem="local_solve",
+            active_mask=active_mask, block=bidx)
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
@@ -584,8 +596,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
     elif v.op in ("solve_outcome", "solve_outcome_component"):
         # Python graph/authoring requires an explicit consumed outcome before a solve result can feed
-        # effects. Runtime lowering keeps the existing Krylov call as the value-producing operation;
-        # these nodes are zero-cost aliases that preserve that explicit contract in the IR.
+        # effects. The solve-producing operation has already constructed and guarded its native
+        # SolveReport using the exact action attached to this outcome. These projections are therefore
+        # zero-cost aliases of a scratch that is reachable only after the guard accepted it.
         (source,) = v.inputs
         if v.op == "solve_outcome_component" and "out_block" in v.attrs:
             solve = source.inputs[0]

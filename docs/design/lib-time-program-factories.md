@@ -51,6 +51,15 @@ the selected failure action. `IMEX_ARS222_TABLEAU` stores the standard ARS(2,2,2
 fixed IEEE-754 binary64 authoring values, so semantic identity never depends on a platform `sqrt`
 call. A nonlinear source that reads a solved field remains a manually authored residual Program:
 the cell-local Newton kernel cannot run a hierarchy field solve while perturbing one cell.
+The same compiled nonlinear Program executes on every active AMR level; hierarchy traversal,
+reflux and average-down remain native spatial services rather than a second time integrator.
+Each level reduces the pointwise Newton status collectively over its active cells. A converged
+scratch becomes readable only after the authored `SolveOutcome` action accepts its `SolveReport`;
+`FailRun` therefore aborts before commit, leaving the accepted hierarchy and clock unchanged.
+Every valid cell on every AMR level participates in the pointwise solve and collective status,
+including parent cells covered by a fine level. The accepted parent old/new states are required by
+the parent predictor and temporal coarse-to-fine fill-patch interpolation, so fine coverage never
+removes a valid parent cell from the solve.
 
 A partial implicit update is expressed by the source operator itself, for example
 `source_term("momentum_drag", [0 * rho, -k * mx, -k * my])`. Components with a zero source remain
