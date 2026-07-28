@@ -68,10 +68,23 @@ def test_project_and_recheck_is_lazy_lowered_and_visible_in_transaction_identity
     assert plan.guards[0].role is GuardRole.ERROR_ESTIMATE
     assert plan.projections == (BlockProjection(),)
     source = emit_cpp_program(program)
-    assert "ctx.apply_projection(0," in source
-    assert '"guard"' in source
-    assert "StepAttemptRejected" in source
-    assert "ctx.commit_many({" in source
+    projection = source.index("ctx.apply_projection(0,")
+    recheck_reduction = source.index("ctx.norm_inf(0,", projection)
+    recheck_branch = source.index("if (!(", recheck_reduction)
+    rejection = source.index("StepAttemptRejected", recheck_branch)
+    commit = source.index("ctx.commit_many({", rejection)
+    assert projection < recheck_reduction < recheck_branch < rejection < commit
+
+    report = StepTransactionReport(
+        status="accepted",
+        phase="commit",
+        action="commit",
+        projections=tuple(
+            guard.name for guard in plan.guards
+            if type(guard.action) is ProjectAndRecheck
+        ),
+    )
+    assert report.to_data()["projections"] == ["embedded_error"]
 
 
 def test_error_controlled_strategy_requires_an_actual_lowered_error_guard():
@@ -98,8 +111,10 @@ def test_step_transaction_report_refuses_partial_publication():
         action="commit",
         staged_effects=("states",),
         committed_effects=("states",),
+        projections=("realizability",),
     )
     assert accepted.to_data()["committed_effects"] == ["states"]
+    assert accepted.to_data()["projections"] == ["realizability"]
     with pytest.raises(ValueError, match="cannot include committed_effects"):
         StepTransactionReport(
             status="rejected",
@@ -113,6 +128,13 @@ def test_step_transaction_report_refuses_partial_publication():
             phase="commit",
             action="commit",
             rolled_back_effects=("states",),
+        )
+    with pytest.raises(ValueError, match="cannot contain duplicates"):
+        StepTransactionReport(
+            status="accepted",
+            phase="commit",
+            action="commit",
+            projections=("realizability", "realizability"),
         )
 
 

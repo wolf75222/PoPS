@@ -16,8 +16,10 @@ from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._step_strategy import run_step_attempt
 from pops.time import (
     ALL_PROVISIONAL_STORES,
+    BlockProjection,
     ErrorControlledDt,
     FixedDt,
+    ProjectAndRecheck,
     StepTransactionReport,
 )
 
@@ -233,6 +235,24 @@ def test_success_commits_native_clock_cursors_and_attempt_counter_together():
     assert runtime._consumer_reports == ((False, False),)
     assert runtime.artifacts == {"sample.out"}
     assert native.events == ["begin", "commit", "publish", "finalize"]
+
+
+def test_controller_report_carries_project_and_recheck_guard_identity():
+    native = _Native()
+    native._step_transaction_plan = SimpleNamespace(
+        stores=ALL_PROVISIONAL_STORES,
+        guards=(
+            SimpleNamespace(
+                name="realizability",
+                action=ProjectAndRecheck(BlockProjection()),
+            ),
+        ),
+    )
+
+    report = run_step_attempt(native, native, FixedDt(0.125), t_end=0.125)
+
+    assert report.projections == ("realizability",)
+    assert report.to_data()["projections"] == ["realizability"]
 
 
 def test_error_controlled_retry_rolls_back_before_opening_the_next_attempt():
@@ -469,6 +489,15 @@ def test_fault_injection_matrix_restores_every_available_store_and_reports_exact
         } else None,
         fail_commit=phase == "commit",
     )
+    native._step_transaction_plan = SimpleNamespace(
+        stores=ALL_PROVISIONAL_STORES,
+        guards=(
+            SimpleNamespace(
+                name="realizability",
+                action=ProjectAndRecheck(BlockProjection()),
+            ),
+        ),
+    )
     runtime = _Runtime(native, fail_effect=phase == "effect")
     runtime._consumer_cursors = ConsumerCursorSet((
         ScheduleCursor("accepted-sample", "accepted-occurrence", 3),
@@ -522,4 +551,5 @@ def test_fault_injection_matrix_restores_every_available_store_and_reports_exact
     assert report.committed_effects == ()
     assert report.rolled_back_effects == stores
     assert report.attempts == 1
+    assert report.projections == ("realizability",)
     assert report.diagnostics == (diagnostic,)
