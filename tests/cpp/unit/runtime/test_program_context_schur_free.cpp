@@ -18,7 +18,10 @@
 
 #include <pops/runtime/program/program_context.hpp>
 
+#include <map>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 // The facade type is complete and usable from program_context.hpp alone (a self-contained TU). If the
 // header had lost a needed include when the Schur material moved out, this static_assert would not
@@ -31,6 +34,11 @@ static_assert(std::is_class<pops::runtime::program::ProgramContext>::value,
 // still carries its seam constructor after the Schur split.
 static_assert(!std::is_trivially_constructible<pops::runtime::program::ProgramContext>::value,
               "ProgramContext keeps its System-wrapping constructor after the split");
+static_assert(
+    std::is_base_of_v<
+        pops::runtime::program::ProgramExecutionServices<pops::runtime::program::ProgramContext>,
+        pops::runtime::program::ProgramContext>,
+    "ProgramContext must consume the one shared Program execution-service implementation");
 
 TEST(ProgramContextSchurFree, HeaderIsSelfContainedAndBuilds) {
   // Reaching this TEST means program_context.hpp compiled standalone (no Schur/MG/Lorentz headers).
@@ -39,4 +47,116 @@ TEST(ProgramContextSchurFree, HeaderIsSelfContainedAndBuilds) {
   pops::runtime::program::ProgramContext ctx(static_cast<void*>(nullptr));
   (void)ctx;
   SUCCEED() << "program_context.hpp builds without any coupling/schur/** dependency";
+}
+
+namespace {
+
+template <bool Amr>
+class ExecutionServicesFixture
+    : public pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>> {
+ public:
+  explicit ExecutionServicesFixture(int active_level) : active_level_(active_level) {}
+
+  int last_params_block() const { return last_params_block_; }
+  int field_update_count() const { return field_update_count_; }
+  pops::Real diagnostic(const std::string& name) const { return diagnostics_.at(name); }
+
+ private:
+  friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
+
+  const std::vector<int>& program_execution_block_map_() const { return block_map_; }
+  int program_execution_block_count_() const { return 2; }
+  pops::Real program_execution_physical_time_() const { return pops::Real(3.5); }
+  void program_execution_record_scalar_(const std::string& name, pops::Real value) const {
+    diagnostics_[name] = value;
+  }
+  pops::RuntimeParams program_execution_params_(int block) const {
+    last_params_block_ = block;
+    return {};
+  }
+  void program_execution_set_field_timepoint_(const std::string&,
+                                              const pops::FieldLogicalTimePoint&) const {
+    ++field_update_count_;
+  }
+  void program_execution_set_field_parameters_(const std::string&,
+                                               const std::vector<double>&) const {
+    ++field_update_count_;
+  }
+  void program_execution_set_field_kernel_(const std::string&,
+                                           const pops::CompiledFieldBoundaryKernel&) const {
+    ++field_update_count_;
+  }
+  pops::runtime::program::Profiler& program_execution_profiler_() const { return profiler_; }
+  int program_execution_macro_step_() const { return 4; }
+  int program_execution_active_level_() const { return active_level_; }
+
+  int active_level_ = -1;
+  std::vector<int> block_map_{1, 0};
+  mutable std::map<std::string, pops::Real> diagnostics_;
+  mutable int last_params_block_ = -1;
+  mutable int field_update_count_ = 0;
+  mutable pops::runtime::program::Profiler profiler_;
+};
+
+template <class Context>
+void expect_shared_program_services(Context& context, bool amr) {
+  using pops::runtime::program::ScheduleDomainKind;
+
+  context.configure_primary_clock("clock.macro");
+  context.declare_clock_relation("clock.macro", "clock.fast", 2);
+  EXPECT_TRUE(
+      context.schedule_domain_occurs(ScheduleDomainKind::kAcceptedStep, "clock.macro", "", -1));
+  EXPECT_TRUE(
+      context.schedule_is_due(7, 2, ScheduleDomainKind::kAcceptedStep, "clock.macro", "", -1));
+  EXPECT_FALSE(context.schedule_at_start(ScheduleDomainKind::kAcceptedStep, "clock.macro", "", -1));
+  EXPECT_EQ(context.schedule_domain_occurs(ScheduleDomainKind::kAmrLevel, "clock.macro", "", 1),
+            amr);
+
+  auto subcycle = context.subcycle_scope("clock.macro", "clock.fast", 2);
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    subcycle.iteration(iteration);
+    EXPECT_TRUE(
+        context.schedule_domain_occurs(ScheduleDomainKind::kClockTick, "clock.fast", "", -1));
+  }
+  subcycle.finish();
+  context.synchronize_sample_and_hold("clock.macro", "clock.fast", 4, pops::Real(0));
+
+  EXPECT_EQ(context.sys_block(0), 1);
+  EXPECT_EQ(context.sys_block(1), 0);
+  EXPECT_EQ(context.n_blocks(), 2);
+  EXPECT_EQ(context.macro_step(), 4);
+  EXPECT_DOUBLE_EQ(static_cast<double>(context.physical_time()), 3.5);
+
+  context.set_stage_time(1, 2);
+  context.record_scalar("mass", pops::Real(9));
+  EXPECT_EQ(context.diagnostic("mass"), pops::Real(9));
+  (void)context.program_params(1);
+  EXPECT_EQ(context.last_params_block(), 1);
+  context.set_field_logical_timepoint("potential", {});
+  context.set_field_boundary_parameters("potential", {1.0, 2.0});
+  context.set_field_boundary_kernel("potential", {});
+  EXPECT_EQ(context.field_update_count(), 3);
+
+  context.profiler().enable();
+  EXPECT_TRUE(context.schedule_decision(3, true, true));
+  EXPECT_EQ(context.profiler().counter("nodes_due"), 1);
+  EXPECT_EQ(context.profiler().counter("cache_misses"), 1);
+  context.count_kernel(2);
+  EXPECT_EQ(context.profiler().counter("kernels"), 2);
+
+  EXPECT_THROW(context.set_stage_time(2, 1), std::runtime_error);
+  EXPECT_THROW(
+      context.schedule_is_due(-1, 2, ScheduleDomainKind::kAcceptedStep, "clock.macro", "", -1),
+      std::runtime_error);
+  EXPECT_THROW(context.sys_block(2), std::runtime_error);
+  EXPECT_THROW(context.scheduler_error("stale value"), std::runtime_error);
+}
+
+}  // namespace
+
+TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameContractFixture) {
+  ExecutionServicesFixture<false> uniform(-1);
+  ExecutionServicesFixture<true> amr(1);
+  expect_shared_program_services(uniform, false);
+  expect_shared_program_services(amr, true);
 }

@@ -130,7 +130,7 @@ DEFERRED_GROUPS: dict = {
         "ir_ops": frozenset(),  # scheduling is an attr on an op node, not a distinct IR op
         "header_methods": frozenset({"cache_should_update", "cache_store_aux", "cache_restore_aux",
                                     "cache_store_scratch", "cache_restore_scratch",
-                                    "cache_accumulate_dt", "cache_effective_dt", "scheduler_error"}),
+                                    "cache_accumulate_dt", "cache_effective_dt"}),
     },
 }
 

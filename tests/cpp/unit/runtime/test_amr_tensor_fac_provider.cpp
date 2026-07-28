@@ -22,6 +22,11 @@ using pops::runtime::program::HierarchyTensorSolverBuildRequest;
 using pops::runtime::program::HierarchyTensorSolverExecutionPath;
 using pops::runtime::program::HierarchyTensorSolverProvider;
 using pops::runtime::program::PreparedHierarchyTensorSolver;
+using pops::runtime::program::ProgramExecutionServices;
+
+static_assert(
+    std::is_base_of_v<ProgramExecutionServices<AmrProgramContext>, AmrProgramContext>,
+    "AmrProgramContext must consume the one shared Program execution-service implementation");
 
 class DistinctHierarchyPrepared final : public PreparedHierarchyTensorSolver {
  public:
