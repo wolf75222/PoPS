@@ -494,9 +494,9 @@ class SlipWall:
             for component, token in tokens.items()
             if token in {normal_token, normal_velocity}
         ]
-        if len(normal) != 1:
+        if not normal:
             raise ValueError(
-                "SlipWall on %s requires exactly one declared normal polar-vector component"
+                "SlipWall on %s requires a declared normal polar-vector component"
                 % geometry.name
             )
         return _resolved_condition(

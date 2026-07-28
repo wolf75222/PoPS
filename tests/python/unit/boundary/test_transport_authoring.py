@@ -7,7 +7,7 @@ from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import ResolvedTransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow, SlipWall
 from pops.domain import Rectangle
-from pops.frames import Cartesian2D
+from pops.frames import Cartesian2D, Z_AXIS
 from pops.math import ddt, div
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -163,7 +163,7 @@ def test_slip_wall_requires_roles_and_lowers_one_model_aware_face_law():
             "rho": Density(),
             "mx": Momentum(axis=x_axis),
             "my": Momentum(axis=y_axis),
-            "bz": Axial(axis=y_axis),
+            "bz": Axial(axis=Z_AXIS),
         },
     )
     rho, mx, my, bz = state
@@ -175,7 +175,10 @@ def test_slip_wall_requires_roles_and_lowers_one_model_aware_face_law():
             x_axis: (rho, mx, my, bz),
             y_axis: (rho, mx, my, bz),
         },
-        waves={x_axis: (1.0, 1.0, 1.0, 1.0), y_axis: (1.0, 1.0, 1.0, 1.0)},
+        waves={
+            x_axis: (1.0, 1.0, 1.0, 1.0),
+            y_axis: (1.0, 1.0, 1.0, 1.0),
+        },
     )
     rate = model.rate("rate", equation=ddt(state) == -div(flux))
     method = FiniteVolume(
@@ -199,4 +202,4 @@ def test_slip_wall_requires_roles_and_lowers_one_model_aware_face_law():
     assert {row.condition_type for row in authority.conditions} == {"slip_wall"}
     runtime = authority.runtime_boundary_data({})
     assert [row["type"] for row in runtime["faces"]] == ["slip_wall"] * 4
-    assert all(row["values"] == [0.0, 0.0, 0.0, 0.0] for row in runtime["faces"])
+    assert all(row["values"] == [0.0] * 4 for row in runtime["faces"])

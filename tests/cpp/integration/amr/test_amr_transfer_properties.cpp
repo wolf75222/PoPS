@@ -587,3 +587,78 @@ TEST(test_amr_transfer_properties, BootstrapMaterializesPreparedBoundarySessionA
         coarse_rhs.fab(0).const_array()(coarse_rhs.box(0).lo[0], coarse_rhs.box(0).lo[1], 0),
         kPreparedBoundarySentinel);
 }
+
+TEST(test_amr_transfer_properties, RuntimePreparedSlipWallFillsDeepPhysicalGhosts) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  const BoxArray boxes(std::vector<Box2D>{domain});
+  const DistributionMapping distribution(boxes.size(), n_ranks());
+  const Geometry geometry{domain, Real(0), Real(1), Real(0), Real(1)};
+  const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
+  AmrHierarchyLayout hierarchy{{boxes}, {distribution}, {Real(0.25)}, {Real(0.25)},
+                               {},      load_balance};
+
+  MultiFab state(boxes, distribution, 5, 2);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      values(i, j, 0) = Real(1);
+      values(i, j, 1) = Real(2);
+      values(i, j, 2) = Real(5);
+      values(i, j, 3) = Real(3);
+      values(i, j, 4) = Real(4);
+    });
+  }
+  device_fence();
+  auto levels = std::make_shared<std::vector<AmrLevelMP>>();
+  levels->push_back(AmrLevelMP{std::move(state), nullptr, Real(0.25), Real(0.25)});
+
+  AmrRuntimeBlock block;
+  block.name = "fluid";
+  block.state_identity = "case::amr::fluid::state::U";
+  block.ncomp = 5;
+  block.levels = std::move(levels);
+  block.boundary_plan = std::make_shared<PreparedBoundaryPlan>(
+      "case::amr::fluid::boundary", 2,
+      prepare_hyperbolic_boundary<2>({"slip_wall", "slip_wall", "slip_wall", "slip_wall"},
+                                     std::vector<double>(20, 0.0),
+                                     {"case::amr::fluid::xlo", "case::amr::fluid::xhi",
+                                      "case::amr::fluid::ylo", "case::amr::fluid::yhi"},
+                                     {"Density", "MomentumX", "MomentumX", "MomentumY", "AxialZ"}),
+      std::vector<int>{}, block.state_identity);
+  block.boundary_field_registry = std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
+  block.level_rhs_core_at_point_prepared =
+      [](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U, const MultiFab&,
+         const Geometry&, MultiFab& R, const PreparedGridBoundarySession& boundary) {
+        boundary.fill_same_level_and_physical(U, point);
+        R.set_val(Real(0));
+      };
+  block.level_boundary_residual_at_point_prepared =
+      [](const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, const MultiFab&,
+         const Geometry&, MultiFab&, const PreparedGridBoundarySession&) {};
+
+  BCRec poisson_boundary;
+  poisson_boundary.xlo = poisson_boundary.xhi = BCType::Foextrap;
+  poisson_boundary.ylo = poisson_boundary.yhi = BCType::Foextrap;
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(std::move(block));
+  AmrRuntime runtime(geometry, std::move(hierarchy), poisson_boundary, std::move(blocks),
+                     Periodicity{false, false}, true);
+  runtime.install_boundary_storage_routes({});
+
+  MultiFab& live = runtime.level_state(0, 0);
+  MultiFab rhs(live.box_array(), live.dmap(), live.ncomp(), 0);
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.amr-slip",    0,   0,  0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.0};
+  EXPECT_NO_THROW(runtime.level_rhs_into_at(0, 0, point, live, rhs));
+  device_fence();
+
+  if (live.local_size() > 0) {
+    const ConstArray4 values = live.fab(0).const_array();
+    EXPECT_EQ(values(-2, 2, 1), Real(-2));
+    EXPECT_EQ(values(-2, 2, 2), Real(-5));
+    EXPECT_EQ(values(-2, 2, 4), Real(-4));
+    EXPECT_EQ(values(2, -2, 3), Real(-3));
+    EXPECT_EQ(values(2, -2, 4), Real(-4));
+  }
+}
