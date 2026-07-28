@@ -419,6 +419,48 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
     assert authorities.bootstrap.tagging == authorities.tagging.graph
 
 
+def test_gradient_tagging_fails_at_resolve_without_context_or_one_consumer_layout():
+    from pops.amr._resolution import AMRTaggingResolutionContext
+    from pops.math import ValueExpr
+    from pops.mesh import LayoutPlanBuilder
+    from pops.model import Handle
+
+    target = _example().build_final_case()
+    case = pops.validate(target.authoring.case)
+    descriptor = target.layout.resolve_for_case(case.resolve)
+    owner = case.owner_path.canonical()
+    numerics = tuple(
+        case._resolved_numerics_for(name) for name in sorted(case._numerics_assignments)
+    )
+    threshold = case.resolve(target.authoring.refine_threshold)
+
+    missing = Handle("missing-discrete-state", kind="state", owner=owner)
+    missing_builder = LayoutPlanBuilder(owner)
+    missing_layout = missing_builder.layout("only", descriptor)
+    missing_builder.assign_state(missing, missing_layout)
+    missing_plan = missing_builder.resolve(states=(missing,))
+    missing_context = AMRTaggingResolutionContext(
+        owner, missing_plan, numerics, case.resolve)
+    with pytest.raises(ValueError, match="has no resolved spatial discretization"):
+        missing_context.resolve_gradient_magnitude(
+            field=ValueExpr(missing), scale=1, action="refine",
+            comparison="gt", threshold=threshold)
+
+    state = case.resolve(target.authoring.tracer_state)
+    multiple_builder = LayoutPlanBuilder(owner)
+    first = multiple_builder.layout("first", descriptor)
+    multiple_builder.layout("second", descriptor)
+    multiple_builder.assign_state(state, first)
+    multiple_plan = multiple_builder.resolve(states=(state,))
+    multiple_context = AMRTaggingResolutionContext(
+        owner, multiple_plan, numerics, case.resolve)
+    with pytest.raises(
+            ValueError, match="requires exactly one adaptive layout authority"):
+        multiple_context.resolve_gradient_magnitude(
+            field=ValueExpr(state), scale=1, action="refine",
+            comparison="gt", threshold=threshold)
+
+
 def test_temporal_relations_are_exact_explicit_and_independent_from_spatial_ratios():
     from pops.amr import (
         AMRClockRelation,
