@@ -24,8 +24,10 @@
 
 #include <gtest/gtest.h>
 
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/allocator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
@@ -390,6 +392,55 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   EXPECT_THROW(ctx.commit_many({{&first, &wrong_components}}), std::invalid_argument);
   EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
   EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
+}
+
+TEST(ProgramContextContract, SystemPreparedSlipWallFillsDeepPhysicalGhosts) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::fluid::state::U";
+  sim.install_block_state_route("fluid", state_identity);
+  sim.install_boundary_plan(
+      "fluid", "case::block::fluid::boundary", 2,
+      {"slip_wall", "slip_wall", "slip_wall", "slip_wall"}, std::vector<double>(20, 0.0),
+      {"case::block::fluid::xlo", "case::block::fluid::xhi", "case::block::fluid::ylo",
+       "case::block::fluid::yhi"},
+      {"Density", "MomentumX", "MomentumX", "MomentumY", "AxialZ"}, {}, state_identity);
+  sim.install_block("fluid", 5, VariableSet{}, VariableSet{}, 1.0, BlockClosures{}, {}, {}, 1, true,
+                    1);
+
+  MultiFab& state = sim.block_state(0);
+  ASSERT_GE(state.n_grow(), 2);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      values(i, j, 0) = Real(1);
+      values(i, j, 1) = Real(2);
+      values(i, j, 2) = Real(5);
+      values(i, j, 3) = Real(3);
+      values(i, j, 4) = Real(4);
+    });
+  }
+  device_fence();
+  const auto lane = ExecutionLane::world("test.system.deep-slip-wall");
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.system-slip", 0,   0,  0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("fluid"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  if (state.local_size() > 0) {
+    const ConstArray4 values = state.fab(0).const_array();
+    EXPECT_EQ(values(-2, 2, 1), Real(-2));
+    EXPECT_EQ(values(-2, 2, 2), Real(-5));
+    EXPECT_EQ(values(-2, 2, 4), Real(-4));
+    EXPECT_EQ(values(2, -2, 3), Real(-3));
+    EXPECT_EQ(values(2, -2, 4), Real(-4));
+  }
 }
 
 TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {

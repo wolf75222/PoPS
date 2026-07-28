@@ -40,7 +40,9 @@ enum class HyperbolicComponentParity { Scalar, PolarVector, AxialVector };
 ///
 /// A polar vector reverses its normal component at a reflective plane.  An axial vector applies
 /// det(R)R, so its normal component is preserved and every tangential component reverses.  Scalars
-/// are even.  The axis is declaration metadata, never inferred from the component index.
+/// are even.  The axis is a three-dimensional physical-component axis, never inferred from the
+/// component index.  It is intentionally independent of @p Dim: a 1D/2D mesh may evolve transverse
+/// polar components or an out-of-plane axial component (the usual 2.5D case).
 template <int Dim>
 struct HyperbolicComponentTransform {
   static_assert(Dim >= 1 && Dim <= 3);
@@ -50,13 +52,15 @@ struct HyperbolicComponentTransform {
 
   static HyperbolicComponentTransform scalar() { return {}; }
   static HyperbolicComponentTransform polar_vector(int component_axis) {
-    if (component_axis < 0 || component_axis >= Dim)
-      throw std::invalid_argument("polar boundary component axis is outside the model dimension");
+    if (component_axis < 0 || component_axis >= 3)
+      throw std::invalid_argument(
+          "polar boundary component axis is outside the physical x/y/z embedding");
     return {HyperbolicComponentParity::PolarVector, component_axis};
   }
   static HyperbolicComponentTransform axial_vector(int component_axis) {
-    if (component_axis < 0 || component_axis >= Dim)
-      throw std::invalid_argument("axial boundary component axis is outside the model dimension");
+    if (component_axis < 0 || component_axis >= 3)
+      throw std::invalid_argument(
+          "axial boundary component axis is outside the physical x/y/z embedding");
     return {HyperbolicComponentParity::AxialVector, component_axis};
   }
 
@@ -268,28 +272,16 @@ template <int Dim>
 inline HyperbolicComponentTransform<Dim> transform_from_role(std::string_view role) {
   if (role == "MomentumX" || role == "VelocityX")
     return HyperbolicComponentTransform<Dim>::polar_vector(0);
-  if (role == "MomentumY" || role == "VelocityY") {
-    if constexpr (Dim < 2)
-      throw std::invalid_argument("model role references the absent y axis");
+  if (role == "MomentumY" || role == "VelocityY")
     return HyperbolicComponentTransform<Dim>::polar_vector(1);
-  }
-  if (role == "MomentumZ" || role == "VelocityZ") {
-    if constexpr (Dim < 3)
-      throw std::invalid_argument("model role references the absent z axis");
+  if (role == "MomentumZ" || role == "VelocityZ")
     return HyperbolicComponentTransform<Dim>::polar_vector(2);
-  }
   if (role == "AxialX")
     return HyperbolicComponentTransform<Dim>::axial_vector(0);
-  if (role == "AxialY") {
-    if constexpr (Dim < 2)
-      throw std::invalid_argument("axial model role references the absent y axis");
+  if (role == "AxialY")
     return HyperbolicComponentTransform<Dim>::axial_vector(1);
-  }
-  if (role == "AxialZ") {
-    if constexpr (Dim < 3)
-      throw std::invalid_argument("axial model role references the absent z axis");
+  if (role == "AxialZ")
     return HyperbolicComponentTransform<Dim>::axial_vector(2);
-  }
   if (role == "Density" || role == "Energy" || role == "Pressure" || role == "Temperature" ||
       role == "Scalar" || role == "Custom")
     return HyperbolicComponentTransform<Dim>::scalar();

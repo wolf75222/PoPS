@@ -152,33 +152,40 @@ TEST(test_prepared_boundary_plan, executes_same_level_and_component_physical_pro
   EXPECT_EQ(field(4, 2, 1), Real(16));  // 2*9 - interior(2)
 }
 
-TEST(test_prepared_boundary_plan, model_aware_slip_wall_reverses_only_normal_polar_component) {
+TEST(test_prepared_boundary_plan,
+     model_aware_slip_wall_handles_multiple_normal_and_out_of_plane_components) {
   const Box2D domain = Box2D::from_extents(4, 4);
-  MultiFab state = scalar_field(domain, 4, 1);
+  MultiFab state = scalar_field(domain, 5, 2);
   for (int local = 0; local < state.local_size(); ++local) {
     const Array4 values = state.fab(local).array();
     for_each_cell(state.box(local), [=](int i, int j) {
       values(i, j, 0) = Real(1);
       values(i, j, 1) = Real(2);
-      values(i, j, 2) = Real(3);
-      values(i, j, 3) = Real(4);
+      values(i, j, 2) = Real(5);
+      values(i, j, 3) = Real(3);
+      values(i, j, 4) = Real(4);
     });
   }
   auto boundary = prepare_hyperbolic_boundary<2>(
-      {"slip_wall", "slip_wall", "foextrap", "foextrap"}, std::vector<double>(16, 0.0),
+      {"slip_wall", "slip_wall", "slip_wall", "slip_wall"}, std::vector<double>(20, 0.0),
       {"case::fluid::xlo", "case::fluid::xhi", "case::fluid::ylo", "case::fluid::yhi"},
-      {"Density", "MomentumX", "MomentumY", "Energy"});
-  PreparedBoundaryPlan plan("case::fluid::slip-plan", 1, std::move(boundary));
+      {"Density", "MomentumX", "MomentumX", "MomentumY", "AxialZ"});
+  PreparedBoundaryPlan plan("case::fluid::slip-plan", 2, std::move(boundary));
 
   plan.fill_same_level_and_physical(state, domain);
 
   const Fab2D& field = state.fab(0);
   EXPECT_EQ(field(-1, 2, 0), Real(1));
   EXPECT_EQ(field(-1, 2, 1), Real(-2));
-  EXPECT_EQ(field(-1, 2, 2), Real(3));
-  EXPECT_EQ(field(-1, 2, 3), Real(4));
+  EXPECT_EQ(field(-1, 2, 2), Real(-5));
+  EXPECT_EQ(field(-1, 2, 3), Real(3));
+  EXPECT_EQ(field(-1, 2, 4), Real(-4));
+  EXPECT_EQ(field(-2, 2, 1), Real(-2));
   EXPECT_EQ(field(2, -1, 1), Real(2));
-  EXPECT_EQ(field(2, -1, 2), Real(3));
+  EXPECT_EQ(field(2, -1, 2), Real(5));
+  EXPECT_EQ(field(2, -1, 3), Real(-3));
+  EXPECT_EQ(field(2, -1, 4), Real(-4));
+  EXPECT_EQ(field(2, -2, 3), Real(-3));
 }
 
 TEST(test_prepared_boundary_plan, polar_and_axial_reflections_are_distinct_in_1d_2d_3d_frames) {
@@ -187,12 +194,18 @@ TEST(test_prepared_boundary_plan, polar_and_axial_reflections_are_distinct_in_1d
 
   const auto polar_normal_2d = HyperbolicComponentTransform<2>::polar_vector(0);
   const auto polar_tangent_2d = HyperbolicComponentTransform<2>::polar_vector(1);
+  const auto polar_out_of_plane_2d = HyperbolicComponentTransform<2>::polar_vector(2);
   const auto axial_normal_2d = HyperbolicComponentTransform<2>::axial_vector(0);
   const auto axial_tangent_2d = HyperbolicComponentTransform<2>::axial_vector(1);
+  const auto axial_out_of_plane_2d = HyperbolicComponentTransform<2>::axial_vector(2);
   EXPECT_EQ(polar_normal_2d.reflection_sign(0), Real(-1));
   EXPECT_EQ(polar_tangent_2d.reflection_sign(0), Real(1));
+  EXPECT_EQ(polar_out_of_plane_2d.reflection_sign(0), Real(1));
+  EXPECT_EQ(polar_out_of_plane_2d.reflection_sign(1), Real(1));
   EXPECT_EQ(axial_normal_2d.reflection_sign(0), Real(1));
   EXPECT_EQ(axial_tangent_2d.reflection_sign(0), Real(-1));
+  EXPECT_EQ(axial_out_of_plane_2d.reflection_sign(0), Real(-1));
+  EXPECT_EQ(axial_out_of_plane_2d.reflection_sign(1), Real(-1));
 
   const auto polar_z_3d = HyperbolicComponentTransform<3>::polar_vector(2);
   const auto axial_z_3d = HyperbolicComponentTransform<3>::axial_vector(2);
