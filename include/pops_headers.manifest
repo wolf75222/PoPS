@@ -122,6 +122,7 @@ api pops/numerics/time/amr/levels/amr_subcycling.hpp
 api pops/numerics/time/amr/prepared_coarse_fine_operator.hpp
 api pops/numerics/time/amr/reflux/amr_flux_helpers.hpp
 api pops/numerics/time/amr/reflux/amr_flux_ledger.hpp
+api pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp
 api pops/numerics/time/amr/reflux/amr_reflux_mf.hpp
 api pops/numerics/time/integrators/implicit_stepper.hpp
 test-only pops/numerics/time/integrators/ssprk.hpp
