@@ -81,6 +81,12 @@ def _provider_data(value: Any, *, where: str, methods: tuple[str, ...]) -> Mappi
     _text(provider_id, "%s.consumer_data.provider_id" % where)
     if not isinstance(extension, str) or not extension.startswith(".") or "/" in extension:
         raise TypeError("%s consumer_data.extension must be a canonical file suffix" % where)
+    validate_configuration = getattr(value, "validate_configuration", None)
+    if validate_configuration is not None:
+        if not callable(validate_configuration):
+            raise TypeError("%s.validate_configuration must be callable" % where)
+        if validate_configuration() is not None:
+            raise TypeError("%s.validate_configuration() must return None" % where)
     return freeze_data(first, "%s.consumer_data" % where)
 
 

@@ -246,16 +246,37 @@ class ConsoleMonitor(Descriptor):
 
 
 class Checkpoint(Descriptor):
-    """A restartable checkpoint consumer; bit identity is the only optional stronger guarantee."""
+    """A restartable checkpoint with one explicit hierarchy-restore contract."""
 
     category = "checkpoint"
 
-    def __init__(self, *, schedule: Any, target: Any, bit_identical: Any = False) -> None:
+    def __init__(
+        self,
+        *,
+        schedule: Any,
+        target: Any,
+        bit_identical: Any = False,
+        hierarchy: Any = None,
+    ) -> None:
         if type(bit_identical) is not bool:
             raise TypeError("Checkpoint.bit_identical must be a bool")
+        from .restart import (
+            RegridOnRestart,
+            RestoreRecordedHierarchy,
+            require_restart_hierarchy,
+        )
+
+        hierarchy = RestoreRecordedHierarchy() if hierarchy is None else hierarchy
+        hierarchy = require_restart_hierarchy(hierarchy, where="Checkpoint.hierarchy")
+        if bit_identical and type(hierarchy) is RegridOnRestart:
+            raise ValueError(
+                "Checkpoint cannot combine bit_identical=True with RegridOnRestart(); "
+                "regridding changes hierarchy/order unless a provider proves otherwise"
+            )
         self.schedule = _schedule(schedule, where="Checkpoint.schedule")
         self.target = _target(target, where="Checkpoint.target")
         self.bit_identical = bit_identical
+        self.hierarchy = hierarchy
 
     def declaration_references(self) -> tuple[Handle, ...]:
         return ()
@@ -274,7 +295,10 @@ class Checkpoint(Descriptor):
             output_format=None,
             parallel_mode=ParallelMode.COLLECTIVE,
             levels=AllLevels(),
-            operation=RestartV3(bit_identical=self.bit_identical),
+            operation=RestartV3(
+                bit_identical=self.bit_identical,
+                hierarchy=self.hierarchy,
+            ),
         ),)
 
     def options(self) -> dict[str, Any]:
@@ -283,6 +307,13 @@ class Checkpoint(Descriptor):
             "target": self.target,
             "restartable": True,
             "bit_identical": self.bit_identical,
+            "guarantee": (
+                "bit_identical_accepted_state"
+                if self.bit_identical
+                else self.hierarchy.guarantee
+            ),
+            "hierarchy": self.hierarchy.to_data(),
+            "hierarchy_identity": self.hierarchy.identity.token,
         }
 
 

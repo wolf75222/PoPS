@@ -15,6 +15,8 @@ from pops.output import (
     FailRun as OutputFailRun,
     HDF5,
     ParaView,
+    RegridOnRestart,
+    RestoreRecordedHierarchy,
     Retry,
     ScientificOutput,
     SkipSampleReported,
@@ -99,7 +101,92 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     assert checkpoint.output_format is None
     assert checkpoint.operation_data["provider_id"] == "pops.restart.accepted-state-v5"
     assert checkpoint.operation_data["bit_identical"] is True
+    assert checkpoint.operation_data["hierarchy"] == {
+        "schema_version": 1,
+        "mode": "restore_recorded_hierarchy",
+        "guarantee": "accepted_state_with_recorded_hierarchy",
+    }
+    assert checkpoint.operation_data["guarantee"] == "bit_identical_accepted_state"
+    assert checkpoint.operation_data["supports_regrid_on_restart"] is False
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
+
+
+def test_checkpoint_hierarchy_policies_have_distinct_exact_identities_and_guarantees():
+    case, _, _ = _case()
+    schedule = every(10, clock=Clock("macro", owner=case.owner_path))
+    strict = RestoreRecordedHierarchy()
+    regrid = RegridOnRestart()
+
+    assert strict.to_data() == {
+        "schema_version": 1,
+        "mode": "restore_recorded_hierarchy",
+        "guarantee": "accepted_state_with_recorded_hierarchy",
+    }
+    assert regrid.to_data() == {
+        "schema_version": 1,
+        "mode": "regrid_on_restart",
+        "guarantee": "accepted_state_after_regrid",
+    }
+    assert strict.identity.domain == regrid.identity.domain == "restart-hierarchy"
+    assert strict.identity != regrid.identity
+
+    checkpoint = Checkpoint(
+        schedule=schedule,
+        target="checkpoints/regrid",
+        hierarchy=regrid,
+    )
+    options = checkpoint.options()
+    assert options["guarantee"] == "accepted_state_after_regrid"
+    assert options["hierarchy"] == regrid.to_data()
+    assert options["hierarchy_identity"] == regrid.identity.token
+    (authored,) = checkpoint.consumer_authoring()
+    operation = authored.operation.consumer_data()
+    (strict_authored,) = Checkpoint(
+        schedule=schedule,
+        target="checkpoints/strict",
+        hierarchy=strict,
+    ).consumer_authoring()
+    strict_operation = strict_authored.operation.consumer_data()
+    assert strict_operation["hierarchy_identity"] == strict.identity.token
+    assert strict_operation["hierarchy_identity"] != operation["hierarchy_identity"]
+    assert strict_operation["guarantee"] == "accepted_state_with_recorded_hierarchy"
+    assert operation["hierarchy"] == regrid.to_data()
+    assert operation["hierarchy_identity"] == regrid.identity.token
+    assert operation["guarantee"] == "accepted_state_after_regrid"
+    assert operation["supports_regrid_on_restart"] is False
+
+
+def test_regrid_on_restart_refuses_bit_identity_and_unsupported_builtin_provider():
+    case, _, _ = _case()
+    schedule = every(10, clock=Clock("macro", owner=case.owner_path))
+    with pytest.raises(ValueError, match="bit_identical=True with RegridOnRestart"):
+        Checkpoint(
+            schedule=schedule,
+            target="checkpoints/impossible",
+            bit_identical=True,
+            hierarchy=RegridOnRestart(),
+        )
+
+    checkpoint = Checkpoint(
+        schedule=schedule,
+        target="checkpoints/regrid",
+        hierarchy=RegridOnRestart(),
+    )
+    graph = ConsumerGraph.from_consumers((checkpoint,))
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+    with pytest.raises(
+        NotImplementedError,
+        match=r"accepted-state-v5 does not implement RegridOnRestart",
+    ):
+        graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
 
 
 def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():

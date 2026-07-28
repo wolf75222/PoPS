@@ -130,6 +130,10 @@ Explicit unsupported rows include:
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
   per native rank, so AMR restart currently requires the same rank count; rank redistribution is never
   inferred from opaque local publications.
+- `checkpoint:regrid_on_restart` has an explicit typed `RegridOnRestart()` identity and the weaker
+  `accepted_state_after_regrid` guarantee, but the builtin accepted-state-v5 provider refuses it before
+  artifact creation. No complete hierarchy/history/field remap route currently implements that
+  guarantee, and `bit_identical=True` is incompatible with the policy.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 - `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a

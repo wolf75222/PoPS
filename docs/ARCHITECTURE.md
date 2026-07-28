@@ -449,8 +449,10 @@ provenance before mutation.  During explicit bootstrap, the installed Program co
 that level-qualified image before each spatial hierarchy transition commits.  After the mandatory
 zero-step `pops.run` establishes the checkpoint's controls identity, a checkpoint before the first
 accepted step therefore cannot retain a stale coarse-only clock axis.  Multi-block and active-regrid
-layouts use this same strict route; PoPS does not silently degrade to a weaker regrid-on-restart
-guarantee.
+layouts use this same strict route. `RestoreRecordedHierarchy()` is the exact default and
+`RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity; the builtin
+accepted-state-v5 provider currently refuses that weaker policy during resolution because it has no
+complete hierarchy/history/field remap implementation. PoPS never silently degrades the strict route.
 
 The transport of a block, in turn, reads this aux. The retained low-level `SystemCoupler`
 `advance_transport` utility routes toward the closure `s.advance` (full path) or its disk variants;
