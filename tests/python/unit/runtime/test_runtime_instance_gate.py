@@ -36,7 +36,7 @@ from pops.output._consumer_contracts import (
     ConsumerQuantity,
     ParallelMode,
 )
-from pops.output._restart_provider import RestartV3
+from pops.output._restart_provider import ReopenedRestart, RestartV3
 from pops.output.observers import ObserverReceipt
 from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._temporal_restart import TemporalRestartState
@@ -109,6 +109,7 @@ class _Executor:
         self._step = 0
         self._last_run_identity = None
         self._last_restart_identity = None
+        self._prepared_restart_bit_identical = None
         self._step_snapshot = None
         self._step_committed = False
         self._step_strategy = FixedDt(1.0)
@@ -277,17 +278,22 @@ class _Executor:
         return target
 
     def restart(self, path):
-        prepared = self._prepare_checkpoint_restart(Path(path).read_bytes())
+        prepared = self._prepare_checkpoint_restart(
+            Path(path).read_bytes(), bit_identical=False
+        )
         self._begin_checkpoint_restart()
         result = self._apply_checkpoint_restart(prepared)
         self._commit_checkpoint_restart()
         self._finalize_checkpoint_restart()
         return result
 
-    def _prepare_checkpoint_restart(self, payload):
+    def _prepare_checkpoint_restart(self, payload, *, bit_identical):
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
 
+        if type(bit_identical) is not bool:
+            raise TypeError("test restart bit_identical must be an exact bool")
+        self._prepared_restart_bit_identical = bit_identical
         stored = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, stored, runtime_kind="uniform")
         return identity, float(stored["t"]), int(stored["macro_step"])
@@ -1197,9 +1203,12 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         def invalidate_geometry_cache():
             events.append("geometry")
 
-    def restore_checkpoint_payload(owner, executor, payload, *, phase_prefix):
+    def restore_checkpoint_payload(
+        owner, executor, payload, *, bit_identical, phase_prefix
+    ):
         assert executor is native
         assert payload == b"checkpoint"
+        assert bit_identical is True
         assert phase_prefix == "native restart"
         events.append("native")
         return "restored"
@@ -1223,9 +1232,97 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         _consumer_cursors=None,
     )
 
-    assert RuntimeInstance._restore_checkpoint(owner, b"checkpoint", cursors) == "restored"
+    assert RuntimeInstance._restore_checkpoint(
+        owner,
+        b"checkpoint",
+        cursors,
+        bit_identical=True,
+    ) == "restored"
     assert owner._consumer_cursors is cursors
     assert events == ["native", "geometry", "diagnostics"]
+
+
+def test_checkpoint_restore_requires_exact_bit_identical_policy():
+    owner = SimpleNamespace()
+
+    with pytest.raises(
+        TypeError, match="RuntimeInstance restart bit_identical must be an exact bool"
+    ):
+        RuntimeInstance._restore_checkpoint(
+            owner,
+            b"checkpoint",
+            ConsumerCursorSet(),
+            bit_identical=1,
+        )
+
+
+def test_restart_provider_passes_bit_identical_policy_without_hidden_state():
+    calls = []
+
+    class _Runtime:
+        @staticmethod
+        def _restore_checkpoint(payload, cursors, *, bit_identical):
+            calls.append((payload, cursors, bit_identical))
+            return "restored"
+
+    cursors = ConsumerCursorSet()
+    reopened = ReopenedRestart(Path("checkpoint.npz"), b"checkpoint", cursors)
+
+    assert RestartV3(bit_identical=True).restore(_Runtime(), reopened) == "restored"
+    assert calls == [(b"checkpoint", cursors, True)]
+
+
+def test_collective_restart_passes_policy_to_exact_native_preflight():
+    from pops.output._checkpoint_collective import restore_checkpoint_payload
+
+    calls = []
+
+    class _Executor:
+        @staticmethod
+        def _prepare_checkpoint_restart(payload, *, bit_identical):
+            calls.append(("prepare", payload, bit_identical))
+            return "prepared"
+
+        @staticmethod
+        def _begin_checkpoint_restart():
+            calls.append(("begin",))
+
+        @staticmethod
+        def _apply_checkpoint_restart(prepared):
+            calls.append(("apply", prepared))
+            return "restored"
+
+        @staticmethod
+        def _commit_checkpoint_restart():
+            calls.append(("commit",))
+
+        @staticmethod
+        def _finalize_checkpoint_restart():
+            calls.append(("finalize",))
+
+        @staticmethod
+        def _rollback_checkpoint_restart():
+            calls.append(("rollback",))
+
+    owner = SimpleNamespace(
+        _execution_context=SimpleNamespace(
+            communicator=SimpleNamespace(identity="serial", handle=None)
+        )
+    )
+
+    assert restore_checkpoint_payload(
+        owner,
+        _Executor(),
+        b"checkpoint",
+        bit_identical=True,
+    ) == "restored"
+    assert calls == [
+        ("prepare", b"checkpoint", True),
+        ("begin",),
+        ("apply", "prepared"),
+        ("commit",),
+        ("finalize",),
+    ]
 
 
 def test_checkpoint_restart_authenticates_and_restores_consumer_cursors(tmp_path):
@@ -1401,6 +1498,25 @@ def test_checkpoint_consumer_serializes_its_post_accept_cursor(tmp_path):
     restored = RuntimeInstance(plan, executor=_Executor(plan))
     restored.restart(target)
     assert restored.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples == 1
+    assert restored._executor._prepared_restart_bit_identical is False
+
+
+def test_checkpoint_restart_propagates_bit_identical_policy_to_native_preflight(tmp_path):
+    target = tmp_path / "bit-identical-checkpoint.npz"
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        target_uri=target,
+        operation=RestartV3(bit_identical=True),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._run(t_end=1.0, max_steps=1)
+
+    restored = RuntimeInstance(plan, executor=_Executor(plan))
+    restored.restart(target)
+
+    assert restored._executor._prepared_restart_bit_identical is True
 
 
 def test_checkpoint_refuses_a_different_consumer_graph_before_native_restore(tmp_path):

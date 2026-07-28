@@ -235,11 +235,19 @@ class _SystemIO(_System):
             self, "Uniform accepted-state capture", prepare, self._capture_checkpoint, publish
         )
 
-    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedUniformRestart:
+    def _prepare_checkpoint_restart(
+        self,
+        payload: bytes,
+        *,
+        bit_identical: bool,
+    ) -> _PreparedUniformRestart:
         """Authenticate and validate every byte before the first native state write."""
         import numpy as np
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
-        from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.output._checkpoint_collective import (
+            decode_checkpoint_bytes,
+            require_restart_bit_identical,
+        )
         from pops.runtime._checkpoint_manifest import (
             authenticate_checkpoint_payload,
             require_exact_payload_version,
@@ -253,6 +261,7 @@ class _SystemIO(_System):
             resolve_history_storage,
         )
 
+        require_restart_bit_identical(bit_identical, where="Uniform restart")
         d = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, d, runtime_kind="uniform")
         require_exact_payload_version(
@@ -469,10 +478,14 @@ class _SystemIO(_System):
             ) = snapshot
             del self._checkpoint_restart_python_snapshot
 
-    def restart(self, path: Any) -> Any:
+    def restart(self, path: Any, *, bit_identical: bool = False) -> Any:
         """Restore the direct engine through the native collective transaction protocol."""
         from pops.output._checkpoint_collective import restore_checkpoint_path
 
         return restore_checkpoint_path(
-            self, self, path, phase_prefix="Uniform direct-engine restart"
+            self,
+            self,
+            path,
+            bit_identical=bit_identical,
+            phase_prefix="Uniform direct-engine restart",
         )

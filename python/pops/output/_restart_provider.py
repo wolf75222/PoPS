@@ -362,7 +362,11 @@ class RestartV3:
         self.validate_configuration()
         if type(reopened) is not ReopenedRestart:
             raise TypeError("RestartV3.restore requires an exact ReopenedRestart")
-        return runtime._restore_checkpoint(reopened.payload, reopened.cursors)
+        return runtime._restore_checkpoint(
+            reopened.payload,
+            reopened.cursors,
+            bit_identical=self.bit_identical,
+        )
 
 
 @dataclass(frozen=True, slots=True)

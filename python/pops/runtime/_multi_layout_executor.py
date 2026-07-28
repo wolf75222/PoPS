@@ -715,11 +715,22 @@ class _MultiLayoutUniformExecutor:
             self._cleanup_checkpoint_root(root, topology, "capture")
         return str(target)
 
-    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedMultiLayoutRestart:
+    def _prepare_checkpoint_restart(
+        self,
+        payload: bytes,
+        *,
+        bit_identical: bool,
+    ) -> _PreparedMultiLayoutRestart:
         import numpy as np
-        from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.output._checkpoint_collective import (
+            decode_checkpoint_bytes,
+            require_restart_bit_identical,
+        )
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
 
+        policy = require_restart_bit_identical(
+            bit_identical, where="multi-layout restart"
+        )
         stored = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(
             self, stored, runtime_kind="multi_layout_uniform")
@@ -745,7 +756,9 @@ class _MultiLayoutUniformExecutor:
                 raise TypeError(
                     "layout %d engine lacks the in-memory restart preflight protocol" % index)
             child_bytes = np.asarray(stored[name], dtype=np.uint8).tobytes()
-            prepared_children.append(prepare(child_bytes))
+            prepared_children.append(
+                prepare(child_bytes, bit_identical=policy)
+            )
         return _PreparedMultiLayoutRestart(identity, dict(mapping), tuple(prepared_children))
 
     def _begin_checkpoint_restart(self) -> None:
@@ -818,7 +831,7 @@ class _MultiLayoutUniformExecutor:
             raise RuntimeError(
                 "multi-layout child rollback failed: %s" % "; ".join(map(str, errors)))
 
-    def restart(self, path: Any) -> str:
+    def restart(self, path: Any, *, bit_identical: bool = False) -> str:
         from pops.output._checkpoint_collective import (
             canonical_checkpoint_path,
             checkpoint_topology,
@@ -835,7 +848,12 @@ class _MultiLayoutUniformExecutor:
         payload = root_bytes(
             topology, "multi-layout restart read", target.read_bytes)
         restore_checkpoint_payload(
-            self, self, payload, phase_prefix="multi-layout restart")
+            self,
+            self,
+            payload,
+            bit_identical=bit_identical,
+            phase_prefix="multi-layout restart",
+        )
         return str(target)
 
 
