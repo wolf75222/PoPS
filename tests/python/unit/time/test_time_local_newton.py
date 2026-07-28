@@ -12,8 +12,8 @@ std::function / Eigen in the kernel (only stack scalars + fixed ``[N]`` / ``[N][
 
 (A) Validation + codegen (pure Python, always runs): the builder rejects a non-callable residual, a
     non-State guess, a non-positive max_iter, a non-local residual op, and manifest-sized dense
-    fallback; a valid implicit reaction lowers to a per-cell Newton kernel whose generated C++ has the
-    residual lambda, the FD Jacobian, the mat_inverse step and the convergence break; refused w/o model.
+    fallback; a valid implicit reaction lowers to the prepared provider and report guard; refused
+    without a model.
 
 (B) End-to-end scalar implicit reaction parity and failure matrix (skips unless the full toolchain is
     present): a
@@ -220,6 +220,12 @@ def section_a(t):
         "tol / max_iter recorded on the op",
     )
     chk(
+        nl.attrs["safeguard"] == "exact"
+        and nl.attrs["max_evaluations"] == 0
+        and nl.attrs["relative_tol"] == 0.0,
+        "the complete prepared controls are recorded on the op",
+    )
+    chk(
         len(nl.attrs["residual_block"]) >= 3,
         "the residual sub-block holds the iterate + guess + ops",
     )
@@ -252,7 +258,7 @@ def section_a(t):
     chk(_h(1e-10, 20) != _h(1e-8, 20), "a different tol rehashes the IR")
     chk(_h(1e-10, 20) != _h(1e-10, 30), "a different max_iter rehashes the IR")
 
-    # --- the codegen lowers a per-cell Newton kernel ---
+    # --- the codegen lowers the residual into the unique prepared provider ---
     m = reaction_model("react_cg", 2.0)
     src = emit_cpp_program(reaction_program(t, "react_cg", model=m), model=m)
     for frag in (
@@ -280,11 +286,14 @@ def section_a(t):
     chk(guard < commit, "a failed Newton report is consumed before the state commit")
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
     chk("Gval[0] = u" in src, "the frozen guess is read into a stack vector")
-    chk("U_[0] = Gval[0]" in src, "the Newton iterate is seeded to the guess")
+    chk("solve_prepared_local_nonlinear(prepared_, Gval)" in src,
+        "the prepared solve is seeded from the frozen guess")
     chk("rout[0] =" in src and "Ueval[0]" in src, "the residual is re-evaluated at the iterate")
     # No forbidden constructs in the device kernel.
-    for forbidden in ("std::function", "std::vector", "Eigen::", "new ", "malloc"):
-        chk(forbidden not in src, "the Newton kernel has no %r (device-clean)" % forbidden)
+    for forbidden in (
+        "std::function", "Eigen::", "new ", "malloc", "Jinv_", "for (int it_ =",
+    ):
+        chk(forbidden not in src, "the generated residual route has no %r" % forbidden)
 
     # The unique consumed action is selected at the native SolveOutcome boundary. Selected
     # RejectAttempt statuses reject, every unselected status fails the run, and the consumed report
@@ -372,8 +381,10 @@ def section_a(t):
     )
     big_src = emit_cpp_program(Pbig, model=big)
     chk(
-        "pops::detail::mat_inverse<9>(" in big_src and "pops::Real J_[9][9];" in big_src,
-        "n_cons=9 emits exact manifest-sized Newton storage",
+        "pops::prepare_local_nonlinear_problem<9>" in big_src
+        and "pops::LocalNonlinearCellResult<9>" in big_src
+        and "pops::detail::mat_inverse<9>(" not in big_src,
+        "n_cons=9 reaches the exact manifest-sized prepared provider",
     )
 
 

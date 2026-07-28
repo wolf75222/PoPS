@@ -1,11 +1,12 @@
 #pragma once
 
 /// @file
-/// @brief SolveReport -- the authoritative result type of every iterative solve in
-///        `include/pops/numerics/elliptic/linear`.
+/// @brief SolveReport -- the authoritative result type shared by prepared linear and nonlinear
+///        solves.
 ///
-/// One definition shared by every prepared matrix-free Krylov method and its runtime consumers, so
-/// generated and direct-native routes cannot drift into hand-synchronised status contracts.
+/// One definition shared by prepared matrix-free Krylov methods, cell-local nonlinear providers and
+/// their runtime consumers, so generated and direct-native routes cannot drift into
+/// hand-synchronised status contracts.
 
 #include <pops/core/foundation/types.hpp>
 
@@ -16,8 +17,8 @@
 
 namespace pops {
 
-/// Explicit status of a linear solve. Only kSolved publishes a solved value; every other status is a
-/// failed solve report that callers must consume before using the mutated iterate.
+/// Explicit solve status. Only kSolved publishes a candidate; every other status is a failed solve
+/// report that callers must consume while leaving the live state unchanged.
 enum class SolveStatus {
   kSolved,
   kSingular,
@@ -27,6 +28,8 @@ enum class SolveStatus {
   kCapabilityFailure,
   kInvalidInput,
   kIncompatibleRhs,
+  kInadmissibleCandidate,
+  kSafeguardFailure,
 };
 
 /// Runtime reaction requested by a solve report.
@@ -54,6 +57,10 @@ inline const char* solve_status_name(SolveStatus status) {
       return "invalid_input";
     case SolveStatus::kIncompatibleRhs:
       return "incompatible_rhs";
+    case SolveStatus::kInadmissibleCandidate:
+      return "inadmissible_candidate";
+    case SolveStatus::kSafeguardFailure:
+      return "safeguard_failure";
   }
   return "invalid_input";
 }
@@ -75,9 +82,16 @@ inline const char* solve_action_name(SolveAction action) {
 /// boolean can contradict the status.
 struct SolveReport {
   int iters = 0;                     ///< number of iterations performed
+  int evaluations = 0;               ///< residual/Jacobian evaluations performed
+  int safeguard_steps = 0;           ///< rejected/damped trial steps
   Real rel_residual = 0;             ///< residual_norm / declared reference denominator
   Real reference_residual_norm = 0;  ///< exact reference norm of the owning solver contract
   Real residual_norm = 0;            ///< exact final norm tested for convergence
+  Real step_norm = 0;                ///< final scaled update norm
+  Real condition_evidence = 0;       ///< largest/smallest accepted pivot magnitude
+  int failed_i = -1;                 ///< first failing cell coordinate, when available
+  int failed_j = -1;                 ///< first failing cell coordinate, when available
+  int failed_component = -1;         ///< first failing equation/component, when available
   SolveStatus status = SolveStatus::kIterationLimit;
   SolveAction action = SolveAction::kFailRun;
   std::string reason = "iteration_limit";
@@ -130,6 +144,8 @@ inline bool solve_report_is_publishable(const SolveReport& report,
       case SolveStatus::kCapabilityFailure:
       case SolveStatus::kInvalidInput:
       case SolveStatus::kIncompatibleRhs:
+      case SolveStatus::kInadmissibleCandidate:
+      case SolveStatus::kSafeguardFailure:
         return true;
     }
     return false;
@@ -147,11 +163,13 @@ inline bool solve_report_is_publishable(const SolveReport& report,
     return std::isfinite(value) && value >= Real(0);
   };
   return maximum_iterations >= 0 && report.iters >= 0 && report.iters <= maximum_iterations &&
-         known_status(report.status) && known_action(report.action) && report.valid() &&
+         report.evaluations >= 0 && report.safeguard_steps >= 0 && known_status(report.status) &&
+         known_action(report.action) && report.valid() &&
          report.solved_value_available() == (report.status == SolveStatus::kSolved) &&
          finite_nonnegative(report.rel_residual) &&
          finite_nonnegative(report.reference_residual_norm) &&
-         finite_nonnegative(report.residual_norm);
+         finite_nonnegative(report.residual_norm) && finite_nonnegative(report.step_norm) &&
+         finite_nonnegative(report.condition_evidence);
 }
 
 }  // namespace pops

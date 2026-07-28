@@ -512,14 +512,15 @@ without the constraint `dt < eps`. The scalar implicit step (per cell) is solved
 
 $$F(W) = W - \tilde U - \Delta t\,S(W) = 0,\qquad J = I - \Delta t\,\frac{\partial S}{\partial W},$$
 
-exact in one iteration if `S` is linear in `U`, quadratic otherwise. The Jacobian is formed by
-finite differences (no analytic Jacobian to provide on the model side).
+exact in one iteration if `S` is linear in `U`, quadratic otherwise. One prepared provider accepts
+a finite-difference, analytic, or automatic-differentiation Jacobian provider; the implicit-source
+adapter selects the model's analytic `source_jacobian` when available and finite differences otherwise.
 
 **Partial IMEX.** When only a subset of the variables is stiff, we integrate implicitly only
 those components. The solve becomes a forward-backward Euler per component: the explicit components
-advance by forward Euler at the input state, `W_e = U^n_e + dt S_e(U^n)`, then the implicit components
-are solved by Newton on the reduced `n x n` subsystem (`n` = number of implicit ones `<= N`), the
-explicit ones frozen at their advanced value as known data. The partitioning comes either from the model
+advance by forward Euler at the input state, `W_e = U^n_e + dt S_e(U^n)`. The prepared residual keeps
+the complete `N x N` state space: explicit rows are identity constraints fixing those known values,
+while implicit rows carry the backward-Euler residual. The partitioning comes either from the model
 (trait `is_implicit(c)`), or from a mask carried by the block (priority over the model default), which
 allows reusing the same model with different treatments depending on the block. This
 partition is read only when an explicitly authored typed implicit Program primitive is
@@ -531,47 +532,51 @@ function imex_euler_step(U, dt, Texpl, Simpl):
     Texpl(U, dt)            # explicite en place : U <- U^n + dt*T(U^n) (membre connu)
     Simpl(U, dt)            # implicite en place : resout U <- W tel que W = U + dt*S(W)
 
-# pas implicite par cellule (Newton local, IMEX partiel), N = Model::n_vars
-function newton_source_solve(model, Un, aux, dt, iters, mask):
-    impl <- liste des c dans [0,N) tels que is_implicit_component(mask, c)   # m = |impl| <= N
-    W <- Un
-    # (1) composantes explicites : Euler avant a l'etat d'entree
-    if m < N:
-        S_in <- model.source(Un, aux)
-        for c not in impl: W[c] <- Un[c] + dt * S_in[c]
-    # (2) composantes implicites : Newton sur le sous-systeme reduit m x m
-    for it in 0..iters-1:
-        S0 <- model.source(W, aux)
-        for r in 0..m-1:                          # residu F = W - Un - dt*S(W)
-            c <- impl[r];  F[r] <- W[c] - Un[c] - dt * S0[c]
-        for cc in 0..m-1:                          # jacobienne par differences finies, colonne par colonne
-            col <- impl[cc];  h <- 1e-7*|W[col]| + 1e-7
-            Wp <- W;  Wp[col] += h;  Sp <- model.source(Wp, aux)
-            for rr in 0..m-1:
-                row <- impl[rr];  dSdW <- (Sp[row] - S0[row]) / h
-                J[rr][cc] <- (row==col ? 1 : 0) - dt * dSdW       # I - dt*(dS/dW)
-        solve_dense(J, F, delta, m)                # Gauss + pivot partiel, tableau fixe N, device-callable
-        for r in 0..m-1: W[impl[r]] -= delta[r]
-    return W
+# preparation locale, N = Model::n_vars
+function prepare_implicit_source_problem(model, Un, aux, dt, controls, mask):
+    S_in <- model.source(Un, aux)
+    for c in 0..N-1:
+        explicit_target[c] <- Un[c] + dt*S_in[c]
+    residual(W)[c] <-
+        W[c] - Un[c] - dt*model.source(W, aux)[c]  si c est implicite
+        W[c] - explicit_target[c]                  sinon
+    jacobian <- model.source_jacobian si disponible, differences finies sinon
+    return PreparedLocalNonlinearProblem(
+        residual, jacobian, domaine_admissible, controls, echelles)
 
-# stepper de bloc : pas implicite sur la source locale du modele, en place sur tout le MultiFab
-function backward_euler_source(model, aux, U, dt, iters, mask):
+function solve_prepared_local_nonlinear(problem, guess):
+    # tableaux fixes N sur la pile, aucun callback/type-erasure/allocation dans la boucle cellule
+    # residu mis a l'echelle, budget iterations/evaluations, pivot partiel, safeguard explicite
+    return LocalNonlinearCellResult(candidate, status, iterations, evaluations, diagnostics)
+
+# stepper de bloc : candidat transactionnel + publication seulement apres succes collectif
+function backward_euler_source(model, aux, U, dt, controls, mask):
+    candidate <- MultiFab(layout(U))
+    statistics <- MultiFab(layout(U))
     for chaque fab local de U:
-        for_each_cell(box, BackwardEulerSourceKernel:
+        for_each_cell(box, PreparedImplicitSourceKernel:
             Un <- load_state(U, i, j);  a <- load_aux(aux, i, j)
-            W  <- newton_source_solve(model, Un, a, dt, iters, mask)
-            U(i,j,:) <- W)
+            problem <- prepare_implicit_source_problem(model, Un, a, dt, controls, mask)
+            result <- solve_prepared_local_nonlinear(problem, Un)
+            candidate(i,j,:) <- result.candidate
+            statistics(i,j,:) <- result.status et diagnostics)
+    report <- reduction MPI collective des statistics
+    si report.status != solved: echouer sans modifier U
+    U <- candidate
+    return report
 ```
 
 **Code.** [`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp):
 `imex_euler_step(U, dt, Texpl, Simpl)` chains the in-place explicit transport then the in-place implicit
 source solve (two callables `TransportStep` / `ImplicitSourceSolve`). The implicit step lives in
-[`include/pops/numerics/time/integrators/implicit_stepper.hpp`](../include/pops/numerics/time/integrators/implicit_stepper.hpp):
-`newton_source_solve<Model>` (local per-cell Newton, forward-backward Euler for the partial IMEX),
-`detail::solve_dense<N>` (dense `n x n` resolution by Gauss elimination with partial pivoting, a
-fixed constexpr array hence device-callable, no allocation), and `backward_euler_source<Model>` which applies
-the kernel `detail::BackwardEulerSourceKernel<Model>` via `for_each_cell` (a named functor and not an
-extended lambda, for robust device emission from an external TU). The implicit/explicit partitioning
+[`include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp`](../include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp)
+owns the only cell-local nonlinear algorithm: immutable concrete functors, scaled stopping controls,
+finite-difference/analytic/AD Jacobian providers, partial-pivot factorization without inverse,
+safeguards, budgets and explicit statuses. The adapter in
+[`include/pops/numerics/time/integrators/implicit_stepper.hpp`](../include/pops/numerics/time/integrators/implicit_stepper.hpp)
+forms the forward-backward Euler residual, runs the named device kernel into a candidate field,
+constructs the common collective `SolveReport`, and publishes only a globally solved candidate. The
+implicit/explicit partitioning
 goes through the `PartiallyImplicitModel` concept (trait `M::is_implicit(c)`), `model_is_implicit<Model>`
 (default: everything implicit when the trait is absent), the POD carrier `ImplicitMask<N>` (`active`, `flag[N]`,
 carried by the block, passed by value on the device) and `is_implicit_component<Model, N>` (an active mask
@@ -582,8 +587,11 @@ explicitly, and an unavailable lowering fails closed.
 
 **Constraints / remarks.** The implicit step is unconditionally stable for a linear relaxation
 (where a plain Picard fixed point would diverge as soon as `dt * stiffness > 1`, precisely the
-stiff regime); it is exact in one iteration if `S` is linear in `U`, quadratic convergence otherwise
-(default `iters = 2`). The finite-difference Jacobian uses a step `h = 1e-7 |W_col| + 1e-7`.
+stiff regime); it is exact in one iteration if `S` is linear in `U`, quadratic convergence otherwise.
+The default finite-difference relative step is `1e-7`; default stopping is
+`||F||_inf <= 1e-12` with an iteration budget of 20. Singular pivots, exhausted budgets, NaN/Inf,
+inadmissible candidates, safeguard failures and unsupported Jacobian capabilities remain distinct
+outcomes. There is no warning-only or unchecked publication policy.
 Limits: `imex_euler_step` is first order in time (forward-backward Euler); the AP covers the relaxation
 limit, not the condensation of the potential-velocity-Lorentz couplings at high `omega_c`, which is the
 domain of Schur condensation (section 13). Inactive mask and a model without the `is_implicit` trait:
