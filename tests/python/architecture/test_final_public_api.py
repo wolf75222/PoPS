@@ -325,8 +325,8 @@ def test_physics_has_no_competing_model_facade() -> None:
     from pops import physics
 
     assert physics.__all__ == [
-        "Model", "ComponentRole", "Density", "Energy", "Momentum", "Pressure", "Scalar",
-        "Temperature", "Velocity",
+        "Model", "Axial", "ComponentRole", "Density", "Energy", "Momentum", "Pressure",
+        "Scalar", "Temperature", "Velocity",
     ]
     assert physics.Model is pops.Model
     for removed in ("PdeModel", "HyperbolicModel", "PhysicsModel", "HybridModel"):
