@@ -526,13 +526,23 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
     return lines
 
 
-def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_var: Any,
-                                       status_var: Any, block_idx: Any = 0) -> list:
+def _emit_solve_local_nonlinear_kernel(
+    model: Any,
+    v: Any,
+    guess_var: Any,
+    out_var: Any,
+    status_var: Any,
+    active_mask_var: Any,
+    block_idx: Any = 0,
+) -> list:
     """Lower ``solve_local_nonlinear`` (spec op 10) to a per-cell Newton kernel: from the initial guess
     U0 (the @p guess_var state), iterate ``J dU = -r``, ``U -= dU`` until ``max_c |r_c| < tol`` or the
-    fixed budget, then write the converged U into @p out_var. Reuses ``pops::for_each_cell`` + the SAME
-    stack dense inverse ``pops::detail::mat_inverse<N>`` as `solve_local_linear` -- no heap / std::function
-    / Eigen in the device kernel (only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
+    fixed budget, then write the provisional U into @p out_var and one terminal code into
+    @p status_var (0=converged, 1=iteration limit, 2=singular Jacobian, 3=non-finite evaluation).
+    The caller collectively reduces that code and consumes the resulting ``SolveReport`` before the
+    scratch can become publishable. Reuses ``pops::for_each_cell`` + the SAME stack dense inverse
+    ``pops::detail::mat_inverse<N>`` as `solve_local_linear` -- no heap / std::function / Eigen in
+    the device kernel (only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
 
     The residual is evaluated by an inlined device lambda built from the residual sub-block (the
     iterate stack, the frozen guess, named ``source`` / ``apply`` per-cell Exprs, affine combines). The
@@ -560,6 +570,21 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
         "  const pops::Array4 solve_statusA = %s.fab(li).array();" % status_var,
+        "  const bool newton_has_active_mask_ = %s != nullptr;" % active_mask_var,
+        "  const pops::ConstArray4 newton_activeA_ = "
+        "newton_has_active_mask_ ? %s->fab(li).const_array() : pops::ConstArray4{};"
+        % active_mask_var,
+    ]
+    body += [
+        "    if (newton_has_active_mask_ && "
+        "!(newton_activeA_(i, j, 0) >= pops::Real(0.5))) {",
+    ]
+    for c in range(n):
+        body.append("      outA(i, j, %d) = %sA(i, j, %d);" % (c, guess_var, c))
+    body += [
+        "      solve_statusA(i, j, 0) = pops::Real(0);",
+        "      return;",
+        "    }",
     ]
     # Per-cell aux + the live primitives are NOT pre-bound here: the prims depend on the ITERATE (they
     # are recomputed inside the residual lambda from Ueval). Only the aux locals are cell constants.
@@ -634,9 +659,10 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     body.append("      for (int i_ = 0; i_ < %d; ++i_) {" % n)
     body.append("        pops::Real du_ = pops::Real(0);")
     body.append("        for (int k_ = 0; k_ < %d; ++k_) du_ += Jinv_[i_][k_] * r_[k_];" % n)
+    body.append("        if (!std::isfinite(du_)) { solve_failure_ = 3; break; }")
     body.append("        U_[i_] -= du_;")
     body.append(
-        "        if (!std::isfinite(U_[i_])) solve_failure_ = 3;")
+        "        if (!std::isfinite(U_[i_])) { solve_failure_ = 3; break; }")
     body.append("      }")
     body.append("      if (solve_failure_ == 3) break;")
     body.append("    }")
