@@ -246,6 +246,8 @@ void System::prepare_default_field_publication_storage_() {
 }
 
 void System::prepare_named_field_publication_storage_(const std::string& field) {
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}))
+    throw std::invalid_argument("System named field publication request differs between MPI ranks");
   p_->fields_.prepare_named_publication_storage(field);
 }
 

@@ -349,26 +349,47 @@ TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_l
   EXPECT_EQ(max_abs_diff(system.density("n1"), q1), 0.0);
 
   std::vector<const MultiFab*> bad{&system.block_state(0)};
-  EXPECT_THROW(system.solve_fields_from_blocks(slot, bad), std::invalid_argument);
   std::vector<const MultiFab*> duplicate_stage{&system.block_state(0), &system.block_state(0)};
-  EXPECT_THROW(system.solve_fields_from_blocks(slot, duplicate_stage), std::invalid_argument)
-      << "one stage object cannot be assigned to two qualified System blocks";
-  EXPECT_THROW(system.solve_fields_from_state(slot, 0, system.block_state(1)),
-               std::invalid_argument)
-      << "a single-stage solve cannot alias another qualified block's live state";
+  if (n_ranks() == 1) {
+    EXPECT_THROW((void)consume_solve_outcome(system.solve_fields_from_blocks(slot, bad)),
+                 std::invalid_argument);
+    EXPECT_THROW(
+        (void)consume_solve_outcome(system.solve_fields_from_blocks(slot, duplicate_stage)),
+        std::invalid_argument)
+        << "one stage object cannot be assigned to two qualified System blocks";
+    EXPECT_THROW(
+        (void)consume_solve_outcome(system.solve_fields_from_state(slot, 0, system.block_state(1))),
+        std::invalid_argument)
+        << "a single-stage solve cannot alias another qualified block's live state";
+  } else {
+    EXPECT_THROW((void)consume_solve_outcome(system.solve_fields_from_blocks(slot, bad)),
+                 std::runtime_error);
+    EXPECT_THROW(
+        (void)consume_solve_outcome(system.solve_fields_from_blocks(slot, duplicate_stage)),
+        std::runtime_error)
+        << "one stage object cannot be assigned to two qualified System blocks";
+    EXPECT_THROW(
+        (void)consume_solve_outcome(system.solve_fields_from_state(slot, 0, system.block_state(1))),
+        std::runtime_error)
+        << "collective field publication must report invalid stage requests on every rank";
+  }
 
   if (n_ranks() > 1) {
     std::vector<const MultiFab*> rank_local_shape = all_live;
     if (my_rank() == 0)
       rank_local_shape.pop_back();
-    EXPECT_THROW(system.solve_fields_from_blocks(slot, rank_local_shape), std::invalid_argument)
+    EXPECT_THROW(
+        (void)consume_solve_outcome(system.solve_fields_from_blocks(slot, rank_local_shape)),
+        std::runtime_error)
         << "rank-local request-shape drift must fail collectively without stranding peers";
     const std::string rank_local_slot = my_rank() == 0 ? slot : "rank-local-unknown-slot";
-    EXPECT_THROW(system.solve_fields_from_blocks(rank_local_slot, all_live),
-                 std::invalid_argument)
+    EXPECT_THROW(
+        (void)consume_solve_outcome(system.solve_fields_from_blocks(rank_local_slot, all_live)),
+        std::invalid_argument)
         << "rank-local provider drift must fail before any backend collective";
     fail_rank_local_rhs = my_rank() == 0;
-    EXPECT_THROW(system.solve_fields_from_blocks(slot, all_live), std::runtime_error)
+    EXPECT_THROW((void)consume_solve_outcome(system.solve_fields_from_blocks(slot, all_live)),
+                 std::runtime_error)
         << "a rank-local provider callback failure must be published before prepare_rhs";
     fail_rank_local_rhs = false;
     const SolveReport recovered =
