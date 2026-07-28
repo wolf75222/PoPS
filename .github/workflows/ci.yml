@@ -1437,7 +1437,9 @@ jobs:
   gate-mpi-prewarm:
     name: ubuntu-24.04 / MPI + Kokkos Serial (C++ prewarm ${{ matrix.lane }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 22
+    # setup-kokkos can consume ~15 minutes on a cold runner. Keep enough room
+    # for the explicit 18-minute compile watchdog and artifact publication.
+    timeout-minutes: 40
     needs: [set-mode, changes]
     if: needs.set-mode.outputs.mpi_required == 'true'
     strategy:
