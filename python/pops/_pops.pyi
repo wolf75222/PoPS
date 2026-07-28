@@ -77,6 +77,8 @@ class StepAttemptRejected(RuntimeError):
         "breakdown",
         "iteration_limit",
         "invalid_evaluation",
+        "inadmissible_candidate",
+        "safeguard_failure",
         "capability_failure",
         "invalid_input",
         "incompatible_rhs",
@@ -183,9 +185,16 @@ class _NativeObserverMpiLane:
 
 class _SolveReport:
     iters: int
+    evaluations: int
+    safeguard_steps: int
     rel_residual: float
     reference_residual_norm: float
     residual_norm: float
+    step_norm: float
+    condition_evidence: float
+    failed_i: int
+    failed_j: int
+    failed_component: int
     status: str
     action: str
     reason: str

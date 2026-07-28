@@ -114,9 +114,9 @@ void bind_system_assembly(py::class_<System>& cls) {
   cls.def(py::init<const SystemConfig&>())
       // Per-block composition: model (bricks) + spatial scheme (limiter/riemann) + time
       // (explicit/imex) + substeps. Python says WHAT, the compiled C++ does the compute.
-      // ADC-214: the Python SURFACE is UNCHANGED (same flat newton_* kwargs, same defaults). The
-      // lambda receives them flat and BUILDS the NewtonOptions POD internally before calling the
-      // new C++ method (which groups these homogeneous parameters). adc_cases sees no change.
+      // The lambda receives the flat preparation controls and builds the NewtonOptions POD before
+      // calling the grouped C++ method. Failure policy is intentionally absent: the solve is
+      // fail-closed.
       .def(
           "add_block",
           [](System& s, const std::string& name, const ModelSpec& model, const std::string& limiter,
@@ -124,16 +124,14 @@ void bind_system_assembly(py::class_<System>& cls) {
              int substeps, bool evolve, int stride, const std::vector<std::string>& implicit_vars,
              const std::vector<std::string>& implicit_roles, int newton_max_iters,
              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-             bool newton_diagnostics, double newton_damping, const std::string& newton_fail_policy,
-             double positivity_floor, bool wave_speed_cache, double weno_epsilon) {
+             bool newton_diagnostics, double newton_damping, double positivity_floor,
+             bool wave_speed_cache, double weno_epsilon) {
             NewtonOptions newton;
             newton.max_iters = newton_max_iters;
             newton.rel_tol = static_cast<Real>(newton_rel_tol);
             newton.abs_tol = static_cast<Real>(newton_abs_tol);
             newton.fd_eps = static_cast<Real>(newton_fd_eps);
             newton.damping = static_cast<Real>(newton_damping);
-            newton.fail_policy =
-                newton_fail_policy_from_string(newton_fail_policy, "System::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, evolve, stride,
                         implicit_vars, implicit_roles, newton, newton_diagnostics, positivity_floor,
                         wave_speed_cache, weno_epsilon);
@@ -147,15 +145,14 @@ void bind_system_assembly(py::class_<System>& cls) {
           // bit-identical. Resolved on the C++ side against the block's names/roles (error on a missing name/role).
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // Options of the implicit IMEX source Newton (defaults = historical constants 2 / 1e-7,
-          // bit-identical). newton_diagnostics=True enables the report (newton_report(name)).
+          // Preparation controls of the shared implicit local nonlinear provider.
+          // newton_diagnostics=True retains the report returned by that provider.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_diagnostics") = false,
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_fail_policy") = "none",
           // Zhang-Shu POSITIVITY limiter (ADC-76): density floor of the reconstructed face states
           // (conservative scaling toward the cell mean). 0 (default) = inactive,
           // bit-identical path. Requires a model exposing the Density role.

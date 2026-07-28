@@ -16,7 +16,6 @@ from pops.runtime._numeric import native_block_scalars, native_real, positive_in
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
-    NEWTON_DEFAULT_FAIL_POLICY,
     NEWTON_DEFAULT_FD_EPS,
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
@@ -86,7 +85,6 @@ class _SystemInstall(_System):
                           rel_tol, abs_tol, fd_eps,
                           getattr(time, "newton_diagnostics", False),
                           damping,
-                          getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           positivity_floor,
                           getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
 
@@ -132,7 +130,6 @@ class _SystemInstall(_System):
                               rel_tol, abs_tol, fd_eps,
                               getattr(time, "newton_diagnostics", False),
                               damping,
-                              getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                               positivity_floor,
                               getattr(spatial, "wave_speed_cache", False),
                               **_weno_kwargs(spatial))
@@ -158,12 +155,10 @@ class _SystemInstall(_System):
                 != NEWTON_DEFAULT_FD_EPS
                 or getattr(time, "newton_diagnostics", False)
                 or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)
-                != NEWTON_DEFAULT_DAMPING
-                or getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY)
-                != NEWTON_DEFAULT_FAIL_POLICY):
+                != NEWTON_DEFAULT_DAMPING):
             raise ValueError(
                 "add_equation: the Newton options (newton_max_iters/rel_tol/abs_tol/fd_eps/"
-                "diagnostics/damping/fail_policy) are carried only by a composed native model "
+                "diagnostics/damping) are carried only by a composed native model "
                 "(ModelSpec), available on the internal native engine API (not part of the "
                 "pops.bind surface). The compiled model (.so) ABI does not carry them.")
 

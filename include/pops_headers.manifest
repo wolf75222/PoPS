@@ -105,6 +105,7 @@ api pops/numerics/fv/reconstruction.hpp
 api pops/numerics/fv/spatial_discretisation.hpp
 api pops/numerics/linalg/block_inverse.hpp
 api pops/numerics/linalg/dense_eig.hpp
+api pops/numerics/nonlinear/prepared_local_nonlinear.hpp
 api pops/numerics/spatial/embedded_boundary/domain.hpp
 api pops/numerics/spatial/embedded_boundary/operator.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp

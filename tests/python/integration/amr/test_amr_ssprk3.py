@@ -222,12 +222,11 @@ def _check_imex_ssprk3_rejected(n=16):
         kwargs = dict(
             implicit_vars=[],
             implicit_roles=[],
-            newton_max_iters=2,
+            newton_max_iters=20,
             newton_rel_tol=0.0,
-            newton_abs_tol=0.0,
+            newton_abs_tol=1e-12,
             newton_fd_eps=1e-7,
             newton_damping=1.0,
-            newton_fail_policy="none",
             newton_diagnostics=False,
         )
         kwargs.update(kw)
@@ -247,7 +246,6 @@ def _check_imex_ssprk3_rejected(n=16):
             kwargs["newton_abs_tol"],
             kwargs["newton_fd_eps"],
             kwargs["newton_damping"],
-            kwargs["newton_fail_policy"],
             kwargs["newton_diagnostics"],
         )
         return s

@@ -94,6 +94,69 @@ def _append_solve_report_guard(
     lines.append("}")
 
 
+def _append_local_nonlinear_report(
+        program: Any, solve: Any, status: str, report: str, lines: list[str]) -> None:
+    """Reduce one prepared local-solve status field into the common collective report."""
+    action_kind, _ = _consumed_solve_action(program, solve)
+    failure_action = (
+        "pops::SolveAction::kRejectAttempt"
+        if action_kind == "reject_attempt"
+        else "pops::SolveAction::kFailRun"
+    )
+    fields = (
+        ("status", 0, "int"),
+        ("iterations", 1, "int"),
+        ("evaluations", 2, "int"),
+        ("reference_residual", 3, "real"),
+        ("residual", 4, "real"),
+        ("step", 5, "real"),
+        ("condition", 6, "real"),
+        ("safeguard_steps", 7, "int"),
+    )
+    reduced = {}
+    for suffix, component, kind in fields:
+        token = "%s_%s" % (report, suffix)
+        reduced[suffix] = token
+        expression = "pops::reduce_max(%s, %d)" % (status, component)
+        if kind == "int":
+            lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
+        else:
+            lines.append("const pops::Real %s = %s;" % (token, expression))
+    encoded = "%s_failure_location" % report
+    failed_count = "%s_failed_count" % report
+    failed_i = "%s_failed_i" % report
+    failed_j = "%s_failed_j" % report
+    failed_component = "%s_failed_component" % report
+    lines += [
+        "const pops::Real %s = pops::reduce_max(%s, 8);" % (encoded, status),
+        "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
+        "int %s = -1;" % failed_i,
+        "int %s = -1;" % failed_j,
+        "int %s = -1;" % failed_component,
+        "if (%s > pops::Real(0))" % failed_count,
+        "  pops::detail::decode_local_nonlinear_failure("
+        "%s, %s, %s, %s);" % (encoded, failed_i, failed_j, failed_component),
+    ]
+    lines.append(
+        "pops::SolveReport %s = pops::local_nonlinear_solve_report("
+        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+        % (
+            report,
+            reduced["status"],
+            reduced["iterations"],
+            reduced["evaluations"],
+            reduced["reference_residual"],
+            reduced["residual"],
+            reduced["step"],
+            reduced["condition"],
+            reduced["safeguard_steps"],
+            failed_i,
+            failed_j,
+            failed_component,
+            failure_action,
+        ))
+
+
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
              prelude: Any = None, block_idx: Any = None, target: Any = "system",
              field_plans: Any = None) -> None:
@@ -240,22 +303,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         status = "ci_status_%d" % v.id
         prototype_block = next(iter(components))
         prototype = var[by_block[prototype_block].id]
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 10, 0);"
                      % (status, int(v.id), prototype))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
-            tol=v.attrs["tol"], max_iter=int(v.attrs["max_iter"]),
-            fd_eps=v.attrs["fd_eps"], coefficient=v.attrs["coefficient"])
-        code = "ci_code_%d" % v.id
+            controls=v.attrs, coefficient=v.attrs["coefficient"])
         report = "ci_report_%d" % v.id
-        lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 0));" % (code, status))
-        lines.append("pops::SolveReport %s;" % report)
-        lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
-        lines.append("else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit);"
-                     % (code, report))
-        lines.append("else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular);"
-                     % (code, report))
-        lines.append("else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
+        _append_local_nonlinear_report(program, v, status, report, lines)
         _append_solve_report_guard(program, v, report, lines, label="coupled_implicit")
         var.update({("coupled_solution", v.id, block): token
                     for block, token in scratch.items()})
@@ -490,9 +544,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += _emit_solve_local_linear_kernel(
             node_model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id], bidx)
     elif v.op == "solve_local_nonlinear":
-        # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
-        # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
-        # uses. The output is a fresh scratch state; the guess input seeds the iterate.
+        # The residual functor and immutable controls are generated; the unique prepared provider
+        # owns the local nonlinear algorithm and returns a transaction-local candidate plus status.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
         if target == "system":
@@ -501,8 +554,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        status = "ln_status_%d" % v.id
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 1, %s, 10, 0);"
+                     % (status, int(v.id), var[base.id]))
         lines += _emit_solve_local_nonlinear_kernel(
-            node_model, v, var[guess_in.id], var[v.id], bidx)
+            node_model, v, var[guess_in.id], var[v.id], status, bidx)
+        report = "ln_report_%d" % v.id
+        _append_local_nonlinear_report(program, v, status, report, lines)
+        _append_solve_report_guard(program, v, report, lines, label="local_nonlinear")
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block

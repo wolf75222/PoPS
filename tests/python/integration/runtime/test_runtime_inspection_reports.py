@@ -7,7 +7,7 @@ from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime s
 
 pops = pytest.importorskip("pops")
 from pops.layouts import Uniform  # noqa: E402
-from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
+from tests.python.support.layout_plan import cartesian_grid  # noqa: E402
 
 
 def test_system_inspect_is_structured_and_array_free():
@@ -28,7 +28,7 @@ def test_system_inspect_is_structured_and_array_free():
     assert d["diagnostics"]["fallbacks"]["schema_version"] == 1
     assert any(row["key"] == "elliptic.fft.direct_dft"
                for row in d["diagnostics"]["fallbacks"]["entries"])
-    assert d["options"]["defaults"]["newton"]["max_iters"] == 2
+    assert d["options"]["defaults"]["newton"]["max_iters"] == 20
     assert d["options"]["poisson"]["solver"] == "geometric_mg"
     assert "array(" not in str(rep)
     assert json.loads(rep.to_json())["runtime"] == "system"

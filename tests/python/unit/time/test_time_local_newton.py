@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """pops.time LOCAL NON-LINEAR SOLVE codegen, end to end (epic ADC-399 / ADC-422).
 
-`P.solve_local_nonlinear` (spec op 10) now LOWERS a per-cell Newton iteration: from the initial guess
-U0, ``emit_cpp_program`` emits a device kernel that re-evaluates an inlined residual ``r(U)`` (built
-from the residual sub-block -- named ``source`` / ``apply`` per-cell Exprs + the iterate / frozen guess
-+ affine combines), forms an in-kernel finite-difference Jacobian, and solves the Newton step
-``J dU = -r`` with the SAME manifest-sized dense inverse ``pops::detail::mat_inverse<N>`` ``solve_local_linear``
-uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::function / Eigen in the kernel
-(only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
+`P.solve_local_nonlinear` lowers only a per-cell residual functor and immutable controls.  The shared
+`PreparedLocalNonlinearProblem<N>` provider owns iterations, Jacobians, safeguards, pivoted solves,
+diagnostics and failure statuses.  Generated code therefore contains no private Newton loop or
+explicit inverse.  Candidates stay in scratch storage until the collective SolveReport is consumed.
 
 (A) Validation + codegen (pure Python, always runs): the builder rejects a non-callable residual, a
     non-State guess, a non-positive max_iter, a non-local residual op, and manifest-sized dense
-    fallback; a valid implicit reaction lowers to a per-cell Newton kernel whose generated C++ has the
-    residual lambda, the FD Jacobian, the mat_inverse step and the convergence break; refused w/o model.
+    fallback; a valid implicit reaction lowers to the prepared provider and report guard; refused
+    without a model.
 
 (B) End-to-end scalar implicit reaction parity (skips unless the full toolchain is present): a
     1-variable model (rho) with a NON-LINEAR named source ``S(rho) = -k*rho^2``; a Program W solving
@@ -162,6 +159,12 @@ def section_a(t):
         "tol / max_iter recorded on the op",
     )
     chk(
+        nl.attrs["safeguard"] == "exact"
+        and nl.attrs["max_evaluations"] == 0
+        and nl.attrs["relative_tol"] == 0.0,
+        "the complete prepared controls are recorded on the op",
+    )
+    chk(
         len(nl.attrs["residual_block"]) >= 3,
         "the residual sub-block holds the iterate + guess + ops",
     )
@@ -194,28 +197,34 @@ def section_a(t):
     chk(_h(1e-10, 20) != _h(1e-8, 20), "a different tol rehashes the IR")
     chk(_h(1e-10, 20) != _h(1e-10, 30), "a different max_iter rehashes the IR")
 
-    # --- the codegen lowers a per-cell Newton kernel ---
+    # --- the codegen lowers the residual into the unique prepared provider ---
     m = reaction_model("react_cg", 2.0)
     src = emit_cpp_program(reaction_program(t, "react_cg", model=m), model=m)
     for frag in (
         "auto residual_eval = [&]",
-        "pops::detail::mat_inverse<1>(",
-        "for (int it_ = 0;",
-        "J_[1][1]",
-        "std::fmax(rmax_, std::fabs(r_",
-        "if (rmax_ < static_cast<pops::Real>(1e-12)) break;",
-        "const pops::Real eps_",
-        "U_[i_] -= du_;",
+        "pops::PreparedLocalNonlinearControls controls_",
+        "pops::prepare_local_nonlinear_problem<1>",
+        "pops::solve_prepared_local_nonlinear(prepared_, Gval)",
+        "pops::LocalNonlinearCellResult<1>",
+        "pops::local_nonlinear_solve_report(",
+        "pops::detail::encode_local_nonlinear_failure(",
+        "pops::detail::decode_local_nonlinear_failure(",
+        "pops::reduce_sum(ln_status_",
+        "pops::SolveAction::kFailRun",
+        "if (!ln_report_",
         "pops::for_each_cell(",
     ):
-        chk(frag in src, "the Newton kernel has %r" % frag)
+        chk(frag in src, "the prepared local solve has %r" % frag)
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
     chk("Gval[0] = u" in src, "the frozen guess is read into a stack vector")
-    chk("U_[0] = Gval[0]" in src, "the Newton iterate is seeded to the guess")
+    chk("solve_prepared_local_nonlinear(prepared_, Gval)" in src,
+        "the prepared solve is seeded from the frozen guess")
     chk("rout[0] =" in src and "Ueval[0]" in src, "the residual is re-evaluated at the iterate")
     # No forbidden constructs in the device kernel.
-    for forbidden in ("std::function", "std::vector", "Eigen::", "new ", "malloc"):
-        chk(forbidden not in src, "the Newton kernel has no %r (device-clean)" % forbidden)
+    for forbidden in (
+        "std::function", "Eigen::", "new ", "malloc", "Jinv_", "for (int it_ =",
+    ):
+        chk(forbidden not in src, "the generated residual route has no %r" % forbidden)
 
     # --- refused without a model (the residual's named source needs the model coefficients) ---
     chk(
@@ -245,8 +254,10 @@ def section_a(t):
     )
     big_src = emit_cpp_program(Pbig, model=big)
     chk(
-        "pops::detail::mat_inverse<9>(" in big_src and "pops::Real J_[9][9];" in big_src,
-        "n_cons=9 emits exact manifest-sized Newton storage",
+        "pops::prepare_local_nonlinear_problem<9>" in big_src
+        and "pops::LocalNonlinearCellResult<9>" in big_src
+        and "pops::detail::mat_inverse<9>(" not in big_src,
+        "n_cons=9 reaches the exact manifest-sized prepared provider",
     )
 
 

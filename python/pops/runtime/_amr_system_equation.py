@@ -19,7 +19,6 @@ from pops.runtime.routes import (
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
-    NEWTON_DEFAULT_FAIL_POLICY,
     NEWTON_DEFAULT_FD_EPS,
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
@@ -47,13 +46,11 @@ def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
         or getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL) != NEWTON_DEFAULT_ABS_TOL
         or getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS) != NEWTON_DEFAULT_FD_EPS
         or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING) != NEWTON_DEFAULT_DAMPING
-        or getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY)
-        != NEWTON_DEFAULT_FAIL_POLICY
         or getattr(time, "newton_diagnostics", False)
     ):
         raise ValueError(
             "%s : the Newton options/diagnostics (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
-            "fail_policy/diagnostics) are not transported by the AMR production package; "
+            "diagnostics) are not transported by the AMR production package; "
             "the AMR target does not yet provide the typed local nonlinear/Newton Program "
             "primitive that could consume them. Keep the AMR Program explicit, use a typed "
             "LocalLinear solve for a linear implicit operator, or use the uniform System "
@@ -193,7 +190,6 @@ class _AmrSystemEquation(_AmrSystem):
                     getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
                     where="AmrSystem.add_equation.newton_damping",
                 ),
-                getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                 getattr(time, "newton_diagnostics", False),
                 native_real(
                     getattr(spatial, "positivity_floor", 0.0),
@@ -252,8 +248,8 @@ class _AmrSystemEquation(_AmrSystem):
                 "runtime has no private IMEX fallback."
             )
         # Newton options / diagnostics: same flat ABI -> neither the options nor the report transit
-        # through the .so loader. Explicit rejection (otherwise iters=2 / no report silently), parity with
-        # the stride/mask rejection above and with System.add_equation (compiled backend).
+        # through the .so loader. Explicit rejection prevents silent substitution of the prepared
+        # provider defaults, in parity with the stride/mask rejection above and System.add_equation.
         _reject_newton_amr_compiled("AmrSystem.add_equation", time)
         # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor now
         # (pops_install_native_amr -> add_compiled_model -> set_compiled_block), so it is threaded

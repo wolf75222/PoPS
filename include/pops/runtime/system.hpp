@@ -216,18 +216,17 @@ class System {
   /// @param implicit_roles IMEX only: same implicit mask but by physical ROLE ("density",
   ///                 "momentum_x", "energy", ...) instead of the name (cf. variable_roles). Union with
   ///                 implicit_vars. A role absent from the block raises an EXPLICIT error.
-  /// @param newton IMEX only: options of the local Newton of the implicit source (backward-Euler),
-  ///                 grouped in a POD (ADC-214; cf. NewtonOptions). max_iters (default 2 = historical
-  ///                 constant), rel_tol / abs_tol (PER-CELL stopping criterion
-  ///                 ||F||_inf <= abs_tol + rel_tol*||F0||_inf, 0/0 = disabled -> historical fixed
-  ///                 iterations), fd_eps (step of the finite-difference Jacobian, default 1e-7),
-  ///                 damping (damping W -= damping*delta in (0, 1], 1 = full Newton),
-  ///                 fail_policy (kFailNone / kFailWarn / kFailThrow: reaction to failed cells).
-  ///                 Default {} = historical constants, bit-identical.
+  /// @param newton IMEX only: preparation controls for the shared cell-local nonlinear provider
+  ///                 used by the implicit backward-Euler source solve. max_iters defaults to 20;
+  ///                 rel_tol / abs_tol define the per-cell stopping criterion
+  ///                 ||F||_inf <= abs_tol + rel_tol*||F0||_inf and at least one must be positive;
+  ///                 fd_eps is the finite-difference Jacobian step (default 1e-7), and damping is
+  ///                 the fixed Newton step factor in (0, 1]. Every failed solve fails the owning
+  ///                 transaction before the candidate can be published.
   /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
   ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
   ///                 aggregated over the substeps of each advance and available via newton_report(name).
-  ///                 OPT-IN: false (default) = historical path with no extra cost. Stays
+  ///                 OPT-IN: false (default) omits the retained diagnostic summary. Stays
   ///                 flat (a separate bool, outside the homogeneous family of convergence options).
   /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
   ///                 every exact reconstructed face-trace pair, then reuses that interval from both

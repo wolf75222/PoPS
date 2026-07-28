@@ -184,8 +184,8 @@ pops::runtime::amr::PreparedClusteringSpec amr_clustering_spec_from_python(
 // Assembly seams: per-block composition, native block, and refinement tagging.
 void bind_amr_assembly(py::class_<AmrSystem>& cls) {
   cls.def(py::init<const AmrSystemConfig&>())
-      // ADC-214: Python surface UNCHANGED (same flat newton_* kwargs, same defaults). The lambda
-      // assembles the NewtonOptions POD before the C++ call (parity with System.add_block).
+      // The lambda assembles the flat preparation controls into NewtonOptions before the C++ call.
+      // Failure policy is intentionally absent: every local nonlinear failure is fail-closed.
       .def(
           "add_block",
           [](AmrSystem& s, const std::string& name, const ModelSpec& model,
@@ -194,16 +194,14 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& implicit_vars,
              const std::vector<std::string>& implicit_roles, int newton_max_iters,
              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-             double newton_damping, const std::string& newton_fail_policy, bool newton_diagnostics,
-             double positivity_floor, double weno_epsilon, bool wave_speed_cache) {
+             double newton_damping, bool newton_diagnostics, double positivity_floor,
+             double weno_epsilon, bool wave_speed_cache) {
             NewtonOptions newton;
             newton.max_iters = newton_max_iters;
             newton.rel_tol = static_cast<Real>(newton_rel_tol);
             newton.abs_tol = static_cast<Real>(newton_abs_tol);
             newton.fd_eps = static_cast<Real>(newton_fd_eps);
             newton.damping = static_cast<Real>(newton_damping);
-            newton.fail_policy =
-                newton_fail_policy_from_string(newton_fail_policy, "AmrSystem::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, stride, implicit_vars,
                         implicit_roles, newton, newton_diagnostics, positivity_floor, weno_epsilon,
                         wave_speed_cache);
@@ -217,15 +215,14 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // metadata only; they do not enable a hidden backward-Euler step.
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // The flat newton_* kwargs likewise remain for Python-surface compatibility. Every
-          // non-default option and newton_diagnostics=true fails closed until an executable typed
+          // Every non-default Newton control and newton_diagnostics=true fails closed until a typed
           // AMR local nonlinear/Newton Program primitive owns both the solve and its report.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_fail_policy") = "none", py::arg("newton_diagnostics") = false,
+          py::arg("newton_diagnostics") = false,
           // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
           // by the AmrSystem.add_block / add_equation Python facade.

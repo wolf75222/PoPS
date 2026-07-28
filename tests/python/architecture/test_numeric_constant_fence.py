@@ -153,9 +153,9 @@ def _scan_constant_values() -> dict:
     return values
 
 
-# Report (section, key) -> the scanned constant whose value it must equal. String-valued keys
-# (newton.fail_policy), the unscanned kAmrRefRatio (amr.refinement_ratio, defined in
-# amr/hierarchy/refinement_ratio.hpp), and runtime counters (diagnostics.*) are intentionally omitted.
+# Report (section, key) -> the scanned constant whose value it must equal. The unscanned
+# kAmrRefRatio (amr.refinement_ratio, defined in amr/hierarchy/refinement_ratio.hpp) and runtime
+# counters (diagnostics.*) are intentionally omitted.
 _REPORT_VALUE_TO_CONSTANT = {
     ("newton", "max_iters"): "kNewtonDefaultMaxIters",
     ("newton", "rel_tol"): "kNewtonDefaultRelTol",
