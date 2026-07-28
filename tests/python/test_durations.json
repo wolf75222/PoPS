@@ -51,6 +51,7 @@
   "tests/python/integration/native_loader/test_external_interface_backend.py": 120.0,
   "tests/python/integration/native_loader/test_native_abi_std.py": 93.6,
   "tests/python/integration/native_loader/test_native_brick_typed_ctors.py": 62.4,
+  "tests/python/integration/native_loader/test_normalized_program_execution.py": 91.3,
   "tests/python/integration/native_loader/test_prepared_krylov_method_component.py": 120.0,
   "tests/python/integration/native_loader/test_prepared_nullspace_component.py": 120.0,
   "tests/python/integration/native_loader/test_prepared_preconditioner_component.py": 120.0,
