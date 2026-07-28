@@ -14,6 +14,7 @@ The full gate covers:
 - per-space transfer registries and recursive deterministic bootstrap;
 - exact level clocks, flux ledgers, reflux, rollback, and real MPI execution;
 - strict accepted-state restart and topology/history/ledger rollback;
+- distinct strict/regrid-on-restart identities, guarantees, and fail-closed capability refusal;
 - total `LoweringCoverageReport` success and structured rejection.
 
 `deferred = []` is normative. Every ADC-672 through ADC-678 issue must have a

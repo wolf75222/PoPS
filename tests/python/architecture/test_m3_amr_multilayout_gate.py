@@ -21,7 +21,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 26
+    assert len(data["check"]) == 28
 
 
 def test_m3_final_gate_has_no_deferred_requirement():

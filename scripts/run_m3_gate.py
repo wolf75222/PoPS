@@ -24,6 +24,7 @@ EXPECTED_REQUIREMENTS = {
     "transfer_bootstrap",
     "clocks_reflux",
     "accepted_state",
+    "restart_hierarchy_policy",
     "lowering_coverage",
 }
 ALLOWED_PYTEST_TARGETS = {
@@ -34,6 +35,7 @@ ALLOWED_PYTEST_TARGETS = {
     "tagging_graph",
     "hierarchy_regrid",
     "transfer_bootstrap",
+    "restart_hierarchy_policy",
 }
 NATIVE_PYTEST_FILES = {
     "tests/python/integration/amr/test_amr_magnitude_tagging_native.py",

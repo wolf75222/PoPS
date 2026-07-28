@@ -200,6 +200,22 @@ test_regex = "^test_amr_history_ring\\.RejectedAb2RegridRestoresTopologyHistoryF
 
 [[check]]
 issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "positive"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_checkpoint_hierarchy_policies_have_distinct_exact_identities_and_guarantees"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "refusal"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_regrid_on_restart_refuses_bit_identity_and_unsupported_builtin_provider"
+
+[[check]]
+issue = "ADC-678"
 requirement = "lowering_coverage"
 polarity = "positive"
 kind = "pytest"
