@@ -829,7 +829,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n  # Agregation REQUISE", 1
     )[0]
     assert "runs-on: ubuntu-24.04" in mpi_prewarm_block
-    assert "timeout-minutes: 22" in mpi_prewarm_block
+    assert "timeout-minutes: 40" in mpi_prewarm_block
     assert "needs: [set-mode, changes]" in mpi_prewarm_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_prewarm_block
     assert "lane: [system, amr-base, amr-compressible]" in mpi_prewarm_block
