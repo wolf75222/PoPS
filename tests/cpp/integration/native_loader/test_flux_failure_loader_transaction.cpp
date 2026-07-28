@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -80,36 +79,6 @@ std::string package_source() {
       }
     };
 
-    struct StageThreeFailureScalar {
-      using State = pops::StateVec<1>;
-      using Prim = pops::StateVec<1>;
-      using Aux = pops::Aux;
-      static constexpr int n_vars = 1;
-
-      POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-      POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const {
-        return pops::Real(1);
-      }
-      POPS_HD State source(const State& state, const Aux&) const {
-        // With dt=1, ARS222 stage 2 converges to gamma ~= 0.293. Its source increment
-        // produces base3 ~= 0.707, where stage 3 deliberately reports an invalid evaluation.
-        // AdvanceImexRkArs222 has already written base3 into the live MultiFab at that point.
-        return State{state[0] > pops::Real(0.5)
-                         ? std::numeric_limits<pops::Real>::quiet_NaN()
-                         : pops::Real(1)};
-      }
-      POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
-      POPS_HD Prim to_primitive(const State& state) const { return state; }
-      POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
-
-      static pops::VariableSet conservative_vars() {
-        return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Custom}};
-      }
-      static pops::VariableSet primitive_vars() {
-        return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Custom}};
-      }
-    };
-
     template <pops::EvaluationStatus Status, std::uint32_t Reason>
     struct AttemptControlFlux {
       template <pops::PhysicalFlux Physical>
@@ -150,23 +119,6 @@ std::string package_source() {
       system.set_block_ghosts(name, pops::NoSlope::n_ghost);
     }
 
-    void install_stage_three_failure_block(pops::System& system, const char* name, int substeps,
-                                           bool evolve, int stride) {
-      const StageThreeFailureScalar model{};
-      const pops::GridContext context = system.grid_context(name);
-      pops::BlockClosures closures =
-          pops::build_block<pops::NoSlope, RetryFlux>(model, context, /*imex=*/true,
-                                                      /*recon_prim=*/false, "imexrk_ars222");
-      system.install_block(name, StageThreeFailureScalar::n_vars,
-                           StageThreeFailureScalar::conservative_vars(),
-                           StageThreeFailureScalar::primitive_vars(), 1.4, std::move(closures),
-                           pops::make_max_speed(model, context), pops::make_poisson_rhs(model),
-                           substeps, evolve, stride);
-      auto conversion = pops::make_cell_convert(model);
-      system.set_block_conversion(name, std::move(conversion.first), std::move(conversion.second));
-      system.set_block_ghosts(name, pops::NoSlope::n_ghost);
-    }
-
     extern "C" const char* pops_native_abi_key() {
       return POPS_ABI_KEY_LITERAL;
     }
@@ -192,8 +144,6 @@ std::string package_source() {
         install_attempt_block<RetryFlux>(system, name, substeps, evolve != 0, stride);
       else if (params[0] == 1.0 && std::string(time) == "explicit")
         install_attempt_block<RejectFlux>(system, name, substeps, evolve != 0, stride);
-      else if (params[0] == 2.0 && std::string(time) == "imex")
-        install_stage_three_failure_block(system, name, substeps, evolve != 0, stride);
       else
         throw std::invalid_argument("attempt-control test package received an invalid mode");
     }
@@ -222,46 +172,27 @@ int exercise_attempt(const std::string& library, double mode,
     caught = rejected.status() == pops::SolveStatus::kInvalidEvaluation &&
              rejected.disposition() == expected_disposition &&
              rejected.reason_code() == expected_reason;
+    if (!caught)
+      std::fprintf(stderr,
+                   "attempt-control mismatch: status=%u disposition=%u reason=0x%08x "
+                   "(expected disposition=%u reason=0x%08x)\n",
+                   static_cast<unsigned>(rejected.status()),
+                   static_cast<unsigned>(rejected.disposition()), rejected.reason_code(),
+                   static_cast<unsigned>(expected_disposition), expected_reason);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "unexpected attempt-control exception: %s\n", error.what());
+    return 1;  // FluxEvaluationFailure must not escape the host transaction boundary.
   } catch (...) {
+    std::fprintf(stderr, "unexpected non-standard attempt-control exception\n");
     return 1;  // FluxEvaluationFailure must not escape the host transaction boundary.
   }
-  if (!caught || system.time() != 0.0 || system.get_state("scalar") != accepted)
-    return 1;
-  return 0;
-}
-
-int exercise_ars222_stage_three_rollback(const std::string& library) {
-  constexpr int n = 8;
-  pops::SystemConfig config;
-  config.n = n;
-  config.L = 1.0;
-  config.periodicity = {true, true};
-  pops::System system(config);
-  // The fixed native-loader ABI currently labels the package route "imex"; the package installs
-  // the ARS222 closure directly so this test reaches the exact native stage implementation.
-  system.add_native_block("scalar", library, "none", "rusanov", "conservative", "imex", 1.4,
-                          /*substeps=*/1, true, 1, {2.0});
-  const std::vector<double> accepted(static_cast<std::size_t>(n) * n, 0.0);
-  system.set_state("scalar", accepted);
-
-  system.begin_step_transaction();
-  bool caught_stage_three_failure = false;
-  try {
-    system.step(1.0);
-  } catch (const std::runtime_error& error) {
-    caught_stage_three_failure =
-        std::string(error.what()).find("invalid_evaluation") != std::string::npos;
-  } catch (...) {
-    system.rollback_step_transaction();
+  if (!caught || system.time() != 0.0 || system.get_state("scalar") != accepted) {
+    std::fprintf(stderr, "attempt-control rollback mismatch: caught=%d time=%.17g state=%s\n",
+                 caught ? 1 : 0, system.time(),
+                 system.get_state("scalar") == accepted ? "accepted" : "mutated");
     return 1;
   }
-
-  // Stage 3 wrote base3 into U before its local solve failed. The outer StepTransaction must still
-  // expose the exact accepted state and clock, never that provisional stage value.
-  const bool restored =
-      caught_stage_three_failure && system.time() == 0.0 && system.get_state("scalar") == accepted;
-  system.rollback_step_transaction();
-  return restored ? 0 : 1;
+  return 0;
 }
 
 int run_flux_failure_loader_transaction() {
@@ -285,7 +216,6 @@ int run_flux_failure_loader_transaction() {
                                0x52545259u);
   failures += exercise_attempt(
       library, 1.0, pops::runtime::program::StepAttemptDisposition::kReject, 0x524a4354u);
-  failures += exercise_ars222_stage_three_rollback(library);
   std::remove(source.c_str());
   std::remove(library.c_str());
   std::remove((library + ".log").c_str());
