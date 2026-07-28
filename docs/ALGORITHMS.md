@@ -23,7 +23,7 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [4. Time-integration bricks: SSPRK and object integrators](#4-time-integration-bricks-ssprk-and-object-integrators)
 - [5. Stiff sources: asymptotic-preserving IMEX and partial IMEX](#5-stiff-sources-asymptotic-preserving-imex-and-partial-imex)
 - [6. Operator splitting: Lie and Strang](#6-operator-splitting-lie-and-strang)
-- [7. Retained low-level multirate formulas](#7-retained-low-level-multirate-formulas)
+- [7. Test-only multirate reference formulas](#7-test-only-multirate-reference-formulas)
 - [8. Parabolic term: diffusion as face flux](#8-parabolic-term-diffusion-as-face-flux)
 - [9. Elliptic: geometric multigrid](#9-elliptic-geometric-multigrid)
 - [10. Elliptic: spectral Poisson (FFT), single-rank and distributed](#10-elliptic-spectral-poisson-fft-single-rank-and-distributed)
@@ -483,7 +483,7 @@ solved once per step limits the field to order 1, whatever SSPRK is chosen on th
 computing declared stability bounds. They do not create a scheduler: production subcycling,
 holds, or catch-up must appear as explicit Program composition (section 7).
 The `SSPRK2Step`/`SSPRK3Step` objects reproduce bit-for-bit the
-old inline copies `SystemCoupler::advance_explicit_ssprk2/ssprk3` (deduplication). Validation:
+old static-driver inline copies (deduplication). Validation:
 `test_user_time_integrator` checks that a user-provided integrator gives the same result
 as a core SSPRK.
 
@@ -576,9 +576,9 @@ goes through the `PartiallyImplicitModel` concept (trait `M::is_implicit(c)`), `
 (default: everything implicit when the trait is absent), the POD carrier `ImplicitMask<N>` (`active`, `flag[N]`,
 carried by the block, passed by value on the device) and `is_implicit_component<Model, N>` (an active mask
 with priority over the model default). `ImplicitSourceStepper` (`iters = 2`) models the concept
-`ImplicitBlockStepper` for the low-level `SystemCoupler` numerical utility. Production `System` and
-`AmrSystem` do not schedule that helper: their normalized `ProgramGraph` must place a typed implicit
-primitive explicitly, and an unavailable lowering fails closed.
+`ImplicitBlockStepper` for isolated numerical tests. Production `System` and `AmrSystem` do not
+schedule that helper: their normalized `ProgramGraph` must place a typed implicit primitive
+explicitly, and an unavailable lowering fails closed.
 
 **Constraints / remarks.** The implicit step is unconditionally stable for a linear relaxation
 (where a plain Picard fixed point would diverge as soon as `dt * stiffness > 1`, precisely the
@@ -669,12 +669,13 @@ Lie/Strang endpoints and explicit field-solve placement.
 
 ---
 
-## 7. Retained low-level multirate formulas
+## 7. Test-only multirate reference formulas
 
-**Scope.** This section records the tested low-level `SystemCoupler` formulas and their
-historical descriptor semantics. They are not a production time engine. `System` and
-`AmrSystem` execute only their installed `ProgramGraph`; production subcycling, holds,
-catch-up, and adaptive-step placement must be authored as typed Program composition.
+**Scope.** This section records historical formulas retained only by
+`tests/cpp/support/reference_system_driver.hpp`. They are not installed PoPS code and cannot become a
+production time engine. `System` and `AmrSystem` execute only their installed `ProgramGraph`;
+production subcycling, holds, catch-up, and adaptive-step placement must be authored as typed Program
+composition.
 
 **Intuition.** Not all species of a coupled system require the same time step.
 A stiff species (electrons) splits a macro-step into several substeps ($\text{substeps}$); a
@@ -719,8 +720,7 @@ $$\text{dt}_b = \frac{\text{cfl} \; h_{\text{cell}} \; \text{substeps}_b}{\text{
 where $h_{\text{cell}} = \min(dx, dy)$ in Cartesian, $\min(dr, r_{\min}\, d\theta)$ in polar (the
 physical azimuthal step is minimal at the inner radius), and $w_b$ is the max wave speed of the block.
 
-The retained low-level `SystemCoupler::step_adaptive` algorithm fixes the macro-step on the fastest
-block,
+The test-only `ReferenceSystemDriver::step_adaptive` oracle fixes the macro-step on the fastest block,
 $\Delta t = \text{cfl}\, h_{\text{cell}} / w_{\max}$, and assigns each block the runtime stride
 
 $$m_b = \max\!\left(1,\left\lfloor\frac{w_{\max}}{w_b}\right\rfloor\right).$$
@@ -767,8 +767,8 @@ function step_cfl(cfl):                           # choix du macro-pas par CFL
 ```
 
 **Code.** The skeleton is [`numerics/time/scheduler.hpp`](../include/pops/numerics/time/schemes/scheduler.hpp),
-function `advance_subcycled` (two overloads: with and without `macro_step`). It is a low-level
-composition brick used by `SystemCoupler`, not a fallback of the production facade. It reads
+function `advance_subcycled` (two overloads: with and without `macro_step`). Only the test oracle
+composes it into a complete temporal driver. It reads
 `block_substeps_v`, `block_stride_v` and `block_time_treatment_v`, aliases of `TimePolicyTraits`
 defined in [`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)
 (`TimePolicy<Method, Treatment, substeps, stride>`, aliases `ExplicitTime` / `ImplicitTime` /
@@ -792,13 +792,13 @@ hold/cache behavior must author that policy explicitly. The speed $w_b$ comes fr
 $\text{dt} = \text{cfl}\,h\,\text{substeps}/(\text{stride}\,w)$ gives, for $\text{substeps}_b > 1$, a
 step $\text{substeps}_b$ times larger than the old formula $\text{dt} = \text{cfl}\,h/(\text{stride}\,w)$.
 Bit-identical parity with the history therefore holds only for $\text{substeps} = 1$ (at any
-stride); to replay a run calibrated on the old formula, pass the explicit historical $\text{dt}$
-to `step(dt)`, not `step_cfl`. Under MPI, the absence of `all_reduce_max` would desynchronize the
+stride); to reproduce the historical test formula, supply the explicit historical $\text{dt}$ to
+the oracle rather than its CFL helper. Under MPI, the absence of `all_reduce_max` would desynchronize the
 ranks (each would see the max of its own boxes only) and would make the simulation diverge. The
 stride semantics is hold-then-catch-up: the slow block is loosely coupled, which is an assumed choice
 (the gas is not resolved at every step). Tests `test_multirate_stride`, `test_adaptive_multirate`
-and `test_cfl_dt` prove the low-level `SystemCoupler` numerical bricks. Facade contract tests
-separately prove that no `System` or `AmrSystem` launch can select them implicitly.
+and `test_cfl_dt` prove the test-only numerical oracle. The architecture gate separately proves that
+no installed header and no `System` or `AmrSystem` launch can select it.
 
 ## 8. Parabolic term: diffusion as face flux
 
@@ -2082,9 +2082,9 @@ the selected blocks; the adaptive executor runs the same graph over a shared hie
 DistributionMapping and geometry per level via `same_layout_or_throw`), performs coarse co-located
 Poisson assembly, and conservatively transfers/refluxes every declared state. Inter-species sources
 are typed component-interface implementations in the graph; the bytecode and native registration
-calls remain internal lowering details. On the coupling side:
-`coupling/system_coupler.hpp` (`SystemAssembler` assembles, `SystemDriver` advances),
-`coupling/amr_system_coupler.hpp` (the system carried over AMR).
+calls remain internal lowering details. On the coupling side,
+`coupling/system_coupler.hpp` contains only `SystemAssembler`, while
+`coupling/amr_system_coupler.hpp` carries the static system over AMR without owning a time scheme.
 [`runtime/model_factory.hpp`](../include/pops/runtime/builders/factory/model_factory.hpp):
 `dispatch_model` / `dispatch_transport` / `dispatch_source` / `dispatch_elliptic` assemble a
 `CompositeModel` from a `ModelSpec` (the core names no scenario).
@@ -2098,8 +2098,9 @@ so the Program applies a term-set whose invariants are machine-checked rather th
 ionization is declared NON-conservative in density (it net-sources an electron/ion pair) while collision
 conserves momentum and thermal exchange conserves energy. The named couplings are presets lowering to
 this one representation, inspectable read-only through `coupled_operators()`. The production facade
-applies `substeps` and `stride` only to the whole installed Program. Per-block multirate cadence
-remains a low-level `SystemCoupler` capability until its explicit `ProgramGraph` lowering exists.
+applies `substeps` and `stride` only to the whole installed Program. Per-block runtime-adaptive
+cadence is unsupported until its explicit `ProgramGraph` lowering exists; only the test oracle
+retains its historical formula.
 In multi-block AMR, `regrid_every > 0` is supported (the union-tag regrid rebuilds the hierarchy from all blocks' tags; `regrid_every == 0` keeps it frozen)
 and `set_conservative_state` accepts a complete block-qualified conservative state for every native
 or deferred compiled (`.so`) block. Without an explicit IMEX mask

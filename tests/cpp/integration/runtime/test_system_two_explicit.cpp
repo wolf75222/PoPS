@@ -1,4 +1,4 @@
-// SystemCoupler : deux blocs EXPLICITES heterogenes (jalon 2.5.2) et conditions aux
+// Driver de reference test-only : deux blocs EXPLICITES heterogenes (jalon 2.5.2) et conditions aux
 // limites PAR BLOC reellement appliquees (jalon 2.1.3).
 //
 // Partie A : deux blocs explicites avec des schemas ET des sous-pas differents
@@ -9,9 +9,10 @@
 
 #include <gtest/gtest.h>
 
+#include "reference_system_driver.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -91,7 +92,7 @@ TEST(SystemTwoExplicit, TwoExplicitSchemesAdvanceIndependently) {
   ProdSSP2 a{"ssp2", Production{Real(2)}, Ua, BCRec{}};
   ProdSSP3 b{"ssp3", Production{Real(5)}, Ub, BCRec{}};
   CoupledSystem system{a, b};
-  auto sim = make_system_coupler(system, geom, ba, BCRec{}, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, BCRec{}, ZeroSystemRhs{});
   sim.step(dt);  // tout explicite : pas de callback
   EXPECT_TRUE(std::fabs(sum(Ua) - dt * Real(2) * ncell) < Real(1e-12)) << "ssp2_block";
   EXPECT_TRUE(std::fabs(sum(Ub) - dt * Real(5) * ncell) < Real(1e-12)) << "ssp3_block";
@@ -113,7 +114,7 @@ TEST(SystemTwoExplicit, IdenticalPerBlockBcsProduceIdenticalResult) {
   AdvBlock b1{"p1", AdvectX{}, Up1, per};
   AdvBlock b2{"p2", AdvectX{}, Up2, per};
   CoupledSystem system{b1, b2};
-  auto sim = make_system_coupler(system, geom, ba, per, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, per, ZeroSystemRhs{});
   sim.step(dt);
   MultiFab d(ba, dm, 1, 0);
   lincomb(d, Real(1), Up1, Real(-1), Up2);
@@ -139,7 +140,7 @@ TEST(SystemTwoExplicit, DifferingPerBlockBcsDiverge) {
   AdvBlock bp{"per", AdvectX{}, Uper, per};
   AdvBlock bo{"out", AdvectX{}, Uout, out};
   CoupledSystem system{bp, bo};
-  auto sim = make_system_coupler(system, geom, ba, per, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, per, ZeroSystemRhs{});
   sim.step(dt);
   MultiFab d(ba, dm, 1, 0);
   lincomb(d, Real(1), Uper, Real(-1), Uout);

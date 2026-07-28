@@ -35,8 +35,8 @@
 /// aux enters through the FLUX (E x B); for a self-gravitating fluid through the SOURCE. Three
 /// orthogonal axes, all template parameters: Limiter (reconstruction), Policy (PerStage vs
 /// OncePerStep), NumericalFlux (Rusanov by default). Compatible with a SINGLE model; multi-species
-/// goes through SystemCoupler. The detail:: helpers are at namespace scope (an POPS_HD extended
-/// lambda cannot live in a private method, an nvcc restriction).
+/// goes through the whole-system Program/runtime path. The detail:: helpers are at namespace scope
+/// (a POPS_HD extended lambda cannot live in a private method, an nvcc restriction).
 
 namespace pops {
 

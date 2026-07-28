@@ -82,8 +82,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   missing capabilities fail closed before native installation, and the Roe entropy correction is
   an explicit typed provider policy.
 - ADC-700 removes the always-throwing `System::step_adaptive` production facade and its Python
-  binding. Runtime-speed-derived multirate cadence remains a low-level numerical reference until it
-  has an explicit `ProgramGraph` lowering; `System` and `AmrSystem` expose no fallback time engine.
+  binding, plus the installed static `SystemDriver` / `SystemCoupler` scheme-and-cadence driver.
+  Runtime-speed-derived multirate cadence remains only as a test numerical oracle until it has an
+  explicit `ProgramGraph` lowering; `System` and `AmrSystem` expose no fallback time engine.
 - ADC-637 Retire the hand-written condensed-Schur Program brick. The condensed-implicit electrostatic-Lorentz push is now authored entirely in the DSL and emitted to C++ on EVERY layout (System, flat and refined AMR): the coupling/schur/program/** headers (schur_program_kernels.hpp, condensed_schur_operator.hpp) and the P.schur_* Program ops are gone, the generic condensed_* route (block_inverse / block_apply_inverse, the authored J on a momentum subset, a generic condensed_energy kernel) is the sole route, and the generated .so carries all scheme kernels. condensed_schur no longer takes route= or c_bz=. Zero Schur-specific C++ remains on the compiled Program path; the generic tensor-coefficient elliptic apply and the GeometricMG preconditioner are re-homed to Schur-free elliptic infrastructure (runtime/program/coeff_elliptic_ops.hpp), and the AMR composite driver is the renamed generic AmrCondensedElliptic (amr_condensed_elliptic.hpp) over CompositeFacPoisson. Bit-identical to the retired brick on System and flat AMR (golden, np.array_equal, theta == 1 and theta == 0.5) and >= 98% of its throughput. The order-exact conservative refined-multilevel condensed solve stays a precise refusal pending ADC-648 (gather-then-solve, on the generic ops); the native CondensedSchur source-stage steppers are unaffected and retire under their own follow-up after ADC-648.
 - routes: the 24 unreferenced symmetric route-id constants (ADC-630); named constants remain only for identifiers with a live consumer.
 

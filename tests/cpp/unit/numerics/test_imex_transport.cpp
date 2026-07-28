@@ -8,9 +8,10 @@
 
 #include <gtest/gtest.h>
 
+#include "reference_system_driver.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -71,7 +72,7 @@ TEST(test_imex_transport, imex_block_transport_is_advanced_by_the_core) {
   ImexBlk imex{"imex", AdvectX{Real(1)}, Ui, bc};
   ExplBlk expl{"expl", AdvectX{Real(1)}, Ue, bc};
   CoupledSystem system{imex, expl};
-  auto sim = make_system_coupler(system, geom, ba, bc, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, bc, ZeroSystemRhs{});
 
   sim.step(Real(0.05), ImplicitSourceStepper{});  // source nulle -> seul le transport agit
 

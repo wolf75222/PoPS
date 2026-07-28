@@ -24,7 +24,7 @@
 ///   one-arg take_step allocates it per call; the scratch-taking overload reuses a caller-owned
 ///   buffer (see run_explicit_substeps) to hoist the allocation out of a substep loop -- both
 ///   paths are bit-identical;
-/// - SSPRK2Step / SSPRK3Step exactly reproduce the old copies in SystemCoupler and
+/// - SSPRK2Step / SSPRK3Step exactly reproduce the retired static-driver copies and
 ///   ssprk.hpp (bit-identical).
 
 namespace pops {
@@ -63,7 +63,7 @@ struct ForwardEuler {
 };
 
 // SSP-RK2 (Shu-Osher, 2 stages, order 2). Same operations as the old
-// SystemCoupler::advance_explicit_ssprk2 / ssprk.hpp::advance_ssprk2 (bit-identical).
+// Retired static-driver SSPRK2 / ssprk.hpp::advance_ssprk2 (bit-identical).
 struct SSPRK2Step {
   // Reusable stage buffers (residual R with 0 ghosts; stage U1 with U's ghosts, since rhs reads
   // its ghosts). Hoist out of a substep loop via run_explicit_substeps. Reuse is bit-identical:
@@ -102,7 +102,7 @@ struct SSPRK2Step {
 };
 
 // SSP-RK3 (Shu-Osher, 3 stages, order 3). Same operations as the old
-// SystemCoupler::advance_explicit_ssprk3 (bit-identical).
+// Retired static-driver SSPRK3 (bit-identical).
 struct SSPRK3Step {
   // Reusable stage buffers (residual R with 0 ghosts; stages U1/U2/U3 with U's ghosts, since the
   // first two are passed back to rhs which reads their ghosts). Hoist out of a substep loop via

@@ -5,9 +5,10 @@
 
 #include <gtest/gtest.h>
 
+#include "reference_system_driver.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -65,7 +66,7 @@ TEST(test_user_time_integrator, UserForwardEulerAdvancesConstantSource) {
   U.set_val(Real(0));
   UserBlock blk{"prod", Production{Real(3)}, U, bc};
   CoupledSystem system{blk};
-  auto sim = make_system_coupler(system, geom, ba, bc, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, bc, ZeroSystemRhs{});
 
   const Real dt = Real(0.1);
   sim.step(dt);  // tout explicite : le coupleur appelle UserForwardEuler::take_step

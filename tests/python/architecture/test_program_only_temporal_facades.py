@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
 SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
+STATIC_SYSTEM_ASSEMBLER = ROOT / "include/pops/coupling/system/system_coupler.hpp"
+REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
@@ -43,6 +45,7 @@ SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
 BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
+HEADERS_MANIFEST = ROOT / "include/pops_headers.manifest"
 MANIFEST = ROOT / "tests/test_manifest.toml"
 
 EXPLICIT_TEST_BRIDGE = "tests.python.support.explicit_program"
@@ -117,6 +120,44 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     assert "step_adaptive" not in source
     assert "step_adaptive" not in SYSTEM_HEADER.read_text(encoding="utf-8")
     assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
+
+
+def test_static_system_temporal_driver_is_test_only():
+    """The coupling header may assemble operators, never select a time scheme or cadence."""
+    production_sources = (
+        tuple((ROOT / "include/pops").rglob("*.hpp"))
+        + tuple((ROOT / "src").rglob("*.cpp"))
+        + tuple((ROOT / "python/bindings").rglob("*.cpp"))
+        + tuple((ROOT / "python/pops").rglob("*.py"))
+    )
+    retired_identity = re.compile(r"\b(?:SystemDriver|SystemCoupler|make_system_coupler)\b")
+    violations = {
+        path.relative_to(ROOT).as_posix()
+        for path in production_sources
+        if retired_identity.search(path.read_text(encoding="utf-8"))
+    }
+    assert violations == set()
+    assert (
+        "test-only pops/coupling/system/system_coupler.hpp"
+        in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    )
+
+    assembler = STATIC_SYSTEM_ASSEMBLER.read_text(encoding="utf-8")
+    assert "class SystemAssembler" in assembler
+    assert "block_residual(" in assembler
+    for temporal_authority in (
+        "advance_subcycled(",
+        "step_adaptive(",
+        "step_cfl(",
+        "SSPRK2Step",
+        "ImplicitSourceStepper",
+    ):
+        assert temporal_authority not in assembler
+
+    reference = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
+    assert "class ReferenceSystemDriver" in reference
+    assert "Real step_adaptive(" in reference
+    assert REFERENCE_SYSTEM_DRIVER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
 
 
 def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():

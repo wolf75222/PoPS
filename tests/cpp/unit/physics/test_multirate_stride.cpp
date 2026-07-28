@@ -8,9 +8,10 @@
 
 #include <gtest/gtest.h>
 
+#include "reference_system_driver.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -60,7 +61,7 @@ TEST(test_multirate_stride, FastAndSlowResyncAfterStridePeriod) {
   FastBlk fast{"fast", Production{Real(1)}, Uf, bc};
   SlowBlk slow{"slow", Production{Real(1)}, Us, bc};
   CoupledSystem system{fast, slow};
-  auto sim = make_system_coupler(system, geom, ba, bc, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, bc, ZeroSystemRhs{});
 
   // 1er macro-pas : rapide avance de dt (0.1) ; lent avance de 3*dt (0.3) en une fois.
   sim.step(dt);
