@@ -20,7 +20,7 @@ requirement = "ghost_plan"
 polarity = "refusal"
 kind = "pytest"
 target = "ghost_plan"
-nodeid = "tests/python/unit/mesh/test_ghost_producer_plan.py::test_missing_overlap_and_extra_producers_fail_without_order_priority"
+nodeid = "tests/python/unit/mesh/test_ghost_producer_plan.py::test_global_missing_and_overlapping_producers_fail_before_compile_lowering"
 
 [[check]]
 issue = "ADC-672"
