@@ -355,7 +355,7 @@ class _SystemIO(_System):
         # Once any ring has materialized, require the whole registry to agree exactly.
         if current_histories and history_names != current_histories:
             raise RuntimeError(
-                "checkpoint Program histories %r != installed histories %r"
+                "checkpoint Program histories %r != installed qualified histories %r"
                 % (history_names, current_histories)
             )
         schedule = temporal.program_schedule

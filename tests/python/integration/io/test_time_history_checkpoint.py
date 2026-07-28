@@ -173,6 +173,11 @@ def _authorize_identity_runtime(sim, compiled):
     sim._execution_context = context
     sim._step_strategy = authored._step_strategy
     sim._step_transaction_plan = authored.transaction_plan()
+    sim._temporal_restart_state.configure_program(
+        authored.temporal_manifest(),
+        time=sim.time(),
+        macro_step=sim.macro_step(),
+    )
     snapshot = BoundSnapshot(
         semantic_identity=compiled.semantic_identity,
         artifact_identity=compiled.artifact_identity,

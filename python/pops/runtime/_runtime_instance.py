@@ -1311,7 +1311,8 @@ class RuntimeInstance:
                 return self._accepted_step_transaction(advance, at_end=at_end)
             except StepAttemptRejected as error:
                 # _accepted_step_transaction has already restored every native/Python store here.
-                # Only the detached proposal cursor may advance to the next retry.
+                # It also carries the one rejected-attempt statistic into the accepted temporal
+                # authority; only the detached proposal cursor may advance to the next retry.
                 if sequence.retry(error):
                     continue
                 raise
