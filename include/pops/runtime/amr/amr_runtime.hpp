@@ -3679,6 +3679,67 @@ class AmrRuntime {
         [&]() { return solve_named_fields_uncommitted(selected); });
   }
 
+  /// Re-evaluate one exact named-field provider from a stage state on any materialized hierarchy
+  /// level. The live conservative state is restored before the returned SolveOutcome can be
+  /// consumed; only the provider's candidate publication remains transactional. This is the native
+  /// field-coupled Jacobian seam used by AmrProgramContext.
+  ///
+  /// Dynamic field boundaries whose kernels read conservative state remain coarse-only until their
+  /// dependency views are materialized per level. Rejecting that narrower case here prevents a fine
+  /// solve from silently presenting coarse storage to a fine boundary kernel.
+  [[nodiscard]] bool named_field_stage_state_is_level_qualified(const std::string& provider_slot,
+                                                                int level) const {
+    const auto field = named_fields_.find(provider_slot);
+    if (field == named_fields_.end())
+      throw std::invalid_argument(
+          "AmrRuntime::named_field_stage_state_is_level_qualified selected an unknown provider "
+          "slot");
+    if (level < 0 || level >= nlev_)
+      throw std::out_of_range(
+          "AmrRuntime::named_field_stage_state_is_level_qualified level is out of range");
+    return level == 0 || !field->second.plan.has_boundary_kernel ||
+           field->second.plan.boundary_state_blocks.empty();
+  }
+
+  SolveOutcome solve_named_fields_from_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      std::size_t block, const MultiFab& stage_state) {
+    if (provider_slot.empty())
+      throw std::invalid_argument(
+          "AmrRuntime::solve_named_fields_from_state_at requires an exact provider slot");
+    if (point.level < 0 || point.level >= nlev_)
+      throw std::out_of_range("AmrRuntime::solve_named_fields_from_state_at level is out of range");
+    if (block >= blocks_.size())
+      throw std::out_of_range("AmrRuntime::solve_named_fields_from_state_at block is out of range");
+    if (!named_field_stage_state_is_level_qualified(provider_slot, point.level))
+      throw std::logic_error(
+          "solve_fields_from_state_at_fine_level: a fine-level dynamic field boundary requires "
+          "level-qualified dependency views");
+
+    MultiFab& live = (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U;
+    if (!same_exact_multifab_layout_(live, stage_state))
+      throw std::invalid_argument(
+          "AmrRuntime::solve_named_fields_from_state_at stage state does not match its exact "
+          "block/level layout");
+    const std::pair<std::size_t, int> scratch_key{block, point.level};
+    auto insertion = named_field_stage_state_scratch_.try_emplace(
+        scratch_key, live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+    MultiFab& accepted = insertion.first->second;
+    if (!same_exact_multifab_layout_(accepted, live))
+      accepted = MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+
+    PureFieldAlgebra::copy_allocated(accepted, live);
+    try {
+      PureFieldAlgebra::copy_allocated(live, stage_state);
+      SolveOutcome outcome = solve_named_fields(&provider_slot);
+      PureFieldAlgebra::copy_allocated(live, accepted);
+      return outcome;
+    } catch (...) {
+      PureFieldAlgebra::copy_allocated(live, accepted);
+      throw;
+    }
+  }
+
   [[nodiscard]] bool field_solve_transaction_active() const noexcept {
     return field_solve_transaction_active_;
   }
@@ -5719,6 +5780,10 @@ class AmrRuntime {
   std::map<int, AuxHaloPolicy> named_aux_bc_;
   // NAMED multi-elliptic fields (ADC-428): field name -> aux outputs + prepared provider instance.
   std::map<std::string, NamedField> named_fields_;
+  // Persistent exact-layout snapshots used while a named provider assembles from a provisional
+  // stage state. Compatibility is rechecked on every use, so regrid/restart cannot retain stale
+  // storage while steady-state replays allocate nothing.
+  std::map<std::pair<std::size_t, int>, MultiFab> named_field_stage_state_scratch_;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
   // TYPED coupling operator inspect metadata (ADC-595, parity with System::Impl::coupled_operators_):
