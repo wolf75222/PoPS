@@ -1,16 +1,13 @@
 """ADC-700: fail closed until every temporal route has an explicit Program primitive.
 
 The ordinary explicit runtime tests may install the small Programs from
-``tests.python.support.explicit_program``.  The remaining semantic implicit and polar tests below
-must not use that bridge: forward Euler cannot stand in for backward Euler, partial IMEX,
-ARS(2,2,2), Newton diagnostics, or a missing point-qualified polar RHS.
+``tests.python.support.explicit_program``.  Semantic implicit tests must use
+typed Program primitives: forward Euler cannot stand in for backward Euler,
+partial IMEX, ARS(2,2,2), or nonlinear local solves.
 
-This source-only gate records the current blockers deliberately.  Once typed Program primitives for
-one family land, its semantic test must be migrated to that real primitive and removed from
-``SEMANTIC_BLOCKERS`` in the same change. Coupled sources now execute through an explicit
-candidate-state Program primitive, so their tests install a real SSPRK2 transport + split-source
-Program instead of borrowing the retired facade stepper. Polar transport likewise has a genuine
-point-qualified residual and its spatial tests use explicitly authored SSPRK2/SSPRK3 Programs.
+The blocker ledger is intentionally empty.  Coupled sources, polar transport,
+linear IMEX and nonlinear local IMEX now execute through ordinary Programs;
+none borrows a spatial-runtime time integrator.
 """
 
 from __future__ import annotations
@@ -47,28 +44,10 @@ BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
 HEADERS_MANIFEST = ROOT / "include/pops_headers.manifest"
-MANIFEST = ROOT / "tests/test_manifest.toml"
 
-EXPLICIT_TEST_BRIDGE = "tests.python.support.explicit_program"
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
-MIXED_SEMANTIC_BLOCKERS = {
-    "tests/python/unit/runtime/test_v3_features.py": (
-        "expect_imex_program_required",
-    ),
-}
-
-# These remain executable semantic tests in the normal manifest.  They are blockers, not candidates
-# for an explicit-Euler compatibility rewrite.
-SEMANTIC_BLOCKERS = {
-    "tests/python/integration/amr/test_amr_newton_full.py": (
-        "engine.IMEX(",
-        "expect_native_rejection(",
-    ),
-    "tests/python/unit/runtime/test_v3_features.py": (
-        "engine.IMEX(",
-        "expect_amr_newton_rejection(",
-    ),
-}
+NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
+V3_FEATURES_TEST = ROOT / "tests/python/unit/runtime/test_v3_features.py"
 
 
 def _function_body(source: str, signature: str) -> str:
@@ -87,6 +66,7 @@ def _function_body(source: str, signature: str) -> str:
 
 
 def _python_function_source(source: str, name: str) -> str:
+    """Extract one Python function without matching unrelated compatibility tests."""
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
@@ -337,24 +317,42 @@ def test_prepared_amr_program_reflux_plan_is_spatial_only():
         assert retired_attempt_state not in source
 
 
-def test_unlowerable_semantic_tests_remain_real_manifest_tests_without_fe_bridge():
-    manifest = MANIFEST.read_text(encoding="utf-8")
-    for relative, markers in SEMANTIC_BLOCKERS.items():
-        source = (ROOT / relative).read_text(encoding="utf-8")
-        assert 'path = "%s"' % Path(relative).parent.as_posix() in manifest
-        blocker_functions = MIXED_SEMANTIC_BLOCKERS.get(relative)
-        if blocker_functions is None:
-            assert EXPLICIT_TEST_BRIDGE not in source
-        else:
-            # A mixed integration file may use authored FE/SSPRK Programs for genuinely explicit
-            # sections. Its still-unlowerable semantic helpers must remain fail-closed.
-            for function_name in blocker_functions:
-                blocker_source = _python_function_source(source, function_name)
-                assert "install_forward_euler_program" not in blocker_source
-                assert "install_ssprk2_program" not in blocker_source
-                assert "installed whole-system Program" in blocker_source
-        for marker in markers:
-            assert marker in source, "%s lost semantic marker %r" % (relative, marker)
+def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
+    nonlinear = NONLINEAR_AMR_TEST.read_text(encoding="utf-8")
+    v3 = V3_FEATURES_TEST.read_text(encoding="utf-8")
+    assert "IMEX(" in nonlinear
+    assert "LocalNewton(" in nonlinear
+    assert 'getattr(node, "op", None) == "solve_outcome"' in nonlinear
+    assert "program.to_graph()" in nonlinear
+    assert "program._values" not in nonlinear
+    assert "max_iterations=1" in nonlinear
+    assert "action=fail_run" in nonlinear
+    assert "covered_poison" in nonlinear
+    assert "invalid_evaluation" in nonlinear
+    assert "engine.IMEX(" not in nonlinear
+    assert "expect_native_rejection" not in nonlinear
+    assert "expect_amr_newton_rejection" not in v3
+    d2_guard = _python_function_source(v3, "expect_imex_program_required")
+    assert "engine.IMEX(" in d2_guard
+    assert "installed whole-system Program" in d2_guard
+
+
+def test_amr_pointwise_status_reduces_every_valid_level_cell():
+    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+
+    pointwise = _function_body(
+        context,
+        "  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const",
+    )
+    assert "if (context.domain_mask == nullptr)" in pointwise
+    assert "return context.domain_mask;" in pointwise
+
+    status = _function_body(
+        context,
+        "  Real pointwise_status_max(int block, const MultiFab& status,",
+    )
+    assert "const MultiFab* expected = pointwise_active_mask(block, status)" in status
+    assert "pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr})" in status
 
 
 def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives():

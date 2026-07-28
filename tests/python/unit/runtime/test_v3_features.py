@@ -4,8 +4,8 @@
   (A) CoupledSource.frequency : la 'CFL de couplage' declaree borne le pas
       (dt == cfl/mu, raison 'coupled_source:<nom>') -- System, sans compilateur ; et un couplage
       REJETE ne laisse AUCUNE borne fantome (frequence enregistree apres validation, revue v3) ;
-  (B) Newton sur AMR : options non-defaut et diagnostics rejetes tant qu'aucune primitive implicite
-      typee du Program ne les consomme ; aucun faux rapport ne reste expose par le runtime spatial ;
+  (B) Newton sur AMR : le runtime spatial n'expose aucun moteur temporel ou rapport Newton cache ;
+      l'execution non lineaire est couverte par le Program compile dans test_amr_newton_full ;
   (C) set_conservative_state MULTI-BLOCS : l'etat complet (avec quantite de mouvement) seede le
       grossier (la masse et la dynamique different du seed densite au repos) ;
   (D, compilateur) enable_hllc : riemann='hllc' accepte sur un modele DSL 3-var NON Euler via la
@@ -117,48 +117,18 @@ chk(
     f"couplage rejete = ZERO borne fantome (dt {dt2:.3e}, borne {sim.last_dt_bound()!r})",
 )
 
-# --- (B) requetes Newton AMR : fail-closed ------------------------------------------
+# --- (B) le runtime spatial AMR ne possede aucun moteur Newton -----------------------
 print("== (B) AMR : aucun Newton cache dans le runtime spatial ==")
-
-
-def expect_amr_newton_rejection(label, time):
-    system = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
-    system.set_temporal_relations([2], [1], ["integral_only"])
-    try:
-        system.add_equation(
-            "e",
-            iso_model(n0=rho16_mean),
-            spatial=engine.Spatial(limiter=Minmod()),
-            time=time,
-        )
-    except (RuntimeError, ValueError) as error:
-        chk(
-            "Newton" in str(error) or "implicit" in str(error),
-            f"{label} rejete explicitement",
-        )
-        return
-    chk(False, f"{label} aurait du etre rejete")
-
-
-expect_amr_newton_rejection(
-    "options Newton non-defaut",
-    engine.IMEX(newton_max_iters=5, newton_rel_tol=1e-10),
-)
-expect_amr_newton_rejection(
-    "diagnostics Newton",
-    engine.IMEX(newton_diagnostics=True),
-)
-
-amr_default_imex = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
-amr_default_imex.set_temporal_relations([2], [1], ["integral_only"])
-amr_default_imex.add_equation(
+amr_program_only = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
+amr_program_only.set_temporal_relations([2], [1], ["integral_only"])
+amr_program_only.add_equation(
     "e",
     iso_model(n0=rho16_mean),
     spatial=engine.Spatial(limiter=Minmod()),
-    time=engine.IMEX(),
+    time=engine.Explicit(),
 )
 chk(
-    not hasattr(amr_default_imex, "newton_report"),
+    not hasattr(amr_program_only, "newton_report"),
     "le runtime spatial AMR n'expose aucun faux rapport Newton",
 )
 
@@ -269,7 +239,12 @@ try:
     def expect_imex_program_required(cm, label):
         s = System(n=16, L=1.0, periodicity=(True, True))
         s.set_poisson()
-        s.add_equation("f", model=cm, spatial=engine.Spatial(limiter=Minmod()), time=engine.IMEX())
+        s.add_equation(
+            "f",
+            model=cm,
+            spatial=engine.Spatial(limiter=Minmod()),
+            time=engine.IMEX(),
+        )
         z16 = np.zeros((16, 16))
         s.set_primitive_state("f", rho=gaussian(16), u=0.2 + z16, v=z16)
         try:
