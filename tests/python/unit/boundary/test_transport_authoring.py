@@ -203,3 +203,17 @@ def test_slip_wall_requires_roles_and_lowers_one_model_aware_face_law():
     runtime = authority.runtime_boundary_data({})
     assert [row["type"] for row in runtime["faces"]] == ["slip_wall"] * 4
     assert all(row["values"] == [0.0] * 4 for row in runtime["faces"])
+
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+
+    detached_compile_data = authority.compile_boundary_data()
+    detached_compile_data.update(
+        {
+            "ghost_plan_identity": authority.plan.canonical_id,
+            "producer_order": [],
+            "component_region_templates": [],
+        }
+    )
+    detached_runtime = CompiledBoundaryPlan(detached_compile_data).runtime_boundary_data({})
+    assert detached_runtime["faces"] == runtime["faces"]
+    assert detached_runtime["required_depth"] == runtime["required_depth"]

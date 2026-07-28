@@ -90,9 +90,9 @@ class CompiledBoundaryPlan:
         faces = []
         for face in data["faces"]:
             if not isinstance(face, dict) or face.get("type") not in {
-                    "periodic", "foextrap", "dirichlet", "external"}:
+                    "periodic", "foextrap", "dirichlet", "slip_wall", "external"}:
                 raise ValueError("compiled boundary face has no executable producer type")
-            if face["type"] in {"periodic", "foextrap", "external"}:
+            if face["type"] in {"periodic", "foextrap", "slip_wall", "external"}:
                 values = [0.0] * ncomp
             else:
                 expressions = face.get("values")
