@@ -40,6 +40,7 @@ SYSTEM_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
 SYSTEM_BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
 GRID_CONTEXT = ROOT / "include/pops/runtime/context/grid_context.hpp"
 NUMERICAL_DEFAULTS = ROOT / "include/pops/runtime/numerical_defaults.hpp"
+IMPLICIT_STEPPER = ROOT / "include/pops/numerics/time/integrators/implicit_stepper.hpp"
 SYSTEM_IMPL = ROOT / "src/runtime/system/system_impl.hpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
 BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
@@ -158,6 +159,13 @@ def test_static_system_temporal_driver_is_test_only():
     assert "class ReferenceSystemDriver" in reference
     assert "Real step_adaptive(" in reference
     assert REFERENCE_SYSTEM_DRIVER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
+
+
+def test_local_implicit_solve_has_one_typed_options_route():
+    source = IMPLICIT_STEPPER.read_text(encoding="utf-8")
+    assert "const NewtonOptions& opts" in source
+    assert "int iters = 2" not in source
+    assert "Legacy signature with a bare iteration budget" not in source
 
 
 def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():

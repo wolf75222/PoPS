@@ -945,17 +945,6 @@ inline SolveReport consume_implicit_source_fail_run(SolveOutcome& outcome) {
                            " action=" + failed.action_name());
 }
 
-/// Legacy signature with a bare iteration budget (iters = 2 historical). The numerical iteration is
-/// unchanged, but its candidate now goes through the same mandatory transactional consumption.
-template <class Model>
-SolveReport backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U, Real dt,
-                                  int iters = 2, const ImplicitMask<Model::n_vars>& mask = {}) {
-  NewtonOptions opts;
-  opts.max_iters = iters;
-  auto outcome = backward_euler_source(model, aux, U, dt, opts, mask, nullptr);
-  return consume_implicit_source_fail_run(outcome);
-}
-
 // Default implicit stepper: backward-Euler (Newton) on the model source.
 // Models ImplicitBlockStepper; passed as is to the test-only reference driver as the implicit
 // advance callback. The user writes no solver.
