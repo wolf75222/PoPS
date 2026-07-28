@@ -1115,6 +1115,11 @@ sources = ["tests/cpp/unit/numerics/test_flux_interfaces.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_interface_flux_fragment_ledger"
+sources = ["tests/cpp/unit/numerics/test_interface_flux_fragment_ledger.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_multiblock_interface_scheduler"
 sources = ["tests/cpp/integration/runtime/test_multiblock_interface_scheduler.cpp"]
 labels = ["integration", "runtime", "medium"]
