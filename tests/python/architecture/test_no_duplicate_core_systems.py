@@ -349,6 +349,15 @@ def test_field_handle_is_the_sole_public_field_solve_route():
     ) == {"named_field_solve": "green"}
 
 
+def test_native_named_field_solve_uses_exact_block_slots_not_a_representative():
+    """A coupled named-field solve must preserve every qualified block stage."""
+    context = _read(REPO_ROOT / "include" / "pops" / "runtime" / "program"
+                    / "program_context.hpp")
+    assert "representative" not in context
+    assert "solve_fields_from_blocks(field, workspace.system_stages)" in context
+    assert "solve_fields_from_state(field, representative" not in context
+
+
 # ---------------------------------------------------------------------------------------------
 # Gate 1c -- AMR: layout=AMR(...) is THE config route; sim.amr is a read-only VIEW.
 # ---------------------------------------------------------------------------------------------

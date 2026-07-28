@@ -347,6 +347,10 @@ TEST(ProgramContextContract,
   MultiFab subset_stage(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
                         subset_live.n_grow());
   subset_stage.set_val(Real(11));
+  EXPECT_THROW(
+      (void)ctx.solve_fields_from_blocks(505, "missing-subset-provider", {{0, &live_a}}),
+      std::invalid_argument)
+      << "a subset Program must not borrow an unlisted System block's live state as its stage";
   auto subset_solve = [&]() {
     return ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &subset_stage}});
   };
@@ -357,8 +361,8 @@ TEST(ProgramContextContract,
   EXPECT_EQ(after_subset_retry.fab_calls, before_subset_retry.fab_calls);
   EXPECT_EQ(after_subset_retry.communication_calls, before_subset_retry.communication_calls);
 
-  // Replacing the live layout invalidates exactly the affected published-state slot. It is
-  // rematerialized once, then remains persistent for the next retry.
+  // Replacing the live layout does not materialize a representative-block snapshot: the exact
+  // System-sized stage vector is forwarded directly to the qualified named-field solve.
   subset_live = MultiFab(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
                          subset_live.n_grow() + 1);
   subset_live.set_val(Real(5));
@@ -370,7 +374,8 @@ TEST(ProgramContextContract,
       (void)ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &rebound_stage}}),
       std::runtime_error);
   const AllocationEventStats after_layout_change = allocation_event_stats();
-  EXPECT_GT(after_layout_change.fab_calls, before_layout_change.fab_calls);
+  EXPECT_EQ(after_layout_change.fab_calls, before_layout_change.fab_calls);
+  EXPECT_EQ(after_layout_change.communication_calls, before_layout_change.communication_calls);
   const AllocationEventStats before_rebound_retry = allocation_event_stats();
   EXPECT_THROW(
       (void)ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &rebound_stage}}),
@@ -693,6 +698,10 @@ TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
   EXPECT_EQ(ctx.sys_block(0), 0);
   EXPECT_THROW(ctx.sys_block(-1), std::runtime_error) << "negative Program index must fail";
   EXPECT_THROW(ctx.sys_block(1), std::runtime_error) << "Program index outside the map must fail";
+  EXPECT_THROW(sim.set_program_block_map({0, 0}), std::invalid_argument)
+      << "two Program blocks must not silently overwrite the same System stage slot";
+  EXPECT_EQ(sim.program_block_map(), (std::vector<int>{0}))
+      << "a rejected double assignment must preserve the previously authenticated map";
 
   sim.set_program_block_map({-1});
   EXPECT_THROW(ctx.sys_block(0), std::runtime_error) << "negative mapped System index must fail";

@@ -298,6 +298,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     assert variant_targets == {
         "test_amr_system_bz_multibox": (2, 4),
         "test_copy_schedule_cache": (1, 2, 4),
+        "test_coupled_fieldsolve": (2,),
         "test_fill_boundary_cache": (1, 2, 4),
         "test_geometric_mg": (2,),
         "test_generic_krylov": (1, 2, 4),
@@ -319,7 +320,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 79
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 80
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4

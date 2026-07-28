@@ -187,6 +187,11 @@ POPS_EXPORT SolveReport System::solve_fields_from_state(const std::string& field
   return p_->solve_named_field_from_state(field, block_idx, U_stage);
 }
 
+POPS_EXPORT SolveReport System::solve_fields_from_blocks(
+    const std::string& field, const std::vector<const MultiFab*>& U_stages) {
+  return p_->solve_named_field_from_blocks(field, U_stages);
+}
+
 // Register a named elliptic field (ADC-428): records WHERE the field's solved phi / centered grad land
 // in the aux channel (@p phi_comp / @p gx_comp / @p gy_comp, the model's named aux slots). The native
 // loader calls this for each m.elliptic_field after the block is installed. POPS_EXPORT: resolved by the

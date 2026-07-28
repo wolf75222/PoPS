@@ -1452,7 +1452,6 @@ class ProgramContext {
     std::vector<int> program_to_system;
     std::vector<const MultiFab*> program_stages;
     std::vector<const MultiFab*> system_stages;
-    std::vector<MultiFab> published_states;
     std::vector<int> expected_program_blocks;
     std::string generated_field_identity;
     bool expected_program_blocks_initialized = false;
@@ -1519,20 +1518,25 @@ class ProgramContext {
     const std::size_t system_blocks = static_cast<std::size_t>(sys_->n_blocks());
     const bool unchanged = workspace.program_to_system == block_map &&
                            workspace.program_stages.size() == block_map.size() &&
-                           workspace.system_stages.size() == system_blocks &&
-                           workspace.published_states.size() == block_map.size();
+                           workspace.system_stages.size() == system_blocks;
     if (unchanged)
       return;
 
     // Authenticate the complete map before releasing a previously valid workspace.  A malformed map
     // cannot leave a partially reconfigured context behind.
-    for (std::size_t p = 0; p < block_map.size(); ++p)
-      (void)sys_block(static_cast<int>(p));
+    for (std::size_t p = 0; p < block_map.size(); ++p) {
+      const int mapped = sys_block(static_cast<int>(p));
+      for (std::size_t previous = 0; previous < p; ++previous) {
+        if (block_map[previous] == mapped)
+          throw block_map_error_(
+              "ProgramContext::solve_fields_from_blocks: Program blocks " +
+              std::to_string(previous) + " and " + std::to_string(p) +
+              " both map to System block " + std::to_string(mapped));
+      }
+    }
     workspace.program_to_system.assign(block_map.begin(), block_map.end());
     workspace.program_stages.assign(block_map.size(), nullptr);
     workspace.system_stages.assign(system_blocks, nullptr);
-    workspace.published_states.clear();
-    workspace.published_states.resize(block_map.size());
     workspace.expected_program_blocks.clear();
     workspace.expected_program_blocks_initialized = false;
   }
@@ -1541,12 +1545,13 @@ class ProgramContext {
     const MultiFab& live = sys_->block_state(sys_block(program_block));
     if (!scratch_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
       throw std::invalid_argument(
-          "Program stage state must match its block's exact distributed layout");
-    const std::vector<int>& block_map = sys_->program_block_map();
-    for (std::size_t other = 0; other < block_map.size(); ++other) {
-      if (static_cast<int>(other) == program_block)
+          "Program simultaneous field solve requires each stage state to match its block's exact "
+          "distributed layout");
+    const int qualified_system_block = sys_block(program_block);
+    for (int other = 0; other < sys_->n_blocks(); ++other) {
+      if (other == qualified_system_block)
         continue;
-      if (&stage == &sys_->block_state(sys_block(static_cast<int>(other))))
+      if (&stage == &sys_->block_state(other))
         throw std::invalid_argument(
             "Program stage override cannot borrow another block's live state");
     }
@@ -1659,47 +1664,6 @@ class ProgramContext {
     return sys_->solve_fields_from_blocks(workspace.system_stages);
   }
 
-  int prepare_named_field_snapshots_(FieldSolveWorkspace& workspace) const {
-    int representative = -1;
-    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
-      if (workspace.program_stages[p] == nullptr)
-        continue;
-      const int system_block = workspace.program_to_system[p];
-      MultiFab& live = sys_->block_state(system_block);
-      MultiFab& published = workspace.published_states[p];
-      if (!scratch_layout_matches_(published, live, live.ncomp(), live.n_grow())) {
-        published = MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
-        count_scratch(published);
-      }
-      if (representative < 0)
-        representative = system_block;
-    }
-    if (representative < 0)
-      throw std::runtime_error(
-          "ProgramContext::solve_fields_from_blocks(field): no stage override was supplied");
-
-    // Capture every accepted live image before the first live state is touched.  If any later stage
-    // copy or native solve fails, all blocks can therefore be restored transactionally.
-    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
-      if (workspace.program_stages[p] == nullptr)
-        continue;
-      const int system_block = workspace.program_to_system[p];
-      PureFieldAlgebra::copy_allocated(workspace.published_states[p],
-                                       sys_->block_state(system_block));
-    }
-    return representative;
-  }
-
-  void restore_named_field_states_(const FieldSolveWorkspace& workspace) const {
-    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
-      if (workspace.program_stages[p] == nullptr)
-        continue;
-      const int system_block = workspace.program_to_system[p];
-      PureFieldAlgebra::copy_allocated(sys_->block_state(system_block),
-                                       workspace.published_states[p]);
-    }
-  }
-
   SolveReport solve_named_field_workspace_(const std::string& field,
                                            FieldSolveWorkspace& workspace) const {
     if (workspace.in_use)
@@ -1709,23 +1673,19 @@ class ProgramContext {
       explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
       ~WorkspaceUse() { flag = false; }
     } use(workspace.in_use);
-    const int representative = prepare_named_field_snapshots_(workspace);
-    try {
-      for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
-        if (workspace.program_stages[p] == nullptr)
-          continue;
-        PureFieldAlgebra::copy_allocated(sys_->block_state(workspace.program_to_system[p]),
-                                         *workspace.program_stages[p]);
-      }
-      const SolveReport report =
-          sys_->solve_fields_from_state(field, representative, sys_->block_state(representative));
-      restore_named_field_states_(workspace);
-      return report;
-    } catch (...) {
-      const std::exception_ptr failure = std::current_exception();
-      restore_named_field_states_(workspace);
-      std::rethrow_exception(failure);
+    std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
+    bool has_override = false;
+    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
+      if (workspace.program_stages[p] == nullptr)
+        continue;
+      workspace.system_stages[static_cast<std::size_t>(workspace.program_to_system[p])] =
+          workspace.program_stages[p];
+      has_override = true;
     }
+    if (!has_override)
+      throw std::runtime_error(
+          "ProgramContext::solve_fields_from_blocks(field): no stage override was supplied");
+    return sys_->solve_fields_from_blocks(field, workspace.system_stages);
   }
 
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };

@@ -35,6 +35,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
+#include <pops/parallel/comm.hpp>
 
 #include "test_harness.hpp"
 
@@ -258,6 +259,118 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
 
   if (!chk.failed())
     std::printf("OK test_coupled_fieldsolve\n");
+}
+
+TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_live_mutation) {
+  const int n = 32;
+  const SystemConfig cfg{n, 1.0, Periodicity{true, true}};
+  System system(cfg);
+  ModelSpec spec;
+  spec.transport = "exb";
+  spec.source = "none";
+  spec.elliptic = "charge";
+  spec.q = 1.0;
+  spec.B0 = 1.0;
+  system.add_block("n0", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
+  system.add_block("n1", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
+
+  const std::string slot = "qualified-coupled-provider";
+  const PreparedProviderOptions backend_options{"pops.system.geometric-mg-options@1",
+                                                {{"abs_tol", 0.0},
+                                                 {"bottom_sweeps", std::int64_t{50}},
+                                                 {"coarse_threshold", std::int64_t{0}},
+                                                 {"max_cycles", std::int64_t{50}},
+                                                 {"min_coarse", std::int64_t{2}},
+                                                 {"post_smooth", std::int64_t{2}},
+                                                 {"pre_smooth", std::int64_t{2}},
+                                                 {"rel_tol", 1.0e-8}}};
+  system.register_configured_field_solver_provider("geometric_mg", slot, backend_options);
+  system.set_field_solver_plan(
+      slot, "test:qualified-coupled-plan", "test:qualified-coupled-provider",
+      "test:qualified-coupled-field", "n0", "potential",
+      {"test:n0/potential/rhs", "test:n1/potential/rhs"}, {"n0", "n1"},
+      {"potential", "potential"}, {1.0, 1.0}, slot);
+  const std::string conflicting_slot = "conflicting-output-provider";
+  system.register_configured_field_solver_provider("geometric_mg", conflicting_slot,
+                                                   backend_options);
+  EXPECT_THROW(
+      system.set_field_solver_plan(
+          conflicting_slot, "test:conflicting-output-plan",
+          "test:conflicting-output-provider", "test:other-owner", "n0", "potential",
+          {"test:n0/other/rhs"}, {"n0"}, {"other"}, {1.0}, conflicting_slot),
+      std::runtime_error)
+      << "one output block/key must identify exactly one qualified provider slot";
+  system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
+                                      "test:periodic-cartesian", "test:periodic-cartesian:v1");
+  system.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
+                                 {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0},
+                                 {0.0, 0.0, 0.0, 0.0});
+  system.register_field_nullspace_provider(std::make_shared<DecoratedNullspaceProvider>());
+  system.set_field_nullspace(
+      slot, "test.field-nullspace.decorated",
+      PreparedProviderOptions{"pops.field-nullspace.operator-topology-derived.options@1",
+                              {{"gauge.value", 0.0}}});
+  system.ensure_aux_width(kAuxBaseComps + 1);
+  system.register_elliptic_field("n0", "potential", kAuxBaseComps, -1, -1, 1);
+  system.set_block_elliptic_field("n0", "potential", [](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(1), 0, rhs);
+  });
+  bool fail_rank_local_rhs = false;
+  system.set_block_elliptic_field("n1", "potential", [&](const MultiFab& state, MultiFab& rhs) {
+    if (fail_rank_local_rhs)
+      throw std::runtime_error("intentional rank-local RHS failure");
+    add_scaled_component(state, Real(1), 0, rhs);
+  });
+
+  const std::vector<double> q0 = charge_density(n, 1.0, 0.0);
+  const std::vector<double> q1 = charge_density(n, 0.6, 0.25);
+  system.set_density("n0", q0);
+  system.set_density("n1", q1);
+
+  std::vector<const MultiFab*> all_live{&system.block_state(0), &system.block_state(1)};
+  const SolveReport all_report = system.solve_fields_from_blocks(slot, all_live);
+  ASSERT_TRUE(all_report.solved_value_available()) << all_report.status_name();
+  const std::vector<double> all_phi = system.field_potential_global(slot);
+
+  MultiFab stage1 = system.block_state(1);
+  stage1.set_val(Real(0));
+  std::vector<const MultiFab*> override_states{&system.block_state(0), &stage1};
+  const SolveReport override_report = system.solve_fields_from_blocks(slot, override_states);
+  ASSERT_TRUE(override_report.solved_value_available()) << override_report.status_name();
+  const std::vector<double> override_phi = system.field_potential_global(slot);
+
+  EXPECT_GT(max_abs_diff(all_phi, override_phi), 1.0e-4)
+      << "the named solve ignored the second qualified stage slot";
+  EXPECT_EQ(max_abs_diff(system.density("n0"), q0), 0.0);
+  EXPECT_EQ(max_abs_diff(system.density("n1"), q1), 0.0);
+
+  std::vector<const MultiFab*> bad{&system.block_state(0)};
+  EXPECT_THROW(system.solve_fields_from_blocks(slot, bad), std::invalid_argument);
+  std::vector<const MultiFab*> duplicate_stage{&system.block_state(0), &system.block_state(0)};
+  EXPECT_THROW(system.solve_fields_from_blocks(slot, duplicate_stage), std::invalid_argument)
+      << "one stage object cannot be assigned to two qualified System blocks";
+  EXPECT_THROW(system.solve_fields_from_state(slot, 0, system.block_state(1)),
+               std::invalid_argument)
+      << "a single-stage solve cannot alias another qualified block's live state";
+
+  if (n_ranks() > 1) {
+    std::vector<const MultiFab*> rank_local_shape = all_live;
+    if (my_rank() == 0)
+      rank_local_shape.pop_back();
+    EXPECT_THROW(system.solve_fields_from_blocks(slot, rank_local_shape), std::invalid_argument)
+        << "rank-local request-shape drift must fail collectively without stranding peers";
+    const std::string rank_local_slot = my_rank() == 0 ? slot : "rank-local-unknown-slot";
+    EXPECT_THROW(system.solve_fields_from_blocks(rank_local_slot, all_live),
+                 std::invalid_argument)
+        << "rank-local provider drift must fail before any backend collective";
+    fail_rank_local_rhs = my_rank() == 0;
+    EXPECT_THROW(system.solve_fields_from_blocks(slot, all_live), std::runtime_error)
+        << "a rank-local provider callback failure must be published before prepare_rhs";
+    fail_rank_local_rhs = false;
+    const SolveReport recovered = system.solve_fields_from_blocks(slot, all_live);
+    EXPECT_TRUE(recovered.solved_value_available())
+        << "the communicator must remain usable after both fail-closed preflights";
+  }
 }
 
 TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign) {

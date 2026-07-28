@@ -366,6 +366,15 @@ std::string System::poisson_solver() const {
 // matching the .so's block names; ProgramContext reads it to translate a Program block index to the
 // name-matched System block index. POPS_EXPORT: resolved by the generated .so across the dlopen boundary.
 void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
+  for (std::size_t program = 0; program < prog_to_sys.size(); ++program) {
+    for (std::size_t previous = 0; previous < program; ++previous) {
+      if (prog_to_sys[program] == prog_to_sys[previous])
+        throw std::invalid_argument(
+            "System::set_program_block_map: Program blocks " + std::to_string(previous) +
+            " and " + std::to_string(program) + " both map to System block " +
+            std::to_string(prog_to_sys[program]));
+    }
+  }
   p_->program_.block_map_ = prog_to_sys;
 }
 const std::vector<int>& System::program_block_map() const {

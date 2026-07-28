@@ -762,6 +762,12 @@ class System {
   /// is invalid, or the geometry is polar (cartesian only for now).
   POPS_EXPORT SolveReport solve_fields_from_state(const std::string& field, int block_idx,
                                                   const MultiFab& U_stage);
+  /// Solve named @p field from the exact simultaneous stage states of all contributing blocks.
+  /// @p U_stages is indexed by System block; nullptr keeps that block at its accepted live state.
+  /// Unlike the historical ProgramContext route, this contract never selects or mutates a
+  /// representative block.
+  POPS_EXPORT SolveReport solve_fields_from_blocks(
+      const std::string& field, const std::vector<const MultiFab*>& U_stages);
   /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
   /// equal -1 => only phi is written; @p gradient_sign is exactly -1 or +1 and scales both derivatives.
