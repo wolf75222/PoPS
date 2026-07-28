@@ -130,6 +130,7 @@ def test_step_attempt_rejection_is_a_structured_runtime_error_contract():
         "detail": "str",
         "disposition": "Literal['retry', 'reject']",
         "reason_code": "int",
+        "failed_rank": "int",
     }
 
     source = BINDINGS.read_text(encoding="utf-8")
