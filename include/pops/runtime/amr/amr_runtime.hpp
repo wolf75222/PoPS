@@ -2939,8 +2939,45 @@ class AmrRuntime {
     level_rhs_with_interfaces(k, point, states, rhs, flux_only);
   }
 
+  /// Complete a Program-owned grouped capture with the ordinary canonical shared-interface
+  /// evaluator, then publish its one level-qualified raw fragment into the caller's active attempt
+  /// transaction. The scheduler still applies the one shared flux to both blocks with opposite
+  /// signs. Local flux-materialising residuals must already have omitted the prepared face.
+  /// This first wiring slice is deliberately restricted to a frozen two-level serial hierarchy.
+  void publish_level_interface_flux_fragments(
+      int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::vector<int>& requested_blocks, const std::vector<MultiFab*>& requested_states,
+      const std::vector<MultiFab*>& requested_rhs,
+      runtime::multiblock::InterfaceFluxFragmentPublication& publication) {
+    if (nlev_ != 2 || k < 0 || k >= nlev_ || point.level != k || requested_blocks.empty() ||
+        requested_blocks.size() != requested_states.size() ||
+        requested_blocks.size() != requested_rhs.size())
+      throw std::invalid_argument(
+          "AMR interface-flux fragment publication requires one valid fixed two-level group");
+    std::vector<MultiFab*> states(blocks_.size(), nullptr);
+    std::vector<MultiFab*> rhs(blocks_.size(), nullptr);
+    for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
+      const int raw = requested_blocks[request];
+      if (raw < 0 || raw >= static_cast<int>(blocks_.size()) ||
+          states[static_cast<std::size_t>(raw)] != nullptr ||
+          requested_states[request] == nullptr || requested_rhs[request] == nullptr)
+        throw std::invalid_argument(
+            "AMR interface-flux fragment publication requires unique non-null blocks");
+      const std::size_t block = static_cast<std::size_t>(raw);
+      states[block] = requested_states[request];
+      rhs[block] = requested_rhs[request];
+    }
+    interface_scheduler_.apply(point, states, rhs, &publication);
+  }
+
   std::size_t interface_evaluation_count(const std::string& identity, int level) const {
     return interface_scheduler_.evaluation_count(identity, level);
+  }
+  void require_complete_fixed_two_level_interfaces() const {
+    if (nlev_ != 2)
+      throw std::logic_error(
+          "fixed two-level interface registry validation requires exactly two levels");
+    interface_scheduler_.require_complete_fixed_two_level_registry();
   }
   bool has_level_interfaces(int level) const { return interface_scheduler_.has_interfaces(level); }
   /// R <- -div F(U) only (NO default source) for block @p b on level @p k (SourceFreeModel path). Same

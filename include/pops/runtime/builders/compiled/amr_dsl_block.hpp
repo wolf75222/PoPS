@@ -500,6 +500,7 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
       boundary.fill_same_level_and_physical(U, point);
       detail::compute_amr_face_fluxes<Limiter, Flux>(model, U, aux, Fx, Fy, geom.dx(), geom.dy(),
                                                      rprim, pf, weps, ws_cache);
+      detail::zero_prepared_interface_fluxes(Fx, Fy, boundary.context());
       pops::mf_eval_rhs(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
     };
     b.level_flux_capture_neg_div_prepared =
@@ -511,6 +512,7 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
           boundary.fill_same_level_and_physical(U, point);
           detail::compute_amr_face_fluxes<Limiter, Flux>(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(),
                                                          rprim, pf, weps, ws_cache);
+          detail::zero_prepared_interface_fluxes(Fx, Fy, boundary.context());
           pops::mf_eval_rhs(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
         };
   }

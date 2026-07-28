@@ -3,12 +3,18 @@
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/physics/bricks/bricks.hpp>
+#include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/runtime/system/system_block_store.hpp>
 
 #include "amr_transfer_test_authority.hpp"
 
+#include <array>
+#include <cstdint>
 #include <cmath>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -116,6 +122,18 @@ using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
 
 ExBModel scalar_model() {
   return ExBModel{ExBVelocity{Real(1)}, NoSource{}, ChargeDensity{Real(0)}};
+}
+
+AxisAlignedInterface aligned_x_route(std::string identity) {
+  AxisAlignedInterface route;
+  route.identity = std::move(identity);
+  route.left_block = 0;
+  route.right_block = 1;
+  route.left_axis = route.right_axis = InterfaceAxis::X;
+  route.left_side = InterfaceSide::High;
+  route.right_side = InterfaceSide::Low;
+  route.right_component_for_left = {0};
+  return route;
 }
 
 }  // namespace
@@ -305,6 +323,270 @@ TEST(test_multiblock_interface_scheduler,
 }
 
 TEST(test_multiblock_interface_scheduler,
+     FixedTwoLevelPublicationEvaluatesOnceAndStagesOnlyItsQualifiedLevelOrientation) {
+  ensure_runtime();
+  const Box2D left_box{{0, 0}, {1, 2}};
+  const Box2D right_box{{2, 0}, {3, 2}};
+  MultiFab left_state = make_field(left_box, 1);
+  MultiFab right_state = make_field(right_box, 1);
+  MultiFab left_rhs(left_state.box_array(), left_state.dmap(), 1, 0);
+  MultiFab right_rhs(right_state.box_array(), right_state.dmap(), 1, 0);
+  left_state.set_val(Real(2));
+  right_state.set_val(Real(6));
+  left_rhs.set_val(Real(0));
+  right_rhs.set_val(Real(0));
+
+  const Geometry left_geometry{left_box, Real(0), Real(1), Real(0), Real(3)};
+  const Geometry right_geometry{right_box, Real(1), Real(2), Real(0), Real(3)};
+  AxisAlignedInterface route = aligned_x_route("amr.fixed-two-level.shared-flux");
+  InterfaceFluxScheduler scheduler;
+  int evaluator_calls = 0;
+  scheduler.install(route, left_state, left_geometry, right_state, right_geometry,
+                    serial_interface_execution(),
+                    [&](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                      ++evaluator_calls;
+                      ASSERT_EQ(batch.face_count, 3);
+                      ASSERT_EQ(batch.component_count, 1);
+                      for (int face = 0; face < batch.face_count; ++face)
+                        batch.shared_flux[face] = Real(face + 2);
+                    });
+
+  constexpr std::uint64_t topology_epoch = 17;
+  InterfaceFluxFragmentLedger ledger(topology_epoch);
+  ledger.begin();
+  const amr::ClockWindow interval{{0, 7, amr::Rational(0, 1), 0.0},
+                                  {0, 7, amr::Rational(1, 1), 0.2}};
+  const amr::ClockStamp clock{0, 7, amr::Rational(1, 2), 0.1};
+  InterfaceFluxFragmentPublication publication{
+      &ledger, topology_epoch, 0, 1, clock, "program.group.node.42", interval, amr::Rational(3, 4)};
+  const BoundaryEvaluationPoint point{"clock.fragments",   7,   0,  0, 42,
+                                      amr::Rational(1, 2), 0.2, 0.1};
+  std::vector<MultiFab*> states{&left_state, &right_state};
+  std::vector<MultiFab*> rhs{&left_rhs, &right_rhs};
+  scheduler.apply(point, states, rhs, &publication);
+
+  EXPECT_EQ(evaluator_calls, 1);
+  EXPECT_EQ(scheduler.evaluation_count(route.identity, 0), 1u);
+  EXPECT_EQ(ledger.pending_size(), 1u);
+  EXPECT_EQ(ledger.published_size(), 0u);
+  ledger.commit();
+  ASSERT_EQ(ledger.published_size(), 1u);
+  const auto& first = ledger.published_entries()[0];
+  EXPECT_EQ(first.key.interface_identity, route.identity);
+  EXPECT_EQ(first.key.topology_epoch, topology_epoch);
+  EXPECT_EQ(first.key.coarse_level, 0);
+  EXPECT_EQ(first.key.fine_level, 1);
+  EXPECT_EQ(first.key.clock.level, clock.level);
+  EXPECT_EQ(first.key.clock.macro_step, clock.macro_step);
+  EXPECT_EQ(first.key.clock.phase, clock.phase);
+  EXPECT_EQ(first.key.stage_identity, "program.group.node.42");
+  EXPECT_EQ(first.key.orientation, amr::InterfaceFluxOrientation::CoarseOutward);
+  EXPECT_EQ(first.measure.stage_weight, amr::Rational(3, 4));
+  EXPECT_DOUBLE_EQ(first.measure.face_measure, 1.0);
+  EXPECT_EQ(first.payload, (InterfaceFluxFragmentPayload{Real(2), Real(3), Real(4)}));
+}
+
+TEST(test_multiblock_interface_scheduler,
+     RejectedFixedTwoLevelAttemptRollsBackWithoutPublishingAnyFragment) {
+  ensure_runtime();
+  const Box2D left_box{{0, 0}, {1, 1}};
+  const Box2D right_box{{2, 0}, {3, 1}};
+  MultiFab left_state = make_field(left_box, 1);
+  MultiFab right_state = make_field(right_box, 1);
+  MultiFab left_rhs(left_state.box_array(), left_state.dmap(), 1, 0);
+  MultiFab right_rhs(right_state.box_array(), right_state.dmap(), 1, 0);
+  const Geometry left_geometry{left_box, Real(0), Real(1), Real(0), Real(2)};
+  const Geometry right_geometry{right_box, Real(1), Real(2), Real(0), Real(2)};
+  AxisAlignedInterface route = aligned_x_route("amr.rejected.shared-flux");
+  route.level = 1;
+  InterfaceFluxScheduler scheduler;
+  scheduler.install(route, left_state, left_geometry, right_state, right_geometry,
+                    serial_interface_execution(),
+                    [](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                      for (int face = 0; face < batch.face_count; ++face)
+                        batch.shared_flux[face] = Real(5);
+                    });
+
+  InterfaceFluxFragmentLedger ledger(23);
+  ledger.begin();
+  const amr::ClockWindow interval{{1, 9, amr::Rational(0, 1), 0.4},
+                                  {1, 9, amr::Rational(1, 1), 0.5}};
+  InterfaceFluxFragmentPublication publication{&ledger,
+                                               23,
+                                               0,
+                                               1,
+                                               amr::ClockStamp{1, 9, amr::Rational(1, 2), 0.45},
+                                               "program.group.node.8",
+                                               interval,
+                                               amr::Rational(1, 1)};
+  const BoundaryEvaluationPoint point{"clock.fragments",   9,   1,   0, 8,
+                                      amr::Rational(1, 2), 0.1, 0.45};
+  std::vector<MultiFab*> states{&left_state, &right_state};
+  std::vector<MultiFab*> rhs{&left_rhs, &right_rhs};
+  scheduler.apply(point, states, rhs, &publication);
+  ASSERT_EQ(ledger.pending_size(), 1u);
+  EXPECT_EQ(ledger.published_size(), 0u);
+
+  ledger.rollback();
+  EXPECT_TRUE(ledger.empty());
+  EXPECT_EQ(ledger.pending_size(), 0u);
+  EXPECT_EQ(ledger.published_size(), 0u);
+}
+
+TEST(test_multiblock_interface_scheduler,
+     AmrProgramPublishesExactFixedHierarchyFragmentsAndRestoresReportOnRejectedAttempt) {
+  ensure_runtime();
+  constexpr int cells = 4;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = cells;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 2);
+  layout.ba[1] = BoxArray(std::vector<Box2D>{layout.geom.domain.refine(kAmrRefRatio)});
+  layout.dm[1] = layout.load_balance->distribute(layout.ba[1], n_ranks());
+
+  std::vector<AmrRuntimeBlock> blocks;
+  for (const char* name : {"left", "right"}) {
+    AmrRuntimeBlock block = detail::dispatch_amr_block(
+        scalar_model(), "none", "rusanov", layout, name,
+        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1);
+    const auto omit_local_interface = [](MultiFab&, const MultiFab&, const Geometry&, MultiFab& fx,
+                                         MultiFab& fy, MultiFab& rhs) {
+      fx.set_val(Real(0));
+      fy.set_val(Real(0));
+      rhs.set_val(Real(0));
+    };
+    block.level_flux_capture = omit_local_interface;
+    block.level_flux_capture_neg_div = omit_local_interface;
+    block.level_rhs_without_prepared_interfaces = [](const BoundaryEvaluationPoint&, MultiFab&,
+                                                     const MultiFab&, const Geometry&,
+                                                     MultiFab& rhs) { rhs.set_val(Real(0)); };
+    block.level_neg_div_flux_without_prepared_interfaces =
+        block.level_rhs_without_prepared_interfaces;
+    blocks.push_back(std::move(block));
+  }
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
+  runtime.set_parent_child_temporal_relations({amr::ParentChildClockRelation(
+      0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly)});
+
+  std::array<int, 2> evaluator_calls{0, 0};
+  for (int level = 0; level < 2; ++level) {
+    AxisAlignedInterface route = aligned_x_route("amr.program.shared-flux");
+    route.level = level;
+    route.affine_mapping_identity = "periodic-x-translation";
+    route.right_normal_translation = Real(1);
+    runtime.install_level_interface_flux(
+        level, route, serial_interface_execution(),
+        [&, level](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+          ++evaluator_calls[static_cast<std::size_t>(level)];
+          for (int face = 0; face < batch.face_count; ++face)
+            batch.shared_flux[face] = Real(level + face + 1);
+        });
+  }
+
+  AmrSystem facade(AmrSystemConfig{});
+  facade.set_program_block_map({0, 1});
+  runtime::program::AmrProgramContext context(&runtime, &facade);
+  context.configure_primary_clock("clock.program-fragments");
+  const auto evaluate_group = [&](bool reject_after_parent) {
+    context.advance_hierarchy(0.2, [&](double) {
+      context.set_stage_time(1, 2);
+      MultiFab& left = context.state(0);
+      MultiFab& right = context.state(1);
+      MultiFab& left_rhs = context.rhs_scratch(100, 0, left);
+      MultiFab& right_rhs = context.rhs_scratch(101, 0, right);
+      context.rhs_group(42, {{0, &left, &left_rhs, 11, 0}, {1, &right, &right_rhs, 12, 0}});
+      const Box2D box = left.box(0);
+      const int j = box.lo[1];
+      const Real left_flux = left_rhs.fab(0).const_array()(box.hi[0], j, 0);
+      const Real right_flux = right_rhs.fab(0).const_array()(box.lo[0], j, 0);
+      EXPECT_NE(left_flux, Real(0));
+      EXPECT_EQ(left_flux + right_flux, Real(0));
+      if (reject_after_parent && context.level() == 0)
+        throw std::runtime_error("reject after canonical parent interface flux");
+    });
+  };
+
+  evaluate_group(false);
+  EXPECT_EQ(evaluator_calls[0], 1);
+  EXPECT_EQ(evaluator_calls[1], 2);
+  const auto& accepted = context.accepted_interface_flux_fragments();
+  ASSERT_EQ(accepted.size(), 3u);
+  int coarse_orientation_count = 0;
+  int fine_orientation_count = 0;
+  int parent_clock_count = 0;
+  int child_clock_count = 0;
+  int first_child_window_count = 0;
+  int second_child_window_count = 0;
+  for (const auto& entry : accepted) {
+    EXPECT_EQ(entry.key.interface_identity, "amr.program.shared-flux");
+    EXPECT_EQ(entry.key.topology_epoch, runtime.topology_epoch());
+    EXPECT_EQ(entry.key.stage_identity, "program.group.node.42");
+    EXPECT_EQ(entry.key.coarse_level, 0);
+    EXPECT_EQ(entry.key.fine_level, 1);
+    EXPECT_EQ(entry.key.interval.begin.level, entry.key.clock.level);
+    EXPECT_EQ(entry.key.interval.end.level, entry.key.clock.level);
+    EXPECT_EQ(entry.key.interval.begin.macro_step, 0);
+    EXPECT_EQ(entry.key.interval.end.macro_step, 0);
+    EXPECT_EQ(entry.key.clock.macro_step, 0);
+    EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 1));
+    if (entry.key.orientation == amr::InterfaceFluxOrientation::CoarseOutward)
+      ++coarse_orientation_count;
+    else if (entry.key.orientation == amr::InterfaceFluxOrientation::FineOutward)
+      ++fine_orientation_count;
+    if (entry.key.clock.level == 0) {
+      ++parent_clock_count;
+      EXPECT_EQ(entry.key.interval.begin.phase, amr::Rational(0, 1));
+      EXPECT_EQ(entry.key.interval.end.phase, amr::Rational(1, 1));
+      EXPECT_EQ(entry.key.clock.phase, amr::Rational(1, 2));
+      EXPECT_DOUBLE_EQ(entry.key.interval.begin.physical_time, 0.0);
+      EXPECT_DOUBLE_EQ(entry.key.interval.end.physical_time, 0.2);
+      EXPECT_DOUBLE_EQ(entry.key.clock.physical_time, 0.1);
+      EXPECT_DOUBLE_EQ(entry.measure.face_measure, 0.25);
+    } else if (entry.key.clock.level == 1) {
+      ++child_clock_count;
+      EXPECT_DOUBLE_EQ(entry.measure.face_measure, 0.125);
+      if (entry.key.interval.begin.phase == amr::Rational(0, 1)) {
+        ++first_child_window_count;
+        EXPECT_EQ(entry.key.interval.end.phase, amr::Rational(1, 2));
+        EXPECT_EQ(entry.key.clock.phase, amr::Rational(1, 4));
+        EXPECT_DOUBLE_EQ(entry.key.interval.begin.physical_time, 0.0);
+        EXPECT_DOUBLE_EQ(entry.key.interval.end.physical_time, 0.1);
+        EXPECT_DOUBLE_EQ(entry.key.clock.physical_time, 0.05);
+      } else {
+        ++second_child_window_count;
+        EXPECT_EQ(entry.key.interval.begin.phase, amr::Rational(1, 2));
+        EXPECT_EQ(entry.key.interval.end.phase, amr::Rational(1, 1));
+        EXPECT_EQ(entry.key.clock.phase, amr::Rational(3, 4));
+        EXPECT_DOUBLE_EQ(entry.key.interval.begin.physical_time, 0.1);
+        EXPECT_DOUBLE_EQ(entry.key.interval.end.physical_time, 0.2);
+        EXPECT_DOUBLE_EQ(entry.key.clock.physical_time, 0.15);
+      }
+    } else {
+      ADD_FAILURE() << "fragment clock escaped the fixed two-level hierarchy";
+    }
+  }
+  EXPECT_EQ(coarse_orientation_count, 1);
+  EXPECT_EQ(fine_orientation_count, 2);
+  EXPECT_EQ(parent_clock_count, 1);
+  EXPECT_EQ(child_clock_count, 2);
+  EXPECT_EQ(first_child_window_count, 1);
+  EXPECT_EQ(second_child_window_count, 1);
+
+  const std::array<int, 2> calls_before_rejection = evaluator_calls;
+  EXPECT_THROW(evaluate_group(true), std::runtime_error);
+  EXPECT_EQ(evaluator_calls[0], calls_before_rejection[0] + 1);
+  EXPECT_EQ(evaluator_calls[1], calls_before_rejection[1]);
+  EXPECT_EQ(context.accepted_interface_flux_fragments().size(), 3u)
+      << "the rejected parent publication must not replace the accepted report";
+}
+
+TEST(test_multiblock_interface_scheduler,
      MpiWorldSingleRankKeepsItsNativeIdentityAndExecutesTheCompleteLocalPair) {
 #if !defined(POPS_HAS_MPI)
   GTEST_SKIP() << "requires a PoPS build with the native MPI transport enabled";
@@ -425,6 +707,19 @@ TEST(test_multiblock_interface_scheduler, UnsupportedOrUnauthenticatedMappingsFa
                std::invalid_argument);
   EXPECT_EQ(prepare_calls, 1)
       << "a face ownership conflict must fail before preparing a second component";
+
+  // A refined patch that merely sits inside the physical domain is not a complete shared face.
+  // Refusing it here prevents a fixed L1 seed from being mistaken for a coarse/fine block boundary.
+  MultiFab partial_left = make_field(Box2D{{1, 1}, {2, 2}}, 1);
+  MultiFab partial_right = make_field(Box2D{{5, 1}, {6, 2}}, 1);
+  const Geometry declared_left{Box2D{{0, 0}, {3, 3}}, Real(0), Real(4), Real(0), Real(4)};
+  const Geometry declared_right{Box2D{{4, 0}, {7, 3}}, Real(4), Real(8), Real(0), Real(4)};
+  InterfaceFluxScheduler partial_scheduler;
+  AxisAlignedInterface partial_route = aligned_x_route("partial-refined-face");
+  EXPECT_THROW(
+      partial_scheduler.install(partial_route, partial_left, declared_left, partial_right,
+                                declared_right, serial_interface_execution(), evaluator_factory),
+      std::invalid_argument);
 }
 
 TEST(test_multiblock_interface_scheduler,
