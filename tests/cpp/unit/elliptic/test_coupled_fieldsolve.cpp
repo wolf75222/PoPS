@@ -330,14 +330,16 @@ TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_l
   system.set_density("n1", q1);
 
   std::vector<const MultiFab*> all_live{&system.block_state(0), &system.block_state(1)};
-  const SolveReport all_report = system.solve_fields_from_blocks(slot, all_live);
+  const SolveReport all_report =
+      consume_solve_outcome(system.solve_fields_from_blocks(slot, all_live));
   ASSERT_TRUE(all_report.solved_value_available()) << all_report.status_name();
   const std::vector<double> all_phi = system.field_potential_global(slot);
 
   MultiFab stage1 = system.block_state(1);
   stage1.set_val(Real(0));
   std::vector<const MultiFab*> override_states{&system.block_state(0), &stage1};
-  const SolveReport override_report = system.solve_fields_from_blocks(slot, override_states);
+  const SolveReport override_report =
+      consume_solve_outcome(system.solve_fields_from_blocks(slot, override_states));
   ASSERT_TRUE(override_report.solved_value_available()) << override_report.status_name();
   const std::vector<double> override_phi = system.field_potential_global(slot);
 
@@ -369,7 +371,8 @@ TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_l
     EXPECT_THROW(system.solve_fields_from_blocks(slot, all_live), std::runtime_error)
         << "a rank-local provider callback failure must be published before prepare_rhs";
     fail_rank_local_rhs = false;
-    const SolveReport recovered = system.solve_fields_from_blocks(slot, all_live);
+    const SolveReport recovered =
+        consume_solve_outcome(system.solve_fields_from_blocks(slot, all_live));
     EXPECT_TRUE(recovered.solved_value_available())
         << "the communicator must remain usable after both fail-closed preflights";
   }
