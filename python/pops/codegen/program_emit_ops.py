@@ -133,6 +133,69 @@ def _append_pointwise_solve_report(
     _append_solve_report_guard(program, solve, outcome, lines, label=label)
 
 
+def _append_local_nonlinear_report(
+        program: Any, solve: Any, status: str, report: str, lines: list[str]) -> None:
+    """Reduce one prepared local-solve status field into the common collective report."""
+    action_kind, _ = _consumed_solve_action(program, solve)
+    failure_action = (
+        "pops::SolveAction::kRejectAttempt"
+        if action_kind == "reject_attempt"
+        else "pops::SolveAction::kFailRun"
+    )
+    fields = (
+        ("status", 0, "int"),
+        ("iterations", 1, "int"),
+        ("evaluations", 2, "int"),
+        ("reference_residual", 3, "real"),
+        ("residual", 4, "real"),
+        ("step", 5, "real"),
+        ("condition", 6, "real"),
+        ("safeguard_steps", 7, "int"),
+    )
+    reduced = {}
+    for suffix, component, kind in fields:
+        token = "%s_%s" % (report, suffix)
+        reduced[suffix] = token
+        expression = "pops::reduce_max(%s, %d)" % (status, component)
+        if kind == "int":
+            lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
+        else:
+            lines.append("const pops::Real %s = %s;" % (token, expression))
+    encoded = "%s_failure_location" % report
+    failed_count = "%s_failed_count" % report
+    failed_i = "%s_failed_i" % report
+    failed_j = "%s_failed_j" % report
+    failed_component = "%s_failed_component" % report
+    lines += [
+        "const pops::Real %s = pops::reduce_max(%s, 8);" % (encoded, status),
+        "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
+        "int %s = -1;" % failed_i,
+        "int %s = -1;" % failed_j,
+        "int %s = -1;" % failed_component,
+        "if (%s > pops::Real(0))" % failed_count,
+        "  pops::detail::decode_local_nonlinear_failure("
+        "%s, %s, %s, %s);" % (encoded, failed_i, failed_j, failed_component),
+    ]
+    lines.append(
+        "pops::SolveReport %s = pops::local_nonlinear_solve_report("
+        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+        % (
+            report,
+            reduced["status"],
+            reduced["iterations"],
+            reduced["evaluations"],
+            reduced["reference_residual"],
+            reduced["residual"],
+            reduced["step"],
+            reduced["condition"],
+            reduced["safeguard_steps"],
+            failed_i,
+            failed_j,
+            failed_component,
+            failure_action,
+        ))
+
+
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
              prelude: Any = None, block_idx: Any = None, target: Any = "system",
              field_plans: Any = None) -> None:
@@ -336,7 +399,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         status = "ci_status_%d" % v.id
         prototype_block = next(iter(components))
         prototype = var[by_block[prototype_block].id]
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 10, 0);"
                      % (status, int(v.id), prototype))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,

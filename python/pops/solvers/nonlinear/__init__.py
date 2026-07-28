@@ -87,19 +87,35 @@ class PreparedFieldNonlinear:
 
 @dataclass(frozen=True, slots=True)
 class _PreparedLocalNewton:
-    """Private immutable provider for either form of cell-local Newton solve."""
+    """Immutable controls shared by every form of cell-local nonlinear solve."""
 
     tolerance: float
+    relative_tolerance: float
+    step_tolerance: float
     max_iterations: int
+    max_evaluations: int
     finite_difference_step: float
+    safeguard: str
+    damping: float
+    max_backtracks: int
+    minimum_step: float
+    armijo: float
     identity: Identity
 
     def __post_init__(self) -> None:
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "tolerance": _scalar_data(self.tolerance),
+            "relative_tolerance": _scalar_data(self.relative_tolerance),
+            "step_tolerance": _scalar_data(self.step_tolerance),
             "max_iterations": self.max_iterations,
+            "max_evaluations": self.max_evaluations,
             "finite_difference_step": _scalar_data(self.finite_difference_step),
+            "safeguard": self.safeguard,
+            "damping": _scalar_data(self.damping),
+            "max_backtracks": self.max_backtracks,
+            "minimum_step": _scalar_data(self.minimum_step),
+            "armijo": _scalar_data(self.armijo),
         }
         if self.identity != make_identity("prepared-local-newton", payload):
             raise ValueError("prepared LocalNewton identity is not canonical")
@@ -114,8 +130,12 @@ class _PreparedLocalNewton:
         return build(program=program, prepared_solver=self, name=name)
 
 
+_NATIVE_INT_MAX = (1 << 31) - 1
+
+
 def _positive_int(value: Any, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, int) \
+            or value <= 0 or value > _NATIVE_INT_MAX:
         raise ValueError("Newton %s must be a positive Python int" % name)
     return value
 
@@ -128,6 +148,20 @@ def _positive_float(value: Any, name: str, *, upper: float | None = None) -> flo
     if upper is not None and result >= upper:
         raise ValueError("Newton %s must be < %s" % (name, upper))
     return result
+
+
+def _nonnegative_float(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(float(value)) or float(value) < 0:
+        raise ValueError("Newton %s must be a finite non-negative scalar" % name)
+    return float(value)
+
+
+def _nonnegative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) \
+            or value < 0 or value > _NATIVE_INT_MAX:
+        raise ValueError("Newton %s must be a non-negative Python int" % name)
+    return value
 
 
 class Newton(Descriptor):
@@ -217,7 +251,7 @@ class Newton(Descriptor):
 
 
 class LocalNewton(Descriptor):
-    """Typed cell-local Newton solve with no unused global Krylov/line-search knobs."""
+    """Typed controls for the single prepared cell-local nonlinear provider."""
 
     category = "nonlinear_solver"
     native_id = "pops::LocalNewton"
@@ -227,34 +261,84 @@ class LocalNewton(Descriptor):
         self,
         *,
         tolerance: Any = 1.0e-12,
+        relative_tolerance: Any = 0.0,
+        step_tolerance: Any = 0.0,
         max_iterations: Any = 20,
+        max_evaluations: Any = 0,
         finite_difference_step: Any = 1.0e-7,
+        safeguard: Any = "exact",
+        damping: Any = 1.0,
+        max_backtracks: Any = 12,
+        minimum_step: Any = 1.0 / 4096.0,
+        armijo: Any = 1.0e-4,
     ) -> None:
         self.tolerance = _positive_float(tolerance, "tolerance")
+        self.relative_tolerance = _nonnegative_float(
+            relative_tolerance, "relative_tolerance")
+        self.step_tolerance = _nonnegative_float(step_tolerance, "step_tolerance")
         self.max_iterations = _positive_int(max_iterations, "max_iterations")
+        self.max_evaluations = _nonnegative_int(max_evaluations, "max_evaluations")
         self.finite_difference_step = _positive_float(
             finite_difference_step, "finite_difference_step")
+        if safeguard not in ("exact", "damped", "backtracking"):
+            raise ValueError(
+                "Newton safeguard must be 'exact', 'damped', or 'backtracking'")
+        self.safeguard = safeguard
+        self.damping = _positive_float(damping, "damping")
+        if self.damping > 1.0:
+            raise ValueError("Newton damping must be <= 1")
+        if self.safeguard == "exact" and self.damping != 1.0:
+            raise ValueError("Newton safeguard='exact' requires damping=1")
+        self.max_backtracks = _nonnegative_int(max_backtracks, "max_backtracks")
+        self.minimum_step = _positive_float(minimum_step, "minimum_step")
+        self.armijo = _positive_float(armijo, "armijo", upper=1.0)
+        if self.minimum_step > self.damping:
+            raise ValueError("Newton minimum_step must be <= damping")
 
     def to_data(self) -> dict[str, Any]:
         return {
             "scheme": self.scheme,
             "tolerance": self.tolerance,
+            "relative_tolerance": self.relative_tolerance,
+            "step_tolerance": self.step_tolerance,
             "max_iterations": self.max_iterations,
+            "max_evaluations": self.max_evaluations,
             "finite_difference_step": self.finite_difference_step,
+            "safeguard": self.safeguard,
+            "damping": self.damping,
+            "max_backtracks": self.max_backtracks,
+            "minimum_step": self.minimum_step,
+            "armijo": self.armijo,
         }
 
     def prepare_program_solve(self) -> _PreparedLocalNewton:
         """Prepare the generic Program solve provider."""
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "tolerance": _scalar_data(self.tolerance),
+            "relative_tolerance": _scalar_data(self.relative_tolerance),
+            "step_tolerance": _scalar_data(self.step_tolerance),
             "max_iterations": self.max_iterations,
+            "max_evaluations": self.max_evaluations,
             "finite_difference_step": _scalar_data(self.finite_difference_step),
+            "safeguard": self.safeguard,
+            "damping": _scalar_data(self.damping),
+            "max_backtracks": self.max_backtracks,
+            "minimum_step": _scalar_data(self.minimum_step),
+            "armijo": _scalar_data(self.armijo),
         }
         return _PreparedLocalNewton(
             tolerance=self.tolerance,
+            relative_tolerance=self.relative_tolerance,
+            step_tolerance=self.step_tolerance,
             max_iterations=self.max_iterations,
+            max_evaluations=self.max_evaluations,
             finite_difference_step=self.finite_difference_step,
+            safeguard=self.safeguard,
+            damping=self.damping,
+            max_backtracks=self.max_backtracks,
+            minimum_step=self.minimum_step,
+            armijo=self.armijo,
             identity=make_identity("prepared-local-newton", payload),
         )
 

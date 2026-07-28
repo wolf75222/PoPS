@@ -64,6 +64,8 @@ _SOLVE_STATUS_CPP = {
     "capability_failure": "pops::SolveStatus::kCapabilityFailure",
     "invalid_input": "pops::SolveStatus::kInvalidInput",
     "incompatible_rhs": "pops::SolveStatus::kIncompatibleRhs",
+    "inadmissible_candidate": "pops::SolveStatus::kInadmissibleCandidate",
+    "safeguard_failure": "pops::SolveStatus::kSafeguardFailure",
 }
 
 
