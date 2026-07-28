@@ -712,6 +712,9 @@ jobs:
       - name: M2 temporal gate manifest
         run: python3 scripts/run_m2_gate.py --check-only
 
+      - name: M3 AMR and multi-layout gate manifest
+        run: python3 scripts/run_m3_gate.py --check-only
+
       - name: Generated component catalog
         env:
           PYTHONPATH: ${{ github.workspace }}/python

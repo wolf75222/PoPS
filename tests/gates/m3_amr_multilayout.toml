@@ -1,0 +1,215 @@
+schema_version = 1
+gate = "m3-amr-multilayout"
+issues = ["ADC-672", "ADC-673", "ADC-674", "ADC-675", "ADC-676", "ADC-677", "ADC-678"]
+deferred = []
+
+# Every M3 issue has an executable success proof, a deterministic refusal/rollback
+# proof, and at least one mandatory native proof. Exact selectors make deletion,
+# renaming, skip/xfail, or replacement by a mock hierarchy fail closed.
+[[check]]
+issue = "ADC-672"
+requirement = "ghost_plan"
+polarity = "positive"
+kind = "pytest"
+target = "ghost_plan"
+nodeid = "tests/python/unit/mesh/test_ghost_producer_plan.py::test_all_explicit_producer_protocols_and_shared_interface_flux"
+
+[[check]]
+issue = "ADC-672"
+requirement = "ghost_plan"
+polarity = "refusal"
+kind = "pytest"
+target = "ghost_plan"
+nodeid = "tests/python/unit/mesh/test_ghost_producer_plan.py::test_missing_overlap_and_extra_producers_fail_without_order_priority"
+
+[[check]]
+issue = "ADC-672"
+requirement = "ghost_plan"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_multiblock_regrid_union"
+test_regex = "^test_amr_multiblock_regrid_union\\.Runs$"
+
+[[check]]
+issue = "ADC-673"
+requirement = "layout_plan"
+polarity = "positive"
+kind = "pytest"
+target = "layout_plan"
+nodeid = "tests/python/unit/codegen/test_layout_plan_pipeline.py::test_independent_uniform_layouts_resolve_with_exact_authenticated_providers"
+
+[[check]]
+issue = "ADC-673"
+requirement = "layout_plan"
+polarity = "refusal"
+kind = "pytest"
+target = "layout_plan"
+nodeid = "tests/python/unit/codegen/test_layout_plan_pipeline.py::test_pipeline_rejects_an_unassigned_materialized_state_before_artifact_creation"
+
+[[check]]
+issue = "ADC-673"
+requirement = "layout_plan"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_system_layout_transfer"
+test_regex = "^test_mpi_system_layout_transfer_np2$"
+
+[[check]]
+issue = "ADC-674"
+requirement = "tagging_graph"
+polarity = "positive"
+kind = "pytest"
+target = "tagging_graph"
+nodeid = "tests/python/unit/amr/test_tagging_graph_identity_lowering.py::test_every_tagging_field_survives_resolution_and_native_lowering"
+
+[[check]]
+issue = "ADC-674"
+requirement = "tagging_graph"
+polarity = "refusal"
+kind = "pytest"
+target = "tagging_graph"
+nodeid = "tests/python/unit/mesh/test_amr_tagging_graph.py::test_extension_registry_is_open_but_resolve_rejects_callbacks_and_unknown_nodes"
+
+[[check]]
+issue = "ADC-674"
+requirement = "tagging_graph"
+polarity = "positive"
+kind = "pytest"
+target = "tagging_graph"
+nodeid = "tests/python/integration/amr/test_amr_magnitude_tagging_native.py::test_magnitude_above_lowers_and_executes_on_the_native_amr_tagger"
+
+[[check]]
+issue = "ADC-675"
+requirement = "hierarchy_regrid"
+polarity = "positive"
+kind = "pytest"
+target = "hierarchy_regrid"
+nodeid = "tests/python/unit/mesh/amr/test_hierarchy_contract.py::test_three_level_hierarchy_is_explicit_and_level_count_is_strictly_derived"
+
+[[check]]
+issue = "ADC-675"
+requirement = "hierarchy_regrid"
+polarity = "refusal"
+kind = "pytest"
+target = "hierarchy_regrid"
+nodeid = "tests/python/unit/mesh/amr/test_hierarchy_contract.py::test_provider_refuses_anisotropy_3d_and_three_levels_with_capability_evidence"
+
+[[check]]
+issue = "ADC-675"
+requirement = "hierarchy_regrid"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_hierarchy"
+test_regex = "^test_amr_hierarchy\\.Runs$"
+
+[[check]]
+issue = "ADC-675"
+requirement = "hierarchy_regrid"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_hierarchy"
+test_regex = "^test_amr_hierarchy\\.FineLayoutValidationIsAtomic$"
+
+[[check]]
+issue = "ADC-676"
+requirement = "transfer_bootstrap"
+polarity = "positive"
+kind = "pytest"
+target = "transfer_bootstrap"
+nodeid = "tests/python/unit/mesh/amr/test_transfer_bootstrap.py::test_three_level_bootstrap_is_one_explicit_recursive_plan"
+
+[[check]]
+issue = "ADC-676"
+requirement = "transfer_bootstrap"
+polarity = "refusal"
+kind = "pytest"
+target = "transfer_bootstrap"
+nodeid = "tests/python/unit/mesh/amr/test_transfer_bootstrap.py::test_registry_refuses_empty_missing_incompatible_ambiguous_and_unused"
+
+[[check]]
+issue = "ADC-676"
+requirement = "transfer_bootstrap"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.AnalyticEveryLevelCacheEpochAndL0L1L2Rollback$"
+
+[[check]]
+issue = "ADC-676"
+requirement = "transfer_bootstrap"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.PreparedCarrierRejectsUnrepresentableExternalReach$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_reflux_ledger"
+test_regex = "^test_program_reflux_ledger\\.accepted_exact_ledger_is_the_unique_numerical_reflux_source$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_reflux_ledger"
+test_regex = "^test_program_reflux_ledger\\.non_integral_relation_requires_declared_remainder$"
+
+[[check]]
+issue = "ADC-677"
+requirement = "clocks_reflux"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_amr_program_reflux"
+test_regex = "^test_mpi_amr_program_reflux_np2$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_preflight_returns_exact_native_payload_and_counters"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "refusal"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_preflight_refuses_any_static_provenance_mismatch"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.AcceptedStateRestartReconstructsReboundFluxAuthorityForNextAb2Step$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.RejectedAb2RegridRestoresTopologyHistoryFluxAndStateExactly$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "lowering_coverage"
+polarity = "positive"
+kind = "pytest"
+target = "lowering_coverage"
+nodeid = "tests/python/unit/codegen/test_module_lowering_coverage.py::test_module_lowering_attaches_total_coverage_graph"
+
+[[check]]
+issue = "ADC-678"
+requirement = "lowering_coverage"
+polarity = "refusal"
+kind = "pytest"
+target = "lowering_coverage"
+nodeid = "tests/python/unit/codegen/test_module_lowering_coverage.py::test_unsupported_operator_kind_is_a_structured_partial_rejection"
