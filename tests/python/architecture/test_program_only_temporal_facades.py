@@ -63,17 +63,9 @@ SEMANTIC_BLOCKERS = {
         "engine.IMEX(",
         "expect_native_rejection(",
     ),
-    "tests/python/unit/runtime/test_implicit_vars.py": (
-        "implicit_vars=",
-        ".advance(",
-    ),
     "tests/python/unit/runtime/test_v3_features.py": (
         "engine.IMEX(",
         "expect_amr_newton_rejection(",
-    ),
-    "tests/python/unit/time/test_imexrk.py": (
-        "engine.IMEXRK(",
-        ".step(",
     ),
 }
 
