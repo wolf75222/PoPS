@@ -1,0 +1,65 @@
+schema_version = 1
+gate = "adc757-prepared-numerics-slice"
+issue = "ADC-757"
+evidence_from = ["ADC-750", "ADC-753"]
+deferred = [
+  "boundary_geometry_riemann_and_spatial_provider_families",
+  "python_ir_generated_abi_and_restart_parity",
+  "runtime_consumer_cutover_and_legacy_deletion",
+  "amr_regrid_migration_and_restart_coherence",
+  "mpi_collective_execution",
+  "gpu_backend_execution",
+  "workspace_reentrancy_and_stream_partitioning",
+  "performance_baselines_and_end_to_end_benchmarks",
+  "local_time_and_load_balance_provider_families",
+]
+
+# This is an executable partial gate, not ADC-757 closure. Every claimed
+# requirement has one success proof and one refusal/detector proof.
+[[check]]
+requirement = "prepared_local_nonlinear"
+polarity = "positive"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.FiniteDifferenceAnalyticAndAdUseOneOutcomeContract$"
+
+[[check]]
+requirement = "prepared_local_nonlinear"
+polarity = "refusal"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.EveryFailureClassIsExplicitAndLeavesTheGuessUntouched$"
+
+[[check]]
+requirement = "typed_fallible_evaluation"
+polarity = "positive"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.FallibleEvaluationStatusAndReasonRemainDistinct$"
+
+[[check]]
+requirement = "typed_fallible_evaluation"
+polarity = "refusal"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.FatalEvaluationIsTypedAllocationFreeAndCannotPublish$"
+
+[[check]]
+requirement = "transactional_recovery_publication"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.tentative_publication_rolls_back_solution_and_warm_start$"
+
+[[check]]
+requirement = "transactional_recovery_publication"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.malformed_and_repair_candidates_fail_closed$"
+
+[[check]]
+requirement = "allocation_aware_cell_hot_path"
+polarity = "positive"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.ConvergedPreparedPathAllocatesNothingAndRollsBack$"
+
+[[check]]
+requirement = "allocation_aware_cell_hot_path"
+polarity = "refusal"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.AllocationProbeDetectsControlHeapTraffic$"
