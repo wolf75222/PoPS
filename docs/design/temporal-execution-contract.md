@@ -63,12 +63,18 @@ offline migration; runtime restart contains no compatibility branch.
 
 Offline envelope inspection authenticates only the integrity of a canonical checkpoint; it is not
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
-identities, temporal state, consumer cursors, and field-provider state. Later sealed v2 payloads
-still have no reviewed semantic/Program-version mapping to the current schema. A real migration
-therefore requires an explicit version table covering semantic identity, Program IR and hash,
-schedule/cadence, histories, caches, controller state, consumers, and run controls. Until that
-mapping exists, both offline inspection and runtime restart fail closed without publishing a
-destination.
+identities, temporal state, consumer cursors, and field-provider state. The explicit
+`pops.codegen.checkpoint_migration` route can migrate exactly that frozen, store-all Uniform v2
+schema only when the caller supplies both a complete authenticated current-v5 authority checkpoint
+and a reviewed mapping. The mapping pins the source bytes, source ABI and Program hash, the
+authority restart and target lifecycle/ABI/Program identities, every block/component/history
+correspondence, and the closed set of current metadata inherited from the authority. The supported
+route requires the same grid and accepted clock, Dense fully stored histories with a matching
+outgoing-`dt` ledger, and no qualified field providers, scheduled caches, or ConsumerGraph state.
+It validates and reopens the complete current payload before an atomic no-clobber publication; the
+source and authority are never modified. Other v2 variants remain unsupported. Runtime restart
+contains no migration import or compatibility branch and continues to reject every historical
+payload.
 
 `RuntimeInstance` obtains each consumer moment from the accepted cursor of the consumer's qualified
 clock. A missing clock, provisional phase, or desynchronized cursor is an error. Consequently a
