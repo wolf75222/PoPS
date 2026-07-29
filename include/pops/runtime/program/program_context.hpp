@@ -255,18 +255,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), sys_block(b), u, r);
   }
 
-  /// r <- S(u, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
-  /// divergence (the exact MIRROR of @ref neg_div_flux_default_into). Forwards to
-  /// System::block_source_into (the block's SourceInto path, bit-identical to the source half of
-  /// rhs_into). The codegen lowers a SOURCE stage (P.rhs(flux=False, sources with "default")) to this, so
-  /// a Lie/Strang split assembles "the default source but no flux" without the -div F base leaking in
-  /// (epic ADC-399 / ADC-430, spec: rhs flux=False is source-only). Header-inline forwarder, like @ref
-  /// neg_div_flux_default_into.
-  void source_default_into(int b, MultiFab& u, MultiFab& r) const {
-    count_kernel();
-    sys_->block_source_into(sys_block(b), u, r);
-  }
-
   /// Fail before a generated pointwise operator touches storage when an embedded boundary is active.
   /// Default-source and transport residuals have native geometry-aware providers; arbitrary generated
   /// expressions and local solves do not yet, and cannot be repaired by post-zeroing their outputs.
@@ -1244,6 +1232,10 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     count_kernel(static_cast<std::int64_t>(batch.requests.size()));
     sys_->block_rhs_group(boundary_point_(batch.group_id), batch.runtime_blocks, batch.states,
                           batch.rhs, batch.flux_only);
+  }
+  void program_execution_source_default_into_(int runtime_block, MultiFab& state,
+                                              MultiFab& rhs) const {
+    sys_->block_source_into(runtime_block, state, rhs);
   }
 
   struct LogicalEvaluationRollback {
