@@ -12,7 +12,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +93,25 @@ def _python_mpi_entrypoints() -> dict[str, int]:
     return entries
 
 
+def _python_mpi_orchestrators() -> set[str]:
+    data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
+    orchestrators: set[str] = set()
+    for suite in data.get("python", {}).get("suite", ()):
+        for row in suite.get("mpi_orchestrators", ()):
+            if not isinstance(row, dict) or set(row) != {"path"}:
+                raise ValueError(
+                    "invalid Python MPI orchestrator %r; expected exactly one path field"
+                    % row
+                )
+            path = row["path"]
+            if not isinstance(path, str) or not path:
+                raise ValueError("invalid Python MPI orchestrator path %r" % path)
+            if path in orchestrators:
+                raise ValueError("duplicate Python MPI orchestrator %s" % path)
+            orchestrators.add(path)
+    return orchestrators
+
+
 def _validate_python_nodeid(nodeid: object, where: str, errors: list[str]) -> str | None:
     if not isinstance(nodeid, str) or nodeid.count("::") != 1:
         errors.append("%s must contain one exact file::test nodeid" % where)
@@ -156,6 +177,11 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
         errors.append("cannot read Python MPI entrypoints: %s" % exc)
         python_mpi_entrypoints = {}
+    try:
+        python_mpi_orchestrators = _python_mpi_orchestrators()
+    except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
+        errors.append("cannot read Python MPI orchestrators: %s" % exc)
+        python_mpi_orchestrators = set()
     for index, row in enumerate(checks, 1):
         where = "check[%d]" % index
         base = {"issue", "requirement", "polarity", "kind", "target"}
@@ -191,6 +217,14 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             if target not in ALLOWED_PYTEST_TARGETS:
                 errors.append("%s has unknown pytest target %r" % (where, target))
             relative = _validate_python_nodeid(nodeid, where, errors)
+            if (
+                relative is not None
+                and relative.startswith("tests/python/integration/mpi/")
+                and relative not in python_mpi_orchestrators
+            ):
+                errors.append(
+                    "%s is not a manifest-owned serial MPI orchestrator" % relative
+                )
             if polarity == "positive" and relative in NATIVE_PYTEST_FILES:
                 native_positive_issues.add(str(issue))
         elif kind == "mpi_python":
@@ -261,7 +295,55 @@ def _mpi_python_command(mpi_exec: str, nproc: int, relative: str) -> list[str]:
 def _required_mpi_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["POPS_REQUIRE_MPI_TESTS"] = "1"
+    environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
     return environment
+
+
+def _pytest_skip_count(report: Path) -> int:
+    if not report.is_file():
+        raise RuntimeError("M3 pytest did not produce its mandatory JUnit report")
+    try:
+        root = ET.parse(report).getroot()
+    except ET.ParseError as exc:
+        raise RuntimeError("M3 pytest produced an invalid JUnit report") from exc
+    return len(root.findall(".//skipped"))
+
+
+def _run_required_pytest(nodeids: list[str]) -> None:
+    environment = _required_mpi_environment()
+    with tempfile.TemporaryDirectory(prefix="pops-m3-gate-") as temporary:
+        report = Path(temporary) / "pytest.xml"
+        command = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--strict-markers",
+            "-o",
+            "xfail_strict=true",
+            "--junitxml",
+            str(report),
+            *nodeids,
+        ]
+        print(
+            "+ POPS_REQUIRE_MPI_TESTS=1 POPS_REQUIRE_NATIVE_TESTS=1",
+            " ".join(command),
+            flush=True,
+        )
+        completed = subprocess.run(
+            command,
+            cwd=ROOT,
+            env=environment,
+            check=False,
+        )
+        skipped = _pytest_skip_count(report)
+        if skipped:
+            raise RuntimeError(
+                "M3 pytest reported %d skipped/xfail proof(s); every proof is mandatory"
+                % skipped
+            )
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(completed.returncode, command)
 
 
 def _chunks(values: list[str], size: int) -> Iterable[list[str]]:
@@ -309,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
 
     nodeids = [row["nodeid"] for row in checks if row["kind"] == "pytest"]
     for chunk in _chunks(nodeids, 24):
-        _run([sys.executable, "-m", "pytest", "-q", *chunk])
+        _run_required_pytest(chunk)
     mpi_entrypoints = sorted(
         {
             (row["nodeid"].split("::", 1)[0], row["nproc"])

@@ -170,7 +170,8 @@ class AmrRuntimeView:
         """Return a :class:`CheckpointReport` of the live system's restartability (sec.8.11)."""
         constraints = ["same bound composition and compiled Program",
                        "authenticated v5 accepted-state payload",
-                       "same native rank count for exact rank-local ownership and Program state"]
+                       "same recorded patch boxes and refinement topology under "
+                       "RestoreRecordedHierarchy()"]
         violations = []
         try:
             n_blocks = int(self._sim._s.n_blocks())
@@ -182,8 +183,12 @@ class AmrRuntimeView:
             "v5 persists every block/level, owner-rank map, aux and qualified field warm start.",
             "active regridding is supported: topology epoch, regrid count, exact level clocks, "
             "history identities and lagged conservative flux publications are restored.",
-            "the public restart guarantee is bit-identical accepted-state continuation; there is "
-            "no implicit weaker regrid-on-restart fallback.",
+            "bit_identical=True requires the recorded MPI rank count and owner-rank map.",
+            "the default non-bit-identical route may rematerialize hierarchy ownership and the "
+            "rank-owned Program accepted state onto a different rank count only when every persisted "
+            "history ring is Dense; selective history replay remains same-rank.",
+            "RegridOnRestart() is not implemented; there is no implicit weaker hierarchy remap "
+            "fallback.",
         ]
         return CheckpointReport(
             restartable=not violations, constraints=constraints, violations=violations, notes=notes)

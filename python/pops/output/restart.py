@@ -28,7 +28,12 @@ class RestartHierarchy:
 
 @dataclass(frozen=True, slots=True)
 class RestoreRecordedHierarchy(RestartHierarchy):
-    """Restore the checkpoint's exact hierarchy, ownership, and accepted state."""
+    """Restore exact recorded patch geometry and accepted state.
+
+    ``Checkpoint(bit_identical=True)`` additionally requires the recorded owner-rank map.
+    The default non-bit-identical route may rematerialize ownership for a new MPI cardinality;
+    it never regrids or infers different patch boxes.
+    """
 
     mode: ClassVar[str] = "restore_recorded_hierarchy"
     guarantee: ClassVar[str] = "accepted_state_with_recorded_hierarchy"

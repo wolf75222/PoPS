@@ -33,6 +33,15 @@ manifest-owned script once with `mpiexec -n 2` and forces
 `POPS_REQUIRE_MPI_TESTS=1`; a missing launcher, MPI runtime, or native
 capability is therefore a failure, never an optional skip.
 
+The rank-change restart proof is a serial pytest orchestrator registered in the same manifest. It
+launches an independent two-rank capture and one-rank restore, so the gate proves persisted
+rematerialization across MPI worlds rather than rebuilding ownership inside one communicator.
+The source validator requires that exact pytest path to remain in the manifest's
+`mpi_orchestrators` category; removing or reclassifying it invalidates `--check-only`.
+All Python checks run with native and MPI requirements forced on; a missing capability cannot turn
+this proof into an optional skip. Pytest also emits a mandatory JUnit report with strict xfail
+semantics; any skipped or xfailed proof fails the M3 gate.
+
 The multi-layout checkpoint proof currently uses two independent `Uniform`
 layouts. It proves restoration of every layout state and mapping counter, but
 it is not a substitute for the separate AMR hierarchy/regrid restart proofs.

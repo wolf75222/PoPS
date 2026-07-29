@@ -3,8 +3,10 @@
 The sealed payload preserves owner-rank mappings, all block/level state, aux and elliptic warm starts,
 regrid counters, qualified history rings, rational clocks, lagged flux publications, level relations
 and transfer-plan provenance. Restore is transactional: ``bit_identical=True`` requires the recorded
-rank topology, while the default exact-hierarchy policy may rematerialize only ownership for a new
-MPI cardinality. Historical or weaker fallback formats are refused.
+rank topology, while the default exact-geometry policy may rematerialize hierarchy ownership and
+rank-owned Program state for a new MPI cardinality. Rank-count changes require every persisted
+history ring to be Dense because selective replay is a same-rank operation. Historical or weaker
+fallback formats are refused.
 """
 
 from dataclasses import dataclass

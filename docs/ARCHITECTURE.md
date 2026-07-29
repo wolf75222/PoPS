@@ -450,10 +450,13 @@ provenance before mutation.  During explicit bootstrap, the installed Program co
 that level-qualified image before each spatial hierarchy transition commits.  After the mandatory
 zero-step `pops.run` establishes the checkpoint's controls identity, a checkpoint before the first
 accepted step therefore cannot retain a stale coarse-only clock axis.  Multi-block and active-regrid
-layouts use this same strict route. `RestoreRecordedHierarchy()` is the exact default and
-`RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity; the builtin
-accepted-state-v5 provider currently refuses that weaker policy during resolution because it has no
-complete hierarchy/history/field remap implementation. PoPS never silently degrades the strict route.
+layouts use this same authenticated route. `RestoreRecordedHierarchy()` preserves the recorded patch
+geometry. With `bit_identical=True` it also requires the recorded rank count and owner map; the
+default non-bit-identical route may rematerialize ownership only when every persisted history ring is
+Dense. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity; the
+builtin accepted-state-v5 provider currently refuses that weaker policy during resolution because it
+has no complete hierarchy/history/field remap implementation. PoPS never silently changes patch
+geometry under `RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
 `assemble_rhs` (limited reconstruction then numerical flux -> $R = -\mathrm{div} F + S$).
