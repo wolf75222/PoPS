@@ -115,9 +115,9 @@ void bind_system_assembly(py::class_<System>& cls) {
   cls.def(py::init<const SystemConfig&>())
       // Per-block composition: model (bricks) + spatial scheme (limiter/riemann) + time
       // (explicit/imex) + substeps. Python says WHAT, the compiled C++ does the compute.
-      // ADC-214: the Python SURFACE is UNCHANGED (same flat newton_* kwargs, same defaults). The
-      // lambda receives them flat and BUILDS the NewtonOptions POD internally before calling the
-      // new C++ method (which groups these homogeneous parameters). adc_cases sees no change.
+      // The lambda receives the flat preparation controls and builds the NewtonOptions POD before
+      // calling the grouped C++ method. Failure policy is intentionally absent: the solve is
+      // fail-closed.
       .def(
           "add_block",
           [](System& s, const std::string& name, const ModelSpec& model, const std::string& limiter,

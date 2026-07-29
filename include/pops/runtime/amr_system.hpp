@@ -346,14 +346,25 @@ class AmrSystem {
   /// Install the same executable per-block ghost authority as System.  Presence of a resolved plan
   /// selects the N-level AmrRuntime route, whose Program RHS composes same-level MPI, the authored
   /// coarse/fine transfer authority, and these physical faces.
+  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
+                                         int required_depth,
+                                         const std::vector<std::string>& face_types,
+                                         const std::vector<double>& face_values,
+                                         const std::vector<std::string>& face_identities,
+                                         const std::vector<std::string>& component_roles,
+                                         const std::vector<int>& omitted_interface_faces = {},
+                                         const std::string& state_identity = {},
+                                         PreparedBoundaryReadDependencies read_dependencies = {});
+  /// Exact-topology overload. Periodic endpoint maps remain topology metadata beside the sole
+  /// model-aware physical-law plan; they never restore component-wise BCRec transport semantics.
   POPS_EXPORT void install_boundary_plan(
       const std::string& name, const std::string& identity, int required_depth,
       const std::vector<std::string>& face_types, const std::vector<double>& face_values,
       const std::vector<std::string>& face_identities,
       const std::vector<std::string>& component_roles,
-      const std::vector<int>& omitted_interface_faces = {}, const std::string& state_identity = {},
-      PreparedBoundaryReadDependencies read_dependencies = {},
-      std::vector<PeriodicIdentification2D> periodic_identifications = {},
+      const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+      PreparedBoundaryReadDependencies read_dependencies,
+      std::vector<PeriodicIdentification2D> periodic_identifications,
       const std::vector<std::string>& face_representations = {},
       const std::vector<std::string>& face_converter_identities = {});
   /// Register the exact state Handle independently from physical-boundary ownership.
@@ -671,6 +682,10 @@ class AmrSystem {
   void begin_restart_transaction();
   void commit_restart_transaction();
   void rollback_restart_transaction();
+  /// Force exactly one artifact-owned scientific regrid inside an active restart transaction.
+  /// The exact recorded accepted state must already have been restored and authenticated.
+  void preflight_regrid_on_restart();
+  void regrid_on_restart();
   int checkpoint_regrid_count() const;
   std::uint64_t checkpoint_topology_epoch() const;
   void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch);
@@ -761,6 +776,11 @@ class AmrSystem {
   /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
   /// low-level steps may omit it because they have no authenticated checkpoint context.
   POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
+  /// Install the artifact-owned restart preflight, transform and forced rollback-resynchronization
+  /// hooks.
+  POPS_EXPORT void install_program_restart_hooks(std::function<void()> preflight,
+                                                 std::function<void()> regrid,
+                                                 std::function<void()> resync);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
@@ -798,9 +818,9 @@ class AmrSystem {
   /// @p so_path, checks its ABI key against this module (fail-loud on mismatch), runs the section-24
   /// install-time requirement validation (aux / solver / block instance, verbatim spec messages), binds
   /// the Program's blocks to the AMR blocks BY NAME, seeds each block's RuntimeParams from the .so
-  /// pops_program_param_* metadata, then calls the .so's pops_install_program_amr(this), which wraps the
-  /// AmrSystem in an AmrProgramContext and installs the macro-step closure. Mirrors add_native_block and
-  /// System::install_program; the .so stays loaded for the process lifetime.
+  /// pops_program_param_* metadata, then calls the .so's pops_install_program_amr(this), whose shared
+  /// facade factory selects the hierarchy provider and installs the macro-step closure. Mirrors
+  /// add_native_block and System::install_program; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).

@@ -9,7 +9,8 @@ SMALLER than the native CFL wins; a LARGER bound loses (native CFL wins); and a 
 bound leaves the native CFL UNCHANGED.
 
 The generated .so exports a SECOND ABI pair alongside the macro step: ``pops_program_has_dt_bound()``
-(true iff a bound was set) and ``pops_program_dt_bound(ProgramContext*, cfl)`` (the lowered scalar).
+(true iff a bound was set) and a facade-typed ``pops_program_dt_bound(System*, cfl)`` (the lowered
+scalar, evaluated through the shared Program execution provider).
 
 Section (A) (pure Python) pins the IR + codegen: the bound is recorded, the two ABI functions are
 emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Section (B) is end-to-end

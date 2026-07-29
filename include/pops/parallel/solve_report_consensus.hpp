@@ -28,9 +28,16 @@ class ExactSolveReportConsensusScratch {
     fixed_minimum_.fill(char{0});
     std::size_t offset = 0;
     append(std::int64_t{report.iters}, offset);
+    append(std::int64_t{report.evaluations}, offset);
+    append(std::int64_t{report.safeguard_steps}, offset);
     append(report.rel_residual, offset);
     append(report.reference_residual_norm, offset);
     append(report.residual_norm, offset);
+    append(report.step_norm, offset);
+    append(report.condition_evidence, offset);
+    append(std::int64_t{report.failed_i}, offset);
+    append(std::int64_t{report.failed_j}, offset);
+    append(std::int64_t{report.failed_component}, offset);
     append(static_cast<std::int32_t>(report.status), offset);
     append(static_cast<std::int32_t>(report.action), offset);
     append(static_cast<std::uint64_t>(report.reason.size()), offset);
@@ -69,8 +76,9 @@ class ExactSolveReportConsensusScratch {
     offset += sizeof(Value);
   }
 
-  static constexpr std::size_t kFixedPayloadBytes =
-      sizeof(std::int64_t) + 3 * sizeof(Real) + 2 * sizeof(std::int32_t) + sizeof(std::uint64_t);
+  static constexpr std::size_t kFixedPayloadBytes = 6 * sizeof(std::int64_t) + 5 * sizeof(Real) +
+                                                    2 * sizeof(std::int32_t) +
+                                                    sizeof(std::uint64_t);
   static constexpr std::size_t kReasonChunkBytes = 1024;
   std::array<char, kFixedPayloadBytes> fixed_minimum_{};
   std::array<char, kFixedPayloadBytes> fixed_maximum_{};

@@ -39,7 +39,6 @@
 #include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/context/grid_context.hpp>    // GridContext (System aux seam)
-#include <pops/runtime/program/cache_manager.hpp>   // CacheManager (held-node value cache, ADC-458)
 #include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
 #include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system.hpp>  // System (the runtime this facade forwards to)
@@ -63,93 +62,16 @@
 /// System::Impl / Array4 / fill_boundary / the elliptic solver / Kokkos / MPI / CFL / substeps.
 ///
 /// IDIOM: ProgramContext is a plain (non-template) class holding a System*. A generated .so receives
-/// the System as a flat void* across the dlopen boundary (like the native loader's `void* self`) and
-/// wraps it here; it reaches per-block storage through the System's public accessors because
-/// System::Impl is private to the _pops translation unit.
+/// the typed System facade across the authenticated dlopen boundary and asks the shared provider
+/// factory to construct this topology/storage provider; it reaches per-block storage through the
+/// System's public accessors because System::Impl is private to the _pops translation unit.
 namespace pops {
 namespace runtime {
 namespace program {
 
 class ProgramContext : public ProgramExecutionServices<ProgramContext> {
  public:
-  /// One exact logical-clock child interval.  The generated subcycle cursor validates iteration
-  /// order; this companion owns the numerical evaluation window used by prepared operators.  It is
-  /// deliberately move-only and restores the enclosing dt/phase/time/stage on every exit path, so
-  /// nested Program.subcycle bodies cannot leak a child clock into their parent evaluation.
-  class LogicalEvaluationScope {
-   public:
-    LogicalEvaluationScope(const ProgramContext& owner, int iteration, int count)
-        : owner_(&owner),
-          saved_dt_(owner.current_dt_),
-          saved_stage_(owner.stage_time_),
-          saved_phase_begin_(owner.logical_phase_begin_),
-          saved_phase_span_(owner.logical_phase_span_),
-          saved_physical_offset_(owner.logical_physical_time_offset_) {
-      if (count <= 0 || iteration < 0 || iteration >= count)
-        throw std::invalid_argument("Program logical evaluation requires a valid child iteration");
-      if (!std::isfinite(saved_dt_) || saved_dt_ <= 0.0)
-        throw std::logic_error("Program logical evaluation requires a prepared parent dt");
-      const double child_dt = saved_dt_ / static_cast<double>(count);
-      const double child_offset =
-          saved_physical_offset_ + static_cast<double>(iteration) * child_dt;
-      if (!std::isfinite(child_dt) || child_dt <= 0.0 || !std::isfinite(child_offset))
-        throw std::overflow_error("Program logical evaluation child window is not finite");
-      const amr::Rational child_fraction(iteration, count);
-      const amr::Rational child_span = saved_phase_span_ * amr::Rational(1, count);
-      const amr::Rational child_begin = saved_phase_begin_ + saved_phase_span_ * child_fraction;
-
-      owner.invalidate_active_operator_snapshot_();
-      child_dt_ = child_dt;
-      owner.current_dt_ = child_dt;
-      owner.stage_time_ = amr::Rational(0, 1);
-      owner.logical_phase_begin_ = child_begin;
-      owner.logical_phase_span_ = child_span;
-      owner.logical_physical_time_offset_ = child_offset;
-    }
-    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
-    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
-    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
-        : owner_(std::exchange(other.owner_, nullptr)),
-          saved_dt_(other.saved_dt_),
-          saved_stage_(other.saved_stage_),
-          saved_phase_begin_(other.saved_phase_begin_),
-          saved_phase_span_(other.saved_phase_span_),
-          saved_physical_offset_(other.saved_physical_offset_),
-          child_dt_(other.child_dt_) {}
-    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
-    ~LogicalEvaluationScope() noexcept { restore_(); }
-
-    Real dt() const {
-      if (owner_ == nullptr)
-        throw std::logic_error("Program logical evaluation scope is no longer active");
-      return static_cast<Real>(child_dt_);
-    }
-
-   private:
-    void restore_() noexcept {
-      if (owner_ == nullptr)
-        return;
-      owner_->current_dt_ = saved_dt_;
-      owner_->stage_time_ = saved_stage_;
-      owner_->logical_phase_begin_ = saved_phase_begin_;
-      owner_->logical_phase_span_ = saved_phase_span_;
-      owner_->logical_physical_time_offset_ = saved_physical_offset_;
-      owner_->invalidate_active_operator_snapshot_();
-      owner_ = nullptr;
-    }
-
-    const ProgramContext* owner_ = nullptr;
-    double saved_dt_ = 0.0;
-    amr::Rational saved_stage_{0, 1};
-    amr::Rational saved_phase_begin_{0, 1};
-    amr::Rational saved_phase_span_{1, 1};
-    double saved_physical_offset_ = 0.0;
-    double child_dt_ = 0.0;
-  };
-
   explicit ProgramContext(System* sys) : sys_(sys) {}
-  /// Wraps a System passed as a flat void* (what pops_install_program(void* sys) receives).
-  explicit ProgramContext(void* sys) : sys_(static_cast<System*>(sys)) {}
 
   /// Register the macro-step body. @p step advances ONE macro-step over dt (it owns solve_fields,
   /// the RHS, the linear combine and the commit). An empty std::function is rejected.
@@ -168,10 +90,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_phase_begin_ = amr::Rational(0, 1);
     logical_phase_span_ = amr::Rational(1, 1);
     logical_physical_time_offset_ = 0.0;
-  }
-
-  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
-    return LogicalEvaluationScope(*this, iteration, count);
   }
 
   SolveOutcome solve_fields() const {
@@ -203,32 +121,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return sys_->solve_fields_from_state_at_in_place_(point, provider_slot, sys_block(b),
                                                         u_stage);
     });
-  }
-  template <class Body>
-  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                    const std::string& provider_slot, int b,
-                                    MultiFab& evaluation_state, MultiFab& restore_state,
-                                    Body&& body) const {
-    const auto restore = [&]() {
-      const SolveReport restored = consume_field_outcome_(
-          solve_fields_from_state_at(point, provider_slot, b, restore_state));
-      if (!restored.solved_value_available())
-        throw_field_solve_failure_(restored, "restoring the frozen field state");
-    };
-    const SolveReport prepared = consume_field_outcome_(
-        solve_fields_from_state_at(point, provider_slot, b, evaluation_state));
-    if (!prepared.solved_value_available()) {
-      restore();
-      throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
-    }
-    try {
-      std::forward<Body>(body)();
-    } catch (...) {
-      const std::exception_ptr failure = std::current_exception();
-      restore();
-      std::rethrow_exception(failure);
-    }
-    restore();
   }
   /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
   /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
@@ -302,7 +194,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
     });
   }
-  MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
   /// Evaluate one authored rate at its exact, stable node identity.  There is deliberately no
   /// sentinel/default identity: shared-interface assembly and boundary callbacks authenticate this
   /// value as part of BoundaryEvaluationPoint, so an anonymous rate would be temporally ambiguous.
@@ -438,37 +329,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->require_cartesian_generated_operator(sys_block(b), operation);
   }
 
-  /// Return the prepared active-cell mask for a pointwise generated operator owned by Program block
-  /// @p b.  A Cartesian block has no mask (nullptr means every valid cell is active).  Embedded
-  /// geometries expose the same stable, block-qualified mask used by the native residual and field
-  /// algebra.  The field layout is authenticated here, before generated code launches a device
-  /// kernel; pointwise providers therefore never infer geometry from a case name or mode.
-  const MultiFab* pointwise_active_mask(int b, const MultiFab& field) const {
-    const GridContext context = sys_->grid_context(sys_block(b));
-    if (context.embedded_boundary_set == nullptr || !*context.embedded_boundary_set ||
-        context.geometry_mode == nullptr || *context.geometry_mode == GeometryMode::None)
-      return nullptr;
-    if (context.domain_mask == nullptr)
-      throw std::runtime_error(
-          "ProgramContext pointwise operator has no prepared active-cell mask");
-    pops::detail::validate_relative_cell_measure(field,
-                                                 RelativeCellMeasure{context.domain_mask, nullptr},
-                                                 "ProgramContext pointwise active-cell mask");
-    return context.domain_mask;
-  }
-
-  /// Collective fail-closed reduction for a pointwise generated operator.  @p active_cells must be
-  /// the exact block-qualified mask returned by pointwise_active_mask for @p status; this prevents a
-  /// generated kernel from evaluating one physical domain and validating another.
-  Real pointwise_status_max(int b, const MultiFab& status, const MultiFab* active_cells) const {
-    const MultiFab* expected = pointwise_active_mask(b, status);
-    if (expected != active_cells)
-      throw std::invalid_argument(
-          "ProgramContext pointwise status reduction received a different active-cell mask");
-    const Real reduced = pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
-    return reduced == -std::numeric_limits<Real>::infinity() ? Real(0) : reduced;
-  }
-
   /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) -- the
   /// SAME hmin the native CFL uses. Forwards to System::cfl_min_dx. A compiled time Program's dt bound
   /// (epic ADC-399 / ADC-417, spec s18) reads it to express e.g. cfl * hmin / max_wave_speed.
@@ -482,19 +342,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   Real max_wave_speed(int b, const MultiFab& u) const {
     return sys_->block_max_speed(sys_block(b), u);
   }
-
-  /// The System aux MultiFab (phi=0, grad_x=1, grad_y=2, B_z=3, T_e=4, named fields from
-  /// kAuxNamedBase). NOT owned by the context: it is the live System aux (stable address), the same
-  /// channel solve_fields() fills. A generated local-linear-solve kernel reads the operator
-  /// coefficients (e.g. B_z) from it. Forwards to System::grid_context().aux.
-  MultiFab& aux() const { return *sys_->grid_context().aux; }
-
-  /// The System grid context (transport BC + mesh geometry + the live aux pointer). BY VALUE:
-  /// grid_context() returns a temporary. A generic seam accessor forwarding to
-  /// System::grid_context(), used by out-of-line runtime operators (the coupled elliptic operator
-  /// modules) that assemble coefficient / flux halos from the transport BC without reaching into
-  /// System::Impl -- the SAME channel geom() / aux() expose, bundled.
-  GridContext grid_context() const { return sys_->grid_context(); }
 
   /// Materialize one lane-private mesh authority for a prepared operator that is not attached to a
   /// conservative block (for example, a scalar elliptic field).  This deliberately uses the
@@ -628,39 +475,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
   }
 
-  /// Physical ownership of fields allocated for one generated Program resource bundle. A uniform
-  /// System partitions its one mesh across communicator ranks; exposing the descriptor through the
-  /// same context protocol as AMR keeps generic codegen independent from the runtime target.
-  const PreparedVectorDistribution& program_resource_vector_distribution() const noexcept {
-    return PreparedVectorDistribution::Distributed;
-  }
-  FieldDistribution program_resource_field_storage_distribution() const noexcept {
-    return FieldDistribution::Distributed;
-  }
-  int program_resource_field_level() const noexcept { return 0; }
-  /// Resolve the topology-dependent part of an authored field-nullspace plan at the same boundary
-  /// that allocates its persistent Program resource. Generic codegen supplies only the mathematical
-  /// basis/gauge; the context owns layout scope, physical measure and communicator ownership.
-  void configure_program_resource_field_nullspace(FieldNullspacePlan& plan) const {
-    const GridContext gc = grid_context();
-    const Real measure = gc.geom.dx() * gc.geom.dy();
-    for (FieldNullspaceBasis& basis : plan.bases)
-      basis.cell_measure = {measure};
-  }
-
-  /// A fresh scalar field co-distributed with the System mesh (block 0's box array / distribution),
-  /// @p n_comp components, @p n_ghost ghost layers, zero-initialized. Forwards to
-  /// System::alloc_scalar_field. The scratch fields (residual, search direction, solution) a
-  /// matrix-free Krylov solve allocates -- a 1-component field is distinct from the n_cons block state,
-  /// but shares its (ba, dm) so laplacian / gradient pair it with the state and aux by local fab index.
-  MultiFab alloc_scalar_field(int n_comp = 1, int n_ghost = 1) const {
-    return sys_->alloc_scalar_field(n_comp, n_ghost);
-  }
-
-  /// The System mesh geometry (index domain + physical bounds, dx/dy). BY VALUE: grid_context()
-  /// returns a temporary, so a reference to its @c geom member would dangle. The metric the matrix-free
-  /// Laplacian / gradient read.
-  Geometry geom() const { return sys_->grid_context().geom; }
   /// Metric facts captured by generated kernels before entering device lambdas.  Cartesian and polar
   /// Programs share one emitted body; only these geometry-level values select the coordinate metric.
   bool is_polar_geometry() const { return sys_->program_is_polar(); }
@@ -927,131 +741,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     neg_div_flux_into(r, fx, fy, divc, lane);
   }
 
-  /// A zero-initialized RHS scratch with the SAME layout (box array / distribution / ghosts) as @p u,
-  /// so the subsequent axpy(u, ., r) combines identical layouts. Records the allocation into the
-  /// scratch peak-memory counters (no-op when profiling is off); scratch_state_like forwards here, so
-  /// every stage / rhs scratch is counted once at its single allocation site (ADC-459).
-  MultiFab rhs_scratch_like(const MultiFab& u) const {
-    MultiFab scratch(u.box_array(), u.dmap(), u.ncomp(), u.n_grow());
-    count_scratch(scratch);
-    return scratch;
-  }
-
-  /// A zero-initialized scratch STATE with the same layout as @p u: an intermediate stage state of a
-  /// multi-stage scheme (SSPRK/RK). Same allocation as rhs_scratch_like; named for the codegen's
-  /// intent. Starts at zero, so a stage `sum_i c_i V_i` is built by axpy-ing each term onto it.
-  MultiFab scratch_state_like(const MultiFab& u) const { return rhs_scratch_like(u); }
-
-  /// Context-owned scratch selected by the exact generated IR value and one local sub-slot.  Unlike
-  /// rhs_scratch_like(), this is the hot Program path: storage survives macro steps and is replaced
-  /// only when the prototype's complete distributed layout changes.  Acquisition restores the
-  /// historical zero-initialized-scratch semantics, so rejected attempts cannot leak provisional
-  /// bytes into a retry.  The registry belongs to this ProgramContext (and is shared only by copies
-  /// of that context); there is no process-global cache or Python fallback.
-  MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
-                                prototype.n_grow());
-  }
-
-  /// Persistent state-shaped counterpart of rhs_scratch().  A distinct kind namespace guarantees
-  /// that an IR node asking for both an RHS and a provisional state never aliases accidentally.
-  MultiFab& scratch_state(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::State, value_id, subslot, prototype, prototype.ncomp(),
-                                prototype.n_grow());
-  }
-
-  /// Persistent scalar/vector field on @p prototype's exact distributed mesh.  Component and ghost
-  /// widths are part of the authenticated layout, rather than inferred from a previous use of the
-  /// same node id.
-  MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
-                           int n_comp = 1, int n_ghost = 1) const {
-    if (n_comp < 1 || n_ghost < 0)
-      throw std::invalid_argument("Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
-    return program_scratch_for_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp, n_ghost);
-  }
-
-  /// u <- u + a r over the valid cells (linear combine; forwards to pops::saxpy).
-  void axpy(MultiFab& u, Real a, const MultiFab& r) const {
-    count_kernel();
-    if (const MultiFab* active_cells = active_domain_mask_())
-      pops::saxpy_active(u, a, r, *active_cells);
-    else
-      pops::saxpy(u, a, r);
-  }
-  void axpy(MultiFab& u, Real a, const MultiFab& r, Real /*dt*/,
-            std::initializer_list<ExactCoefficientTerm> /*exact*/) const {
-    axpy(u, a, r);
-  }
-
-  /// z <- a x + b y over the valid cells (assignment, not accumulation; z may alias x or y).
-  /// Forwards to pops::lincomb. The codegen uses it for the committed stage: the block state becomes
-  /// z = c_base * z + 1 * acc, where acc holds the non-base terms (self-alias z==x is safe).
-  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
-    count_kernel();
-    if (const MultiFab* active_cells = active_domain_mask_())
-      pops::lincomb_active(z, a, x, b, y, *active_cells);
-    else
-      pops::lincomb(z, a, x, b, y);
-  }
-  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real /*dt*/,
-               std::initializer_list<ExactCoefficientTerm> /*exact_a*/,
-               std::initializer_list<ExactCoefficientTerm> /*exact_b*/) const {
-    lincomb(z, a, x, b, y);
-  }
-
-  /// Publish a complete multi-state commit group only after every target/source pair validates.
-  /// A source may itself be another target (for example, an authored state permutation). Snapshot
-  /// those aliases before the first write so the group has simultaneous-assignment semantics.
-  /// The enclosing System step snapshot remains the exception-safety boundary for a publication
-  /// failure after validation.
-  void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
-    std::vector<MultiFab*> targets;
-    targets.reserve(commits.size());
-    for (const auto& [target, source] : commits) {
-      if (target == nullptr || source == nullptr)
-        throw std::invalid_argument("ProgramContext::commit_many received a null state");
-      if (std::find(targets.begin(), targets.end(), target) != targets.end())
-        throw std::invalid_argument("ProgramContext::commit_many received a duplicate target");
-      if (target->box_array().boxes() != source->box_array().boxes() ||
-          target->dmap().ranks() != source->dmap().ranks() || target->ncomp() != source->ncomp())
-        throw std::invalid_argument("ProgramContext::commit_many state layout mismatch");
-      targets.push_back(target);
-    }
-    const bool has_aliased_source =
-        std::any_of(commits.begin(), commits.end(), [&targets](const auto& commit) {
-          return commit.first != commit.second &&
-                 std::find(targets.begin(), targets.end(), commit.second) != targets.end();
-        });
-    if (!has_aliased_source) {
-      for (const auto& [target, source] : commits)
-        if (target != source)
-          lincomb(*target, Real(0), *target, Real(1), *source);
-      return;
-    }
-    std::vector<std::pair<MultiFab*, const MultiFab*>> prepared(commits);
-    std::vector<MultiFab> aliased_sources;
-    aliased_sources.reserve(prepared.size());
-    for (auto& [target, source] : prepared) {
-      if (target != source && std::find(targets.begin(), targets.end(), source) != targets.end()) {
-        // MultiFab owns SharedSpace buffers but its deep copy is a host access. Drain any
-        // provisional kernels before reading the source, and mark the clone for the device before
-        // the commit kernels consume it.
-        source->sync_host();
-        aliased_sources.emplace_back(*source);
-        aliased_sources.back().sync_device();
-        source = &aliased_sources.back();
-      }
-    }
-    for (const auto& [target, source] : prepared) {
-      if (target != source) {
-        lincomb(*target, Real(0), *target, Real(1), *source);
-        // The snapshots are function-local. Complete each consuming kernel before a later launch
-        // can fail and before the owning vector is destroyed.
-        device_fence();
-      }
-    }
-  }
-
   /// Register (idempotent) the history @p name with maximum lag @p lag, allocating the ring buffer
   /// WITHOUT reading it. The codegen emits this ONCE in the artifact-install prelude for each
   /// declared history, so a fresh restart sees the complete ring schema before the first step and
@@ -1197,176 +886,13 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->rotate_histories(clock_identity);
   }
 
-  /// @name Reductions (spec op 16)
-  /// COLLECTIVE reductions over one explicitly owned Program block.  The block owner selects the
-  /// runtime's prepared physical-cell measure: full valid cells on a Cartesian grid, the 0/1 active
-  /// mask for staircase geometry, and active cells weighted by kappa for cut-cell geometry.  Integral
-  /// reductions (sum/L1/L2/dot) use that relative volume; extrema ignore inactive storage and are not
-  /// volume-scaled.  The generated Program always uses these owner-qualified overloads.
-  /// @{
-  Real sum_component(int owner, const MultiFab& u, int comp) const {
-    return pops::reduce_sum(u, comp, relative_cell_measure_(owner));
-  }
-  Real max_component(int owner, const MultiFab& u, int comp) const {
-    return pops::reduce_max(u, comp, relative_cell_measure_(owner));
-  }
-  Real min_component(int owner, const MultiFab& u, int comp) const {
-    return pops::reduce_min(u, comp, relative_cell_measure_(owner));
-  }
-  Real abs_sum_component(int owner, const MultiFab& u, int comp) const {
-    return pops::reduce_abs_sum(u, comp, relative_cell_measure_(owner));
-  }
-  Real norm2(int owner, const MultiFab& u) const {
-    return std::sqrt(pops::dot(u, u, 0, relative_cell_measure_(owner)));
-  }
-  Real norm_inf(int owner, const MultiFab& u) const {
-    return pops::reduce_norm_inf(u, 0, relative_cell_measure_(owner));
-  }
-  Real dot(int owner, const MultiFab& left, const MultiFab& right) const {
-    return pops::dot(left, right, 0, relative_cell_measure_(owner));
-  }
-
-  Real sum(int owner, const MultiFab& u) const { return sum_component(owner, u, 0); }
-  Real max(int owner, const MultiFab& u) const { return max_component(owner, u, 0); }
-  Real min(int owner, const MultiFab& u) const { return min_component(owner, u, 0); }
-  Real abs_sum(int owner, const MultiFab& u) const { return abs_sum_component(owner, u, 0); }
-
-  /// Legacy hand-written Cartesian stages may omit the owner.  Under an embedded boundary these
-  /// overloads refuse before launching a kernel: silently assuming block 0 would bypass the exact
-  /// Program-to-System block map and make a multi-block Program's measure ambiguous.
-  Real sum_component(const MultiFab& u, int comp) const {
-    require_unqualified_reduction_safe_();
-    return pops::reduce_sum(u, comp);
-  }
-  Real max_component(const MultiFab& u, int comp) const {
-    require_unqualified_reduction_safe_();
-    return pops::reduce_max(u, comp);
-  }
-  Real min_component(const MultiFab& u, int comp) const {
-    require_unqualified_reduction_safe_();
-    return pops::reduce_min(u, comp);
-  }
-  Real abs_sum_component(const MultiFab& u, int comp) const {
-    require_unqualified_reduction_safe_();
-    return pops::reduce_abs_sum(u, comp);
-  }
-  Real sum(const MultiFab& u) const { return sum_component(u, 0); }
-  Real max(const MultiFab& u) const { return max_component(u, 0); }
-  Real min(const MultiFab& u) const { return min_component(u, 0); }
-  Real abs_sum(const MultiFab& u) const { return abs_sum_component(u, 0); }
-  /// @}
-
-  /// Fill the ghost cells (halos) of @p x in place: the transport BC (periodic by default), the SAME
-  /// exchange laplacian / gradient / divergence run internally before differencing (spec op 22). The
-  /// valid cells are untouched; only the halos change. Forwards to the shared pops::fill_ghosts.
-  void fill_boundary(MultiFab& x) const {
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(x, gc.geom.domain, gc.bc);
-  }
-
-  void fill_boundary(MultiFab& x, const ExecutionLane& lane) const {
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(x, gc.geom.domain, gc.bc, lane);
-  }
-
   /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the
   /// valid cells, the SAME Zhang-Shu / floor projection the native per-step path runs (ADC-177, spec
   /// op 21). REUSES the block's own projection closure (set at add_block time); a block WITHOUT a
   /// projection is rejected. Forwards to System::block_project -- it reimplements no positivity.
   void apply_projection(int b, MultiFab& u) const { sys_->block_project(sys_block(b), u); }
 
-  /// Apply every registered coupled-source operator to a complete simultaneous candidate-state
-  /// group.  Candidates remain private Program values until the caller projects and commit_many()
-  /// publishes them, so a failed coupling cannot expose a partially committed multi-block state.
-  void apply_coupling_operators(Real dt,
-                                std::initializer_list<CouplingStateOverride> candidates) const {
-    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
-      throw std::invalid_argument("Program coupling application requires a finite non-negative dt");
-    if (coupling_workspace_.in_use)
-      throw std::logic_error("Program coupling workspace is already in use");
-    prepare_coupling_workspace_(candidates);
-    struct WorkspaceUse {
-      bool& flag;
-      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
-      ~WorkspaceUse() { flag = false; }
-    } use(coupling_workspace_.in_use);
-    const std::size_t applied =
-        sys_->apply_coupling_operators(dt, coupling_workspace_.system_states);
-    count_kernel(static_cast<std::int64_t>(applied));
-  }
-
-  /// @name Scheduler value cache (Spec 3 section 17-18, ADC-458)
-  /// A held field-solve node recomputes only when DUE (every N macro-steps) and reuses the cached
-  /// System aux (phi / grad / E) in between. The cache is owned by the System (one CacheManager per
-  /// installed Program, keyed by the Program node id) so the checkpoint can reach it (Spec 3 section
-  /// 30); every ProgramContext copy forwards to that single manager via sys_->program_cache(). The
-  /// codegen wraps a held solve_fields in
-  /// ``if (schedule_decision(id, schedule_is_due(...), true)) {
-  ///  solve_fields_from_state(...); cache_store_aux(id); } else { cache_restore_aux(id); }``.
-  /// The runtime cadence/checkpoint is exercised in a compiled
-  /// .so step loop (validated on ROMEO; not buildable on a host-only Mac).
-  /// @{
-  /// True if node @p node_id is due to recompute at the current macro step: cold start (never stored),
-  /// then every @p every_n macro steps. Wraps CacheManager::is_due with System::macro_step().
-  ///
-  /// PROFILER scheduler counters (ADC-459, Spec 3 section 29): a DUE step recomputes the node (a cache
-  /// "miss" + a "due" scheduled node); a NOT-due step reuses the held value (a cache "hit" + a
-  /// "skipped" scheduled node). Counted here at the one decision point every scheduled node routes
-  /// through, gated on the profiler (zero cost when off). These move only under the compiled .so step
-  /// loop that exercises a held schedule (validated on Kokkos/ROMEO, not buildable host-only).
-  bool cache_should_update(int node_id, int every_n) const {
-    const bool due = sys_->program_cache().is_due(node_id, sys_->macro_step(), every_n);
-    if (due) {
-      sys_->profiler().count("cache_misses");
-      sys_->profiler().count("nodes_due");
-    } else {
-      sys_->profiler().count("cache_hits");
-      sys_->profiler().count("nodes_skipped");
-    }
-    return due;
-  }
-  /// Store a copy of the System aux (the field solve's output) as node @p node_id's cached value,
-  /// stamped at the current macro step (resets its accumulated dt).
-  void cache_store_aux(int node_id) const {
-    sys_->program_cache().store(node_id, *sys_->grid_context().aux, sys_->macro_step());
-  }
-  /// Restore node @p node_id's cached aux into the System aux (a held step: no elliptic solve).
-  void cache_restore_aux(int node_id) const {
-    sys_->program_cache().restore_into(node_id, *sys_->grid_context().aux);
-  }
-
-  /// Store a copy of a NAMED scratch MultiFab (a held rhs / source / linear_combine output) as node
-  /// @p node_id's cached value, stamped at the current macro step. The aux variants cache the System
-  /// aux; this caches an arbitrary step-body scratch so ANY schedulable node can hold, not only a
-  /// field solve.
-  void cache_store_scratch(int node_id, const MultiFab& scratch) const {
-    sys_->program_cache().store(node_id, scratch, sys_->macro_step());
-  }
-  /// Restore node @p node_id's cached scratch into @p scratch (a held step: no recompute).
-  void cache_restore_scratch(int node_id, MultiFab& scratch) const {
-    sys_->program_cache().restore_into(node_id, scratch);
-  }
-  /// Add a skipped step's @p dt to node @p node_id's accumulator (accumulate_dt policy): on a NOT-due
-  /// step the held node does not recompute but records the dt so the next due step sees the full
-  /// skipped interval. Variable step_cfl safe (the actual skipped dt, not N * dt_current).
-  void cache_accumulate_dt(int node_id, Real dt) const {
-    sys_->program_cache().accumulate_dt(node_id, dt);
-  }
-  /// The effective dt a due accumulate_dt step applies: @p dt_now plus the summed skipped dt since the
-  /// last recompute (resets the accumulator). The codegen feeds this as the step's dt into the held
-  /// node's recompute so it advances over the whole skipped interval at once.
-  Real cache_effective_dt(int node_id, Real dt_now) const {
-    return sys_->program_cache().effective_dt(node_id, dt_now);
-  }
-  /// @}
-
  private:
-  struct CouplingWorkspace {
-    std::vector<int> program_to_system;
-    std::vector<MultiFab*> system_states;
-    bool in_use = false;
-  };
-
   struct FieldSolveWorkspace {
     std::vector<int> program_to_system;
     std::vector<const MultiFab*> program_stages;
@@ -1420,51 +946,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     std::map<std::int64_t, FieldSolveWorkspace> generated;
     FieldPublicationTransaction publication;
   };
-
-  void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
-    const std::vector<int>& block_map = sys_->program_block_map();
-    const std::size_t system_blocks = static_cast<std::size_t>(sys_->n_blocks());
-    if (block_map.empty())
-      throw block_map_error_(
-          "ProgramContext::apply_coupling_operators has no explicit program-to-system block map");
-    if (block_map.size() != system_blocks || candidates.size() != block_map.size())
-      throw std::invalid_argument(
-          "Program coupling requires a complete candidate pack for every System block");
-
-    const bool structure_changed = coupling_workspace_.program_to_system != block_map ||
-                                   coupling_workspace_.system_states.size() != system_blocks;
-    if (structure_changed) {
-      coupling_workspace_.system_states.assign(system_blocks, nullptr);
-      for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
-        const int system_block = sys_block(static_cast<int>(program_block));
-        MultiFab*& mapped =
-            coupling_workspace_.system_states[static_cast<std::size_t>(system_block)];
-        if (mapped != nullptr)
-          throw std::invalid_argument(
-              "Program coupling block map does not cover each System block exactly once");
-        // Non-null sentinel: authenticate uniqueness without a hot-path temporary allocation.
-        mapped = &sys_->block_state(system_block);
-      }
-      coupling_workspace_.program_to_system.assign(block_map.begin(), block_map.end());
-    }
-
-    std::fill(coupling_workspace_.system_states.begin(), coupling_workspace_.system_states.end(),
-              nullptr);
-    std::size_t ordinal = 0;
-    for (const CouplingStateOverride& candidate : candidates) {
-      if (candidate.program_block != static_cast<int>(ordinal) || candidate.state == nullptr)
-        throw std::invalid_argument(
-            "Program coupling candidates must be non-null and ordered by Program block");
-      require_program_stage_layout_(candidate.program_block, *candidate.state);
-      const int system_block =
-          coupling_workspace_.program_to_system[static_cast<std::size_t>(candidate.program_block)];
-      if (candidate.state == &sys_->block_state(system_block))
-        throw std::invalid_argument(
-            "Program coupling candidates cannot alias accepted live states");
-      coupling_workspace_.system_states[static_cast<std::size_t>(system_block)] = candidate.state;
-      ++ordinal;
-    }
-  }
 
   void capture_field_publication_(FieldPublicationTransaction& transaction) const {
     // SystemFieldSolver's uniform reductions use MPI_COMM_WORLD, so this transaction must
@@ -1746,8 +1227,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->solve_fields_from_blocks_in_place_(field, workspace.system_stages);
   }
 
-  enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
-
   struct ScratchKey {
     ScratchKind kind = ScratchKind::Rhs;
     std::int64_t value_id = -1;
@@ -1791,55 +1270,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return field;
   }
 
-  RelativeCellMeasure relative_cell_measure_(int owner) const {
-    const GridContext context = sys_->grid_context(sys_block(owner));
-    if (context.embedded_boundary_set == nullptr || !*context.embedded_boundary_set ||
-        context.geometry_mode == nullptr || *context.geometry_mode == GeometryMode::None)
-      return {};
-    if (context.domain_mask == nullptr)
-      throw std::runtime_error(
-          "ProgramContext physical reduction has no prepared active-cell mask");
-    if (*context.geometry_mode == GeometryMode::CutCell) {
-      if (context.eb_inverse_volume_fraction == nullptr)
-        throw std::runtime_error(
-            "ProgramContext cut-cell reduction has no prepared inverse volume fraction");
-      return {context.domain_mask, context.eb_inverse_volume_fraction};
-    }
-    return {context.domain_mask, nullptr};
-  }
-
-  void require_unqualified_reduction_safe_() const {
-    const GridContext context = sys_->grid_context();
-    if (context.embedded_boundary_set != nullptr && *context.embedded_boundary_set &&
-        context.geometry_mode != nullptr && *context.geometry_mode != GeometryMode::None)
-      throw std::runtime_error(
-          "ProgramContext embedded-boundary reduction requires an explicit Program block owner");
-  }
-
-  const MultiFab* active_domain_mask_() const {
-    const GridContext context = sys_->grid_context();
-    if (context.embedded_boundary_set != nullptr && *context.embedded_boundary_set &&
-        context.geometry_mode != nullptr && *context.geometry_mode != GeometryMode::None) {
-      if (context.domain_mask == nullptr)
-        throw std::runtime_error(
-            "ProgramContext embedded-boundary algebra has no prepared active-cell mask");
-      return context.domain_mask;
-    }
-    return nullptr;
-  }
-
-  static void require_rate_identity_(int rate_id) {
-    if (rate_id < 0)
-      throw std::invalid_argument(
-          "Program rate evaluation requires a non-negative authored node identity");
-  }
-
-  static void require_group_identity_(int group_id) {
-    if (group_id < 0)
-      throw std::invalid_argument(
-          "Program RHS group requires a non-negative authored group identity");
-  }
-
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
@@ -1856,10 +1286,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                 stage_time_.value() * current_dt_};
   }
 
-  static std::runtime_error block_map_error_(std::string message) {
-    return std::runtime_error(std::move(message));
-  }
-
   static SolveReport consume_field_outcome_(SolveOutcome outcome) {
     return outcome.consume(outcome.report().solved_value_available()
                                ? SolveConsumption::kAccept
@@ -1867,16 +1293,99 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                       ? SolveConsumption::kRejectAttempt
                                       : SolveConsumption::kFailRun));
   }
-
-  [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,
-                                                      const char* detail) {
-    if (report.action == SolveAction::kRejectAttempt)
-      throw StepAttemptRejected(report.status, "prepared field evaluation", detail);
-    throw std::runtime_error(std::string("prepared field evaluation failed: ") +
-                             report.status_name() + " (" + detail + ")");
-  }
-
   friend class ProgramExecutionServices<ProgramContext>;
+  struct LogicalEvaluationRollback {
+    double parent_dt = 0.0;
+    amr::Rational stage{0, 1};
+    amr::Rational phase_begin{0, 1};
+    amr::Rational phase_span{1, 1};
+    double physical_time_offset = 0.0;
+  };
+
+  GridContext program_execution_default_grid_context_() const { return sys_->grid_context(); }
+  GridContext program_execution_block_grid_context_(int owner) const {
+    return sys_->grid_context(sys_block(owner));
+  }
+  MultiFab& program_execution_state_(int runtime_block) const {
+    return sys_->block_state(runtime_block);
+  }
+  MultiFab program_execution_alloc_scalar_field_(int n_comp, int n_ghost) const {
+    return sys_->alloc_scalar_field(n_comp, n_ghost);
+  }
+  std::size_t program_execution_apply_coupling_(
+      Real dt, const std::vector<MultiFab*>& runtime_states) const {
+    return sys_->apply_coupling_operators(dt, runtime_states);
+  }
+  CacheManager& program_execution_cache_(SchedulerCacheOperation /*operation*/) const {
+    return sys_->program_cache();
+  }
+  ProgramResourceTopology program_execution_resource_topology_() const noexcept {
+    return {0, 0, 1};
+  }
+  int program_execution_resource_level_() const noexcept { return 0; }
+  void program_execution_select_resource_level_(int /*level*/) const noexcept {}
+  ProgramResourceStorage program_execution_resource_storage_() const noexcept {
+    return {PreparedVectorDistribution::Distributed, FieldDistribution::Distributed, 0};
+  }
+  std::vector<Real> program_execution_resource_cell_measures_() const {
+    const Geometry geometry = sys_->grid_context().geom;
+    return {geometry.dx() * geometry.dy()};
+  }
+  void program_execution_publish_axpy_(MultiFab&, Real, const MultiFab&) const noexcept {}
+  void program_execution_publish_exact_axpy_(
+      MultiFab&, Real, const MultiFab&, Real,
+      std::initializer_list<ExactCoefficientTerm>) const noexcept {}
+  void program_execution_publish_lincomb_(MultiFab&, Real, const MultiFab&, Real,
+                                          const MultiFab&) const noexcept {}
+  void program_execution_publish_exact_lincomb_(
+      MultiFab&, Real, const MultiFab&, Real, const MultiFab&, Real,
+      std::initializer_list<ExactCoefficientTerm>,
+      std::initializer_list<ExactCoefficientTerm>) const noexcept {}
+
+  double program_execution_logical_parent_dt_() const noexcept { return current_dt_; }
+  LogicalEvaluationRollback program_execution_capture_logical_evaluation_() const noexcept {
+    return {current_dt_, stage_time_, logical_phase_begin_, logical_phase_span_,
+            logical_physical_time_offset_};
+  }
+  void program_execution_apply_logical_evaluation_(
+      const LogicalEvaluationInterval& interval) const {
+    const double child_offset =
+        logical_physical_time_offset_ + static_cast<double>(interval.iteration) * interval.child_dt;
+    if (!std::isfinite(child_offset))
+      throw std::overflow_error("Program logical evaluation child window is not finite");
+    const amr::Rational child_span = logical_phase_span_ * interval.child_span;
+    const amr::Rational child_begin =
+        logical_phase_begin_ + logical_phase_span_ * interval.child_begin;
+
+    invalidate_active_operator_snapshot_();
+    current_dt_ = interval.child_dt;
+    stage_time_ = amr::Rational(0, 1);
+    logical_phase_begin_ = child_begin;
+    logical_phase_span_ = child_span;
+    logical_physical_time_offset_ = child_offset;
+  }
+  void program_execution_restore_logical_evaluation_(
+      const LogicalEvaluationRollback& rollback) const noexcept {
+    current_dt_ = rollback.parent_dt;
+    stage_time_ = rollback.stage;
+    logical_phase_begin_ = rollback.phase_begin;
+    logical_phase_span_ = rollback.phase_span;
+    logical_physical_time_offset_ = rollback.physical_time_offset;
+    invalidate_active_operator_snapshot_();
+  }
+  SolveReport program_execution_solve_fields_from_state_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int block, MultiFab& state) const {
+    return consume_field_outcome_(solve_fields_from_state_at(point, provider_slot, block, state));
+  }
+  MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
+                                       const MultiFab& prototype, int n_comp, int n_ghost) const {
+    return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
+  }
+  void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
+  void program_execution_commit_copy_(MultiFab& target, const MultiFab& source) const {
+    lincomb(target, Real(0), target, Real(1), source);
+  }
   const std::vector<int>& program_execution_block_map_() const { return sys_->program_block_map(); }
   int program_execution_block_count_() const { return sys_->n_blocks(); }
   Real program_execution_physical_time_() const { return static_cast<Real>(sys_->time()); }
@@ -1913,9 +1422,13 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
       std::make_shared<FieldSolveWorkspaceRegistry>();
-  mutable CouplingWorkspace coupling_workspace_;
   mutable std::shared_ptr<ScratchRegistry> scratch_registry_ = std::make_shared<ScratchRegistry>();
   System* sys_;
+};
+
+template <>
+struct ProgramExecutionProviderFor<System> {
+  using type = ProgramContext;
 };
 
 }  // namespace program
