@@ -72,12 +72,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
  public:
   explicit ProgramContext(System* sys) : sys_(sys) {}
 
-  /// Register the macro-step body. @p step advances ONE macro-step over dt (it owns solve_fields,
-  /// the RHS, the linear combine and the commit). An empty std::function is rejected.
-  void install(std::function<void(double)> step) const {
-    sys_->install_program_step(std::move(step));
-  }
-
   /// Start one generated Program body.  The native stepper supplies the accepted local dt; every
   /// boundary evaluation in the body derives its physical time from this exact value and the
   /// authored rational stage fraction.
@@ -651,14 +645,11 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                 stage_time_.value() * current_dt_};
   }
 
-  static SolveReport consume_field_outcome_(SolveOutcome outcome) {
-    return outcome.consume(outcome.report().solved_value_available()
-                               ? SolveConsumption::kAccept
-                               : (outcome.report().action == SolveAction::kRejectAttempt
-                                      ? SolveConsumption::kRejectAttempt
-                                      : SolveConsumption::kFailRun));
-  }
   friend class ProgramExecutionServices<ProgramContext>;
+
+  void program_execution_install_(std::function<void(double)> step) const {
+    sys_->install_program_step(std::move(step));
+  }
 
   runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
       int stage_id) const {

@@ -36,6 +36,7 @@ SHARED_SIGNATURES = (
     "struct HistoryStorePlan",
     "struct ProgramResourceStorage",
     "struct ProgramResourceTopology",
+    "void install(std::function<void(double)> step)",
     "SolveOutcome solve_fields()",
     "SolveOutcome solve_fields_from_state_at(",
     "struct LogicalEvaluationInterval",
@@ -124,6 +125,7 @@ SHARED_SIGNATURES = (
     "static void require_rate_identity_(",
     "static void require_group_identity_(",
     "static std::runtime_error block_map_error_(",
+    "static SolveReport consume_field_outcome_(",
     "RelativeCellMeasure relative_cell_measure_(",
     "void require_unqualified_reduction_safe_(",
     "const MultiFab* active_domain_mask_(",
@@ -273,6 +275,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
         assert "friend class ProgramExecutionServices<%s>;" % context in source
         for hook in (
             "program_execution_logical_parent_dt_",
+            "program_execution_install_",
             "program_execution_boundary_point_",
             "program_execution_rhs_into_",
             "program_execution_has_boundary_linearization_",
