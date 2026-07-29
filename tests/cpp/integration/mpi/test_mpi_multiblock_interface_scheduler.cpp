@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -110,9 +111,13 @@ bool field_is_zero(const MultiFab& field) {
 int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
   comm_init(&argc, &argv);
   long failures = 0;
-  const auto require = [&failures](bool condition) {
-    if (!condition)
+  const auto require = [&failures](bool condition, const std::source_location where =
+                                                       std::source_location::current()) {
+    if (!condition) {
       ++failures;
+      std::cerr << "rank " << my_rank() << ": failed requirement at " << where.file_name() << ':'
+                << where.line() << '\n';
+    }
   };
 
   {
@@ -310,6 +315,8 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
         AmrRuntimeBlock block =
             detail::dispatch_amr_block(scalar_model(), "none", "rusanov", amr_layout, name,
                                        std::vector<double>(16, 1.0), true, 1.4, 1, false, 1);
+        block.state_identity =
+            std::string("test://mpi-three-level-interface/block/") + name + "/state/U";
         const auto omit_local_interface = [](MultiFab&, const MultiFab&, const Geometry&,
                                              MultiFab& fx, MultiFab& fy, MultiFab& rhs) {
           fx.set_val(Real(0));
@@ -409,7 +416,7 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       const std::uint64_t accepted_epoch = amr_runtime.topology_epoch();
       const auto accepted_counts = amr_evaluator_calls;
       amr_runtime.set_clustering(/*min_efficiency=*/1.0, /*min_box_size=*/1,
-                                 /*max_box_size=*/8);
+                                 /*max_box_size=*/4);
       test::install_prepared_threshold_union(amr_runtime, {{0, 0, Real(0.5)}, {1, 0, Real(0.5)}},
                                              "test::mpi-dynamic-interface-finest@1");
       amr_runtime.require_restart_regrid_supported();
