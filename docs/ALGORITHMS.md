@@ -672,8 +672,9 @@ Lie/Strang endpoints and explicit field-solve placement.
 ## 7. Test-only multirate reference formulas
 
 **Scope.** This section records historical formulas retained only by
-`tests/cpp/support/reference_system_driver.hpp`. They are not installed PoPS code and cannot become a
-production time engine. `System` and `AmrSystem` execute only their installed `ProgramGraph`;
+`tests/cpp/support/reference_time_scheduler.hpp` and
+`tests/cpp/support/reference_system_driver.hpp`. They are not installed PoPS code and cannot become
+a production time engine. `System` and `AmrSystem` execute only their installed `ProgramGraph`;
 production subcycling, holds, catch-up, and adaptive-step placement must be authored as typed Program
 composition.
 
@@ -766,14 +767,16 @@ function step_cfl(cfl):                           # choix du macro-pas par CFL
 
 ```
 
-**Code.** The skeleton is [`numerics/time/scheduler.hpp`](../include/pops/numerics/time/schemes/scheduler.hpp),
-function `advance_subcycled` (two overloads: with and without `macro_step`). Only the test oracle
-composes it into a complete temporal driver. It reads
-`block_substeps_v`, `block_stride_v` and `block_time_treatment_v`, aliases of `TimePolicyTraits`
-defined in [`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)
+**Code.** The skeleton is
+[`reference_time_scheduler.hpp`](../tests/cpp/support/reference_time_scheduler.hpp), function
+`pops::test_support::advance_subcycled` (two overloads: with and without `macro_step`). It is
+deliberately outside the installed headers and only the test oracle composes it into a complete
+temporal driver. It reads `reference_block_substeps_v`, `reference_block_stride_v` and
+`reference_block_time_treatment_v`, test-only aliases of `TimePolicyTraits` defined in
+[`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)
 (`TimePolicy<Method, Treatment, substeps, stride>`, aliases `ExplicitTime` / `ImplicitTime` /
 `IMEXTime` / `PrescribedTime`). A `TimeTreatment::Prescribed` block is skipped (the guard
-`!= Prescribed`). The step choice lives in
+`!= Prescribed`). The production step choice lives in
 [`runtime/system_program_driver.hpp`](../include/pops/runtime/system/system_program_driver.hpp): `step_cfl` computes
 the bound, then dispatches the installed normalized graph. Its internal
 `run_program_cadence` mechanically interprets the graph-authored whole-Program cadence
