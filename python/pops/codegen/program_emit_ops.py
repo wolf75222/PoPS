@@ -190,10 +190,6 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 raise NotImplementedError(
                     "history synchronization capability %r has no native lowering; "
                     "supported capability: LinearInterpolation()" % capability)
-            if target != "system":
-                raise NotImplementedError(
-                    "LinearInterpolation native lowering is Uniform-only; AMR retained-history "
-                    "timestamps require the complete hierarchy restart contract")
             if source.op != "history":
                 raise ValueError(
                     "LinearInterpolation native lowering requires one retained history value")
@@ -232,7 +228,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         else:
             raise NotImplementedError(
                 "synchronization provider %r has no native lowering; supported provider: "
-                "SampleAndHold() or Uniform LinearInterpolation()" % relation)
+                "SampleAndHold() or LinearInterpolation()" % relation)
     elif v.op == "solve_fields":
         # Per-stage field solve: the callable Case field operator re-solves phi from THIS
         # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the
