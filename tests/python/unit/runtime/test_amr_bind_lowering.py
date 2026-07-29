@@ -47,13 +47,35 @@ def test_frozen_two_level_capacity_installs_only_the_materialized_coarse_level()
         NativeHierarchyProbe(), ResolvedHierarchyProbe()) == (0,)
 
 
-def test_refined_shared_interface_bind_rejects_only_multi_rank_execution() -> None:
+def test_refined_shared_interface_bind_accepts_exact_mpi_world() -> None:
     mpi = {"communicator_identity": "MPI_COMM_WORLD"}
     _validate_refined_shared_interface_execution((0,), mpi, 2)
     _validate_refined_shared_interface_execution((0, 1), mpi, 1)
+    _validate_refined_shared_interface_execution((0, 1), mpi, 2)
 
-    with pytest.raises(NotImplementedError, match="serial-only"):
-        _validate_refined_shared_interface_execution((0, 1), mpi, 2)
+
+def test_dynamic_refined_shared_interface_bind_remains_serial() -> None:
+    with pytest.raises(NotImplementedError, match="rematerialization"):
+        _validate_refined_shared_interface_execution(
+            (0, 1),
+            {"communicator_identity": "MPI_COMM_WORLD"},
+            2,
+            dynamic_regrid=True,
+        )
+
+
+def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> None:
+    with pytest.raises(ValueError, match="contiguous L0 prefix"):
+        _validate_refined_shared_interface_execution((), {}, 1)
+    with pytest.raises(ValueError, match="contiguous L0 prefix"):
+        _validate_refined_shared_interface_execution((0, 2), {}, 1)
+    with pytest.raises(TypeError, match="exact bool"):
+        _validate_refined_shared_interface_execution(
+            (0, 1), {"communicator_identity": "serial"}, 1, dynamic_regrid=1
+        )
+    with pytest.raises(TypeError, match="serial or exact MPI_COMM_WORLD"):
+        _validate_refined_shared_interface_execution(
+            (0, 1), {"communicator_identity": "MPI_COMM_SELF"}, 1)
 
 
 def test_native_amr_grid_preserves_none_or_all_periodic_axes() -> None:

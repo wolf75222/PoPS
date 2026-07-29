@@ -184,6 +184,206 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
             }
       }
 
+      // The same prepared scheduler owns the L0 and L1 collective routes. Publishing the refined
+      // canonical flux fragment proves that MPI execution does not fall back to two independent
+      // endpoint fluxes when the Program ledger qualifies the fine side of L0/L1.
+      const Box2D fine_left_domain = left_domain.refine(2);
+      const Box2D fine_right_domain = right_domain.refine(2);
+      const BoxArray fine_left_boxes(std::vector<Box2D>{{{0, 0}, {3, 3}}, {{0, 4}, {3, 7}}});
+      const BoxArray fine_right_boxes(std::vector<Box2D>{{{4, 0}, {7, 3}}, {{4, 4}, {7, 7}}});
+      MultiFab fine_left_state(fine_left_boxes, left_owners, 2, 0);
+      MultiFab fine_right_state(fine_right_boxes, right_owners, 2, 0);
+      MultiFab fine_left_rhs(fine_left_boxes, left_owners, 2, 0);
+      MultiFab fine_right_rhs(fine_right_boxes, right_owners, 2, 0);
+      fine_left_rhs.set_val(Real(0));
+      fine_right_rhs.set_val(Real(0));
+      initialize_left(fine_left_state);
+      initialize_right(fine_right_state, route.right_component_for_left);
+
+      AxisAlignedInterface fine_route = route;
+      fine_route.identity = "mpi-two-rank.refined-shared-flux";
+      fine_route.level = 1;
+      const Geometry fine_left_geometry = left_geometry.refine(2);
+      const Geometry fine_right_geometry = right_geometry.refine(2);
+      const BoundaryEvaluationPoint fine_point{"clock.mpi-interface", 4,     1,     0, 2,
+                                               amr::Rational(1, 2),   0.125, 0.3125};
+      int fine_evaluator_calls = 0;
+      bool fine_traces_complete = true;
+      scheduler.install(
+          fine_route, fine_left_state, fine_left_geometry, fine_right_state, fine_right_geometry,
+          execution,
+          [&](const BoundaryEvaluationPoint& actual_point, const InterfaceFluxBatch& batch) {
+            ++fine_evaluator_calls;
+            fine_traces_complete = fine_traces_complete && actual_point == fine_point &&
+                                   batch.face_count == 8 && batch.component_count == 2;
+            for (int face = 0; face < batch.face_count; ++face)
+              for (int component = 0; component < batch.component_count; ++component) {
+                const std::size_t offset =
+                    static_cast<std::size_t>(face) * 2 + static_cast<std::size_t>(component);
+                fine_traces_complete = fine_traces_complete &&
+                                       batch.left_state[offset] == left_value(face, component) &&
+                                       batch.right_state[offset] == right_value(face, component);
+                batch.shared_flux[offset] = shared_flux(face, component);
+              }
+          });
+      InterfaceFluxFragmentLedger fine_ledger(19);
+      fine_ledger.begin();
+      const amr::ClockWindow fine_interval{{1, 4, amr::Rational(0, 1), 0.25},
+                                           {1, 4, amr::Rational(1, 1), 0.375}};
+      const amr::ClockStamp fine_clock{1, 4, amr::Rational(1, 2), 0.3125};
+      InterfaceFluxFragmentPublication fine_publication{
+          &fine_ledger,       19, 0, 1, fine_clock, "program.group.refined-mpi", fine_interval,
+          amr::Rational(1, 1)};
+      std::vector<MultiFab*> fine_states{&fine_left_state, &fine_right_state};
+      std::vector<MultiFab*> fine_rhs{&fine_left_rhs, &fine_right_rhs};
+      scheduler.apply(fine_point, fine_states, fine_rhs, &fine_publication);
+
+      require(fine_evaluator_calls == 1);
+      require(fine_traces_complete);
+      require(scheduler.size() == 2u);
+      require(scheduler.evaluation_count(route.identity, 0) == 1u);
+      require(scheduler.evaluation_count(fine_route.identity, 1) == 1u);
+      require(fine_ledger.pending_size() == 1u);
+      fine_ledger.commit();
+      require(fine_ledger.published_size() == 1u);
+      const auto& fine_fragment = fine_ledger.published_entries().front();
+      require(fine_fragment.key.interface_identity == fine_route.identity);
+      require(fine_fragment.key.coarse_level == 0 && fine_fragment.key.fine_level == 1);
+      require(fine_fragment.key.clock.level == 1);
+      require(fine_fragment.key.orientation == amr::InterfaceFluxOrientation::FineOutward);
+      require(fine_fragment.payload.size() == 16u);
+      for (int face = 0; face < 8; ++face)
+        for (int component = 0; component < 2; ++component) {
+          const std::size_t offset =
+              static_cast<std::size_t>(face) * 2u + static_cast<std::size_t>(component);
+          require(fine_fragment.payload[offset] == shared_flux(face, component));
+        }
+      require(!field_is_zero(fine_left_rhs) && !field_is_zero(fine_right_rhs));
+      require(fine_left_domain == fine_left_state.box_array().bounding_box());
+      require(fine_right_domain == fine_right_state.box_array().bounding_box());
+
+      fine_left_rhs.set_val(Real(0));
+      fine_right_rhs.set_val(Real(0));
+      InterfaceFluxFragmentLedger divergent_publication_ledger(20);
+      divergent_publication_ledger.begin();
+      InterfaceFluxFragmentPublication divergent_publication{
+          &divergent_publication_ledger,
+          20,
+          0,
+          1,
+          fine_clock,
+          my_rank() == 0 ? "program.group.rank-zero" : "program.group.rank-one",
+          fine_interval,
+          amr::Rational(1, 1)};
+      bool divergent_publication_rejected = false;
+      try {
+        scheduler.apply(fine_point, fine_states, fine_rhs, &divergent_publication);
+      } catch (const std::runtime_error& error) {
+        divergent_publication_rejected =
+            std::string(error.what()).find("fragment publication differs") != std::string::npos;
+      }
+      require(divergent_publication_rejected);
+      require(fine_evaluator_calls == 1);
+      require(divergent_publication_ledger.pending_size() == 0u);
+      require(field_is_zero(fine_left_rhs) && field_is_zero(fine_right_rhs));
+      divergent_publication_ledger.rollback();
+
+      InterfaceFluxFragmentLedger sparse_publication_ledger(21);
+      sparse_publication_ledger.begin();
+      InterfaceFluxFragmentPublication sparse_publication{&sparse_publication_ledger,
+                                                          21,
+                                                          0,
+                                                          1,
+                                                          fine_clock,
+                                                          "program.group.sparse-publication",
+                                                          fine_interval,
+                                                          amr::Rational(1, 1)};
+      bool sparse_publication_rejected = false;
+      try {
+        scheduler.apply(fine_point, fine_states, fine_rhs,
+                        my_rank() == 0 ? &sparse_publication : nullptr);
+      } catch (const std::runtime_error& error) {
+        sparse_publication_rejected =
+            std::string(error.what()).find("publication presence differs") != std::string::npos;
+      }
+      require(sparse_publication_rejected);
+      require(fine_evaluator_calls == 1);
+      require(sparse_publication_ledger.pending_size() == 0u);
+      require(field_is_zero(fine_left_rhs) && field_is_zero(fine_right_rhs));
+      sparse_publication_ledger.rollback();
+
+      InterfaceFluxFragmentLedger divergent_transaction_ledger(22);
+      divergent_transaction_ledger.begin();
+      if (my_rank() == 0)
+        divergent_transaction_ledger.begin();
+      InterfaceFluxFragmentPublication divergent_transaction_publication{
+          &divergent_transaction_ledger,
+          22,
+          0,
+          1,
+          fine_clock,
+          "program.group.divergent-transaction",
+          fine_interval,
+          amr::Rational(1, 1)};
+      bool divergent_transaction_rejected = false;
+      try {
+        scheduler.apply(fine_point, fine_states, fine_rhs, &divergent_transaction_publication);
+      } catch (const std::runtime_error& error) {
+        divergent_transaction_rejected =
+            std::string(error.what()).find("fragment publication differs") != std::string::npos;
+      }
+      require(divergent_transaction_rejected);
+      require(fine_evaluator_calls == 1);
+      require(divergent_transaction_ledger.pending_size() == 0u);
+      require(field_is_zero(fine_left_rhs) && field_is_zero(fine_right_rhs));
+      if (my_rank() == 0)
+        divergent_transaction_ledger.rollback();
+      divergent_transaction_ledger.rollback();
+
+      // Even if an externally constructed replicated ledger has already diverged behind identical
+      // transaction coordinates, one rank-local duplicate cannot let a peer scatter/publish alone.
+      // The enclosing attempt then rolls both ledgers back to their common savepoint.
+      InterfaceFluxFragmentLedger accumulation_failure_ledger(23);
+      accumulation_failure_ledger.begin();
+      amr::InterfaceFluxFragmentKey existing_key{
+          fine_route.identity,
+          23,
+          0,
+          1,
+          fine_clock,
+          my_rank() == 0 ? "program.group.duplicate" : "program.group.other",
+          fine_interval,
+          amr::InterfaceFluxOrientation::FineOutward,
+          fine_route.left_block,
+          fine_route.right_block};
+      accumulation_failure_ledger.accumulate(std::move(existing_key),
+                                             {amr::Rational(1, 1), 0.125, 0.125},
+                                             InterfaceFluxFragmentPayload(16, Real(0)));
+      InterfaceFluxFragmentPublication accumulation_failure_publication{
+          &accumulation_failure_ledger,
+          23,
+          0,
+          1,
+          fine_clock,
+          "program.group.duplicate",
+          fine_interval,
+          amr::Rational(1, 1)};
+      bool accumulation_failure_rejected = false;
+      try {
+        scheduler.apply(fine_point, fine_states, fine_rhs, &accumulation_failure_publication);
+      } catch (const std::runtime_error& error) {
+        const std::string message(error.what());
+        accumulation_failure_rejected =
+            message.find("duplicate stage/clock fragment identity") != std::string::npos ||
+            message.find("accumulation failed on another MPI rank") != std::string::npos;
+      }
+      require(accumulation_failure_rejected);
+      require(fine_evaluator_calls == 2);
+      require(scheduler.evaluation_count(fine_route.identity, 1) == 1u);
+      require(field_is_zero(fine_left_rhs) && field_is_zero(fine_right_rhs));
+      accumulation_failure_ledger.rollback();
+      require(accumulation_failure_ledger.pending_size() == 0u);
+
       left_rhs.set_val(Real(0));
       right_rhs.set_val(Real(0));
 

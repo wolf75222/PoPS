@@ -377,12 +377,16 @@ def _validate_refined_shared_interface_execution(
     levels: tuple[int, ...],
     execution_data: dict[str, Any],
     rank_count: int,
+    *,
+    dynamic_regrid: bool = False,
 ) -> None:
-    """Keep bind honest while refined interface-fragment publication is serial-only."""
-    if levels not in ((0,), (0, 1)):
-        raise ValueError("shared-interface materialized levels must be the prefix L0 or L0/L1")
+    """Require one contiguous materialized prefix on the selected communicator."""
+    if not levels or levels != tuple(range(len(levels))):
+        raise ValueError("shared-interface materialized levels must be a contiguous L0 prefix")
     if type(rank_count) is not int or rank_count < 1:
         raise RuntimeError("native shared-interface rank count must be a positive integer")
+    if type(dynamic_regrid) is not bool:
+        raise TypeError("shared-interface dynamic_regrid must be an exact bool")
     communicator = execution_data.get("communicator_identity")
     if communicator == "serial":
         if rank_count != 1:
@@ -391,10 +395,9 @@ def _validate_refined_shared_interface_execution(
         return
     if communicator != "MPI_COMM_WORLD":
         raise TypeError("shared-interface execution requires serial or exact MPI_COMM_WORLD")
-    if len(levels) > 1 and rank_count > 1:
+    if dynamic_regrid and len(levels) > 1 and rank_count > 1:
         raise NotImplementedError(
-            "refined AMR shared-interface fragment publication is currently serial-only; "
-            "MPI_COMM_WORLD with multiple ranks is rejected during bind")
+            "dynamic refined shared-interface rematerialization is not yet proven on MPI")
 
 
 def finalize_runtime_authorities(
@@ -500,7 +503,7 @@ def finalize_runtime_authorities(
         from pops import _pops
 
         _validate_refined_shared_interface_execution(
-            levels, execution_data, _pops.n_ranks())
+            levels, execution_data, _pops.n_ranks(), dynamic_regrid=dynamic_two_level)
         if complete and dynamic_two_level and levels != (0, 1):
             raise NotImplementedError(
                 "dynamic two-level shared interfaces require both levels materialized at bind; "
