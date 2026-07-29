@@ -3135,10 +3135,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
     if (capturing()) {
       const bool has_interfaces = eng_->has_level_interfaces(level_);
-      if (has_interfaces && nlev() != 2)
-        deferred_op("refined_shared_block_interfaces",
-                    "shared block interface-fragment publication currently requires exactly two "
-                    "fixed hierarchy levels");
       if (has_interfaces)
         register_interface_flux_group_(batch.group_id, batch.runtime_blocks, batch.rate_ids);
       const auto group_point = boundary_point_(batch.group_id);
