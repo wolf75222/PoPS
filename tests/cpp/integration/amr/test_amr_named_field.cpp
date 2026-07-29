@@ -923,9 +923,26 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
   runtime.set_field_logical_timepoint(
       "a_potential", FieldLogicalTimePoint{Real(0.25), Real(0.01), 1, 0, 2, 3, 1, 0});
 
+  const SolveReport initial_report = consume_expected_solved(runtime.solve_named_fields());
+  ASSERT_TRUE(initial_report.solved()) << initial_report.reason;
+  std::vector<MultiFab> accepted_driver;
+  std::vector<MultiFab> accepted_potential;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    accepted_driver.push_back(runtime.provider_potential_level("z_driver", level));
+    accepted_potential.push_back(runtime.provider_potential_level("a_potential", level));
+  }
+
   const std::string selected = "a_potential";
   EXPECT_THROW((void)runtime.solve_named_fields(&selected), std::runtime_error)
-      << "a selected transaction must not reuse a stale field dependency";
+      << "a selected transaction must not reuse an already-published field dependency";
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("z_driver", level),
+                                    accepted_driver[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("a_potential", level),
+                                    accepted_potential[static_cast<std::size_t>(level)]),
+              Real(0));
+  }
 
   const SolveReport report = consume_expected_solved(runtime.solve_named_fields());
   ASSERT_TRUE(report.solved()) << report.reason;

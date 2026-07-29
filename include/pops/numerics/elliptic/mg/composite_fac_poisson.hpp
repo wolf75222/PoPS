@@ -19,9 +19,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -465,6 +468,9 @@ class CompositeFacPoisson {
   /// k >= 2 the fields live in the per-level vectors allocated by the N-level ctor.
   MultiFab& rhs_level(int k) { return k == 0 ? f_c_ : (k == 1 ? f_f_ : f_lv_[k - 2]); }
   MultiFab& phi_level(int k) { return k == 0 ? phi_c_ : (k == 1 ? phi_f_ : phi_lv_[k - 2]); }
+  const MultiFab& phi_level(int k) const {
+    return k == 0 ? phi_c_ : (k == 1 ? phi_f_ : phi_lv_[k - 2]);
+  }
   MultiFab& eps_level(int k) { return k == 0 ? eps_c_ : (k == 1 ? eps_f_ : eps_lv_[k - 2]); }
   MultiFab& eps_y_level(int k) {
     return k == 0 ? eps_y_c_ : (k == 1 ? eps_y_f_ : eps_y_lv_[k - 2]);
@@ -538,12 +544,35 @@ class CompositeFacPoisson {
   /// must be installed before solve(), even when only the coarse or fully refined physical boundary
   /// is active for a particular hierarchy shape.
   void set_boundary_context_at_level(int level, const FieldBoundaryExecutionContext& context) {
+    const long minimum_level = all_reduce_min(static_cast<long>(level));
+    const long maximum_level = all_reduce_max(static_cast<long>(level));
+    const long minimum_level_count = all_reduce_min(static_cast<long>(n_levels_));
+    const long maximum_level_count = all_reduce_max(static_cast<long>(n_levels_));
+    long preflight_error = 0;
     if (!has_boundary_kernel_)
-      throw std::runtime_error(
-          "CompositeFacPoisson level boundary context has no installed kernel");
+      preflight_error = 1;
     if (level < 0 || level >= n_levels_)
-      throw std::out_of_range(
-          "CompositeFacPoisson boundary context level is outside the prepared hierarchy");
+      preflight_error = std::max(preflight_error, 2L);
+    if (minimum_level != maximum_level)
+      preflight_error = std::max(preflight_error, 3L);
+    if (minimum_level_count != maximum_level_count)
+      preflight_error = std::max(preflight_error, 4L);
+    preflight_error = all_reduce_max(preflight_error);
+    if (preflight_error != 0) {
+      reset_pending_boundary_contexts_();
+      if (preflight_error == 1)
+        throw std::runtime_error(
+            "CompositeFacPoisson level boundary context has no installed kernel collectively");
+      if (preflight_error == 2)
+        throw std::out_of_range(
+            "CompositeFacPoisson boundary context level is outside the prepared hierarchy "
+            "collectively");
+      if (preflight_error == 4)
+        throw std::logic_error(
+            "CompositeFacPoisson prepared hierarchy depth differs between communicator ranks");
+      throw std::invalid_argument(
+          "CompositeFacPoisson boundary context level differs between communicator ranks");
+    }
 
     level_qualified_boundary_contexts_required_ = true;
     long validation_error = all_reduce_max(validate_level_boundary_context_local_(level, context));
@@ -559,13 +588,30 @@ class CompositeFacPoisson {
     staged.failure = &boundary_failure_;
     if (!boundary_kernel_.observes_iteration)
       staged.point.iteration = 0;
+    try {
+      require_exact_level_boundary_context_contract_(level, staged);
+    } catch (...) {
+      reset_pending_boundary_contexts_();
+      throw;
+    }
     pending_boundary_level_contexts_[static_cast<std::size_t>(level)] = staged;
     pending_boundary_level_context_present_[static_cast<std::size_t>(level)] = true;
     has_pending_level_qualified_boundary_contexts_ = true;
 
     bool candidate_complete = true;
-    for (bool present : pending_boundary_level_context_present_)
+    long pending_mask_divergence = 0;
+    for (bool present : pending_boundary_level_context_present_) {
       candidate_complete = candidate_complete && present;
+      const long minimum_present = all_reduce_min(present ? 1L : 0L);
+      const long maximum_present = all_reduce_max(present ? 1L : 0L);
+      if (minimum_present != maximum_present)
+        pending_mask_divergence = 1;
+    }
+    if (pending_mask_divergence != 0) {
+      reset_pending_boundary_contexts_();
+      throw std::logic_error(
+          "CompositeFacPoisson pending boundary carrier mask differs between communicator ranks");
+    }
     if (!candidate_complete)
       return;
 
@@ -593,24 +639,25 @@ class CompositeFacPoisson {
     const FieldBoundaryExecutionContext previous_finest =
         has_level_qualified_boundary_contexts_ ? boundary_context_for_level_(n_levels_ - 1)
                                                : boundary_context_;
-    bool finest_updated = false;
-    bool coarse_updated = false;
+    bool finest_refresh_attempted = false;
+    bool coarse_refresh_attempted = false;
     try {
       // Refresh the two solvers only after every carrier has passed one immutable batch preflight.
-      // Each GeometricMG setter stages allocations collectively and rolls itself back on failure.
+      // Mark a refresh before entering its setter: a late nonlinear-cache failure can occur after
+      // the setter has committed the new context, so rollback must not depend on normal return.
       if (fully_refined_solver_) {
+        finest_refresh_attempted = true;
         fully_refined_solver_->set_boundary_context(
             pending_boundary_level_contexts_[static_cast<std::size_t>(n_levels_ - 1)]);
-        finest_updated = true;
       }
+      coarse_refresh_attempted = true;
       mg_.set_boundary_context(pending_boundary_level_contexts_.front());
-      coarse_updated = true;
     } catch (...) {
       const std::exception_ptr refresh_error = std::current_exception();
       try {
-        if (coarse_updated)
+        if (coarse_refresh_attempted)
           mg_.set_boundary_context(previous_coarse);
-        if (finest_updated)
+        if (finest_refresh_attempted)
           fully_refined_solver_->set_boundary_context(previous_finest);
       } catch (...) {
         std::terminate();
@@ -1320,30 +1367,35 @@ class CompositeFacPoisson {
   [[nodiscard]] long validate_level_boundary_context_local_(
       int level, const FieldBoundaryExecutionContext& context) const {
     long validation_error = 0;
-    const auto validate_dependency_pack =
-        [&](const MultiFab* const* fields, const FieldDistribution* distributions, int count,
-            long incomplete_code, long layout_code, long distribution_code) {
-          if (count < 0 || (count > 0 && (fields == nullptr || distributions == nullptr))) {
-            validation_error = std::max(validation_error, incomplete_code);
-            return;
-          }
-          const MultiFab& layout = phi_level(level);
-          for (int index = 0; index < count; ++index) {
-            const MultiFab* dependency = fields[index];
-            if (dependency == nullptr ||
-                dependency->box_array().boxes() != layout.box_array().boxes() ||
-                dependency->dmap().ranks() != layout.dmap().ranks())
-              validation_error = std::max(validation_error, layout_code);
-            if (!field_distribution_is_valid(distributions[index]))
-              validation_error = std::max(validation_error, distribution_code);
-          }
-        };
-    validate_dependency_pack(context.states, context.state_distributions, context.state_count,
-                             /*incomplete_code=*/1, /*layout_code=*/2,
-                             /*distribution_code=*/3);
-    validate_dependency_pack(context.fields, context.field_distributions, context.field_count,
-                             /*incomplete_code=*/4, /*layout_code=*/5,
-                             /*distribution_code=*/6);
+    const auto validate_dependency_pack = [&](const MultiFab* const* fields,
+                                              const FieldDistribution* distributions,
+                                              const std::string* identities, int count,
+                                              long incomplete_code, long layout_code,
+                                              long distribution_code, long identity_code) {
+      if (count < 0 ||
+          (count > 0 && (fields == nullptr || distributions == nullptr || identities == nullptr))) {
+        validation_error = std::max(validation_error, incomplete_code);
+        return;
+      }
+      const MultiFab& layout = phi_level(level);
+      for (int index = 0; index < count; ++index) {
+        const MultiFab* dependency = fields[index];
+        if (dependency == nullptr ||
+            dependency->box_array().boxes() != layout.box_array().boxes() ||
+            dependency->dmap().ranks() != layout.dmap().ranks())
+          validation_error = std::max(validation_error, layout_code);
+        if (!field_distribution_is_valid(distributions[index]))
+          validation_error = std::max(validation_error, distribution_code);
+        if (identities[index].empty())
+          validation_error = std::max(validation_error, identity_code);
+      }
+    };
+    validate_dependency_pack(context.states, context.state_distributions, context.state_identities,
+                             context.state_count, /*incomplete_code=*/1, /*layout_code=*/2,
+                             /*distribution_code=*/3, /*identity_code=*/9);
+    validate_dependency_pack(context.fields, context.field_distributions, context.field_identities,
+                             context.field_count, /*incomplete_code=*/4, /*layout_code=*/5,
+                             /*distribution_code=*/6, /*identity_code=*/10);
     if (context.parameter_count < 0 ||
         (context.parameter_count > 0 && context.parameters == nullptr) ||
         (context.parameters != nullptr &&
@@ -1355,6 +1407,56 @@ class CompositeFacPoisson {
         pending_boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_))
       validation_error = std::max(validation_error, 8L);
     return validation_error;
+  }
+
+  void require_exact_level_boundary_context_contract_(
+      int level, const FieldBoundaryExecutionContext& context) const {
+    std::string contract;
+    long materialization_failure = 0;
+    try {
+      const auto append = [&contract](const auto& value) {
+        detail::append_exact_contract_value(contract, value);
+      };
+      const auto append_text = [&contract, &append](std::string_view value) {
+        append(static_cast<std::uint64_t>(value.size()));
+        contract.append(value.data(), value.size());
+      };
+      append(level);
+      append(context.point.time);
+      append(context.point.dt);
+      append(context.point.clock_slot);
+      append(context.point.partition_slot);
+      append(context.point.stage_slot);
+      append(context.point.step);
+      append(context.point.substep);
+      append(context.point.iteration);
+      append(context.state_count);
+      append(context.field_count);
+      append(context.parameter_count);
+      for (int index = 0; index < context.state_count; ++index) {
+        append_text(context.state_identities[index]);
+        append_text(detail::field_distribution_layout_contract(*context.states[index],
+                                                               context.state_distributions[index]));
+      }
+      for (int index = 0; index < context.field_count; ++index) {
+        append_text(context.field_identities[index]);
+        append_text(detail::field_distribution_layout_contract(*context.fields[index],
+                                                               context.field_distributions[index]));
+      }
+      for (int index = 0; index < context.parameter_count; ++index)
+        append((*context.parameters)[static_cast<std::size_t>(index)]);
+    } catch (...) {
+      materialization_failure = 1;
+    }
+    if (all_reduce_max(materialization_failure) != 0)
+      throw std::runtime_error(
+          "CompositeFacPoisson level boundary carrier contract materialization failed "
+          "collectively");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"composite-fac-level-boundary-context", std::string_view(contract)}}))
+      throw std::invalid_argument(
+          "CompositeFacPoisson level boundary carrier contract differs between communicator "
+          "ranks");
   }
 
   void reset_pending_boundary_contexts_() {

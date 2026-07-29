@@ -374,9 +374,11 @@ TEST(CompositeFacPoissonTest, level_qualified_boundary_carrier_requires_every_le
 
   const MultiFab* states[] = {&fac.rhs_level(0)};
   const FieldDistribution distributions[] = {FieldDistribution::Replicated};
+  const std::string identities[] = {"tests.composite-fac.state"};
   FieldBoundaryExecutionContext coarse_context;
   coarse_context.states = states;
   coarse_context.state_distributions = distributions;
+  coarse_context.state_identities = identities;
   coarse_context.state_count = 1;
   fac.set_boundary_context_at_level(0, coarse_context);
 
@@ -418,13 +420,16 @@ TEST(CompositeFacPoissonTest, late_invalid_carrier_does_not_replace_committed_ba
   const MultiFab* accepted_fine_states[] = {&fac.rhs_level(1)};
   const FieldDistribution coarse_distribution[] = {FieldDistribution::Replicated};
   const FieldDistribution fine_distribution[] = {FieldDistribution::Distributed};
+  const std::string state_identities[] = {"tests.composite-fac.transactional-state"};
   FieldBoundaryExecutionContext accepted_coarse;
   accepted_coarse.states = accepted_coarse_states;
   accepted_coarse.state_distributions = coarse_distribution;
+  accepted_coarse.state_identities = state_identities;
   accepted_coarse.state_count = 1;
   FieldBoundaryExecutionContext accepted_fine;
   accepted_fine.states = accepted_fine_states;
   accepted_fine.state_distributions = fine_distribution;
+  accepted_fine.state_identities = state_identities;
   accepted_fine.state_count = 1;
   fac.set_boundary_context_at_level(0, accepted_coarse);
   fac.set_boundary_context_at_level(1, accepted_fine);
@@ -478,13 +483,16 @@ TEST(CompositeFacPoissonTest, fully_refined_hierarchy_consumes_finest_level_carr
   const MultiFab* fine_states[] = {&fac.rhs_level(1)};
   const FieldDistribution coarse_distribution[] = {FieldDistribution::Replicated};
   const FieldDistribution fine_distribution[] = {FieldDistribution::Distributed};
+  const std::string state_identities[] = {"tests.composite-fac.finest-state"};
   FieldBoundaryExecutionContext coarse_context;
   coarse_context.states = coarse_states;
   coarse_context.state_distributions = coarse_distribution;
+  coarse_context.state_identities = state_identities;
   coarse_context.state_count = 1;
   FieldBoundaryExecutionContext fine_context;
   fine_context.states = fine_states;
   fine_context.state_distributions = fine_distribution;
+  fine_context.state_identities = state_identities;
   fine_context.state_count = 1;
   fac.set_boundary_context_at_level(0, coarse_context);
   fac.set_boundary_context_at_level(1, fine_context);
@@ -525,13 +533,16 @@ TEST(CompositeFacPoissonTest, partial_dynamic_boundary_touching_physical_face_fa
   const MultiFab* fine_states[] = {&fac.rhs_level(1)};
   const FieldDistribution coarse_distribution[] = {FieldDistribution::Replicated};
   const FieldDistribution fine_distribution[] = {FieldDistribution::Distributed};
+  const std::string state_identities[] = {"tests.composite-fac.partial-boundary-state"};
   FieldBoundaryExecutionContext coarse_context;
   coarse_context.states = coarse_states;
   coarse_context.state_distributions = coarse_distribution;
+  coarse_context.state_identities = state_identities;
   coarse_context.state_count = 1;
   FieldBoundaryExecutionContext fine_context;
   fine_context.states = fine_states;
   fine_context.state_distributions = fine_distribution;
+  fine_context.state_identities = state_identities;
   fine_context.state_count = 1;
   fac.set_boundary_context_at_level(0, coarse_context);
   EXPECT_THROW(fac.set_boundary_context_at_level(1, fine_context), std::invalid_argument);
