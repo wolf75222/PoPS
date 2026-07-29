@@ -7,6 +7,7 @@ import re
 ROOT = Path(__file__).resolve().parents[3]
 PROGRAM_DIR = ROOT / "include" / "pops" / "runtime" / "program"
 SHARED = PROGRAM_DIR / "program_execution_services.hpp"
+PROGRAM_RUNTIME_STATE = PROGRAM_DIR / "program_runtime_state.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
 PREPARED_AFFINE = (
@@ -38,6 +39,7 @@ SHARED_SIGNATURES = (
     "struct ProgramResourceTopology",
     "class ExclusiveUseGuard",
     "static bool field_layout_matches_(",
+    "ProgramRuntimeState& program_runtime_state_()",
     "void install(std::function<void(double)> step)",
     "SolveOutcome solve_fields()",
     "SolveOutcome solve_fields_from_state_at(",
@@ -340,21 +342,42 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_publish_lincomb_",
             "program_execution_publish_exact_lincomb_",
             "program_execution_validate_commit_aliases_",
-            "program_execution_block_map_",
+            "program_execution_runtime_state_",
             "program_execution_block_count_",
             "program_execution_physical_time_",
-            "program_execution_record_scalar_",
-            "program_execution_params_",
             "program_execution_set_field_timepoint_",
             "program_execution_set_field_parameters_",
             "program_execution_set_field_kernel_",
-            "program_execution_profiler_",
             "program_execution_macro_step_",
             "program_execution_active_level_",
         ):
             assert source.count(hook) == 1, (
                 "%s must provide exactly one explicit provider hook %s" % (context, hook)
             )
+
+
+def test_grid_free_program_state_services_are_shared_not_mirrored():
+    shared = _read(SHARED)
+    runtime_state = _read(PROGRAM_RUNTIME_STATE)
+    providers = (_read(UNIFORM), _read(AMR))
+
+    assert shared.count("program_runtime_state_().block_map()") == 2
+    assert shared.count("program_runtime_state_().record_diagnostic(name, value)") == 1
+    assert shared.count("program_runtime_state_().note_step_projection(name)") == 1
+    assert shared.count("program_runtime_state_().params(block)") == 1
+    assert shared.count("program_runtime_state_().profiler()") == 1
+    assert "const std::vector<int>& block_map() const noexcept" in runtime_state
+    assert "Profiler& profiler() noexcept" in runtime_state
+
+    for retired_hook in (
+        "program_execution_block_map_",
+        "program_execution_record_scalar_",
+        "program_execution_note_step_projection_",
+        "program_execution_params_",
+        "program_execution_profiler_",
+    ):
+        assert retired_hook not in shared
+        assert all(retired_hook not in provider for provider in providers)
 
 
 def test_amr_grouped_rhs_registers_exact_membership_before_fragment_publication():
