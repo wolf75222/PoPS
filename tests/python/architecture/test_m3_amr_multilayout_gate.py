@@ -26,7 +26,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 37
+    assert len(data["check"]) == 39
 
 
 def test_m3_gate_pins_three_level_subcycled_reflux_proof():
@@ -69,6 +69,47 @@ def test_m3_gate_pins_metric_weighted_composite_diagnostic_proof():
     ).read_text(encoding="utf-8")
     assert "runtime::amr::composite_reduce_fields" in source
     assert "std::fabs(integral - 1.25)" in source
+
+
+def test_m3_gate_pins_fail_closed_persistent_hysteresis_proofs():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    checks = data["check"]
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "refusal",
+        "kind": "pytest",
+        "target": "accepted_state",
+        "nodeid": (
+            "tests/python/unit/amr/test_public_amr_resolution.py::"
+            "test_tagging_resolution_refuses_unimplemented_persistent_hysteresis"
+        ),
+    } in checks
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "refusal",
+        "kind": "ctest",
+        "target": "test_amr_native_loader",
+        "test_regex": (
+            "^test_amr_native_loader\\."
+            "PreparedAmrProvidersExecuteExactTablesAndProvenance$"
+        ),
+    } in checks
+
+    authoring_source = (
+        ROOT / "tests/python/unit/amr/test_public_amr_resolution.py"
+    ).read_text(encoding="utf-8")
+    assert "test_tagging_resolution_refuses_unimplemented_persistent_hysteresis" in (
+        authoring_source
+    )
+    native_source = (
+        ROOT
+        / "tests/cpp/integration/native_loader/test_amr_native_loader.cpp"
+    ).read_text(encoding="utf-8")
+    assert "unsupported_hysteresis.min_cycles = 1" in native_source
+    assert "EXPECT_EQ(tag_call_count(), calls_before_hysteresis)" in native_source
 
 
 def test_m3_final_gate_has_no_deferred_requirement():

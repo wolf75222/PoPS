@@ -193,6 +193,22 @@ nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_rank_c
 [[check]]
 issue = "ADC-678"
 requirement = "accepted_state"
+polarity = "refusal"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/amr/test_public_amr_resolution.py::test_tagging_resolution_refuses_unimplemented_persistent_hysteresis"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_native_loader"
+test_regex = "^test_amr_native_loader\\.PreparedAmrProvidersExecuteExactTablesAndProvenance$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"
