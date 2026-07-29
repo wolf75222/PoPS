@@ -941,7 +941,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->program_runtime_state_();
   }
   int program_execution_block_count_() const { return sys_->n_blocks(); }
-  Real program_execution_physical_time_() const { return static_cast<Real>(sys_->time()); }
+  ProgramClockCoordinate program_execution_clock_coordinate_() const {
+    return {static_cast<Real>(sys_->time()), sys_->macro_step(), -1};
+  }
   void program_execution_set_field_timepoint_(const std::string& field,
                                               const FieldLogicalTimePoint& point) const {
     sys_->set_field_logical_timepoint(field, point);
@@ -954,9 +956,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                            const CompiledFieldBoundaryKernel& kernel) const {
     sys_->set_field_boundary_kernel(field, kernel);
   }
-  int program_execution_macro_step_() const { return sys_->macro_step(); }
-  int program_execution_active_level_() const { return -1; }
-
   mutable double current_dt_ = 0.0;
   mutable amr::Rational logical_phase_begin_{0, 1};
   mutable amr::Rational logical_phase_span_{1, 1};
