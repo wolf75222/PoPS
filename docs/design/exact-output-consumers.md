@@ -425,6 +425,44 @@ quantity an invariant. Diagnostic-only outputs remain valid: their owner-qualifi
 terms, layout metadata and provenance are preserved even when no field array is selected. Geometry
 origins and spacings use the conventional `(x, y)` and `(dx, dy)` order.
 
+An executable open-domain balance uses one shared typed identity rather than a Python callback:
+
+```python
+from pops.diagnostics import Balance, BalanceLedger
+
+mass = BalanceLedger("mass")
+program.record_balance(
+    mass,
+    storage_change=storage_increment,
+    outward_boundary_flux=boundary_flux_increment,
+    sources=source_increment,
+    reflux=reflux_increment,
+    projection=projection_increment,
+)
+
+ScientificOutput(
+    ...,
+    diagnostics=(Balance(mass, block=fluid),),
+)
+```
+
+Each argument to `record_balance` is a signed, time-integrated native Program sum/dot reduction,
+or scalar arithmetic composed only from such reductions and exact literals.
+The reported residual is `storage_change + outward_boundary_flux - sources - reflux - projection`.
+The native attempt mailbox accumulates repeated cadence/substep invocations, rejects missing or
+non-finite terms, and is cleared before the next attempt. The consumer reads it only while the
+outer accepted-step transaction still retains the pre-step image. Python therefore packages the
+five returned scalars and residual but never traverses arrays, invents a zero term, or reuses a
+previous step. A rejected attempt or failed consumer publication restores the mailbox with the
+rest of the native transaction.
+
+This route is explicit evidence, not automatic numerical instrumentation: a Program that cannot
+produce its actual reflux or projection increment cannot declare `Balance`. In particular, the
+generic automatic extraction of AMR reflux/projection contributions from the internal native
+operator ledgers remains separate work. On an adaptive layout the recorded values must already be
+composite and coverage-corrected; an ordinary sum of every per-level state would double-count
+covered coarse cells. Neither `Balance` nor `BalanceTerms` silently claims otherwise.
+
 Checkpoint remains a separate restart effect. These consumers do not define a checkpoint schema or
 reader and do not call the scientific-output manifest a restart identity. The checkpoint provider
 remains the sole owner of sealing, hierarchy/history persistence and strict identity-checked
