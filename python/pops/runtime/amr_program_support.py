@@ -118,15 +118,6 @@ DEFERRED_GROUPS: dict = {
         "ir_ops": frozenset(),
         "header_methods": frozenset({"refined_shared_block_interfaces"}),
     },
-    "fine_level_field_perturbation": {
-        "issue": None,
-        "op_source": (
-            "field-provider perturbation inside an implicit solve, routed through the exact "
-            "level-qualified prepared provider"
-        ),
-        "ir_ops": frozenset(),
-        "header_methods": frozenset(),
-    },
     "scheduler": {
         "issue": None,
         "op_source": "program_emit_schedule (held / scheduled cache_* seams)",
@@ -229,12 +220,6 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         # A held / scheduled node lowers to the deferred scheduler cache seams.
         if attrs.get("schedule") is not None:
             used.add("scheduler")
-        # A field-coupled finite-difference Jacobian re-solves the exact prepared provider at the
-        # perturbation's hierarchy level. Keep the group visible (and green) in the report so the
-        # recursive operation remains auditable after its explicit deferral is retired.
-        if op == "rhs_jacvec" and attrs.get("field_coupled") is True \
-                and context.refined_hierarchy:
-            used.add("fine_level_field_perturbation")
     if context.refined_hierarchy and context.shared_block_interfaces:
         used.add("refined_shared_block_interfaces")
     return used

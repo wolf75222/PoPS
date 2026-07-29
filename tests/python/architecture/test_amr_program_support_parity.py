@@ -98,6 +98,7 @@ def test_header_deferred_set_matches_the_python_mirror():
 
 
 def test_parser_finds_only_explicit_known_deferrals():
+    module = _load_support_module()
     header = _parse_header_deferred_set(CONTEXT_HPP.read_text(encoding="utf-8"))
     for identifier in (
         "cache_should_update",
@@ -109,6 +110,7 @@ def test_parser_finds_only_explicit_known_deferrals():
     ):
         assert identifier in header
     assert "solve_fields_from_state_at_fine_level" not in header
+    assert "fine_level_field_perturbation" not in module.DEFERRED_GROUPS
     assert "apply_projection" not in header
     assert not any(identifier.startswith("history") for identifier in header)
 
@@ -156,9 +158,7 @@ def test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarch
     assert module.amr_program_op_support(
         field_jacobian, context=_context(module, refined=False)) == {}
     assert module.amr_program_op_support(
-        field_jacobian, context=_context(module, refined=True)) == {
-            "fine_level_field_perturbation": "green",
-        }
+        field_jacobian, context=_context(module, refined=True)) == {}
     assert module.amr_program_op_support(
         _Program([]), context=_context(module, refined=True, interfaces=True)) == {
             "refined_shared_block_interfaces": "pending",
