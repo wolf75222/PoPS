@@ -89,7 +89,9 @@ Supported native routes include:
   exact Program weights and authoritative local substep duration. Those fragments authenticate the
   paired RHS update; they are not injected again into reflux because that would duplicate the same
   face flux. Both endpoint hierarchies must already expose matching full-tangential fine-face
-  coverage; this route does not mirror one endpoint's AMR tags through the interface mapping.
+  coverage. The level-zero route is installed before hierarchy bootstrap, and only that exact route
+  can authorize proper-nesting support across an omitted physical-boundary face. This route does not
+  mirror one endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
   three-or-more-level or dynamically regridded public AMR interfaces, historical shared-interface
   rates, and refined MPI publication remain unavailable.

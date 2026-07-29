@@ -333,6 +333,14 @@ class _AmrSystemInstall(_AmrSystem):
         # Extracted into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
         self._finish_program_install(compiled, so_path, bind_schema, params)
 
+        # Authenticate and install the level-zero shared-interface routes before bootstrap.  The
+        # clustering proper-nesting proof may reach a face deliberately omitted from a block's
+        # physical-boundary plan; only an already prepared exact interface route may own that face.
+        # The same incremental finalizer runs again below to add a materialized fine-level route.
+        if install_plan is not None:
+            from pops.runtime._runtime_authorities import finalize_runtime_authorities
+            finalize_runtime_authorities(self, install_plan)
+
         if bootstrap_plan is not None:
             from pops.runtime._amr_bootstrap_execution import execute_native_bootstrap
 
@@ -346,9 +354,9 @@ class _AmrSystemInstall(_AmrSystem):
                 },
             )
 
-        # The shared-interface scheduler authenticates the materialized per-level MultiFabs. Keep
-        # that structural install inside the bind transaction: after lazy runtime construction, before
-        # the BoundSnapshot and native lifecycle freeze.
+        # Extend the already authenticated interface registry to the complete materialized level
+        # prefix. Keep that structural install inside the bind transaction, before the BoundSnapshot
+        # and native lifecycle freeze.
         if install_plan is not None:
             from pops.runtime._runtime_authorities import finalize_runtime_authorities
             finalize_runtime_authorities(self, install_plan)

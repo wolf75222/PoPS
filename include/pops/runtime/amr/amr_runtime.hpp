@@ -4146,7 +4146,7 @@ class AmrRuntime {
     TagBox grown = grow_regrid_tags(tag_union(parts), regrid_grow_, pdom,
                                     RegridPeriodicity{base_per_.x, base_per_.y});
     const BoxArray* parents = pk > 0 ? &hierarchy_.ba[pk] : nullptr;
-    const auto physical_support = regrid_physical_ghost_support_();
+    const auto physical_support = regrid_physical_ghost_support_(pk);
     auto [fb, dmap] = regrid_compute_fine_layout_with_provider(
         std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, *clustering_provider_,
         *hierarchy_.load_balance, world_communicator_view(), refinement_ratio, parents,
@@ -4322,21 +4322,41 @@ class AmrRuntime {
     return parts;
   }
 
-  std::optional<RegridPhysicalGhostSupport> regrid_physical_ghost_support_() const {
+  std::optional<RegridPhysicalGhostSupport> regrid_physical_ghost_support_(int level) const {
     if (base_per_.x && base_per_.y)
       return std::nullopt;
+    if (level < 0 || level >= max_levels())
+      throw std::out_of_range(
+          "AMR regrid physical ghost support exceeds the resolved hierarchy capacity");
     int shared_depth = std::numeric_limits<int>::max();
     bool all_depths_supported = true;
-    for (const AmrRuntimeBlock& block : blocks_) {
+    for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
+      const AmrRuntimeBlock& block = blocks_[block_index];
       if (block.boundary_plan) {
         if (!same_periodicity(block.boundary_plan->periodicity(), base_per_))
           throw std::runtime_error(
               "AMR regrid prepared boundary topology disagrees with the hierarchy");
-        if ((!base_per_.x &&
-             (block.boundary_plan->omits_face(0, -1) || block.boundary_plan->omits_face(0, 1))) ||
-            (!base_per_.y &&
-             (block.boundary_plan->omits_face(1, -1) || block.boundary_plan->omits_face(1, 1))))
-          throw std::runtime_error("AMR regrid boundary authority omits a physical domain face");
+        const auto interface_owns = [&](int axis, int side) {
+          using runtime::multiblock::InterfaceAxis;
+          using runtime::multiblock::InterfaceSide;
+          return interface_scheduler_.owns_face(
+              block_index, level, axis == 0 ? InterfaceAxis::X : InterfaceAxis::Y,
+              side < 0 ? InterfaceSide::Low : InterfaceSide::High);
+        };
+        for (int axis = 0; axis < 2; ++axis) {
+          if ((axis == 0 ? base_per_.x : base_per_.y))
+            continue;
+          for (const int side : {-1, 1})
+            if (block.boundary_plan->omits_face(axis, side)) {
+              if (level != 0)
+                throw std::runtime_error(
+                    "AMR regrid interface-owned physical support is limited to the level-zero "
+                    "parent of a frozen two-level hierarchy");
+              if (!interface_owns(axis, side))
+                throw std::runtime_error(
+                    "AMR regrid boundary omission has no authenticated shared-interface owner");
+            }
+        }
         if (!block.boundary_plan->fills_all_allocated_physical_ghosts()) {
           all_depths_supported = false;
           shared_depth = std::min(shared_depth, block.boundary_plan->required_depth());
@@ -4531,7 +4551,7 @@ class AmrRuntime {
 
         const BoxArray* parents =
             parent_level > 0 ? &hierarchy_.ba[static_cast<std::size_t>(parent_level)] : nullptr;
-        const auto physical_support = regrid_physical_ghost_support_();
+        const auto physical_support = regrid_physical_ghost_support_(parent_level);
         auto [boxes, distribution] = regrid_compute_fine_layout_with_provider(
             std::move(grown), parent_domain, parent_level, regrid_margin_, replicated_coarse_,
             *clustering_provider_, *hierarchy_.load_balance, world_communicator_view(),
