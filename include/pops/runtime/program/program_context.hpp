@@ -261,45 +261,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->require_cartesian_generated_operator(sys_block(b), operation);
   }
 
-  /// Materialize one lane-private mesh authority for a prepared operator that is not attached to a
-  /// conservative block (for example, a scalar elliptic field).  This deliberately uses the
-  /// unqualified mesh BC and cannot borrow a block's native boundary components.
-  std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
-      const MultiFab&, const ExecutionLane& lane) const {
-    return std::make_shared<PreparedGridBoundarySession>(sys_->grid_context(), lane);
-  }
-
-  /// Materialize the exact boundary authority of one authenticated Program block.  The Program
-  /// index is resolved through the installed name map before any component state is prepared.
-  std::shared_ptr<PreparedGridBoundarySession> prepare_block_boundary_session(
-      int block, MultiFab& prototype, const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const ExecutionLane& lane) const {
-    return std::make_shared<PreparedGridBoundarySession>(sys_->grid_context(sys_block(block)), lane,
-                                                         prototype, point);
-  }
-
-  /// The MultiFab a per-level coefficient / RHS assembly kernel should WRITE its field into (ADC-633).
-  /// On the uniform System the answer is always the passed field itself -- an IDENTITY hook, so a
-  /// templated assembly free function writes straight into the level-0-bound scratch the codegen
-  /// allocated, byte-for-byte as before. The opaque prepared field-slot identity is ignored here; it
-  /// exists so an AMR provider can redirect the write to its own per-level storage without extending
-  /// this context for every new operator envelope.
-  MultiFab& assembly_target(MultiFab& field, std::string_view field_slot_identity) const {
-    validate_prepared_field_slot(field_slot_identity, "ProgramContext::assembly_target");
-    return field;
-  }
-
-  /// The MultiFab a per-level reconstruction should READ its solved field from (ADC-633). Identity on
-  /// the uniform System (the field passed is the level-0 solution the emitted solve wrote); the AMR
-  /// ProgramContext redirects the READ to the current level's published composite field on a refined
-  /// hierarchy. Trivial + inline so the uniform .so is byte-for-byte unchanged.
-  MultiFab& assembly_source(MultiFab& field, std::string_view field_slot_identity) const {
-    validate_prepared_field_slot(field_slot_identity, "ProgramContext::assembly_source");
-    return field;
-  }
-  /// Uniform counterpart of AmrProgramContext::linear_solution: one grid has one solve field.
-  MultiFab& linear_solution(MultiFab& field) const { return field; }
-
   /// Authenticate the exact operator evaluation point. Generated code supplies a canonical 256-bit
   /// Program/operator authority plus the prepared field/resource identities; the context supplies the
   /// monotonic evaluation revision and exact native clock values.
@@ -375,24 +336,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
 
  public:
-  /// Capability for an operator body emitted inside this compiled Program artifact. Direct C++
-  /// extensions cannot construct the token and therefore remain on the verified apply path.
-  ::pops::detail::AuthenticatedProgramApplyToken authenticated_program_apply_token(
-      OperatorFingerprint authority) const {
-    if (sys_ == nullptr || !sys_->program_owns_operator_authority(authority))
-      throw std::invalid_argument(
-          "compiled Program requested an operator authority not owned by its installed artifact");
-    return ::pops::detail::AuthenticatedProgramApplyToken(authority);
-  }
-
-  /// Execute an already prepared affine problem with its bound persistent workspace. The raw callback,
-  /// integer method wire, lazy preconditioner path and per-call scratch allocations no longer exist.
-  SolveOutcome solve_prepared_linear(const PreparedAffineLinearProblem& problem,
-                                     KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
-                                     const KrylovControls& controls) const {
-    return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
-  }
-
   /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
   /// d fy(.,c)/dy), centered FV, for every component c of @p r. @p fx and @p fy hold the n_cons x- and
   /// y-flux fields a compiled Program's named-flux kernel wrote (component c = the flux of conservative
@@ -974,6 +917,16 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   GridContext program_execution_block_grid_context_(int owner) const {
     return sys_->grid_context(sys_block(owner));
   }
+  bool program_execution_owns_operator_authority_(OperatorFingerprint authority) const {
+    return sys_ != nullptr && sys_->program_owns_operator_authority(authority);
+  }
+  MultiFab& program_execution_assembly_target_(MultiFab& field, std::string_view) const {
+    return field;
+  }
+  MultiFab& program_execution_assembly_source_(MultiFab& field, std::string_view) const {
+    return field;
+  }
+  MultiFab& program_execution_linear_solution_(MultiFab& field) const { return field; }
   MultiFab& program_execution_state_(int runtime_block) const {
     return sys_->block_state(runtime_block);
   }
