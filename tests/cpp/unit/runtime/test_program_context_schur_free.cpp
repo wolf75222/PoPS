@@ -20,6 +20,7 @@
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/runtime/program/program_context.hpp>
 
+#include <bit>
 #include <map>
 #include <optional>
 #include <string>
@@ -98,6 +99,7 @@ class ExecutionServicesFixture
   int boundary_dispatch_rate() const { return boundary_dispatch_rate_; }
   bool boundary_dispatch_has_session() const { return boundary_dispatch_has_session_; }
   bool boundary_dispatch_flux_only() const { return boundary_dispatch_flux_only_; }
+  int operator_topology_count() const { return operator_topology_count_; }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
@@ -155,6 +157,24 @@ class ExecutionServicesFixture
                                                     pops::MultiFab&, pops::MultiFab&,
                                                     int rate_id) const {
     record_boundary_dispatch_("neg_div_flux", program_block, runtime_block, rate_id, false, true);
+  }
+  pops::OperatorFingerprint program_execution_operator_topology_(const pops::MultiFab&) const {
+    ++operator_topology_count_;
+    return {UINT64_C(9), UINT64_C(10), UINT64_C(11), UINT64_C(12)};
+  }
+  pops::OperatorEvaluationSnapshot program_execution_operator_evaluation_snapshot_(
+      pops::OperatorFingerprint authority, pops::OperatorFingerprint topology,
+      pops::OperatorFingerprint resources, std::uint64_t revision) const {
+    return {authority,
+            revision,
+            4,
+            0,
+            1,
+            std::bit_cast<std::uint64_t>(logical_dt_),
+            std::bit_cast<std::uint64_t>(3.5),
+            Amr ? UINT64_C(17) : UINT64_C(1),
+            topology,
+            resources};
   }
   void program_execution_rhs_group_(const typename SharedServices::RhsGroupBatch& batch) const {
     this->count_kernel(static_cast<std::int64_t>(batch.requests.size()));
@@ -334,6 +354,7 @@ class ExecutionServicesFixture
   mutable int boundary_dispatch_rate_ = -1;
   mutable bool boundary_dispatch_has_session_ = false;
   mutable bool boundary_dispatch_flux_only_ = false;
+  mutable int operator_topology_count_ = 0;
 };
 
 template <class Context>
@@ -628,6 +649,45 @@ void expect_shared_boundary_dispatch_services(Context& context) {
       << "invalid stable identities must fail before provider dispatch or profiling";
 }
 
+template <class Context>
+void expect_shared_operator_snapshot_services(Context& context, std::uint64_t topology_revision) {
+  pops::MultiFab prototype;
+  const pops::OperatorFingerprint authority{UINT64_C(1), UINT64_C(2), UINT64_C(3), UINT64_C(4)};
+  const pops::OperatorFingerprint resources{UINT64_C(5), UINT64_C(6), UINT64_C(7), UINT64_C(8)};
+
+  const pops::OperatorEvaluationSnapshot parent =
+      context.operator_evaluation_snapshot(authority, prototype, resources);
+  EXPECT_EQ(parent.revision, 1u);
+  EXPECT_EQ(parent.topology_revision, topology_revision);
+  EXPECT_TRUE(parent.valid());
+  EXPECT_EQ(context.operator_topology_count(), 1);
+  EXPECT_EQ(
+      context.probe_operator_evaluation(authority, parent.topology, resources, parent.revision),
+      parent);
+  EXPECT_EQ(context.operator_topology_count(), 1)
+      << "an allocation-free probe reuses the authenticated topology fingerprint";
+
+  pops::OperatorEvaluationSnapshot child;
+  {
+    auto logical_child = context.logical_evaluation_scope(0, 2);
+    const auto stale_parent =
+        context.probe_operator_evaluation(authority, parent.topology, resources, parent.revision);
+    EXPECT_EQ(stale_parent.revision, 0u);
+    child = context.operator_evaluation_snapshot(authority, prototype, resources);
+    EXPECT_EQ(child.revision, 2u);
+    EXPECT_DOUBLE_EQ(std::bit_cast<double>(child.dt_bits), 0.2);
+  }
+
+  const auto stale_child =
+      context.probe_operator_evaluation(authority, child.topology, resources, child.revision);
+  EXPECT_EQ(stale_child.revision, 0u);
+  const auto reminted_parent =
+      context.operator_evaluation_snapshot(authority, prototype, resources);
+  EXPECT_EQ(reminted_parent.revision, 3u);
+  EXPECT_DOUBLE_EQ(std::bit_cast<double>(reminted_parent.dt_bits), 0.4);
+  EXPECT_EQ(context.operator_topology_count(), 3);
+}
+
 }  // namespace
 
 TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameContractFixture) {
@@ -656,4 +716,11 @@ TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameBoundaryDispatchF
   ExecutionServicesFixture<true> amr(1);
   expect_shared_boundary_dispatch_services(uniform);
   expect_shared_boundary_dispatch_services(amr);
+}
+
+TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameOperatorSnapshotFixture) {
+  ExecutionServicesFixture<false> uniform(-1);
+  ExecutionServicesFixture<true> amr(1);
+  expect_shared_operator_snapshot_services(uniform, 1);
+  expect_shared_operator_snapshot_services(amr, 17);
 }

@@ -67,6 +67,8 @@ SHARED_SIGNATURES = (
     "MultiFab& assembly_source(",
     "MultiFab& linear_solution(",
     "::pops::detail::AuthenticatedProgramApplyToken authenticated_program_apply_token(",
+    "OperatorEvaluationSnapshot operator_evaluation_snapshot(",
+    "OperatorEvaluationSnapshot probe_operator_evaluation(",
     "SolveOutcome solve_prepared_linear(",
     "MultiFab alloc_scalar_field(",
     "ProgramResourceTopology program_resource_topology(",
@@ -244,6 +246,21 @@ def test_clock_state_is_owned_only_by_the_shared_service():
         assert declaration not in _read(AMR)
 
 
+def test_operator_snapshot_revision_state_is_owned_only_by_the_shared_service():
+    shared = _read(SHARED)
+    declarations = (
+        "mutable std::uint64_t operator_snapshot_revision_ = 0;",
+        "mutable std::uint64_t active_operator_snapshot_revision_ = 0;",
+    )
+    for declaration in declarations:
+        assert shared.count(declaration) == 1
+        assert declaration not in _read(UNIFORM)
+        assert declaration not in _read(AMR)
+    assert shared.count("void invalidate_active_operator_snapshot_() const noexcept") == 1
+    assert "invalidate_active_operator_snapshot_" not in _read(UNIFORM)
+    assert "invalidate_active_operator_snapshot_" not in _read(AMR)
+
+
 def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
     for path, context in ((UNIFORM, "ProgramContext"), (AMR, "AmrProgramContext")):
         source = _read(path)
@@ -257,6 +274,8 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_boundary_residual_into_at_",
             "program_execution_boundary_jvp_into_at_",
             "program_execution_neg_div_flux_default_into_",
+            "program_execution_operator_topology_",
+            "program_execution_operator_evaluation_snapshot_",
             "program_execution_rhs_group_",
             "program_execution_source_default_into_",
             "program_execution_apply_projection_",
