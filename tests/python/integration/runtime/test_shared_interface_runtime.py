@@ -160,6 +160,36 @@ def _program(left_state, right_state, rate):
     return program
 
 
+def _ssprk2_program(left_state, right_state, rate):
+    program = pops.Program("shared_interface_ssprk2")
+    left = program.state(left_state)
+    right = program.state(right_state)
+    stage_0 = StagePoint("shared_stage_0", {"main": TimePoint(program.clock, 0)})
+    left_k0 = program.value("left_k0", rate(left.n), at=stage_0)
+    right_k0 = program.value("right_k0", rate(right.n), at=stage_0)
+    stage_1 = StagePoint("shared_stage_1", {"main": TimePoint(program.clock, 1)})
+    left_stage = program.value(
+        "left_stage", left.n + program.dt * left_k0, at=stage_1)
+    right_stage = program.value(
+        "right_stage", right.n + program.dt * right_k0, at=stage_1)
+    left_k1 = program.value("left_k1", rate(left_stage), at=stage_1)
+    right_k1 = program.value("right_k1", rate(right_stage), at=stage_1)
+    left_next = program.value(
+        "left_next",
+        left.n + 0.5 * program.dt * left_k0 + 0.5 * program.dt * left_k1,
+        at=left.next.point,
+    )
+    right_next = program.value(
+        "right_next",
+        right.n + 0.5 * program.dt * right_k0 + 0.5 * program.dt * right_k1,
+        at=right.next.point,
+    )
+    program.commit(left.next, left_next)
+    program.commit(right.next, right_next)
+    program.step_strategy(FixedDt(1.0e-3))
+    return program
+
+
 def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     example = _load_example()
     core = example.build_authoring(output_root=tmp_path / "unused")
@@ -271,3 +301,177 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         right_values[0, 1:-1, 0], 2.992,
         rtol=0.0, atol=1.0e-14,
     )
+
+
+def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
+    from pops.amr import (
+        AMRClockRelation,
+        AMRExecution,
+        AMRHierarchy,
+        AMRRegrid,
+        AMRTagging,
+        AMRTransfer,
+        Buffer,
+        ConflictPolicy,
+        EqualityPolicy,
+        Hysteresis,
+        Tag,
+    )
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Inflow, Outflow
+    from pops.initial import InitialCondition
+    from pops.layouts import AMR
+    from pops.lib.amr import StateTransfer
+    from pops.lib.initial import BindArray
+    from pops.math import ValueExpr
+    from pops.projection import ConservativeCellAverage
+
+    example = _load_example()
+    core = example.build_authoring(output_root=tmp_path / "unused")
+    right = core.case.block("right", model=core.model)
+    right_state = right[core.state]
+    finite_volume = FiniteVolume(
+        flux=core.flux,
+        variables=variables.Conservative(core.state),
+        reconstruction=reconstruction.FirstOrder(),
+        riemann=riemann.ScalarUpwind(velocity=core.velocity),
+    )
+    boundaries = core.frame.boundaries
+
+    def numerics(state):
+        plan = DiscretizationPlan()
+        plan.rates.add(core.rate, finite_volume)
+        plan.boundaries.add(TransportBoundarySet({
+            boundaries.x_min: Inflow(state=state, value=core.inlet_x_value),
+            boundaries.x_max: Outflow(state=state),
+            boundaries.y_min: Inflow(state=state, value=core.inlet_y_value),
+            boundaries.y_max: Outflow(state=state),
+        }))
+        return plan
+
+    left_numerics = numerics(core.tracer_state)
+    right_numerics = numerics(right_state)
+    component = _flux_component(tmp_path)
+    ConservativeInterface(
+        "tracer_to_right",
+        left=BlockInterfaceSide(core.tracer_state, boundaries.x_max),
+        right=BlockInterfaceSide(right_state, boundaries.x_min),
+        numerical_flux=component,
+        permutation=(0,),
+        right_normal_translation=1.0,
+    ).attach(left_numerics, right_numerics)
+    core.case.numerics(left_numerics, block=core.tracer)
+    core.case.numerics(right_numerics, block=right)
+    core.case.initials.add(InitialCondition(
+        state=core.tracer_state,
+        value=BindArray(),
+        projection=ConservativeCellAverage(),
+    ))
+    core.case.initials.add(InitialCondition(
+        state=right_state,
+        value=BindArray(),
+        projection=ConservativeCellAverage(),
+    ))
+    program = _ssprk2_program(core.tracer_state, right_state, core.rate)
+    core.case.program(program)
+
+    transfer = AMRTransfer()
+    transfer.state(core.tracer_state, StateTransfer())
+    transfer.state(right_state, StateTransfer())
+    tagging = AMRTagging(
+        rules=(
+            Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
+            Tag(ValueExpr(right_state) > core.case.value(core.refine_threshold)),
+            Buffer(cells=1),
+        ),
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+    )
+    resolved = pops.resolve(
+        pops.validate(core.case),
+        layout=AMR(
+            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
+            hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+            tagging=tagging,
+            regrid=AMRRegrid.frozen(),
+            transfer=transfer,
+            execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+        ),
+        components=(component,),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    artifact = pops.compile(resolved)
+    left_initial = np.zeros((1, 8, 8), dtype=np.float64)
+    right_initial = np.zeros((1, 8, 8), dtype=np.float64)
+    # The first public refined route requires an already matched fine interface: refine full-height
+    # bands on both mapped faces while keeping the domain interior coarse.  One-sided tag propagation
+    # across a BlockInterface is a separate capability and must not be implied by this proof.
+    left_initial[0, :, -2:] = 1.0
+    right_initial[0, :, :2] = 1.0
+    params = {
+        core.case.resolve(handle, block=block): value
+        for block in (core.tracer, right)
+        for handle, value in (
+            (core.velocity_x_param, 1.0),
+            (core.velocity_y_param, 0.0),
+            (core.inlet_x_param, 0.0),
+            (core.inlet_y_param, 0.0),
+        )
+    }
+    params.update({
+        core.case.resolve(core.refine_threshold): 0.10,
+        core.case.resolve(core.coarsen_threshold): 0.04,
+    })
+    interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+    flat_runtime = example._bind_artifact(
+        artifact,
+        initial_values={
+            core.tracer_state: np.zeros_like(left_initial),
+            right_state: np.zeros_like(right_initial),
+        },
+        params=params,
+    )
+    assert flat_runtime.n_levels() == 1
+    assert flat_runtime._executor._interface_authorities[interface.qualified_id]["levels"] == (0,)
+
+    runtime = example._bind_artifact(
+        artifact,
+        initial_values={
+            core.tracer_state: left_initial,
+            right_state: right_initial,
+        },
+        params=params,
+    )
+
+    assert runtime.n_levels() == 2
+    fine_boxes = tuple(row for row in runtime.patch_boxes() if int(row[0]) == 1)
+    assert fine_boxes
+    assert any(
+        int(row[1]) == 0 and int(row[2]) == 0 and int(row[4]) == 15
+        for row in fine_boxes
+    )
+    assert any(
+        int(row[3]) == 15 and int(row[2]) == 0 and int(row[4]) == 15
+        for row in fine_boxes
+    )
+    assert not any(int(row[1]) <= 7 <= int(row[3]) for row in fine_boxes)
+    initial_left = runtime.integral("tracer")
+    initial_right = runtime.integral("right")
+    initial_integral = initial_left + initial_right
+
+    pops.run(runtime, t_end=1.0e-3, max_steps=1)
+
+    assert runtime._executor._interface_authorities[interface.qualified_id]["levels"] == (0, 1)
+    assert runtime._executor._s._interface_evaluation_count(
+        interface.qualified_id, 0) == 2
+    assert runtime._executor._s._interface_evaluation_count(
+        interface.qualified_id, 1) == 4
+    final_left = runtime.integral("tracer")
+    final_right = runtime.integral("right")
+    lost_by_left = initial_left - final_left
+    gained_by_right = final_right - initial_right
+    assert lost_by_left > 0.0
+    assert gained_by_right > 0.0
+    np.testing.assert_allclose(gained_by_right, lost_by_left, rtol=0.0, atol=2.0e-13)
+    final_integral = final_left + final_right
+    np.testing.assert_allclose(final_integral, initial_integral, rtol=0.0, atol=2.0e-13)

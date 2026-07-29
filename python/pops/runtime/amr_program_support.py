@@ -41,16 +41,31 @@ class AMRProgramSupportContext:
     verdict from Program IR alone.
     """
 
-    refined_hierarchy: bool
+    hierarchy_level_count: int
+    frozen_hierarchy: bool
     shared_block_interfaces: bool
     field_routes_validated: bool
 
     def __post_init__(self) -> None:
+        if type(self.hierarchy_level_count) is not int:
+            raise TypeError("AMRProgramSupportContext.hierarchy_level_count must be int")
+        if self.hierarchy_level_count < 1:
+            raise ValueError("AMRProgramSupportContext.hierarchy_level_count must be positive")
         for name in (
-            "refined_hierarchy", "shared_block_interfaces", "field_routes_validated",
+            "frozen_hierarchy", "shared_block_interfaces", "field_routes_validated",
         ):
             if type(getattr(self, name)) is not bool:
                 raise TypeError("AMRProgramSupportContext.%s must be bool" % name)
+
+    @property
+    def refined_hierarchy(self) -> bool:
+        """Whether the resolved hierarchy can materialize a fine level."""
+        return self.hierarchy_level_count > 1
+
+    @property
+    def supports_shared_interface_fragments(self) -> bool:
+        """Whether the installed ledger route serves this exact hierarchy policy."""
+        return self.frozen_hierarchy and self.hierarchy_level_count <= 2
 
 # --- Capability groups: the ONE mirror of the AmrProgramContext deferral surface ----------------
 # Each group names (a) the AmrProgramContext C++ methods that FAIL LOUD for it -- the header-derived
@@ -233,7 +248,7 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         if op == "rhs_jacvec" and attrs.get("field_coupled") is True \
                 and context.refined_hierarchy:
             used.add("fine_level_field_perturbation")
-    if context.refined_hierarchy and context.shared_block_interfaces:
+    if context.shared_block_interfaces and not context.supports_shared_interface_fragments:
         used.add("refined_shared_block_interfaces")
     return used
 

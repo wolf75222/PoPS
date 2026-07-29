@@ -274,11 +274,12 @@ def validate_shared_interface_program(
         if resolved_hierarchy is None:
             raise TypeError("shared-interface AMR validation requires a resolved hierarchy")
         hierarchy = resolved_hierarchy.plan
-        if hierarchy.level_count != 1 or type(hierarchy.regrid) is not FrozenHierarchy:
+        if hierarchy.level_count not in (1, 2) \
+                or type(hierarchy.regrid) is not FrozenHierarchy:
             raise NotImplementedError(
                 "shared block interfaces on AMR require a prepared interface-flux reflux ledger; "
-                "the installed scheduler supports only one frozen level and refuses refined or "
-                "regridded hierarchies during resolve"
+                "the installed scheduler supports one or two frozen levels and refuses deeper or "
+                "dynamically regridded hierarchies during resolve"
             )
 
     participant_names = frozenset(neighbours)

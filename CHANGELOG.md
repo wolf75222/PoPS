@@ -35,8 +35,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Internal frozen two-level serial AMR shared-interface transactions now retain endpoint-qualified
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
-  reflux source. Public refined execution remains fail-closed until fixed-hierarchy authoring,
-  bind-to-run conservation, and historical-rate provenance are proved end to end.
+  reflux source. `AMRRegrid.frozen()` exposes the materialize-once public hierarchy policy, and the
+  installed shared-interface route covers one or two frozen levels with exact SSPRK2/subcycling
+  evaluation when both endpoint hierarchies already provide matching full-face fine coverage.
+  One-sided tag propagation, deeper or dynamically regridded hierarchies, refined MPI, implicit JVP
+  and historical-rate paths remain fail-closed.
 - Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the
   held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
   hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay

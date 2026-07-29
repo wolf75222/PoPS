@@ -388,6 +388,34 @@ def test_patch_layout_protocol_refuses_unstable_options():
         invalid.options()
 
 
+def test_regrid_authority_requires_the_exact_public_type_before_resolution():
+    class FrozenLookalike:
+        @staticmethod
+        def to_data():
+            return {
+                "schema_version": 1,
+                "authority_type": "amr_regrid",
+                "mode": "frozen",
+            }
+
+    target = _example().build_final_case()
+    authored = target.layout
+    invalid = type(authored)(
+        grid=authored.grid,
+        hierarchy=authored.hierarchy,
+        tagging=authored.tagging,
+        regrid=FrozenLookalike(),
+        transfer=authored.transfer,
+        execution=authored.execution,
+        patch_layout=authored.patch_layout,
+        load_balance=authored.load_balance,
+        tagger=authored.tagger,
+        clustering=authored.clustering,
+    )
+    with pytest.raises(TypeError, match="exact AMRRegrid"):
+        invalid.options()
+
+
 def test_final_amr_authorities_derive_discrete_context_and_nesting():
     from pops.mesh._amr import GradientAbove, GradientBelow
 

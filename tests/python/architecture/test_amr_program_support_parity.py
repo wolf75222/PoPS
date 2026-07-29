@@ -129,9 +129,10 @@ class _Program:
         return list(self._recursive_nodes if recursive else self._nodes)
 
 
-def _context(module, *, refined=False, interfaces=False):
+def _context(module, *, refined=False, interfaces=False, frozen=True):
     return module.AMRProgramSupportContext(
-        refined_hierarchy=refined,
+        hierarchy_level_count=2 if refined else 1,
+        frozen_hierarchy=frozen,
         shared_block_interfaces=interfaces,
         field_routes_validated=True,
     )
@@ -160,9 +161,13 @@ def test_context_sensitive_deferrals_are_reported_only_when_reachable():
             "fine_level_field_perturbation": "pending",
         }
     assert module.amr_program_op_support(
-        _Program([]), context=_context(module, refined=True, interfaces=True)) == {
+        _Program([]), context=_context(
+            module, refined=True, interfaces=True, frozen=False)) == {
             "refined_shared_block_interfaces": "pending",
         }
+    assert module.amr_program_op_support(
+        _Program([]), context=_context(
+            module, refined=True, interfaces=True, frozen=True)) == {}
 
 
 def test_ir_ops_mirror_the_codegen_op_group_sets():
