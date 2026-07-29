@@ -297,6 +297,24 @@ def test_resource_topology_transaction_is_shared_while_raw_topology_and_scratch_
     assert "topology_materialization_generation()" in amr
 
 
+def test_amr_resource_level_selection_keeps_the_active_clock_window_qualified():
+    amr = _read(AMR)
+    hook = re.search(
+        r"void program_execution_select_resource_level_\(int selected\) const noexcept \{"
+        r"(?P<body>.*?)"
+        r"\n  \}",
+        amr,
+        re.DOTALL,
+    )
+    assert hook is not None
+    body = hook.group("body")
+    assert "level_ = selected;" in body
+    assert "if (current_window_)" in body
+    assert "current_window_->begin.level = selected;" in body
+    assert "current_window_->end.level = selected;" in body
+    assert "void set_level(" not in amr
+
+
 def test_scheduler_cache_algorithm_is_shared_but_storage_lifecycle_is_provider_owned():
     shared = _read(SHARED)
     uniform = _read(UNIFORM)
