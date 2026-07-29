@@ -421,6 +421,28 @@ class ProgramExecutionServices {
     }
   }
 
+  /// Apply every coupled-source operator to one complete, simultaneous candidate-state pack.
+  ///
+  /// Candidate ordering, exact layouts, block-map bijection, accepted-state alias rejection and
+  /// workspace reentrancy are Program semantics.  The provider receives only the authenticated
+  /// runtime-ordered pointers and performs its topology-specific native coupling call.
+  void apply_coupling_operators(Real dt,
+                                std::initializer_list<CouplingStateOverride> candidates) const {
+    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
+      throw std::invalid_argument("Program coupling application requires a finite non-negative dt");
+    if (coupling_workspace_.in_use)
+      throw std::logic_error("Program coupling workspace is already in use");
+    prepare_coupling_workspace_(candidates);
+    struct WorkspaceUse {
+      bool& flag;
+      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
+      ~WorkspaceUse() { flag = false; }
+    } use(coupling_workspace_.in_use);
+    const std::size_t applied =
+        provider_().program_execution_apply_coupling_(dt, coupling_workspace_.runtime_states);
+    count_kernel(static_cast<std::int64_t>(applied));
+  }
+
   void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
     if (denominator <= 0 || numerator < 0 || numerator > denominator)
       throw std::runtime_error("Program stage time is outside [0,1]");
@@ -669,7 +691,64 @@ class ProgramExecutionServices {
   mutable amr::Rational stage_time_{0, 1};
 
  private:
+  struct CouplingWorkspace {
+    std::vector<int> program_to_runtime;
+    std::vector<MultiFab*> runtime_states;
+    bool in_use = false;
+  };
+
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
+
+  void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
+    const std::vector<int>& block_map = provider_().program_execution_block_map_();
+    const std::size_t runtime_blocks =
+        static_cast<std::size_t>(provider_().program_execution_block_count_());
+    if (block_map.empty())
+      throw block_map_error_("Program coupling has no explicit program-to-runtime block map");
+    if (block_map.size() != runtime_blocks || candidates.size() != block_map.size())
+      throw std::invalid_argument(
+          "Program coupling requires a complete candidate pack for every runtime block");
+
+    const bool structure_changed = coupling_workspace_.program_to_runtime != block_map ||
+                                   coupling_workspace_.runtime_states.size() != runtime_blocks;
+    if (structure_changed) {
+      coupling_workspace_.runtime_states.assign(runtime_blocks, nullptr);
+      for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
+        const int runtime_block = sys_block(static_cast<int>(program_block));
+        MultiFab*& mapped =
+            coupling_workspace_.runtime_states[static_cast<std::size_t>(runtime_block)];
+        if (mapped != nullptr)
+          throw std::invalid_argument(
+              "Program coupling block map does not cover each runtime block exactly once");
+        // A live-state pointer is only a non-null sentinel while authenticating the map.
+        mapped = &state(static_cast<int>(program_block));
+      }
+      coupling_workspace_.program_to_runtime.assign(block_map.begin(), block_map.end());
+    }
+
+    std::fill(coupling_workspace_.runtime_states.begin(), coupling_workspace_.runtime_states.end(),
+              nullptr);
+    std::size_t ordinal = 0;
+    for (const CouplingStateOverride& candidate : candidates) {
+      if (candidate.program_block != static_cast<int>(ordinal) || candidate.state == nullptr)
+        throw std::invalid_argument(
+            "Program coupling candidates must be non-null and ordered by Program block");
+      const MultiFab& live = state(candidate.program_block);
+      if (candidate.state->box_array().boxes() != live.box_array().boxes() ||
+          candidate.state->dmap().ranks() != live.dmap().ranks() ||
+          candidate.state->ncomp() != live.ncomp() || candidate.state->n_grow() != live.n_grow())
+        throw std::invalid_argument(
+            "Program coupling candidate does not match its exact runtime layout");
+      for (std::size_t other = 0; other < block_map.size(); ++other)
+        if (candidate.state == &state(static_cast<int>(other)))
+          throw std::invalid_argument(
+              "Program coupling candidates cannot alias accepted live states");
+      const int runtime_block =
+          coupling_workspace_.program_to_runtime[static_cast<std::size_t>(candidate.program_block)];
+      coupling_workspace_.runtime_states[static_cast<std::size_t>(runtime_block)] = candidate.state;
+      ++ordinal;
+    }
+  }
 
   static bool embedded_domain_enabled_(const GridContext& context) {
     if (context.embedded_boundary_set != nullptr || context.geometry_mode != nullptr)
@@ -696,6 +775,8 @@ class ProgramExecutionServices {
     return clock_schedule_.coordinate(kind, clock, stage_identity, level,
                                       provider_().program_execution_active_level_(), macro_step());
   }
+
+  mutable CouplingWorkspace coupling_workspace_;
 };
 
 }  // namespace pops::runtime::program

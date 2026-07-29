@@ -40,6 +40,7 @@ SHARED_SIGNATURES = (
     "Real norm_inf(",
     "Real dot(",
     "void commit_many(",
+    "void apply_coupling_operators(",
     "void set_stage_time(",
     "void configure_primary_clock(",
     "void declare_clock_relation(",
@@ -177,6 +178,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_block_grid_context_",
             "program_execution_state_",
             "program_execution_alloc_scalar_field_",
+            "program_execution_apply_coupling_",
             "program_execution_cache_",
             "program_execution_resource_storage_",
             "program_execution_resource_cell_measures_",
@@ -281,6 +283,30 @@ def test_shared_commit_many_owns_layout_and_alias_semantics():
     assert "std::vector<MultiFab> aliased_sources;" in shared
     assert "program_execution_validate_commit_aliases_(has_aliased_source)" in shared
     assert "has_aliased_source && capturing()" in amr
+
+
+def test_shared_coupling_owns_workspace_mapping_layout_alias_and_reentrancy():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    for authority in (
+        "struct CouplingWorkspace",
+        "prepare_coupling_workspace_",
+        "coupling_workspace_",
+    ):
+        assert authority in shared
+        assert authority not in uniform
+        assert authority not in amr
+    for invariant in (
+        "Program coupling workspace is already in use",
+        "does not cover each runtime block exactly once",
+        "does not match its exact runtime layout",
+        "cannot alias accepted live states",
+    ):
+        assert invariant in shared
+    assert "program_execution_apply_coupling_(" in shared
+    assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
 
 
 def test_logical_subdivision_is_shared_and_provider_rollback_is_opaque():
