@@ -158,7 +158,7 @@ inline void install_prepared_thresholds_and_shared_aux_gradient(
 inline void install_prepared_threshold_decisions(
     AmrRuntime& runtime, std::initializer_list<PreparedThresholdTag> refine_criteria,
     std::initializer_list<PreparedThresholdTag> coarsen_criteria,
-    std::string provider_identity = "test::prepared-threshold-decisions@1") {
+    std::string provider_identity = "test::prepared-threshold-decisions@1", int min_cycles = 0) {
   using Program = AmrRuntime::TaggingProgram;
   if (refine_criteria.size() == 0)
     throw std::invalid_argument("test threshold decisions require a refine root");
@@ -190,7 +190,7 @@ inline void install_prepared_threshold_decisions(
   append_union(refine_criteria, refine_ops, refine_args);
   append_union(coarsen_criteria, coarsen_ops, coarsen_args);
   runtime.set_tagging_program({}, std::move(leaves), std::move(refine_ops), std::move(refine_args),
-                              std::move(coarsen_ops), std::move(coarsen_args), 0, 0, 0,
+                              std::move(coarsen_ops), std::move(coarsen_args), min_cycles, 0, 0,
                               "test::prepared-tagging-clock", std::move(provider_identity));
 }
 
