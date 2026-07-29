@@ -20,7 +20,18 @@ def test_all_required_native_families_are_generated_data_only_contracts():
     resolved = {name: interfaces.resolve(name) for name in expected}
     assert set(resolved) == expected
     assert len({value.abi_id for value in resolved.values()}) == len(expected)
-    assert sorted(value.abi_id for value in resolved.values()) == list(range(10))
+    assert {name: value.abi_id for name, value in resolved.items()} == {
+        "numerical_flux": 0,
+        "ghost_boundary": 1,
+        "field_boundary_closure": 2,
+        "tagger": 3,
+        "clustering": 4,
+        "transfer": 5,
+        "reflux": 6,
+        "field_solver": 7,
+        "writer": 8,
+        "field_topology": 9,
+    }
     assert all(value.table_symbol == "pops_component_interface_v1"
                for value in resolved.values())
     assert all(value.operations for value in resolved.values())
