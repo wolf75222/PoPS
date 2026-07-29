@@ -196,8 +196,26 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     return restart
 
 
+def checkpoint_run_identity(payload: Any) -> Identity:
+    """Return the exact run identity carried by an authenticated checkpoint envelope."""
+    files = set(
+        getattr(
+            payload,
+            "files",
+            payload.keys() if isinstance(payload, Mapping) else (),
+        )
+    )
+    if MANIFEST_KEY not in files:
+        raise ValueError("checkpoint has no canonical manifest")
+    manifest = _strict_json(payload[MANIFEST_KEY])
+    run = _identity_from_json(manifest.get("run_identity"))
+    if run.domain != "run":
+        raise ValueError("checkpoint run_identity has wrong domain")
+    return run
+
+
 __all__ = [
     "CHECKPOINT_SCHEMA_VERSION", "IDENTITY_KEY", "MANIFEST_KEY",
-    "authenticate_checkpoint_payload", "require_exact_payload_version",
+    "authenticate_checkpoint_payload", "checkpoint_run_identity", "require_exact_payload_version",
     "seal_checkpoint_payload",
 ]

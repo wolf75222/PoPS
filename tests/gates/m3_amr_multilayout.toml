@@ -185,6 +185,14 @@ nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_prefli
 [[check]]
 issue = "ADC-678"
 requirement = "accepted_state"
+polarity = "refusal"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"

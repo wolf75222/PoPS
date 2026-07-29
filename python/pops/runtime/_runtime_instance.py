@@ -1483,24 +1483,48 @@ class RuntimeInstance:
         self._publisher.validate_diagnostic_restart_state(diagnostic_data)
         return self._checkpoint_cursors_from_data(cursor_data)
 
-    def _restore_checkpoint(self, payload: bytes, cursors: ConsumerCursorSet) -> Any:
+    def _restore_checkpoint(
+        self,
+        payload: bytes,
+        cursors: ConsumerCursorSet,
+        *,
+        bit_identical: bool,
+    ) -> Any:
         from pops.output._checkpoint_collective import (
             decode_checkpoint_bytes,
+            require_restart_bit_identical,
             restore_checkpoint_payload,
         )
 
+        policy = require_restart_bit_identical(
+            bit_identical, where="RuntimeInstance restart"
+        )
         stored = decode_checkpoint_bytes(payload)
+        from ._checkpoint_manifest import checkpoint_run_identity
+
+        source_run_identity = checkpoint_run_identity(stored)
+        restore_run_identity = getattr(
+            self._executor, "_restore_checkpoint_run_identity", None)
+        if not callable(restore_run_identity):
+            raise TypeError(
+                "restart executor lacks the authenticated source-run publication protocol")
         diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
         canonical_diagnostics = self._publisher.validate_diagnostic_restart_state(
             diagnostic_data)
 
         result = restore_checkpoint_payload(
-            self, self._executor, payload, phase_prefix="native restart")
+            self,
+            self._executor,
+            payload,
+            bit_identical=policy,
+            phase_prefix="native restart",
+        )
         # A checkpoint can restore an older topology epoch whose integer value was already cached
         # by this RuntimeInstance for a different hierarchy.  Never expose that stale geometry.
         self._snapshot_builder.invalidate_geometry_cache()
         self._consumer_cursors = cursors
         self._publisher.restore_diagnostic_restart_state(canonical_diagnostics)
+        restore_run_identity(source_run_identity)
         return result
 
     def restart(self, path: Any) -> Any:

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from pops.output._checkpoint_collective import restore_checkpoint_payload
 from pops.runtime._amr_checkpoint_contract import (
     contract_for,
     encode_contract,
@@ -18,7 +21,11 @@ from pops.runtime._amr_checkpoint_v3 import (
     _live_amr_level_envelope,
     _require_exact_field_provider_depth,
 )
-from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
+from pops.runtime._amr_system_io import _AmrSystemIO, _PreparedAMRSystemRestart
+from pops.runtime._amr_checkpoint_topology import (
+    owner_ranks_for_boxes,
+    recorded_rank_topology,
+)
 
 
 class _Payload(dict):
@@ -257,3 +264,155 @@ def test_topology_owner_alignment_is_level_local_and_strict():
         owner_ranks_for_boxes(payload, boxes + [(2, 6, 6, 7, 7)], 3)
     with pytest.raises(ValueError, match="lacks owner-rank map"):
         owner_ranks_for_boxes({}, boxes[:1], 3)
+
+
+def _rank_topology_payload():
+    return {
+        "program_accepted_state_rank_0": np.array([1, 2], dtype=np.uint8),
+        "program_accepted_state_rank_1": np.array([3, 4], dtype=np.uint8),
+        "dmap_rank_0_level_0": np.array([0], dtype=np.int64),
+        "dmap_rank_0_level_1": np.array([0, 1], dtype=np.int64),
+        "dmap_rank_1_level_0": np.array([0], dtype=np.int64),
+        "dmap_rank_1_level_1": np.array([0, 1], dtype=np.int64),
+    }
+
+
+def test_recorded_rank_topology_keeps_all_program_shards_and_one_exact_owner_map():
+    topology = recorded_rank_topology(_rank_topology_payload(), 2, 2)
+    assert topology.program_states == (b"\x01\x02", b"\x03\x04")
+    assert topology.level_owner_ranks == ((0,), (0, 1))
+
+
+def test_recorded_rank_topology_refuses_rank_local_owner_map_disagreement():
+    payload = _rank_topology_payload()
+    payload["dmap_rank_1_level_1"] = np.array([1, 0], dtype=np.int64)
+    with pytest.raises(ValueError, match="owner maps disagree"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_recorded_rank_topology_refuses_out_of_range_recorded_ownership():
+    payload = _rank_topology_payload()
+    payload["dmap_rank_0_level_1"] = np.array([0, 2], dtype=np.int64)
+    payload["dmap_rank_1_level_1"] = np.array([0, 2], dtype=np.int64)
+    with pytest.raises(ValueError, match=r"outside \[0, 2\)"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_recorded_rank_topology_refuses_mixed_program_presence():
+    payload = _rank_topology_payload()
+    payload["program_accepted_state_rank_1"] = np.array([], dtype=np.uint8)
+    with pytest.raises(ValueError, match="disagree on whether a compiled Program image is present"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure(monkeypatch):
+    """The collective restart bracket must retain both native and Python snapshots through apply.
+
+    The native ``AcceptedSnapshot`` already has direct C++ coverage for topology/history/flux
+    restoration.  This source-only seam proves the new rank-change orchestration actually invokes
+    that rollback after hierarchy replacement, rather than releasing the snapshot too early.
+    """
+
+    accepted_native = {
+        "hierarchy": ((1, 0, 0, 7, 7),),
+        "owners": ((0, 1),),
+        "blocks": {"tracer": ((1.0, 2.0), (3.0, 4.0))},
+        "aux": ((5.0, 6.0),),
+        "potentials": ((7.0, 8.0),),
+        "histories": {"rhs": ((9.0, 10.0), (11.0, 12.0))},
+        "clock": (0.3, 3),
+        "counters": (2, 5),
+        "program_state": b"accepted-program-state",
+        "program_revision": 7,
+    }
+
+    class _TransactionalNativeAMR:
+        def __init__(self):
+            self.state = deepcopy(accepted_native)
+            self.snapshot = None
+            self.rollback_calls = 0
+            self.commit_calls = 0
+
+        def begin_restart_transaction(self):
+            if self.snapshot is not None:
+                raise RuntimeError("nested test restart transaction")
+            self.snapshot = deepcopy(self.state)
+
+        def rebuild_hierarchy(self, boxes, owners):
+            self.state["hierarchy"] = tuple(boxes)
+            self.state["owners"] = tuple(owners)
+            self.state["blocks"] = {"tracer": ((101.0,), (102.0,))}
+            self.state["histories"] = {"rhs": ((103.0,), (104.0,))}
+            self.state["program_state"] = b"partially-restored-program-state"
+            self.state["program_revision"] = 8
+
+        def commit_restart_transaction(self):
+            self.commit_calls += 1
+            self.snapshot = None
+
+        def rollback_restart_transaction(self):
+            self.rollback_calls += 1
+            if self.snapshot is None:
+                raise RuntimeError("test restart rollback lost its accepted snapshot")
+            self.state = self.snapshot
+            self.snapshot = None
+
+    class _InjectedFailureAMR(_AmrSystemIO):
+        def _prepare_checkpoint_restart(self, payload, *, bit_identical):
+            assert payload == b"rank-change-checkpoint"
+            assert bit_identical is False
+            return _PreparedAMRSystemRestart("new-restart-identity", object())
+
+    native = _TransactionalNativeAMR()
+    runtime = _InjectedFailureAMR()
+    runtime._s = native
+    runtime._execution_context = SimpleNamespace(
+        communicator=SimpleNamespace(identity="serial", handle=None)
+    )
+    runtime._last_restart_identity = "accepted-restart-identity"
+    runtime._last_restart_report = "accepted-restart-report"
+    runtime._temporal_restart_state = "accepted-temporal-state"
+    runtime._step_controller = "accepted-step-controller"
+
+    def fail_after_rebuild(owner, sim, prepared):
+        assert owner is runtime
+        assert sim is native
+        sim.rebuild_hierarchy(
+            ((1, 8, 8, 15, 15),),
+            (0,),
+        )
+        sim.state["aux"] = ((201.0,),)
+        sim.state["potentials"] = ((202.0,),)
+        sim.state["clock"] = (0.8, 8)
+        sim.state["counters"] = (9, 13)
+        owner._last_restart_report = "partial-restart-report"
+        owner._temporal_restart_state = "partial-temporal-state"
+        owner._step_controller = None
+        raise RuntimeError("injected failure after rank-change hierarchy rebuild")
+
+    monkeypatch.setattr(
+        "pops.runtime._amr_checkpoint_v3.apply_v3",
+        fail_after_rebuild,
+    )
+
+    with pytest.raises(
+        RuntimeError, match="injected failure after rank-change hierarchy rebuild"
+    ):
+        restore_checkpoint_payload(
+            runtime,
+            runtime,
+            b"rank-change-checkpoint",
+            bit_identical=False,
+            phase_prefix="rank-change rollback proof",
+        )
+
+    assert native.state == accepted_native
+    assert native.snapshot is None
+    assert native.rollback_calls == 1
+    assert native.commit_calls == 0
+    assert runtime._last_restart_identity == "accepted-restart-identity"
+    assert runtime._last_restart_report == "accepted-restart-report"
+    assert runtime._temporal_restart_state == "accepted-temporal-state"
+    assert runtime._step_controller == "accepted-step-controller"
+    assert "_checkpoint_restart_python_snapshot" not in runtime.__dict__
+    assert "_checkpoint_restart_committed" not in runtime.__dict__

@@ -1,5 +1,77 @@
 """Topology payload helpers for strict AMR checkpoint/restart."""
 
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedRankTopology:
+    """Authenticated rank-local shards and their shared recorded ownership metadata."""
+
+    program_states: tuple[bytes, ...]
+    level_owner_ranks: tuple[tuple[int, ...], ...]
+
+
+def recorded_rank_topology(payload: Any, level_count: int, rank_count: int) -> RecordedRankTopology:
+    """Authenticate every source-rank shard without selecting a current-rank image."""
+    import numpy as np
+
+    if isinstance(level_count, bool) or not isinstance(level_count, int) or level_count < 1:
+        raise ValueError("restart: AMR recorded level count must be a positive integer")
+    if isinstance(rank_count, bool) or not isinstance(rank_count, int) or rank_count < 1:
+        raise ValueError("restart: AMR recorded rank count must be a positive integer")
+
+    states: list[bytes] = []
+    canonical_maps: tuple[tuple[int, ...], ...] | None = None
+    for rank in range(rank_count):
+        state_key = "program_accepted_state_rank_%d" % rank
+        if state_key not in payload:
+            raise ValueError(
+                "restart: AMR checkpoint lacks accepted Program state for rank %d" % rank
+            )
+        state = np.asarray(payload[state_key])
+        if state.dtype != np.dtype("uint8") or state.ndim != 1:
+            raise TypeError(
+                "restart: AMR accepted Program state for rank %d must be a uint8 vector" % rank
+            )
+        states.append(state.tobytes())
+
+        rank_maps = []
+        for level in range(level_count):
+            dmap_key = "dmap_rank_%d_level_%d" % (rank, level)
+            if dmap_key not in payload:
+                raise ValueError(
+                    "restart: AMR checkpoint lacks owner map for rank %d level %d" % (rank, level)
+                )
+            owner_map = np.asarray(payload[dmap_key])
+            if owner_map.dtype.kind not in "iu" or owner_map.ndim != 1:
+                raise TypeError(
+                    "restart: AMR owner map for rank %d level %d must be an integer vector"
+                    % (rank, level)
+                )
+            owners = tuple(int(owner) for owner in owner_map)
+            if any(owner < 0 or owner >= rank_count for owner in owners):
+                raise ValueError(
+                    "restart: AMR owner map for rank %d level %d contains an owner outside "
+                    "[0, %d)" % (rank, level, rank_count)
+                )
+            rank_maps.append(owners)
+        exact_maps = tuple(rank_maps)
+        if canonical_maps is None:
+            canonical_maps = exact_maps
+        elif exact_maps != canonical_maps:
+            raise ValueError(
+                "restart: AMR owner maps disagree across source ranks 0 and %d" % rank
+            )
+
+    if canonical_maps is None:
+        raise RuntimeError("restart: AMR source topology authentication produced no owner maps")
+    if len({bool(state) for state in states}) != 1:
+        raise ValueError(
+            "restart: AMR source ranks disagree on whether a compiled Program image is present"
+        )
+    return RecordedRankTopology(tuple(states), canonical_maps)
+
 
 def owner_ranks_for_boxes(payload, boxes, level_count):
     """Return the owner rank aligned with each level-tagged fine patch box."""
@@ -24,4 +96,4 @@ def owner_ranks_for_boxes(payload, boxes, level_count):
     return owners
 
 
-__all__ = ["owner_ranks_for_boxes"]
+__all__ = ["RecordedRankTopology", "owner_ranks_for_boxes", "recorded_rank_topology"]

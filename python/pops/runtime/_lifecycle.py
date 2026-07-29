@@ -169,6 +169,15 @@ class _LifecycleMixin(_System):
             snapshot.bind_identity,
         )
 
+    def _restore_checkpoint_run_identity(self, identity: Any) -> None:
+        """Publish the authenticated source run after a successful restart transaction."""
+        from pops.identity import Identity
+
+        if type(identity) is not Identity or identity.domain != "run":
+            raise TypeError("restart requires an authenticated domain-'run' identity")
+        self._last_run_manifest = None
+        self._last_run_identity = Identity.from_data(identity.to_data())
+
     @property
     def last_run_manifest(self) -> Any:
         """The last canonical execution request, or ``None`` before :meth:`run`."""
