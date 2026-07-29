@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <exception>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -15,11 +16,15 @@
 #include <vector>
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
+#include <pops/runtime/context/grid_context.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/profiler.hpp>
@@ -183,6 +188,133 @@ class ProgramExecutionServices {
       throw std::invalid_argument("Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
     return provider_().program_execution_scratch_(ScratchKind::Scalar, value_id, subslot, prototype,
                                                   n_comp, n_ghost);
+  }
+
+  /// Return the exact active-cell mask for one block-qualified generated pointwise operator.
+  ///
+  /// A provider supplies only its topology-qualified GridContext.  The shared service owns the
+  /// geometry-mode interpretation, layout authentication and fail-closed missing-mask behavior.
+  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const {
+    return active_mask_from_context_(
+        provider_().program_execution_block_grid_context_(block), field,
+        "Program pointwise active-cell mask");
+  }
+
+  /// Collectively publish one pointwise status over the exact domain used by the device kernel.
+  Real pointwise_status_max(int block, const MultiFab& status,
+                            const MultiFab* active_cells) const {
+    const MultiFab* expected = pointwise_active_mask(block, status);
+    if (expected != active_cells)
+      throw std::invalid_argument(
+          "Program pointwise status reduction received a different active-cell mask");
+    const Real reduced = pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
+    return reduced == -std::numeric_limits<Real>::infinity() ? Real(0) : reduced;
+  }
+
+  /// u <- u + a r over the valid physical cells.
+  void axpy(MultiFab& u, Real a, const MultiFab& r) const {
+    count_kernel();
+    if (const MultiFab* active_cells = active_domain_mask_())
+      pops::saxpy_active(u, a, r, *active_cells);
+    else
+      pops::saxpy(u, a, r);
+    provider_().program_execution_publish_axpy_(u, a, r);
+  }
+
+  /// Exact-coefficient twin used by conservative AMR ledger publication.
+  void axpy(MultiFab& u, Real a, const MultiFab& r, Real dt,
+            std::initializer_list<ExactCoefficientTerm> exact) const {
+    count_kernel();
+    if (const MultiFab* active_cells = active_domain_mask_())
+      pops::saxpy_active(u, a, r, *active_cells);
+    else
+      pops::saxpy(u, a, r);
+    provider_().program_execution_publish_exact_axpy_(u, a, r, dt, exact);
+  }
+
+  /// z <- a x + b y over the valid physical cells.
+  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
+    count_kernel();
+    if (const MultiFab* active_cells = active_domain_mask_())
+      pops::lincomb_active(z, a, x, b, y, *active_cells);
+    else
+      pops::lincomb(z, a, x, b, y);
+    provider_().program_execution_publish_lincomb_(z, a, x, b, y);
+  }
+
+  /// Exact-coefficient twin used by conservative AMR ledger publication.
+  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real dt,
+               std::initializer_list<ExactCoefficientTerm> exact_a,
+               std::initializer_list<ExactCoefficientTerm> exact_b) const {
+    count_kernel();
+    if (const MultiFab* active_cells = active_domain_mask_())
+      pops::lincomb_active(z, a, x, b, y, *active_cells);
+    else
+      pops::lincomb(z, a, x, b, y);
+    provider_().program_execution_publish_exact_lincomb_(z, a, x, b, y, dt, exact_a, exact_b);
+  }
+
+  /// Collective reductions over one explicitly owned Program block.
+  Real sum_component(int owner, const MultiFab& u, int comp) const {
+    return pops::reduce_sum(u, comp, relative_cell_measure_(owner));
+  }
+  Real max_component(int owner, const MultiFab& u, int comp) const {
+    return pops::reduce_max(u, comp, relative_cell_measure_(owner));
+  }
+  Real min_component(int owner, const MultiFab& u, int comp) const {
+    return pops::reduce_min(u, comp, relative_cell_measure_(owner));
+  }
+  Real abs_sum_component(int owner, const MultiFab& u, int comp) const {
+    return pops::reduce_abs_sum(u, comp, relative_cell_measure_(owner));
+  }
+  Real norm2(int owner, const MultiFab& u) const {
+    return std::sqrt(pops::dot(u, u, 0, relative_cell_measure_(owner)));
+  }
+  Real norm_inf(int owner, const MultiFab& u) const {
+    return pops::reduce_norm_inf(u, 0, relative_cell_measure_(owner));
+  }
+  Real dot(int owner, const MultiFab& left, const MultiFab& right) const {
+    return pops::dot(left, right, 0, relative_cell_measure_(owner));
+  }
+
+  Real sum(int owner, const MultiFab& u) const { return sum_component(owner, u, 0); }
+  Real max(int owner, const MultiFab& u) const { return max_component(owner, u, 0); }
+  Real min(int owner, const MultiFab& u) const { return min_component(owner, u, 0); }
+  Real abs_sum(int owner, const MultiFab& u) const {
+    return abs_sum_component(owner, u, 0);
+  }
+
+  /// Legacy hand-written Cartesian stages may omit the owner only when topology says that is safe.
+  Real sum_component(const MultiFab& u, int comp) const {
+    require_unqualified_reduction_safe_();
+    return pops::reduce_sum(u, comp);
+  }
+  Real max_component(const MultiFab& u, int comp) const {
+    require_unqualified_reduction_safe_();
+    return pops::reduce_max(u, comp);
+  }
+  Real min_component(const MultiFab& u, int comp) const {
+    require_unqualified_reduction_safe_();
+    return pops::reduce_min(u, comp);
+  }
+  Real abs_sum_component(const MultiFab& u, int comp) const {
+    require_unqualified_reduction_safe_();
+    return pops::reduce_abs_sum(u, comp);
+  }
+  Real sum(const MultiFab& u) const { return sum_component(u, 0); }
+  Real max(const MultiFab& u) const { return max_component(u, 0); }
+  Real min(const MultiFab& u) const { return min_component(u, 0); }
+  Real abs_sum(const MultiFab& u) const { return abs_sum_component(u, 0); }
+
+  /// Fill the transport halos of one field through the provider's current topology.
+  void fill_boundary(MultiFab& x) const {
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_ghosts(x, context.geom.domain, context.bc);
+  }
+
+  void fill_boundary(MultiFab& x, const ExecutionLane& lane) const {
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_ghosts(x, context.geom.domain, context.bc, lane);
   }
 
   void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
@@ -376,6 +508,38 @@ class ProgramExecutionServices {
     return std::runtime_error(std::move(message));
   }
 
+  RelativeCellMeasure relative_cell_measure_(int owner) const {
+    const GridContext context = provider_().program_execution_block_grid_context_(owner);
+    if (!embedded_domain_enabled_(context))
+      return {};
+    if (context.domain_mask == nullptr)
+      throw std::runtime_error("Program physical reduction has no prepared active-cell mask");
+    if (context.geometry_mode != nullptr && *context.geometry_mode == GeometryMode::CutCell) {
+      if (context.eb_inverse_volume_fraction == nullptr)
+        throw std::runtime_error(
+            "Program cut-cell reduction has no prepared inverse volume fraction");
+      return {context.domain_mask, context.eb_inverse_volume_fraction};
+    }
+    return {context.domain_mask, nullptr};
+  }
+
+  void require_unqualified_reduction_safe_() const {
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    if (embedded_domain_enabled_(context))
+      throw std::runtime_error(
+          "Program embedded-boundary reduction requires an explicit Program block owner");
+  }
+
+  const MultiFab* active_domain_mask_() const {
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    if (!embedded_domain_enabled_(context))
+      return nullptr;
+    if (context.domain_mask == nullptr)
+      throw std::runtime_error(
+          "Program embedded-boundary algebra has no prepared active-cell mask");
+    return context.domain_mask;
+  }
+
   [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,
                                                       const char* detail) {
     if (report.action == SolveAction::kRejectAttempt)
@@ -390,6 +554,25 @@ class ProgramExecutionServices {
 
  private:
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
+
+  static bool embedded_domain_enabled_(const GridContext& context) {
+    if (context.embedded_boundary_set != nullptr || context.geometry_mode != nullptr)
+      return context.embedded_boundary_set != nullptr && *context.embedded_boundary_set &&
+             context.geometry_mode != nullptr && *context.geometry_mode != GeometryMode::None;
+    return context.domain_mask != nullptr;
+  }
+
+  static const MultiFab* active_mask_from_context_(const GridContext& context,
+                                                   const MultiFab& field,
+                                                   const char* where) {
+    if (!embedded_domain_enabled_(context))
+      return nullptr;
+    if (context.domain_mask == nullptr)
+      throw std::runtime_error(std::string(where) + " has no prepared active-cell mask");
+    pops::detail::validate_relative_cell_measure(
+        field, RelativeCellMeasure{context.domain_mask, nullptr}, where);
+    return context.domain_mask;
+  }
 
   std::optional<ScheduleCoordinate> schedule_coordinate_(ScheduleDomainKind kind,
                                                          const std::string& clock,

@@ -724,31 +724,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return gc;
   }
 
-  /// Block/level-qualified active-cell mask for generated pointwise operators.  Current Cartesian AMR
-  /// levels return nullptr.  Geometry-aware AMR providers can populate GridContext::domain_mask and
-  /// automatically obtain the same protocol without changing generated Program code.
-  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const {
-    const GridContext context =
-        eng_->level_grid_context(static_cast<std::size_t>(sys_block(block)), level_);
-    if (context.domain_mask == nullptr)
-      return nullptr;
-    pops::detail::validate_relative_cell_measure(field,
-                                                 RelativeCellMeasure{context.domain_mask, nullptr},
-                                                 "AmrProgramContext pointwise active-cell mask");
-    return context.domain_mask;
-  }
-
-  /// AMR counterpart of ProgramContext::pointwise_status_max.  The exact mask view used by the
-  /// pointwise kernel is authenticated again before the collective reduction.
-  Real pointwise_status_max(int block, const MultiFab& status, const MultiFab* active_cells) const {
-    const MultiFab* expected = pointwise_active_mask(block, status);
-    if (expected != active_cells)
-      throw std::invalid_argument(
-          "AmrProgramContext pointwise status reduction received a different active-cell mask");
-    const Real reduced = pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
-    return reduced == -std::numeric_limits<Real>::infinity() ? Real(0) : reduced;
-  }
-
   std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
       const MultiFab&, const ExecutionLane& lane) const {
     return std::make_shared<PreparedGridBoundarySession>(grid_context(), lane);
@@ -765,45 +740,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   // --- scratch (per-level) --------------------------------------------------------------------------
   MultiFab alloc_scalar_field(int n_comp = 1, int n_ghost = 1) const {
     return eng_->level_scalar_field(level_, n_comp, n_ghost);
-  }
-  // --- linear algebra (LEVEL-AGNOSTIC: operate on the MultiFab handed in) ---------------------------
-  void axpy(MultiFab& u, Real a, const MultiFab& r) const {
-    count_kernel();
-    pops::saxpy(u, a, r);
-    if (capturing()) {
-      ledger_axpy_(
-          u, a,
-          r);  // shadow the state combine on the effective-flux strip: ledger[u] += a*ledger[r]
-      note_live_write_(
-          &u);  // a write to the live state invalidates any earlier live-state ring snapshot
-    }
-  }
-  void axpy(MultiFab& u, Real a, const MultiFab& r, Real dt,
-            std::initializer_list<ExactCoefficientTerm> exact) const {
-    count_kernel();
-    pops::saxpy(u, a, r);
-    if (capturing()) {
-      ledger_axpy_exact_(u, a, r, dt, exact);
-      note_live_write_(&u);
-    }
-  }
-  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
-    count_kernel();
-    pops::lincomb(z, a, x, b, y);
-    if (capturing()) {
-      ledger_lincomb_(z, a, x, b, y);  // ledger[z] = a*ledger[x] + b*ledger[y]
-      note_live_write_(&z);
-    }
-  }
-  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real dt,
-               std::initializer_list<ExactCoefficientTerm> exact_a,
-               std::initializer_list<ExactCoefficientTerm> exact_b) const {
-    count_kernel();
-    pops::lincomb(z, a, x, b, y);
-    if (capturing()) {
-      ledger_lincomb_exact_(z, a, x, b, y, dt, exact_a, exact_b);
-      note_live_write_(&z);
-    }
   }
   // --- matrix-free elliptic primitives over the CURRENT level (parity with ProgramContext) ----------
   void laplacian(MultiFab& out, MultiFab& in) const {
@@ -925,28 +861,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       boundary.fill(fy, point);
     apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
   }
-  // --- reductions (COLLECTIVE all_reduce, called on every rank; per-level field) --------------------
-  Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
-  Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
-  Real min_component(const MultiFab& u, int comp) const { return pops::reduce_min(u, comp); }
-  Real abs_sum_component(const MultiFab& u, int comp) const {
-    return pops::reduce_abs_sum(u, comp);
-  }
-  Real sum(const MultiFab& u) const { return pops::reduce_sum(u, 0); }
-  Real max(const MultiFab& u) const { return pops::reduce_max(u, 0); }
-  Real min(const MultiFab& u) const { return pops::reduce_min(u, 0); }
-  Real abs_sum(const MultiFab& u) const { return pops::reduce_abs_sum(u, 0); }
-
-  void fill_boundary(MultiFab& x) const {
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(x, g.domain, eng_->transport_bc());
-  }
-
-  void fill_boundary(MultiFab& x, const ExecutionLane& lane) const {
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(x, g.domain, eng_->transport_bc(), lane);
-  }
-
   // --- history (ADC-631): per-level ring slots on the AmrRuntime engine, driven by the SAME lowered
   // body as Uniform (the level index is the driver's set_level cursor -- no scheme dispatch, no new IR).
   // register/read/store address the CURRENT level; rotate fires ONCE per accepted hierarchy step. The
@@ -3563,6 +3477,41 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     double parent_dt = 0.0;
     amr::Rational stage{0, 1};
   };
+
+  GridContext program_execution_default_grid_context_() const { return grid_context(); }
+  GridContext program_execution_block_grid_context_(int owner) const {
+    return eng_->level_grid_context(static_cast<std::size_t>(sys_block(owner)), level_);
+  }
+  void program_execution_publish_axpy_(MultiFab& u, Real a, const MultiFab& r) const {
+    if (!capturing())
+      return;
+    ledger_axpy_(u, a, r);
+    note_live_write_(&u);
+  }
+  void program_execution_publish_exact_axpy_(
+      MultiFab& u, Real a, const MultiFab& r, Real dt,
+      std::initializer_list<ExactCoefficientTerm> exact) const {
+    if (!capturing())
+      return;
+    ledger_axpy_exact_(u, a, r, dt, exact);
+    note_live_write_(&u);
+  }
+  void program_execution_publish_lincomb_(MultiFab& z, Real a, const MultiFab& x, Real b,
+                                          const MultiFab& y) const {
+    if (!capturing())
+      return;
+    ledger_lincomb_(z, a, x, b, y);
+    note_live_write_(&z);
+  }
+  void program_execution_publish_exact_lincomb_(
+      MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real dt,
+      std::initializer_list<ExactCoefficientTerm> exact_a,
+      std::initializer_list<ExactCoefficientTerm> exact_b) const {
+    if (!capturing())
+      return;
+    ledger_lincomb_exact_(z, a, x, b, y, dt, exact_a, exact_b);
+    note_live_write_(&z);
+  }
 
   double program_execution_logical_parent_dt_() const noexcept { return current_level_dt_; }
   LogicalEvaluationRollback program_execution_capture_logical_evaluation_() const {
