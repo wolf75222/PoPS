@@ -193,67 +193,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
     });
   }
-  /// Evaluate one authored rate at its exact, stable node identity.  There is deliberately no
-  /// sentinel/default identity: shared-interface assembly and boundary callbacks authenticate this
-  /// value as part of BoundaryEvaluationPoint, so an anonymous rate would be temporally ambiguous.
-  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
-    require_rate_identity_(rate_id);
-    count_kernel();
-    sys_->block_rhs_into_at(boundary_point_(rate_id), sys_block(b), u, r);
-  }
-  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage_id) const {
-    return boundary_point_(stage_id);
-  }
-  bool has_boundary_linearization(int b) const {
-    return sys_->block_has_boundary_linearization(sys_block(b));
-  }
-  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                        MultiFab& u, MultiFab& r, bool flux_only) const {
-    count_kernel();
-    sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only);
-  }
-  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                        MultiFab& u, MultiFab& r, bool flux_only,
-                        const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only, boundary);
-  }
-  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                                 MultiFab& u, MultiFab& c) const {
-    count_kernel();
-    sys_->block_boundary_residual_into_at(point, sys_block(b), u, c);
-  }
-  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                                 MultiFab& u, MultiFab& c,
-                                 const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    sys_->block_boundary_residual_into_at(point, sys_block(b), u, c, boundary);
-  }
-  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                            MultiFab& u, const MultiFab& v, MultiFab& j) const {
-    count_kernel();
-    sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j);
-  }
-  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                            MultiFab& u, const MultiFab& v, MultiFab& j,
-                            const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j, boundary);
-  }
-
-  /// r <- -div F(u) for block @p b -- the SAME flux divergence as @ref rhs_into but WITHOUT the model's
-  /// default/composite source (Poisson frozen). Forwards to System::block_neg_div_flux_into (the block's
-  /// SourceFreeModel<Model> rhs path, bit-identical to rhs_into minus the source). The codegen lowers a
-  /// hyperbolic stage that excludes the default source (P.rhs(flux=True, sources without "default"),
-  /// incl. the empty list) to this, so a Lie/Strang split assembles "flux but no source" without the
-  /// default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). Header-inline forwarder,
-  /// like @ref rhs_into.
-  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
-    require_rate_identity_(rate_id);
-    count_kernel();
-    sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), sys_block(b), u, r);
-  }
-
   /// Fail before a generated pointwise operator touches storage when an embedded boundary is active.
   /// Default-source and transport residuals have native geometry-aware providers; arbitrary generated
   /// expressions and local solves do not yet, and cannot be repaired by post-zeroing their outputs.
@@ -859,6 +798,47 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
   friend class ProgramExecutionServices<ProgramContext>;
 
+  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
+      int stage_id) const {
+    return boundary_point_(stage_id);
+  }
+  void program_execution_rhs_into_(int /*program_block*/, int runtime_block, MultiFab& state,
+                                   MultiFab& rhs, int rate_id) const {
+    sys_->block_rhs_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+  }
+  bool program_execution_has_boundary_linearization_(int runtime_block) const {
+    return sys_->block_has_boundary_linearization(runtime_block);
+  }
+  void program_execution_rhs_core_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      MultiFab& rhs, bool flux_only, const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      sys_->block_rhs_core_into_at(point, runtime_block, state, rhs, flux_only);
+    else
+      sys_->block_rhs_core_into_at(point, runtime_block, state, rhs, flux_only, *boundary);
+  }
+  void program_execution_boundary_residual_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      MultiFab& residual, const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      sys_->block_boundary_residual_into_at(point, runtime_block, state, residual);
+    else
+      sys_->block_boundary_residual_into_at(point, runtime_block, state, residual, *boundary);
+  }
+  void program_execution_boundary_jvp_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      const MultiFab& direction, MultiFab& result,
+      const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      sys_->block_boundary_jvp_into_at(point, runtime_block, state, direction, result);
+    else
+      sys_->block_boundary_jvp_into_at(point, runtime_block, state, direction, result, *boundary);
+  }
+  void program_execution_neg_div_flux_default_into_(int /*program_block*/, int runtime_block,
+                                                    MultiFab& state, MultiFab& rhs,
+                                                    int rate_id) const {
+    sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+  }
   void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
     count_kernel(static_cast<std::int64_t>(batch.requests.size()));
     sys_->block_rhs_group(boundary_point_(batch.group_id), batch.runtime_blocks, batch.states,

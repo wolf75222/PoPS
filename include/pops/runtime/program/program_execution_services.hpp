@@ -286,6 +286,77 @@ class ProgramExecutionServices {
     provider_().program_execution_rhs_group_(batch);
   }
 
+  /// Evaluate one authored rate at its exact stable identity.
+  ///
+  /// Identity validation and profiling belong to Program semantics. The provider receives an
+  /// already-qualified runtime block and owns only the Uniform or active-level spatial execution.
+  void rhs_into(int block, MultiFab& state, MultiFab& rhs, int rate_id) const {
+    require_rate_identity_(rate_id);
+    count_kernel();
+    provider_().program_execution_rhs_into_(block, sys_block(block), state, rhs, rate_id);
+  }
+
+  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage_id) const {
+    return provider_().program_execution_boundary_point_(stage_id);
+  }
+
+  bool has_boundary_linearization(int block) const {
+    return provider_().program_execution_has_boundary_linearization_(sys_block(block));
+  }
+
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+                        MultiFab& state, MultiFab& rhs, bool flux_only) const {
+    count_kernel();
+    provider_().program_execution_rhs_core_into_at_(point, sys_block(block), state, rhs, flux_only,
+                                                    nullptr);
+  }
+
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+                        MultiFab& state, MultiFab& rhs, bool flux_only,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    provider_().program_execution_rhs_core_into_at_(point, sys_block(block), state, rhs, flux_only,
+                                                    &boundary);
+  }
+
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                 int block, MultiFab& state, MultiFab& residual) const {
+    count_kernel();
+    provider_().program_execution_boundary_residual_into_at_(point, sys_block(block), state,
+                                                             residual, nullptr);
+  }
+
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                 int block, MultiFab& state, MultiFab& residual,
+                                 const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    provider_().program_execution_boundary_residual_into_at_(point, sys_block(block), state,
+                                                             residual, &boundary);
+  }
+
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+                            MultiFab& state, const MultiFab& direction, MultiFab& result) const {
+    count_kernel();
+    provider_().program_execution_boundary_jvp_into_at_(point, sys_block(block), state, direction,
+                                                        result, nullptr);
+  }
+
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
+                            MultiFab& state, const MultiFab& direction, MultiFab& result,
+                            const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    provider_().program_execution_boundary_jvp_into_at_(point, sys_block(block), state, direction,
+                                                        result, &boundary);
+  }
+
+  /// Evaluate the authored transport divergence without the default source.
+  void neg_div_flux_default_into(int block, MultiFab& state, MultiFab& rhs, int rate_id) const {
+    require_rate_identity_(rate_id);
+    count_kernel();
+    provider_().program_execution_neg_div_flux_default_into_(block, sys_block(block), state, rhs,
+                                                             rate_id);
+  }
+
   /// r <- S(u, aux) for one Program block, without any flux divergence.
   ///
   /// Profiling and Program-to-runtime block qualification are topology-independent. The provider
