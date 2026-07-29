@@ -51,6 +51,38 @@ def _identity_data(value: Any) -> Any:
     )
 
 
+def _regrid_receipt_identity_data(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the validated scientific receipt onto canonical identity scalars.
+
+    The public receipt deliberately keeps binary64 values as ``float`` so callers can inspect and
+    compare them numerically.  Identity payloads have the stricter contract used everywhere else in
+    PoPS: binary64 values are represented by their exact ``float.hex()`` spelling.
+    """
+    data = dict(receipt)
+    accepted_time = data.get("accepted_time")
+    if type(accepted_time) is not float or not math.isfinite(accepted_time):
+        raise TypeError("RegridOnRestart receipt accepted_time must be one finite binary64 value")
+    data["accepted_time"] = accepted_time.hex()
+    for section in ("composite_integrals_before", "composite_integrals_after"):
+        values = data.get(section)
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("RegridOnRestart receipt %s must be a sequence" % section)
+        projected = []
+        for row in values:
+            if not isinstance(row, Mapping):
+                raise TypeError("RegridOnRestart receipt %s rows must be mappings" % section)
+            canonical_row = dict(row)
+            value = canonical_row.get("value")
+            if type(value) is not float or not math.isfinite(value):
+                raise TypeError(
+                    "RegridOnRestart receipt %s values must be finite binary64" % section
+                )
+            canonical_row["value"] = value.hex()
+            projected.append(canonical_row)
+        data[section] = projected
+    return data
+
+
 def _same_physical_time(left: float, right: float) -> bool:
     tolerance = 4.0 * max(math.ulp(left), math.ulp(right))
     return abs(left - right) <= tolerance
@@ -1781,7 +1813,7 @@ class RuntimeInstance:
                     "source_run_identity": source_run_identity.to_data(),
                     "restart_identity": restart_identity.to_data(),
                     "hierarchy_policy_identity": policy_identity.to_data(),
-                    "regrid_receipt": dict(receipt),
+                    "regrid_receipt": _regrid_receipt_identity_data(receipt),
                 },
             )
         # A checkpoint can restore an older topology epoch whose integer value was already cached
