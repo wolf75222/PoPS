@@ -1,4 +1,4 @@
-"""Immutable macro-step cadence authored by :class:`pops.time.Program`."""
+"""Immutable macro-step cadence shared by Program authoring and graph IR."""
 from __future__ import annotations
 
 from dataclasses import dataclass

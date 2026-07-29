@@ -13,7 +13,7 @@ from typing import Any
 
 from pops.model.ownership import OwnerKind, OwnerPath
 from pops.time._program.contract import register_program_type
-from pops.time._program.cadence import ProgramCadence
+from pops.time._cadence import ProgramCadence
 from pops.time._program.authoring import _ProgramAuthoring
 from pops.time._program.condensed import _ProgramCondensed
 from pops.time._program.operations import _ProgramCore

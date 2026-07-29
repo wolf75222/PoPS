@@ -6,7 +6,7 @@ import pytest
 from pops.identity.semantic import semantic_identity_of
 from pops.runtime._program_cadence_install import install_program_cadence
 from pops.time import Program
-from pops.time._program.cadence import ProgramCadence
+from pops.time._cadence import ProgramCadence
 from pops.time._program.detach import detach_compiled_program
 
 

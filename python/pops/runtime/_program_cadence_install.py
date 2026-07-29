@@ -6,7 +6,7 @@ from typing import Any
 
 def install_program_cadence(engine: Any, program: Any) -> None:
     """Install one authenticated cadence before the native Program and runtime freeze."""
-    from pops.time._program.cadence import ProgramCadence
+    from pops.time._cadence import ProgramCadence
     from pops.time._program.contract import require_program
 
     require_program(program, exact=True, where="pops.bind Program cadence")
