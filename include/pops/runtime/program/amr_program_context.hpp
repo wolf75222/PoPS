@@ -30,10 +30,8 @@
 #include <pops/mesh/storage/mf_arith.hpp>           // saxpy / lincomb
 #include <pops/mesh/storage/multifab.hpp>           // MultiFab
 #include <pops/parallel/execution_lane.hpp>
-#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
-#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
 #include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
@@ -53,8 +51,10 @@
 ///
 /// A compiled time Program lowers its macro-step body referencing ONLY the variable `ctx` (never the
 /// concrete context type). Topology-independent operations are inherited from
-/// ProgramExecutionServices; this class supplies hierarchy storage, level-local spatial execution and
-/// conservative synchronization. The `{amr_install}` slot
+/// ProgramExecutionServices; this class supplies hierarchy storage, active-level grid capability and
+/// conservative synchronization. Common Laplacian/gradient/divergence orchestration remains in the
+/// shared service; this provider supplies only the active-level grid authority and explicitly refuses
+/// the unsupported polar stencil. The `{amr_install}` slot
 /// installs one recursive Berger-Oliger driver: child steps partition the parent window, each rate reads
 /// a mandatory old/new dense-output interpolation at its exact Program abscissa, and level sync is
 /// conservative reflux followed by average-down. The single coarse system Poisson per macro-step
@@ -586,127 +586,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         prototype, point);
   }
 
-  // --- scratch (per-level) --------------------------------------------------------------------------
-  // --- matrix-free elliptic primitives over the CURRENT level (parity with ProgramContext) ----------
-  void laplacian(MultiFab& out, MultiFab& in) const {
-    count_kernel();
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(in, g.domain, eng_->transport_bc());
-    apply_laplacian(in, g, out);
-  }
-  void laplacian(MultiFab& out, MultiFab& in, const ExecutionLane& lane) const {
-    count_kernel();
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(in, g.domain, eng_->transport_bc(), lane);
-    apply_laplacian(in, g, out);
-  }
-  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(in);
-    apply_laplacian(in, boundary.context().geom, out);
-  }
-  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary,
-                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(in, point);
-    apply_laplacian(in, boundary.context().geom, out);
-  }
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx) const {
-    count_kernel();
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(in, g.domain, eng_->transport_bc());
-    apply_laplacian(in, g, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-  }
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const ExecutionLane& lane) const {
-    count_kernel();
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(in, g.domain, eng_->transport_bc(), lane);
-    apply_laplacian(in, g, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-  }
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(in);
-    apply_laplacian(in, boundary.context().geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-  }
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const PreparedGridBoundarySession& boundary,
-                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(in, point);
-    apply_laplacian(in, boundary.context().geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-  }
-  void gradient(MultiFab& out, MultiFab& phi) const {
-    count_kernel();
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(phi, g.domain, eng_->transport_bc());
-    const Real cx = Real(1) / (Real(2) * g.dx());
-    const Real cy = Real(1) / (Real(2) * g.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-  void gradient(MultiFab& out, MultiFab& phi, const ExecutionLane& lane) const {
-    count_kernel();
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(phi, g.domain, eng_->transport_bc(), lane);
-    const Real cx = Real(1) / (Real(2) * g.dx());
-    const Real cy = Real(1) / (Real(2) * g.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(phi);
-    const Geometry& g = boundary.context().geom;
-    const Real cx = Real(1) / (Real(2) * g.dx());
-    const Real cy = Real(1) / (Real(2) * g.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary,
-                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(phi, point);
-    const Geometry& g = boundary.context().geom;
-    const Real cx = Real(1) / (Real(2) * g.dx());
-    const Real cy = Real(1) / (Real(2) * g.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy) const {
-    count_kernel();
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(fx, g.domain, eng_->transport_bc());
-    if (&fy != &fx)
-      fill_ghosts(fy, g.domain, eng_->transport_bc());
-    apply_divergence(fx, fy, g, out, /*cx=*/0, /*cy=*/1);
-  }
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
-    count_kernel();
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(fx, g.domain, eng_->transport_bc(), lane);
-    if (&fy != &fx)
-      fill_ghosts(fy, g.domain, eng_->transport_bc(), lane);
-    apply_divergence(fx, fy, g, out, /*cx=*/0, /*cy=*/1);
-  }
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
-                  const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(fx);
-    if (&fy != &fx)
-      boundary.fill(fy);
-    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
-  }
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
-                  const PreparedGridBoundarySession& boundary,
-                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(fx, point);
-    if (&fy != &fx)
-      boundary.fill(fy, point);
-    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
-  }
   // --- condensed-implicit elliptic primitives on the hierarchy (ADC-633 / ADC-637): WIRED per level ---
   // The codegen lowers a condensed-implicit (ADC-637) Program to inline block-inverse assembly kernels
   // referencing ONLY the variable `ctx`, so the SAME emitted body compiles against this context. With its
@@ -3332,6 +3211,11 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   bool program_execution_is_polar_geometry_() const noexcept { return false; }
   Real program_execution_radial_origin_() const noexcept { return Real(0); }
   Real program_execution_radial_spacing_() const { return eng_->level_geom(level_).dx(); }
+  [[noreturn]] void program_execution_apply_polar_tensor_(MultiFab&, MultiFab&, const MultiFab*,
+                                                          const MultiFab*, const MultiFab*,
+                                                          const MultiFab*) const {
+    throw std::logic_error("AMR Program provider does not support polar tensor spatial operators");
+  }
 
   struct LogicalEvaluationRollback {
     std::optional<amr::ClockWindow> window;

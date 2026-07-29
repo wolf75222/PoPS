@@ -31,7 +31,6 @@
 #include <pops/mesh/storage/multifab.hpp>           // MultiFab
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
-#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
@@ -392,202 +391,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                      KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
                                      const KrylovControls& controls) const {
     return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
-  }
-
-  /// out = Lap(in): fill @p in's ghosts (transport BC, periodic by default) then apply the SHARED
-  /// discrete 5-point Laplacian (pops::apply_laplacian, all optional coefficients null -> the bare
-  /// bit-identical Laplacian). @p in is non-const because the ghost fill WRITES its halos (the valid
-  /// cells are unchanged); this is the same matvec idiom the matrix-free Krylov test
-  /// (tests/test_generic_krylov.cpp) wraps in its ApplyFn. The compiled program forms an operator
-  /// A(in) = in - alpha*Lap(in) by combining this with ctx.lincomb.
-  void laplacian(MultiFab& out, MultiFab& in) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(in, gc.geom.domain, gc.bc);
-    if (sys_->program_is_polar()) {
-      if (!polar_unit_rr_) {
-        polar_unit_rr_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
-        polar_unit_tt_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
-        polar_unit_rr_->set_val(Real(1));
-        polar_unit_tt_->set_val(Real(1));
-      }
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, polar_unit_rr_.get(),
-                         polar_unit_tt_.get(), nullptr, nullptr);
-    } else {
-      apply_laplacian(in, gc.geom, out);  // all optional pointers null -> bare 5-point Laplacian
-    }
-  }
-
-  void laplacian(MultiFab& out, MultiFab& in, const ExecutionLane& lane) const {
-    if (sys_->program_is_polar())
-      throw std::logic_error(
-          "lane-isolated ProgramContext::laplacian requires a prepared polar operator session");
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(in, gc.geom.domain, gc.bc, lane);
-    apply_laplacian(in, gc.geom, out);
-  }
-
-  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary) const {
-    if (sys_->program_is_polar())
-      throw std::logic_error(
-          "prepared ProgramContext::laplacian requires a polar operator provider");
-    count_kernel();
-    boundary.fill(in);
-    apply_laplacian(in, boundary.context().geom, out);
-  }
-
-  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary,
-                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    if (sys_->program_is_polar())
-      throw std::logic_error(
-          "prepared ProgramContext::laplacian requires a polar operator provider");
-    count_kernel();
-    boundary.fill(in, point);
-    apply_laplacian(in, boundary.context().geom, out);
-  }
-
-  /// Metric-aware tensor div(A grad(in)). The authored ApplyFn remains the sole mathematical
-  /// operator on Cartesian and polar meshes; solver dispatch never swaps it for a second loop with
-  /// different tolerances, preconditioning or residual semantics.
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_grid_ghosts(in, gc);
-    if (sys_->program_is_polar()) {
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
-    } else {
-      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-    }
-  }
-
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const ExecutionLane& lane) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_grid_ghosts(in, gc, lane);
-    if (sys_->program_is_polar()) {
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
-    } else {
-      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-    }
-  }
-
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(in);
-    const GridContext& gc = boundary.context();
-    if (sys_->program_is_polar()) {
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
-    } else {
-      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-    }
-  }
-
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const PreparedGridBoundarySession& boundary,
-                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(in, point);
-    const GridContext& gc = boundary.context();
-    if (sys_->program_is_polar()) {
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
-    } else {
-      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-    }
-  }
-
-  /// out = grad(@p phi) by centered differences: out(.,0) = d phi/dx, out(.,1) = d phi/dy (@p out
-  /// needs >= 2 components). Fills @p phi's ghosts then forwards to pops::field_postprocess with
-  /// store_phi=false (the gradient lands in components 0/1) and the centered factors cx = 1/(2 dx),
-  /// cy = 1/(2 dy) -- the same derivation the elliptic aux post-process uses (+grad sign).
-  void gradient(MultiFab& out, MultiFab& phi) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(phi, gc.geom.domain, gc.bc);
-    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
-    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-
-  void gradient(MultiFab& out, MultiFab& phi, const ExecutionLane& lane) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(phi, gc.geom.domain, gc.bc, lane);
-    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
-    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-
-  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(phi);
-    const GridContext& gc = boundary.context();
-    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
-    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-
-  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary,
-                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(phi, point);
-    const GridContext& gc = boundary.context();
-    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
-    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-
-  /// out = div(@p fx, @p fy) by centered differences: out = d fx/dx + d fy/dy (component 0). The x-flux
-  /// is read from component 0 of @p fx and the y-flux from component 1 of @p fy, the SAME layout
-  /// @ref gradient writes (d/dx in component 0, d/dy in component 1) -- so chaining ctx.gradient(g, phi)
-  /// then ctx.divergence(out, g, g) recovers the 5-point Laplacian. Fills the ghosts of @p fx and @p fy
-  /// (transport BC, periodic by default) then forwards to pops::apply_divergence -- the exact inverse
-  /// stencil of @ref gradient and the same centered FV divergence the coupled elliptic operator
-  /// modules assemble. @p fx and @p fy are non-const because the ghost fill WRITES their halos (the
-  /// valid cells are unchanged). A compiled Program forms a tensor flux operator
-  /// A(phi) = phi - alpha*div(grad phi) by chaining ctx.gradient then ctx.divergence inside a
-  /// matrix-free apply.
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(fx, gc.geom.domain, gc.bc);
-    if (&fy != &fx)
-      fill_ghosts(fy, gc.geom.domain, gc.bc);  // skip the redundant halo fill when fy aliases fx
-    apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
-  }
-
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
-    if (&fy != &fx)
-      fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
-    apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
-  }
-
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
-                  const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(fx);
-    if (&fy != &fx)
-      boundary.fill(fy);
-    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
-  }
-
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
-                  const PreparedGridBoundarySession& boundary,
-                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(fx, point);
-    if (&fy != &fx)
-      boundary.fill(fy, point);
-    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
   }
 
   /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
@@ -1136,6 +939,27 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   Real program_execution_radial_spacing_() const {
     return sys_->program_is_polar() ? sys_->program_polar_geometry().dr()
                                     : sys_->grid_context().geom.dx();
+  }
+  void program_execution_apply_polar_tensor_(MultiFab& out, MultiFab& in, const MultiFab* a_xx,
+                                             const MultiFab* a_yy, const MultiFab* a_xy,
+                                             const MultiFab* a_yx) const {
+    if (!sys_->program_is_polar())
+      throw std::logic_error("Cartesian Program provider cannot execute a polar tensor stencil");
+    if (a_xx == nullptr) {
+      if (a_yy != nullptr || a_xy != nullptr || a_yx != nullptr)
+        throw std::logic_error("isotropic polar Program Laplacian received a partial tensor");
+      if (!polar_unit_rr_ || !scratch_layout_matches_(*polar_unit_rr_, in, 1, 1) ||
+          !polar_unit_tt_ || !scratch_layout_matches_(*polar_unit_tt_, in, 1, 1)) {
+        polar_unit_rr_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
+        polar_unit_tt_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
+        polar_unit_rr_->set_val(Real(1));
+        polar_unit_tt_->set_val(Real(1));
+      }
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, polar_unit_rr_.get(),
+                         polar_unit_tt_.get(), nullptr, nullptr);
+      return;
+    }
+    apply_polar_tensor(in, sys_->program_polar_geometry(), out, a_xx, a_yy, a_xy, a_yx);
   }
 
   struct LogicalEvaluationRollback {
