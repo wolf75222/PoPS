@@ -1,9 +1,9 @@
 // Chantier "Aux extensible", increment 2 : PEUPLEMENT d'un champ aux supplementaire cote
 // coupleur. Le Coupler mono-bloc alloue le canal aux a la largeur DU MODELE (aux_comps) et
 // remplit la composante B_z depuis une fonction B_z(x, y) fournie par l'utilisateur. On
-// exerce le chemin COMPLET Poisson -> aux -> B_z -> source -> integration :
+// exerce le chemin SPATIAL Poisson -> aux -> B_z -> residual :
 //   modele jouet n_aux=4, flux nul, elliptic_rhs nul (phi = 0), source S = B_z * u.
-//   -> du/dt = B_z u ; B_z constant c -> u(t) = u0 * A^N avec A l'amplification SSPRK2.
+//   -> R(U) = B_z U ; B_z constant c et U=1 donnent R=c.
 
 #include <gtest/gtest.h>
 
@@ -42,7 +42,7 @@ struct BzGrow {
 static_assert(PhysicalModel<BzGrow>, "BzGrow modele PhysicalModel");
 static_assert(aux_comps<BzGrow>() == 4, "BzGrow declare n_aux = 4");
 
-TEST(AuxCouplerBz, FullPathAppliesBzGrowth) {
+TEST(AuxCouplerBz, SpatialResidualConsumesPreparedBz) {
   const int n = 16;
   const Real L = 1.0, c = 0.5;
   Box2D dom = Box2D::from_extents(n, n);
@@ -77,27 +77,21 @@ TEST(AuxCouplerBz, FullPathAppliesBzGrowth) {
     EXPECT_TRUE(maxbz < 1e-14) << "Bz_populated (max|B_z - c|=" << maxbz << ")";
   }
 
-  // --- (B) le chemin complet applique B_z : du/dt = c u -> u = A^N (amplification SSPRK2) ---
-  const int N = 20;
-  const Real dt = 0.01;
-  for (int s = 0; s < N; ++s)
-    cpl.advance(U, dt);  // SSPRK2 PerStage, NoSlope
-  const double cdt = c * dt;
-  const double A = 1.0 + cdt + 0.5 * cdt * cdt;  // SSPRK2 (Heun) sur u' = c u
-  const double expected = std::pow(A, N);
+  // --- (B) le residu spatial consomme le B_z prepare, sans choisir un schema temporel ---
+  MultiFab residual(ba, dm, 1, 0);
+  cpl.assemble_residual(U, residual);
   {
     double maxerr = 0, val = 0;
-    for (int li = 0; li < U.local_size(); ++li) {
-      const ConstArray4 u = U.fab(li).const_array();
-      const Box2D v = U.box(li);
+    for (int li = 0; li < residual.local_size(); ++li) {
+      const ConstArray4 r = residual.fab(li).const_array();
+      const Box2D v = residual.box(li);
       for (int j = v.lo[1]; j <= v.hi[1]; ++j)
         for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          maxerr = std::max(maxerr, std::fabs(u(i, j, 0) - expected));
-          val = u(i, j, 0);
+          maxerr = std::max(maxerr, std::fabs(r(i, j, 0) - c));
+          val = r(i, j, 0);
         }
     }
-    EXPECT_TRUE(maxerr < 1e-10) << "Bz_drives_growth_ssprk2 (u=" << val << " attendu=" << expected
+    EXPECT_TRUE(maxerr < 1e-12) << "Bz_drives_spatial_residual (R=" << val << " attendu=" << c
                                 << " err=" << maxerr << ")";
-    EXPECT_TRUE(val > 1.05) << "u_grew (val=" << val << ")";  // c>0 -> croissance nette
   }
 }

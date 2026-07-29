@@ -72,8 +72,10 @@ def test_partial_implicit_source_is_one_authenticated_program_operator():
     assert len(program.commits()) == 1
 
     generated = emit_cpp_program(program, model=model)
-    assert "pops::detail::mat_inverse<3>(" in generated
-    assert "for (int it_ = 0;" in generated
+    assert "pops::prepare_local_nonlinear_problem<3>" in generated
+    assert "pops::solve_prepared_local_nonlinear(prepared_, Gval)" in generated
+    assert "pops::detail::mat_inverse<3>(" not in generated
+    assert "for (int it_ = 0;" not in generated
 
 
 def test_imex_has_no_component_name_or_role_mask_surface():

@@ -29,19 +29,15 @@ PreparedHyperbolicBoundary<2> physical_boundary(std::vector<double> xhi_values =
                                         roles);
 }
 
-PreparedHyperbolicBoundary<2> periodic_x_boundary() {
-  return prepare_hyperbolic_boundary<2>({"periodic", "periodic", "foextrap", "foextrap"},
-                                        std::vector<double>(4, 0.0),
-                                        {"case::periodic-x::xlo", "case::periodic-x::xhi",
-                                         "case::periodic-x::ylo", "case::periodic-x::yhi"},
-                                        {"Scalar"});
-}
-
-PreparedHyperbolicBoundary<2> rotated_periodic_boundary() {
+PreparedHyperbolicBoundary<2> periodic_boundary(
+    std::vector<std::string> face_types = {"periodic", "periodic", "foextrap", "foextrap"},
+    bool explicit_identifications = false) {
+  if (face_types.empty())
+    face_types = {"periodic", "periodic", "foextrap", "foextrap"};
   return prepare_hyperbolic_boundary<2>(
-      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
-      {"case::rotated::xlo", "case::rotated::xhi", "case::rotated::ylo", "case::rotated::yhi"},
-      {"Scalar"}, true);
+      face_types, std::vector<double>(4, 0.0),
+      {"case::periodic::xlo", "case::periodic::xhi", "case::periodic::ylo", "case::periodic::yhi"},
+      {"Scalar"}, explicit_identifications);
 }
 
 PreparedBoundaryComponentSpec linearization_spec(bool jvp, std::string target, std::string output) {
@@ -279,7 +275,7 @@ TEST(test_prepared_boundary_plan, executes_reflected_periodic_ghosts_on_a_multib
   }
   const PeriodicIdentification2D reflected_x{0, 1, std::array<int, 2>{{0, 1}},
                                              std::array<int, 2>{{1, -1}}};
-  PreparedBoundaryPlan plan("case::block::reflected-x", 1, periodic_x_boundary(), {}, "", {},
+  PreparedBoundaryPlan plan("case::block::reflected-x", 1, periodic_boundary({}, true), {}, "", {},
                             {reflected_x});
 
   plan.fill_same_level_and_physical(state, domain);
@@ -320,9 +316,9 @@ TEST(test_prepared_boundary_plan, explicit_identity_periodicity_keeps_the_legacy
   }
   const PeriodicIdentification2D identity{0, 1, std::array<int, 2>{{0, 1}},
                                           std::array<int, 2>{{1, 1}}};
-  PreparedBoundaryPlan legacy_plan("case::block::legacy-periodic", 1, periodic_x_boundary());
+  PreparedBoundaryPlan legacy_plan("case::block::legacy-periodic", 1, periodic_boundary());
   PreparedBoundaryPlan explicit_plan("case::block::explicit-identity-periodic", 1,
-                                     periodic_x_boundary(), {}, "", {}, {identity});
+                                     periodic_boundary({}, true), {}, "", {}, {identity});
 
   legacy_plan.fill_same_level_and_physical(legacy, domain);
   explicit_plan.fill_same_level_and_physical(explicit_identity, domain);
@@ -340,12 +336,53 @@ TEST(test_prepared_boundary_plan, explicit_identity_periodicity_keeps_the_legacy
 TEST(test_prepared_boundary_plan, axis_permutation_refuses_incompatible_rectangular_geometry) {
   const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
                                             std::array<int, 2>{{1, 1}}};
-  PreparedBoundaryPlan plan("case::block::rotated-periodic", 1, rotated_periodic_boundary(), {}, "",
-                            {}, {xlo_to_yhi});
+  PreparedBoundaryPlan plan(
+      "case::block::rotated-periodic", 1,
+      periodic_boundary({"periodic", "foextrap", "foextrap", "periodic"}, true), {}, "", {},
+      {xlo_to_yhi});
   const Box2D rectangular_domain = Box2D::from_extents(8, 6);
   MultiFab state = scalar_field(rectangular_domain, 1, 1);
 
   EXPECT_THROW(plan.fill_same_level_and_physical(state, rectangular_domain), std::invalid_argument);
+}
+
+TEST(test_prepared_boundary_plan, mapped_periodicity_refuses_unmapped_vector_components) {
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+  auto vector_boundary = prepare_hyperbolic_boundary<2>(
+      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(8, 0.0),
+      {"case::vector::xlo", "case::vector::xhi", "case::vector::ylo", "case::vector::yhi"},
+      {"Density", "MomentumX"}, true);
+  EXPECT_THROW(PreparedBoundaryPlan("case::block::rotated-vector-periodic", 1,
+                                    std::move(vector_boundary), {}, "", {}, {xlo_to_yhi}),
+               std::runtime_error);
+}
+
+TEST(test_prepared_boundary_plan, axis_permutation_executes_on_a_square_domain) {
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+  PreparedBoundaryPlan plan(
+      "case::block::rotated-periodic-square", 1,
+      periodic_boundary({"periodic", "foextrap", "foextrap", "periodic"}, true), {}, "", {},
+      {xlo_to_yhi});
+  const Box2D domain = Box2D::from_extents(6, 6);
+  MultiFab state = scalar_field(domain, 1, 1);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(i + 100 * j); });
+  }
+
+  EXPECT_NO_THROW(plan.fill_same_level_and_physical(state, domain));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& field = state.fab(local);
+    const Box2D grown = field.grown_box();
+    for (int j = domain.lo[1]; j <= domain.hi[1]; ++j)
+      if (grown.contains(domain.lo[0] - 1, j))
+        EXPECT_EQ(field(domain.lo[0] - 1, j, 0), Real(j + 100 * domain.hi[1]));
+    for (int i = domain.lo[0]; i <= domain.hi[0]; ++i)
+      if (grown.contains(i, domain.hi[1] + 1))
+        EXPECT_EQ(field(i, domain.hi[1] + 1, 0), Real(domain.lo[0] + 100 * i));
+  }
 }
 
 TEST(test_prepared_boundary_plan, grid_context_routes_exact_nary_storage_registry) {

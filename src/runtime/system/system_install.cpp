@@ -68,10 +68,10 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
           "speed cache only applies to the HLL flux ; received riemann='" +
           riemann + "')");
     if (imex)
-      throw std::runtime_error("System::add_block : wave_speed_cache not supported with time='" +
-                               time +
-                               "' (the cached residual is not available to an implicit Program ; use time "
-                               "'explicit'/'ssprk3'/'euler')");
+      throw std::runtime_error(
+          "System::add_block : wave_speed_cache not supported with time='" + time +
+          "' (the cached residual is not available to an implicit Program ; use time "
+          "'explicit'/'ssprk3'/'euler')");
     if (P->polar_)
       throw std::runtime_error(
           "System::add_block : wave_speed_cache not supported on the polar "
@@ -255,11 +255,10 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // via Kokkos), without copy.
   install_block(name, ncomp, cons_vs, prim_vs, model.gamma, std::move(clo), std::move(max_speed),
                 std::move(add_poisson_rhs), substeps, evolve, stride);
-  EffectiveBlockOptions block_options =
-      make_system_block_options(name, model, "native_model", limiter, riemann, recon, time, method,
-                                substeps, evolve, stride, implicit_vars, implicit_roles,
-                                newton, newton_diagnostics, positivity_floor, wave_speed_cache,
-                                weno_epsilon);
+  EffectiveBlockOptions block_options = make_system_block_options(
+      name, model, "native_model", limiter, riemann, recon, time, method, substeps, evolve, stride,
+      implicit_vars, implicit_roles, newton, newton_diagnostics, positivity_floor, wave_speed_cache,
+      weno_epsilon);
   block_options.ncomp = ncomp;
   block_options.conservative_vars = cons_vs.names;
   block_options.primitive_vars = prim_vs.names;
@@ -303,6 +302,20 @@ POPS_EXPORT void System::install_block_state_route(const std::string& name,
     if (installed_identity == state_identity)
       throw std::runtime_error("System block state route has a duplicate qualified state identity");
   P->block_state_identities_.emplace(name, state_identity);
+}
+
+POPS_EXPORT void System::install_boundary_plan(const std::string& name, const std::string& identity,
+                                               int required_depth,
+                                               const std::vector<std::string>& face_types,
+                                               const std::vector<double>& face_values,
+                                               const std::vector<std::string>& face_identities,
+                                               const std::vector<std::string>& component_roles,
+                                               const std::vector<int>& omitted_interface_faces,
+                                               const std::string& state_identity,
+                                               PreparedBoundaryReadDependencies read_dependencies) {
+  install_boundary_plan(name, identity, required_depth, face_types, face_values, face_identities,
+                        component_roles, omitted_interface_faces, state_identity,
+                        std::move(read_dependencies), {});
 }
 
 POPS_EXPORT void System::install_boundary_plan(
@@ -582,9 +595,8 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
   p_->index(name);  // raises if unknown block
   const NewtonReport* rp = p_->diagnostics_.newton_report_ptr(name);
   if (rp == nullptr)
-    throw std::runtime_error(
-        "System::newton_report : Newton diagnostics not enabled for block '" + name +
-        "' ; pass newton_diagnostics=True when installing the block");
+    throw std::runtime_error("System::newton_report : Newton diagnostics not enabled for block '" +
+                             name + "' ; pass newton_diagnostics=True when installing the block");
   const NewtonReport& r = *rp;
   return SourceNewtonReport{r.enabled,
                             r.converged,
@@ -678,8 +690,7 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
         "System::set_poisson: polar geometry requires solver='polar'; solver substitution is "
         "forbidden");
   if (!p_->polar_ && solver == "polar")
-    throw std::runtime_error(
-        "System::set_poisson: solver='polar' requires polar geometry");
+    throw std::runtime_error("System::set_poisson: solver='polar' requires polar geometry");
   using FieldSolver = field_solver::SystemFieldSolver<Impl>;
   if (solver == "geometric_mg") {
     GeometricMgOptions mg_options;
@@ -753,12 +764,12 @@ void System::set_field_solver_plan(
   const auto existing = p_->fields_.named_field_plans_.find(provider_slot);
   if (existing != p_->fields_.named_field_plans_.end())
     throw std::runtime_error("System::set_field_solver_plan duplicate provider slot");
-  const auto duplicate_output = std::find_if(
-      p_->fields_.named_field_plans_.begin(), p_->fields_.named_field_plans_.end(),
-      [&](const auto& configured) {
-        return configured.second.output_block == output_block &&
-               configured.second.output_key == output_key;
-      });
+  const auto duplicate_output =
+      std::find_if(p_->fields_.named_field_plans_.begin(), p_->fields_.named_field_plans_.end(),
+                   [&](const auto& configured) {
+                     return configured.second.output_block == output_block &&
+                            configured.second.output_key == output_key;
+                   });
   if (duplicate_output != p_->fields_.named_field_plans_.end())
     throw std::runtime_error(
         "System::set_field_solver_plan output block/key already belongs to another qualified "

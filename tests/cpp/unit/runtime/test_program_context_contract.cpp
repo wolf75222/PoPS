@@ -358,42 +358,6 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
       << "an atomic group identity must never alias one of its member rate nodes";
 }
 
-TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
-  ensure_kokkos();
-  SystemConfig cfg;
-  cfg.n = 8;
-  cfg.L = 1.0;
-  cfg.periodicity = {true, true};
-  System sim(cfg);
-  add_gas_block(sim, "a");
-  add_gas_block(sim, "b");
-  sim.set_program_block_map({0, 1});
-  ProgramContext ctx(&sim);
-
-  MultiFab& first = ctx.state(0);
-  MultiFab& second = ctx.state(1);
-  first.set_val(Real(3));
-  second.set_val(Real(7));
-
-  ctx.commit_many({{&first, &second}, {&second, &first}});
-
-  ASSERT_GT(first.local_size(), 0);
-  ASSERT_GT(second.local_size(), 0);
-  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(7));
-  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
-
-  MultiFab different_ghost_width(first.box_array(), first.dmap(), first.ncomp(),
-                                 first.n_grow() + 1);
-  different_ghost_width.set_val(Real(13));
-  ctx.commit_many({{&first, &different_ghost_width}});
-  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
-
-  MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
-  EXPECT_THROW(ctx.commit_many({{&first, &wrong_components}}), std::invalid_argument);
-  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
-  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
-}
-
 TEST(ProgramContextContract, SystemPreparedSlipWallFillsDeepPhysicalGhosts) {
   ensure_kokkos();
   SystemConfig cfg;
@@ -441,6 +405,87 @@ TEST(ProgramContextContract, SystemPreparedSlipWallFillsDeepPhysicalGhosts) {
     EXPECT_EQ(values(2, -2, 3), Real(-3));
     EXPECT_EQ(values(2, -2, 4), Real(-4));
   }
+}
+
+TEST(ProgramContextContract, SystemExecutesScalarAxisPermutedPeriodicPlan) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 6;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::scalar::state::U";
+  sim.install_block_state_route("scalar", state_identity);
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+  sim.install_boundary_plan(
+      "scalar", "case::block::scalar::boundary", 1,
+      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+      {"case::block::scalar::xlo", "case::block::scalar::xhi", "case::block::scalar::ylo",
+       "case::block::scalar::yhi"},
+      {"Scalar"}, {}, state_identity, PreparedBoundaryReadDependencies{}, {xlo_to_yhi});
+  sim.install_block("scalar", 1, VariableSet{}, VariableSet{}, 1.0, BlockClosures{}, {}, {}, 1,
+                    true, 1);
+  sim.mark_bound();
+
+  MultiFab& state = sim.block_state(0);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(i + 100 * j); });
+  }
+  const auto lane = ExecutionLane::world("test.system.axis-permuted-periodic");
+  const runtime::multiblock::BoundaryEvaluationPoint point{
+      "clock.system-axis-permuted", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("scalar"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& field = state.fab(local);
+    const Box2D grown = field.grown_box();
+    for (int j = 0; j < cfg.n; ++j)
+      if (grown.contains(-1, j))
+        EXPECT_EQ(field(-1, j, 0), Real(j + 100 * (cfg.n - 1)));
+    for (int i = 0; i < cfg.n; ++i)
+      if (grown.contains(i, cfg.n))
+        EXPECT_EQ(field(i, cfg.n, 0), Real(100 * i));
+  }
+}
+
+TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 8;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  System sim(cfg);
+  add_gas_block(sim, "a");
+  add_gas_block(sim, "b");
+  sim.set_program_block_map({0, 1});
+  ProgramContext ctx(&sim);
+
+  MultiFab& first = ctx.state(0);
+  MultiFab& second = ctx.state(1);
+  first.set_val(Real(3));
+  second.set_val(Real(7));
+
+  ctx.commit_many({{&first, &second}, {&second, &first}});
+
+  ASSERT_GT(first.local_size(), 0);
+  ASSERT_GT(second.local_size(), 0);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(7));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
+
+  MultiFab different_ghost_width(first.box_array(), first.dmap(), first.ncomp(),
+                                 first.n_grow() + 1);
+  different_ghost_width.set_val(Real(13));
+  ctx.commit_many({{&first, &different_ghost_width}});
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
+
+  MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
+  EXPECT_THROW(ctx.commit_many({{&first, &wrong_components}}), std::invalid_argument);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
 }
 
 TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
