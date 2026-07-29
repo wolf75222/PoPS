@@ -189,12 +189,60 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             raise TypeError(
                 "compiled block must expose one authenticated physical role per component")
         values = []
+        analytic_opcodes = []
+        analytic_literals = []
+        analytic_clocks = []
+        plan_clocks = set()
         for comp in range(ncomp):
             for row in faces:
                 row_values = row.get("values")
                 if not isinstance(row_values, list) or len(row_values) != ncomp:
                     raise ValueError("prepared boundary face values must exactly cover every component")
                 values.append(float(row_values[comp]))
+        for face, row in enumerate(faces):
+            programs = row.get("analytic_programs", [])
+            clock = row.get("analytic_clock")
+            if not isinstance(programs, list) or len(programs) not in (0, ncomp):
+                raise ValueError(
+                    "prepared boundary analytic programs must be empty or cover every component"
+                )
+            if programs and (types[face] != "dirichlet" or representations[face] != "conservative"):
+                raise NotImplementedError(
+                    "prepared analytic boundary programs require conservative fixed-state inflow"
+                )
+            if clock is not None and (not isinstance(clock, str) or not clock or not programs):
+                raise TypeError(
+                    "prepared boundary analytic Clock must be non-empty text on an analytic face"
+                )
+            analytic_clocks.append("" if clock is None else clock)
+            if clock is not None:
+                plan_clocks.add(clock)
+            for component in range(ncomp):
+                if not programs:
+                    analytic_opcodes.append([])
+                    analytic_literals.append([])
+                    continue
+                program = programs[component]
+                if not isinstance(program, dict) or set(program) != {"opcodes", "literals"}:
+                    raise TypeError(
+                        "prepared boundary analytic program must contain opcodes and literals"
+                    )
+                opcodes = program["opcodes"]
+                literals = program["literals"]
+                if (
+                    not isinstance(opcodes, list)
+                    or not opcodes
+                    or any(not isinstance(opcode, str) or not opcode for opcode in opcodes)
+                    or not isinstance(literals, list)
+                    or len(literals) != len(opcodes)
+                ):
+                    raise ValueError(
+                        "prepared boundary analytic opcode/literal rows must be non-empty and aligned"
+                    )
+                analytic_opcodes.append(opcodes)
+                analytic_literals.append([float(value) for value in literals])
+        if len(plan_clocks) > 1:
+            raise ValueError("prepared analytic boundary plan cannot mix several logical Clocks")
         boundary_state_identity = _canonical_qualified_id(
             first.get("state"), where="prepared boundary state")
         if boundary_state_identity != state_identity:
@@ -216,6 +264,9 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             periodic_identifications,
             representations,
             ["" if value is None else value for value in converter_identities],
+            analytic_opcodes,
+            analytic_literals,
+            analytic_clocks,
         )
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):

@@ -168,6 +168,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
 
     source = boundary_identity("xlo", 0, "lower")
     target = boundary_identity("xhi", 0, "upper")
+    face_types = ["periodic", "periodic", "dirichlet", "foextrap"]
     runtime_data = {
         "schema_version": 1,
         "authority_type": "prepared_boundary_plan",
@@ -178,8 +179,14 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
             {
                 "ordinal": ordinal,
                 "producer": "case::block::reflected-periodic::face::%d" % ordinal,
-                "type": "periodic" if ordinal < 2 else "foextrap",
+                "type": face_types[ordinal],
+                "representation": "conservative",
                 "values": [0.0],
+                "analytic_programs": (
+                    [{"opcodes": ["x", "input", "add"], "literals": [0.0, 0.0, 0.0]}]
+                    if ordinal == 2 else []
+                ),
+                "analytic_clock": "clock.analytic" if ordinal == 2 else None,
             }
             for ordinal in range(4)
         ],
@@ -238,7 +245,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     install_runtime_authorities(engine, install_plan)
 
     assert native.installed is not None
-    assert native.installed[3] == ["periodic", "periodic", "foextrap", "foextrap"]
+    assert native.installed[3] == face_types
     assert native.installed[5] == [
         "case::block::reflected-periodic::face::0",
         "case::block::reflected-periodic::face::1",
@@ -249,3 +256,6 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     assert native.installed[9] == [[0, 1, 0, 1, 1, -1]]
     assert native.installed[10] == ["conservative"] * 4
     assert native.installed[11] == [""] * 4
+    assert native.installed[12] == [[], [], ["x", "input", "add"], []]
+    assert native.installed[13] == [[], [], [0.0, 0.0, 0.0], []]
+    assert native.installed[14] == ["", "", "clock.analytic", ""]

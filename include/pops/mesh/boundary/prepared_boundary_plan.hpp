@@ -131,6 +131,9 @@ class PreparedBoundaryPlan {
     void fill_same_level_and_physical(MultiFab& state, const Box2D& domain) const;
     void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry) const;
     void fill_same_level_and_physical(
+        MultiFab& state, const Geometry& geometry,
+        const runtime::multiblock::BoundaryEvaluationPoint& point) const;
+    void fill_same_level_and_physical(
         MultiFab& state, const detail::BoundaryFieldRegistry& fields, const Geometry& geometry,
         const runtime::multiblock::BoundaryEvaluationPoint& point) const;
     void add_residual(const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -427,7 +430,7 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
     fill_native_halos_(state, geometry.domain);
-    hyperbolic_boundary_.fill_physical(state, geometry.domain);
+    hyperbolic_boundary_.fill_physical(state, geometry);
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry,
@@ -437,7 +440,7 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
     fill_native_halos_(state, geometry.domain, lane);
-    hyperbolic_boundary_.fill_physical(state, geometry.domain);
+    hyperbolic_boundary_.fill_physical(state, geometry, lane.communicator());
   }
 
   /// One-shot control/diagnostic adapter. It materializes a fresh component session and workspace;
@@ -787,7 +790,20 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
         "PreparedBoundaryPlan component session requires an exact BoundaryEvaluationPoint");
   plan_->validate_for(state);
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
+  plan_->hyperbolic_boundary_.fill_physical(state, geometry, lane_->communicator());
+}
+
+inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
+    MultiFab& state, const Geometry& geometry,
+    const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+  validate_current_();
+  if (!ghost_components_.empty())
+    throw std::invalid_argument(
+        "PreparedBoundaryPlan component session requires its prepared field registry");
+  plan_->validate_for(state);
+  plan_->fill_native_halos_(state, geometry.domain, *lane_);
+  plan_->hyperbolic_boundary_.fill_physical(state, geometry, static_cast<Real>(point.physical_time),
+                                            point.clock, lane_->communicator());
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
@@ -796,7 +812,8 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
   validate_current_();
   plan_->validate_for(state);
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
+  plan_->hyperbolic_boundary_.fill_physical(state, geometry, static_cast<Real>(point.physical_time),
+                                            point.clock, lane_->communicator());
   detail::BoundaryFieldRegistry fields;
   fields.configure_states(plan_->required_state_identities());
   fields.configure_fields(plan_->required_field_identities());
@@ -827,7 +844,8 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
   validate_current_();
   plan_->validate_for(state);
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
+  plan_->hyperbolic_boundary_.fill_physical(state, geometry, static_cast<Real>(point.physical_time),
+                                            point.clock, lane_->communicator());
   if (ghost_workspaces_.size() != ghost_components_.size())
     throw std::logic_error(
         "PreparedBoundaryPlan ghost executor was not materialized before numerical execution");

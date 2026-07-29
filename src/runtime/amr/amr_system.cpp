@@ -1337,7 +1337,10 @@ POPS_EXPORT void AmrSystem::install_boundary_plan(
     PreparedBoundaryReadDependencies read_dependencies,
     std::vector<PeriodicIdentification2D> periodic_identifications,
     const std::vector<std::string>& face_representations,
-    const std::vector<std::string>& face_converter_identities) {
+    const std::vector<std::string>& face_converter_identities,
+    const std::vector<std::vector<std::string>>& face_analytic_opcodes,
+    const std::vector<std::vector<double>>& face_analytic_literals,
+    const std::vector<std::string>& face_analytic_clocks) {
   Impl* P = p_.get();
   require_assembling_amr(P->bound_, "install_boundary_plan");
   if (P->built)
@@ -1351,7 +1354,8 @@ POPS_EXPORT void AmrSystem::install_boundary_plan(
         "AmrSystem::install_boundary_plan state differs from the exact block state route");
   auto hyperbolic = prepare_hyperbolic_boundary<2>(
       face_types, face_values, face_identities, component_roles, !periodic_identifications.empty(),
-      face_representations, face_converter_identities);
+      face_representations, face_converter_identities, face_analytic_opcodes,
+      face_analytic_literals, face_analytic_clocks);
   auto plan = std::make_shared<PreparedBoundaryPlan>(
       identity, required_depth, std::move(hyperbolic), omitted_interface_faces, state_identity,
       std::move(read_dependencies), std::move(periodic_identifications));

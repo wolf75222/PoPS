@@ -100,14 +100,18 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert "to_conservative provider" in conversion.limitation
     assert "recovery" in conversion.limitation
 
+    analytic = routes["boundary:analytic_xtp"]
+    assert analytic.status == "partial"
+    assert analytic.layout == "uniform|amr"
+    assert analytic.backend == "production"
+    assert "analytic ScalarExpr" in analytic.limitation
+    assert "exact logical Clock" in analytic.limitation
+    assert "state/field/input reads remain unavailable" in analytic.limitation
+
     expected_unavailable = {
         "boundary:characteristic_no_inflow": (
             "executable model eigenstructure",
             "prepared characteristic kernel",
-        ),
-        "boundary:analytic_xtp": (
-            "constants and RuntimeParams only",
-            "compiled ghost-boundary component",
         ),
         "boundary:post_riemann_flux": (
             "no post-Riemann numerical-flux transformation port",

@@ -100,12 +100,17 @@ Supported native routes include:
 - Finite-volume spatial discretisation on the 2D core.
 - One prepared, model-aware 2D transport-boundary plan shared by Uniform and AMR native/compiled
   routes. The capability matrix marks this route `partial` and names its exact built-ins:
-  periodicity, extrapolation, constant or `RuntimeParam` fixed state, fixed-state primitive inflow
-  converted once through the exact compiled block-model `to_conservative` provider, and typed-role
-  slip wall. The conversion route is explicitly `partial`: conservative-to-primitive recovery and
-  arbitrary representation components remain unavailable, and conversion does not invent a
-  boundary admissibility projection. Separate `unavailable` rows expose the missing characteristic
-  no-inflow kernel, device-side analytic `(x,t,params)` data, and post-Riemann flux transformation.
+  periodicity, extrapolation, constant or `RuntimeParam` fixed state, conservative device-side
+  analytic fixed state over typed `(x,y,t,params)`, fixed-state primitive inflow converted once
+  through the exact compiled block-model `to_conservative` provider, and typed-role slip wall.
+  Analytic programs are immutable postfix tables evaluated in native device kernels at the exact
+  `BoundaryEvaluationPoint`; no Python callback or hot-loop allocation is retained. The analytic
+  route remains `partial`: primitive per-point conversion and discrete state/field/input reads are
+  rejected, as is an analytic ghost depth larger than the normal domain extent. The conversion
+  route is explicitly `partial`: conservative-to-primitive recovery and arbitrary representation
+  components remain unavailable, and conversion does not invent a boundary admissibility
+  projection. Separate `unavailable` rows expose the missing characteristic no-inflow kernel and
+  post-Riemann flux transformation.
   These requests fail during resolution or lowering; none silently degrades to component-wise
   ghost filling. A native rank-1/2/4 regrid fixture removes and recreates the fine hierarchy, then
   proves that uncovered internal fine ghosts retain the conservative coarse-fine transfer and are

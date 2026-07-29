@@ -26,7 +26,8 @@ _SCALAR_UNARY_OPS = frozenset({"neg", "sqrt", "abs", "sin", "cos", "exp", "log"}
 _SCALAR_BINARY_OPS = frozenset({
     "add", "sub", "mul", "div", "pow", "atan2", "hypot", "minimum", "maximum",
 })
-_SCALAR_OPS = frozenset({"constant", "coordinate", "parameter", "input", "where"}) | _SCALAR_UNARY_OPS \
+_SCALAR_OPS = frozenset({"constant", "coordinate", "parameter", "input", "time", "where"}) \
+    | _SCALAR_UNARY_OPS \
     | _SCALAR_BINARY_OPS
 _COMPARISON_OPS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
 _LOGICAL_BINARY_OPS = frozenset({"and", "or"})
@@ -84,6 +85,19 @@ class _InputRef:
             raise TypeError("analytic input component must be canonical non-empty text")
 
 
+@dataclass(frozen=True, slots=True)
+class _TimeRef:
+    """Exact logical clock read consumed as physical time by a prepared runtime."""
+
+    clock: Any
+
+    def __post_init__(self) -> None:
+        from pops.time import Clock
+
+        if type(self.clock) is not Clock or self.clock.owner is None:
+            raise TypeError("analytic time requires one owner-qualified exact Clock")
+
+
 @dataclass(frozen=True, slots=True, eq=False, init=False)
 class ScalarExpr:
     """One immutable scalar analytic expression.
@@ -99,6 +113,7 @@ class ScalarExpr:
     _coordinate: _CoordinateRef | None
     _parameter: Any
     _input: _InputRef | None
+    _time: _TimeRef | None
     _frame_id: str | None
     __hash__: ClassVar[None] = None
     __pops_ir_immutable__: ClassVar[bool] = True
@@ -118,6 +133,7 @@ class ScalarExpr:
         coordinate: _CoordinateRef | None = None,
         parameter: Any = None,
         input_ref: _InputRef | None = None,
+        time_ref: _TimeRef | None = None,
     ) -> ScalarExpr:
         result = object.__new__(cls)
         object.__setattr__(result, "_op", op)
@@ -126,6 +142,7 @@ class ScalarExpr:
         object.__setattr__(result, "_coordinate", coordinate)
         object.__setattr__(result, "_parameter", parameter)
         object.__setattr__(result, "_input", input_ref)
+        object.__setattr__(result, "_time", time_ref)
         object.__setattr__(result, "_frame_id", _merged_frame_id(arguments, coordinate))
         _validate_scalar_local(result)
         return result
@@ -276,6 +293,11 @@ class ScalarExpr:
         """Return program-local input leaves in deterministic first-occurrence order."""
 
         return _input_references(self)
+
+    def time_clocks(self) -> tuple[Any, ...]:
+        """Return exact logical clocks in deterministic first-occurrence order."""
+
+        return _time_clocks(self)
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -458,6 +480,12 @@ def _program_input(value_id: Any, component: Any) -> ScalarExpr:
     return ScalarExpr._new("input", input_ref=_InputRef(value_id, component))
 
 
+def _time(clock: Any) -> ScalarExpr:
+    """Internal exact-clock constructor exposed through :func:`pops.analytic.time`."""
+
+    return ScalarExpr._new("time", time_ref=_TimeRef(clock))
+
+
 def _as_scalar(value: Any, *, where: str = "analytic scalar") -> ScalarExpr:
     if isinstance(value, ScalarExpr):
         return value
@@ -542,30 +570,42 @@ def _validate_scalar_local(value: ScalarExpr) -> None:
         raise TypeError("analytic node arguments must be an immutable tuple")
     if value._op == "constant":
         if value._arguments or value._coordinate is not None or value._parameter is not None \
-                or value._input is not None \
+                or value._input is not None or value._time is not None \
                 or type(value._literal) is not float:
             raise TypeError("analytic constant node has an invalid shape")
         _finite_literal(value._literal)
     elif value._op == "coordinate":
         if value._arguments or value._literal is not None \
                 or value._parameter is not None \
-                or value._input is not None \
+                or value._input is not None or value._time is not None \
                 or not isinstance(value._coordinate, _CoordinateRef):
             raise TypeError("analytic coordinate node has an invalid shape")
     elif value._op == "parameter":
         from pops.model import ParamHandle
 
         if value._arguments or value._literal is not None or value._coordinate is not None \
-                or value._input is not None \
+                or value._input is not None or value._time is not None \
                 or type(value._parameter) is not ParamHandle:
             raise TypeError("analytic parameter node has an invalid shape")
     elif value._op == "input":
         if value._arguments or value._literal is not None or value._coordinate is not None \
-                or value._parameter is not None or not isinstance(value._input, _InputRef):
+                or value._parameter is not None or value._time is not None \
+                or not isinstance(value._input, _InputRef):
             raise TypeError("analytic input node has an invalid shape")
+    elif value._op == "time":
+        if (
+            value._arguments
+            or value._literal is not None
+            or value._coordinate is not None
+            or value._parameter is not None
+            or value._input is not None
+            or not isinstance(value._time, _TimeRef)
+        ):
+            raise TypeError("analytic time node has an invalid shape")
     else:
         if value._literal is not None or value._coordinate is not None \
-                or value._parameter is not None or value._input is not None:
+                or value._parameter is not None or value._input is not None \
+                or value._time is not None:
             raise TypeError(
                 "analytic operator node cannot carry literal, coordinate or parameter metadata")
         expected = 1 if value._op in _SCALAR_UNARY_OPS else 2
@@ -727,6 +767,15 @@ def _node_to_data(value: Expression) -> dict[str, Any]:
                 "value_id": value._input.value_id,
                 "component": value._input.component,
             }
+        if value._op == "time":
+            if value._time is None:
+                raise TypeError("analytic time node is missing its exact Clock")
+            return {
+                "kind": "scalar",
+                "op": "time",
+                "clock": value._time.clock.to_data(),
+                "clock_id": value._time.clock.qualified_id,
+            }
         return {
             "kind": "scalar",
             "op": value._op,
@@ -841,12 +890,21 @@ def _node_from_data(
                 raise TypeError("analytic input data has an unsupported shape")
             return ScalarExpr._new(
                 "input", input_ref=_InputRef(data["value_id"], data["component"]))
+        if expected == "scalar" and op == "time":
+            if set(data) != {"kind", "op", "clock", "clock_id"}:
+                raise TypeError("analytic time data has an unsupported shape")
+            from pops.time import Clock
+
+            clock = Clock.from_data(data["clock"])
+            if data["clock_id"] != clock.qualified_id:
+                raise ValueError("analytic time data changed its exact Clock identity")
+            return ScalarExpr._new("time", time_ref=_TimeRef(clock))
         if set(data) != {"kind", "op", "arguments"} \
                 or not isinstance(data["arguments"], list):
             raise TypeError("analytic operator data has an unsupported shape")
         raw_arguments = data["arguments"]
         if expected == "scalar":
-            if op not in _SCALAR_OPS - {"constant", "coordinate", "parameter", "input"}:
+            if op not in _SCALAR_OPS - {"constant", "coordinate", "parameter", "input", "time"}:
                 raise ValueError("unsupported analytic scalar operation %r" % op)
             child_kinds = (["predicate", "scalar", "scalar"] if op == "where"
                            else ["scalar"] * len(raw_arguments))
@@ -886,7 +944,7 @@ def _resolve_references(value: Expression, resolver: Any) -> Expression:
             if resolved.param_kind != value._parameter.param_kind:
                 raise ValueError("analytic parameter resolver changed the declared parameter kind")
             return ScalarExpr._new("parameter", parameter=resolved)
-        if value._op in {"constant", "coordinate", "input"}:
+        if value._op in {"constant", "coordinate", "input", "time"}:
             return value
         return ScalarExpr._new(
             value._op,
@@ -949,6 +1007,26 @@ def _input_references(value: Expression) -> tuple[tuple[int, str], ...]:
     return tuple(ordered)
 
 
+def _time_clocks(value: Expression) -> tuple[Any, ...]:
+    """Collect exact Clock values without assigning a native runtime slot."""
+
+    ordered: list[Any] = []
+    seen: set[str] = set()
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ScalarExpr) and node._op == "time":
+            reference = node._time
+            if not isinstance(reference, _TimeRef):
+                raise TypeError("analytic time leaf does not carry an exact _TimeRef")
+            identity = reference.clock.qualified_id
+            if identity not in seen:
+                seen.add(identity)
+                ordered.append(reference.clock)
+        stack.extend(reversed(node._arguments))
+    return tuple(ordered)
+
+
 __all__ = [
     "AnalyticTruthValueError",
     "DEFAULT_MAX_DEPTH",
@@ -959,5 +1037,6 @@ __all__ = [
     "SCHEMA_VERSION",
     "ScalarExpr",
     "_program_input",
+    "_time",
     "parameter",
 ]

@@ -385,8 +385,9 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             limitation=(
                 "one prepared 2D model-aware plan serves Uniform/AMR native and compiled "
                 "transport boundaries; executable built-ins are periodic, extrapolation, "
-                "constant/RuntimeParam fixed state, model primitive-to-conservative fixed-state "
-                "conversion, and typed-role slip wall; dynamic AMR regrid keeps internal "
+                "constant/RuntimeParam fixed state, conservative device-side analytic "
+                "(x,y,t,params) fixed state, model primitive-to-conservative fixed-state conversion, "
+                "and typed-role slip wall; dynamic AMR regrid keeps internal "
                 "coarse-fine ghosts under the prepared transfer authority on MPI ranks, with "
                 "double-physical corners explicitly not required by dimension-split FV stencils"
             ),
@@ -430,18 +431,17 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "boundary:analytic_xtp",
             layout="uniform|amr",
-            backend="none",
+            backend="production",
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            status="unavailable",
+            status="partial",
             limitation=(
-                "the built-in inflow evaluator accepts constants and RuntimeParams only; "
-                "coordinate-, state-, field-, or time-dependent expressions are rejected"
+                "2D conservative fixed-state inflow accepts data-only analytic ScalarExpr "
+                "programs over typed coordinates, one exact logical Clock, and bound parameters; "
+                "primitive per-point conversion and discrete state/field/input reads remain "
+                "unavailable, and analytic ghost depth may not exceed the normal domain extent"
             ),
-            requested="device-side analytic boundary data depending on (x,t,params)",
-            available_route="constant or RuntimeParam fixed-state inflow",
-            alternative="install a compiled ghost-boundary component",
             source=source,
         ),
         _row(

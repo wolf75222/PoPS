@@ -241,13 +241,17 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
              const std::vector<std::array<int, 6>>& periodic_identifications,
              const std::vector<std::string>& face_representations,
-             const std::vector<std::string>& face_converter_identities) {
+             const std::vector<std::string>& face_converter_identities,
+             const std::vector<std::vector<std::string>>& face_analytic_opcodes,
+             const std::vector<std::vector<double>>& face_analytic_literals,
+             const std::vector<std::string>& face_analytic_clocks) {
             system.install_boundary_plan(
                 name, identity, required_depth, face_types, face_values, face_identities,
                 component_roles, omitted_interface_faces, state_identity,
                 PreparedBoundaryReadDependencies{},
                 decode_periodic_identification_rows(periodic_identifications), face_representations,
-                face_converter_identities);
+                face_converter_identities, face_analytic_opcodes, face_analytic_literals,
+                face_analytic_clocks);
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
@@ -256,6 +260,9 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
           py::arg("face_representations") = std::vector<std::string>{},
           py::arg("face_converter_identities") = std::vector<std::string>{},
+          py::arg("face_analytic_opcodes") = std::vector<std::vector<std::string>>{},
+          py::arg("face_analytic_literals") = std::vector<std::vector<double>>{},
+          py::arg("face_analytic_clocks") = std::vector<std::string>{},
           "Install one resolved per-block ghost-production plan before lazy AMR construction.")
       .def("_install_block_state_route", &AmrSystem::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),

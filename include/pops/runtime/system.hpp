@@ -330,7 +330,10 @@ class System {
       PreparedBoundaryReadDependencies read_dependencies = {},
       std::vector<PeriodicIdentification2D> periodic_identifications = {},
       const std::vector<std::string>& face_representations = {},
-      const std::vector<std::string>& face_converter_identities = {});
+      const std::vector<std::string>& face_converter_identities = {},
+      const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
+      const std::vector<std::vector<double>>& face_analytic_literals = {},
+      const std::vector<std::string>& face_analytic_clocks = {});
   /// Register the exact state Handle owned by a materialized block.  This registry is independent
   /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
   /// dependency of another block's boundary component.
