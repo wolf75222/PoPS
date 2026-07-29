@@ -91,23 +91,29 @@ Supported native routes include:
   retains its higher-order reconstructed-face requirement but fails before native installation
   because no mapped-halo reconstruction provider is installed; it is never silently replaced by a
   cell-average trace.
-  A public serial `AMRRegrid.frozen()` hierarchy may contain one or two levels. A dynamic
-  two-level hierarchy is also executable when both levels are already active at bind and every
-  accepted regrid preserves that active depth. The scheduler rematerializes the authenticated
-  per-level routes on the replacement BoxArray and DistributionMapping before the next Program
-  stage; missing full-face coverage or a depth change rejects the regrid and restores the accepted
-  registry. The two-level route retains endpoint-qualified canonical fragments with exact Program
-  weights and authoritative local substep duration. Those fragments authenticate the paired RHS
-  update; they are not injected again into reflux because that would duplicate the same face flux.
+  A public `AMRRegrid.frozen()` hierarchy may contain any positive materialized L0 prefix. A
+  dynamic hierarchy is also executable when at least two levels are configured, its complete
+  configured prefix is active at bind, and every accepted regrid preserves that active depth. The
+  scheduler rematerializes the authenticated per-level routes on the replacement BoxArray and
+  DistributionMapping before the next Program stage; missing full-face coverage or a depth change
+  rejects the regrid and restores the accepted registry. At depth greater than two, the current
+  coarse-to-fine regrid transaction can replace the finest transition while all ancestors remain
+  unchanged. Replacing a non-finest transition temporarily removes its descendants, so that route
+  fails closed until rematerialization can stage the complete candidate hierarchy atomically.
+  Endpoint-qualified canonical fragments retain exact Program weights and authoritative local
+  substep duration. An interior level publishes the same canonical evaluation to both adjacent,
+  level-qualified coarse/fine audit pairs. Those fragments authenticate the paired RHS update; they
+  are not injected again into reflux because that would duplicate the same face flux.
   Both endpoint hierarchies must expose matching full-tangential fine-face coverage. The level-zero
-  route is installed before hierarchy bootstrap, and only that exact route can authorize
+  route is installed before hierarchy bootstrap. Each successfully created fine route is installed
+  before that level becomes the parent of the next transition; only those exact routes can authorize
   proper-nesting support across an omitted physical-boundary face. This route does not mirror one
   endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
-  three-or-more-level public AMR interfaces, dynamic active-depth changes, historical
-  shared-interface rates, and dynamic refined MPI rematerialization remain unavailable. Frozen
-  refined interface publication uses the same exact `MPI_COMM_WORLD` trace consensus as the flat
-  route; every rank evaluates the canonical shared flux and scatters only to its locally owned
+  dynamic active-depth changes, non-finest dynamic replacements at depth greater than two,
+  historical shared-interface rates, and dynamic refined MPI rematerialization remain unavailable.
+  Frozen refined interface publication uses the same exact `MPI_COMM_WORLD` trace consensus as the
+  flat route; every rank evaluates the canonical shared flux and scatters only to its locally owned
   endpoint cells.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and

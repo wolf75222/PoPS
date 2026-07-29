@@ -524,10 +524,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     }
     if (capturing()) {
       const bool has_interfaces = eng_->has_level_interfaces(level_);
-      if (has_interfaces && nlev() != 2)
-        deferred_op("refined_shared_block_interfaces",
-                    "shared block interface-fragment publication currently requires exactly two "
-                    "active hierarchy levels");
       if (has_interfaces)
         register_interface_flux_group_(group_id, blocks, rate_ids);
       const auto group_point = boundary_point_(group_id);
@@ -3134,9 +3130,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   void begin_interface_flux_attempt_() const {
-    if (nlev() != 2)
+    if (nlev() < 2)
       return;
-    eng_->require_complete_fixed_two_level_interfaces();
+    eng_->require_complete_active_level_interfaces();
     const std::uint64_t topology_epoch = eng_->topology_epoch();
     if (!interface_flux_ledger_)
       interface_flux_ledger_.emplace(topology_epoch);
@@ -3152,11 +3148,11 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void commit_interface_flux_attempt_() const {
     if (!interface_flux_ledger_)
       return;
-    // A head-of-step regrid may have removed the fine level before this attempt entered the
+    // A head-of-step regrid may have removed every fine level before this attempt entered the
     // Program body. begin_interface_flux_attempt_() is then intentionally a no-op; the matching
-    // commit must be one too instead of treating the resident, inactive two-level workspace as a
-    // broken transaction.
-    if (nlev() != 2) {
+    // commit must be one too instead of treating inactive refined workspace as a broken
+    // transaction.
+    if (nlev() < 2) {
       accepted_interface_flux_report_.clear();
       return;
     }
@@ -3285,18 +3281,17 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   runtime::multiblock::InterfaceFluxFragmentPublication interface_flux_publication_(
       int stage) const {
     require_group_identity_(stage);
-    if (nlev() != 2 || !current_window_ || !interface_flux_ledger_ ||
+    if (nlev() < 2 || !current_window_ || !interface_flux_ledger_ ||
         !interface_flux_ledger_->in_transaction())
       throw std::runtime_error(
-          "AMR interface-flux publication has no active fixed two-level Program transaction");
+          "AMR interface-flux publication has no active refined Program transaction");
     const std::uint64_t topology_epoch = eng_->topology_epoch();
     if (interface_flux_ledger_->topology_epoch() != topology_epoch)
       throw std::runtime_error(
           "AMR interface-flux publication crossed a frozen hierarchy topology epoch");
     return {&*interface_flux_ledger_,
             topology_epoch,
-            0,
-            1,
+            nlev(),
             evaluation_clock_(),
             interface_flux_group_identity_(stage),
             *current_window_,

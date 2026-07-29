@@ -105,7 +105,6 @@ def test_parser_finds_only_explicit_known_deferrals():
         "neg_div_flux_into",
         "solve_fields_from_state_default",
         "solve_fields_from_blocks_default",
-        "refined_shared_block_interfaces",
         "solve_fields_from_state_at_fine_level",
     ):
         assert identifier in header
@@ -165,12 +164,25 @@ def test_context_sensitive_deferrals_are_reported_only_when_reachable():
             module, refined=True, interfaces=True, frozen=False)) == {}
     assert module.amr_program_op_support(
         _Program([]), context=_context(
-            module, refined=False, interfaces=True, frozen=False)) == {
-                "refined_shared_block_interfaces": "pending",
-            }
+            module, refined=False, interfaces=True, frozen=False)) == {}
     assert module.amr_program_op_support(
         _Program([]), context=_context(
             module, refined=True, interfaces=True, frozen=True)) == {}
+
+    frozen_three = module.AMRProgramSupportContext(
+        hierarchy_level_count=3,
+        frozen_hierarchy=True,
+        shared_block_interfaces=True,
+        field_routes_validated=True,
+    )
+    dynamic_three = module.AMRProgramSupportContext(
+        hierarchy_level_count=3,
+        frozen_hierarchy=False,
+        shared_block_interfaces=True,
+        field_routes_validated=True,
+    )
+    assert frozen_three.supports_shared_interface_fragments
+    assert dynamic_three.supports_shared_interface_fragments
 
 
 def test_ir_ops_mirror_the_codegen_op_group_sets():

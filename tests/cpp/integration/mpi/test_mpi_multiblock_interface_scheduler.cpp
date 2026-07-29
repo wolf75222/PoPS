@@ -1,9 +1,14 @@
 #include <gtest/gtest.h>
 
+#include "amr_transfer_test_authority.hpp"
 #include "gtest_compat.hpp"
 #include <pops/parallel/comm.hpp>
+#include <pops/physics/bricks/bricks.hpp>
+#include <pops/runtime/amr/amr_runtime.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -15,6 +20,12 @@ using namespace pops;
 using namespace pops::runtime::multiblock;
 
 namespace {
+
+using ExBModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+
+ExBModel scalar_model() {
+  return ExBModel{ExBVelocity{Real(1)}, NoSource{}, ChargeDensity{Real(0)}};
+}
 
 void authenticate_cell_average_trace(AxisAlignedInterface& route) {
   route.left_trace_projection_identity = route.identity + ".left-trace";
@@ -244,7 +255,7 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
                                            {1, 4, amr::Rational(1, 1), 0.375}};
       const amr::ClockStamp fine_clock{1, 4, amr::Rational(1, 2), 0.3125};
       InterfaceFluxFragmentPublication fine_publication{
-          &fine_ledger,       19, 0, 1, fine_clock, "program.group.refined-mpi", fine_interval,
+          &fine_ledger,       19, 2, fine_clock, "program.group.refined-mpi", fine_interval,
           amr::Rational(1, 1)};
       std::vector<MultiFab*> fine_states{&fine_left_state, &fine_right_state};
       std::vector<MultiFab*> fine_rhs{&fine_left_rhs, &fine_right_rhs};
@@ -274,6 +285,122 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       require(fine_left_domain == fine_left_state.box_array().bounding_box());
       require(fine_right_domain == fine_right_state.box_array().bounding_box());
 
+      // Exercise the actual AMR publication entry point, not only the detached scheduler. The
+      // middle level of a three-level prefix must append one fragment to each adjacent pair under
+      // the same MPI_COMM_WORLD collective identity.
+      AmrBuildParams amr_params;
+      amr_params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+      amr_params.mesh.periodicity = Periodicity{true, true};
+      amr_params.mesh.n = 4;
+      amr_params.mesh.L = 1.0;
+      amr_params.mesh.regrid_every = 0;
+      amr_params.mesh.distribute_coarse = true;
+      amr_params.mesh.coarse_max_grid = 2;
+      amr_params.poisson.bc = BCRec{};
+      detail::SharedAmrLayout amr_layout = detail::make_shared_amr_layout_levels(amr_params, 3);
+      for (int level = 1, refinement = kAmrRefRatio; level < 3;
+           ++level, refinement *= kAmrRefRatio) {
+        amr_layout.ba[static_cast<std::size_t>(level)] =
+            BoxArray(std::vector<Box2D>{amr_layout.geom.domain.refine(refinement)});
+        amr_layout.dm[static_cast<std::size_t>(level)] = amr_layout.load_balance->distribute(
+            amr_layout.ba[static_cast<std::size_t>(level)], n_ranks());
+      }
+      std::vector<AmrRuntimeBlock> amr_blocks;
+      for (const char* name : {"left", "right"}) {
+        AmrRuntimeBlock block =
+            detail::dispatch_amr_block(scalar_model(), "none", "rusanov", amr_layout, name,
+                                       std::vector<double>(16, 1.0), true, 1.4, 1, false, 1);
+        const auto omit_local_interface = [](MultiFab&, const MultiFab&, const Geometry&,
+                                             MultiFab& fx, MultiFab& fy, MultiFab& rhs) {
+          fx.set_val(Real(0));
+          fy.set_val(Real(0));
+          rhs.set_val(Real(0));
+        };
+        block.level_flux_capture = omit_local_interface;
+        block.level_flux_capture_neg_div = omit_local_interface;
+        block.level_rhs_without_prepared_interfaces = [](const BoundaryEvaluationPoint&, MultiFab&,
+                                                         const MultiFab&, const Geometry&,
+                                                         MultiFab& rhs) { rhs.set_val(Real(0)); };
+        block.level_neg_div_flux_without_prepared_interfaces =
+            block.level_rhs_without_prepared_interfaces;
+        amr_blocks.push_back(std::move(block));
+      }
+      AmrRuntime amr_runtime(amr_layout.geom, amr_layout.runtime_hierarchy(), amr_layout.poisson_bc,
+                             std::move(amr_blocks), amr_layout.base_per,
+                             amr_layout.replicated_coarse, amr_layout.wall);
+      test::install_second_order_amr_transfer_authorities(amr_runtime, 2);
+      amr_runtime.set_parent_child_temporal_relations(
+          {amr::ParentChildClockRelation(0, 1, amr::Rational(2, 1),
+                                         amr::RemainderPolicy::IntegralOnly),
+           amr::ParentChildClockRelation(1, 2, amr::Rational(2, 1),
+                                         amr::RemainderPolicy::IntegralOnly)});
+      std::array<int, 3> amr_evaluator_calls{0, 0, 0};
+      for (int level = 0; level < 3; ++level) {
+        AxisAlignedInterface amr_route;
+        amr_route.identity = "mpi-two-rank.three-level-shared-flux";
+        amr_route.left_block = 0;
+        amr_route.right_block = 1;
+        amr_route.level = level;
+        amr_route.left_axis = amr_route.right_axis = InterfaceAxis::X;
+        amr_route.left_side = InterfaceSide::High;
+        amr_route.right_side = InterfaceSide::Low;
+        amr_route.right_component_for_left = {0};
+        amr_route.affine_mapping_identity = "periodic-x-translation";
+        amr_route.right_normal_translation = Real(1);
+        authenticate_cell_average_trace(amr_route);
+        amr_runtime.install_level_interface_flux(
+            level, amr_route, execution,
+            [&amr_evaluator_calls, level](const BoundaryEvaluationPoint&,
+                                          const InterfaceFluxBatch& batch) {
+              ++amr_evaluator_calls[static_cast<std::size_t>(level)];
+              for (int face = 0; face < batch.face_count; ++face)
+                batch.shared_flux[face] = Real(level + face + 1);
+            });
+      }
+      amr_runtime.require_complete_active_level_interfaces();
+      MultiFab& amr_left = amr_runtime.level_state(0, 1);
+      MultiFab& amr_right = amr_runtime.level_state(1, 1);
+      MultiFab amr_left_rhs(amr_left.box_array(), amr_left.dmap(), 1, 0);
+      MultiFab amr_right_rhs(amr_right.box_array(), amr_right.dmap(), 1, 0);
+      amr_left_rhs.set_val(Real(0));
+      amr_right_rhs.set_val(Real(0));
+      const BoundaryEvaluationPoint amr_point{"clock.mpi-three-level", 5,   1,   0, 4,
+                                              amr::Rational(1, 2),     0.1, 0.45};
+      InterfaceFluxFragmentLedger amr_ledger(amr_runtime.topology_epoch());
+      amr_ledger.begin();
+      const amr::ClockWindow amr_interval{{1, 5, amr::Rational(0, 1), 0.4},
+                                          {1, 5, amr::Rational(1, 1), 0.5}};
+      InterfaceFluxFragmentPublication amr_publication{
+          &amr_ledger,
+          amr_runtime.topology_epoch(),
+          3,
+          amr::ClockStamp{1, 5, amr::Rational(1, 2), 0.45},
+          "program.group.mpi-three-level",
+          amr_interval,
+          amr::Rational(1, 1)};
+      amr_runtime.publish_level_interface_flux_fragments(
+          1, amr_point, {0, 1}, {&amr_left, &amr_right}, {&amr_left_rhs, &amr_right_rhs},
+          amr_publication);
+      require(amr_evaluator_calls == (std::array<int, 3>{0, 1, 0}));
+      require(amr_ledger.pending_size() == 2u);
+      bool saw_lower_pair = false;
+      bool saw_upper_pair = false;
+      for (const auto& fragment : amr_ledger.pending_entries()) {
+        require(fragment.key.interface_identity == "mpi-two-rank.three-level-shared-flux");
+        require(fragment.key.topology_epoch == amr_runtime.topology_epoch());
+        require(fragment.key.clock.level == 1);
+        saw_lower_pair = saw_lower_pair ||
+                         (fragment.key.coarse_level == 0 && fragment.key.fine_level == 1 &&
+                          fragment.key.orientation == amr::InterfaceFluxOrientation::FineOutward);
+        saw_upper_pair = saw_upper_pair ||
+                         (fragment.key.coarse_level == 1 && fragment.key.fine_level == 2 &&
+                          fragment.key.orientation == amr::InterfaceFluxOrientation::CoarseOutward);
+      }
+      require(saw_lower_pair && saw_upper_pair);
+      require(all_reduce_sum(field_is_zero(amr_left_rhs) ? 0L : 1L) > 0);
+      require(all_reduce_sum(field_is_zero(amr_right_rhs) ? 0L : 1L) > 0);
+      amr_ledger.commit();
+
       fine_left_rhs.set_val(Real(0));
       fine_right_rhs.set_val(Real(0));
       InterfaceFluxFragmentLedger divergent_publication_ledger(20);
@@ -281,8 +408,7 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       InterfaceFluxFragmentPublication divergent_publication{
           &divergent_publication_ledger,
           20,
-          0,
-          1,
+          2,
           fine_clock,
           my_rank() == 0 ? "program.group.rank-zero" : "program.group.rank-one",
           fine_interval,
@@ -304,8 +430,7 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       sparse_publication_ledger.begin();
       InterfaceFluxFragmentPublication sparse_publication{&sparse_publication_ledger,
                                                           21,
-                                                          0,
-                                                          1,
+                                                          2,
                                                           fine_clock,
                                                           "program.group.sparse-publication",
                                                           fine_interval,
@@ -331,8 +456,7 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       InterfaceFluxFragmentPublication divergent_transaction_publication{
           &divergent_transaction_ledger,
           22,
-          0,
-          1,
+          2,
           fine_clock,
           "program.group.divergent-transaction",
           fine_interval,
@@ -372,13 +496,7 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
                                              {amr::Rational(1, 1), 0.125, 0.125},
                                              InterfaceFluxFragmentPayload(16, Real(0)));
       InterfaceFluxFragmentPublication accumulation_failure_publication{
-          &accumulation_failure_ledger,
-          23,
-          0,
-          1,
-          fine_clock,
-          "program.group.duplicate",
-          fine_interval,
+          &accumulation_failure_ledger, 23, 2, fine_clock, "program.group.duplicate", fine_interval,
           amr::Rational(1, 1)};
       bool accumulation_failure_rejected = false;
       try {

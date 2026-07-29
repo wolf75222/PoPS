@@ -392,6 +392,9 @@ class AmrSystem {
       std::shared_ptr<component::LoadedComponent> component);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();
+  /// Internal bind transaction checkpoint for incremental per-level interface installation.
+  POPS_EXPORT std::size_t interface_flux_installation_checkpoint() const;
+  POPS_EXPORT void rollback_interface_flux_installations(std::size_t accepted_size);
   POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
                                                      int level = 0) const;
 

@@ -407,10 +407,11 @@ def finalize_runtime_authorities(
 
     Physical ghost plans are installed before block construction so generated closures capture them.
     A shared NumericalFlux is different: both exact endpoint MultiFabs must exist before the scheduler
-    can prove their BoxArray, DistributionMapping and face geometry.  AMR calls this finalizer once
-    before bootstrap to authenticate level-zero interface ownership, then again after bootstrap to
-    add any materialized fine-level route.  Repeated calls must extend the exact prefix and can never
-    reinstall or silently replace an existing route.
+    can prove their BoxArray, DistributionMapping and face geometry. AMR calls this finalizer before
+    bootstrap to authenticate level-zero ownership, after each successful level creation so the next
+    proper-nesting proof sees an exact parent-level route, and once with ``complete=True`` before
+    bind freezes. Repeated calls must extend the exact prefix and can never reinstall or silently
+    replace an existing route.
     """
     from pops.runtime._component_execution_context import component_execution_data
 
@@ -492,22 +493,23 @@ def finalize_runtime_authorities(
 
         hierarchy = install_plan.resolved_hierarchy.plan
         frozen = type(hierarchy.regrid) is FrozenHierarchy
-        dynamic_two_level = (
-            type(hierarchy.regrid) is RegridSchedule and hierarchy.level_count == 2
+        dynamic_refined = (
+            type(hierarchy.regrid) is RegridSchedule and hierarchy.level_count >= 2
         )
-        if hierarchy.level_count not in (1, 2) or not (frozen or dynamic_two_level):
+        if not frozen and not dynamic_refined:
             raise NotImplementedError(
-                "shared interface runtime finalization requires one or two frozen AMR levels, "
-                "or one dynamic two-level hierarchy")
+                "shared interface runtime finalization supports any frozen materialized L0 "
+                "prefix; dynamic regrid requires at least two configured levels and the complete "
+                "prefix active at bind")
         levels = _materialized_shared_interface_levels(native, hierarchy)
         from pops import _pops
 
         _validate_refined_shared_interface_execution(
-            levels, execution_data, _pops.n_ranks(), dynamic_regrid=dynamic_two_level)
-        if complete and dynamic_two_level and levels != (0, 1):
+            levels, execution_data, _pops.n_ranks(), dynamic_regrid=dynamic_refined)
+        if complete and dynamic_refined and levels != tuple(range(hierarchy.level_count)):
             raise NotImplementedError(
-                "dynamic two-level shared interfaces require both levels materialized at bind; "
-                "active-depth creation/removal is not yet an executable interface route"
+                "dynamic shared interfaces require the complete configured prefix materialized "
+                "at bind; post-bind active-depth creation/removal is not executable"
             )
     elif adaptive != {False}:
         raise ValueError("shared interface finalization requires one coherent layout capability")
@@ -608,15 +610,34 @@ def finalize_runtime_authorities(
             "declaration_identity": declaration_identity,
         })
     discard = getattr(native, "_discard_interface_flux_components", None)
-    if jobs and not callable(discard):
+    checkpoint_provider = getattr(native, "_interface_flux_installation_checkpoint", None)
+    rollback_installations = getattr(
+        native, "_rollback_interface_flux_installations", None
+    )
+    transactional_prefix = callable(checkpoint_provider) and callable(
+        rollback_installations
+    )
+    if jobs and not transactional_prefix and not callable(discard):
         raise NotImplementedError(
             "the selected native provider cannot roll back shared interface installation")
+    accepted_size = None
+    if jobs and transactional_prefix:
+        accepted_size = cast(Callable[[], Any], checkpoint_provider)()
+        if type(accepted_size) is not int or accepted_size < 0:
+            raise RuntimeError(
+                "native shared-interface installation checkpoint is invalid"
+            )
     try:
         for job in jobs:
             cast(Callable[..., Any], install)(*job)
     except BaseException:
-        cast(Callable[..., Any], discard)()
-        engine._interface_authorities = MappingProxyType({})
+        try:
+            if accepted_size is None:
+                cast(Callable[..., Any], discard)()
+            else:
+                cast(Callable[[int], Any], rollback_installations)(accepted_size)
+        finally:
+            engine._interface_authorities = MappingProxyType(dict(previous_reports))
         raise
     engine._interface_authorities = MappingProxyType(installed_reports)
 
