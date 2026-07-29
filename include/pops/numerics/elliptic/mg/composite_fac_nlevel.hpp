@@ -484,7 +484,8 @@ inline void CompositeFacPoisson::prepare_fully_refined_solver_() {
   if (has_reaction_)
     fully_refined_solver_->set_reaction(constant_scalar_field_provider(reaction_));
   if (has_boundary_kernel_)
-    fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_);
+    fully_refined_solver_->set_boundary_kernel(boundary_kernel_,
+                                               boundary_context_for_level_(finest));
 }
 
 inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(int max_iters, Real rel_tol,
@@ -499,8 +500,8 @@ inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(int max_iters, R
   }
   if (has_cross_)
     solver.set_cross_terms(a_xy_level(finest), a_yx_level(finest));
-  if (has_boundary_kernel_ && boundary_kernel_.observes_iteration)
-    solver.set_boundary_context(boundary_context_);
+  if (has_boundary_kernel_)
+    solver.set_boundary_context(boundary_context_for_level_(finest));
   copy0_(solver.rhs(), rhs_level(finest));
   copy0_(solver.phi(), phi_level(finest));
   Real residual = Real(0);
@@ -757,7 +758,7 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
   if (m == 0) {
     prepare_field_residual_view(phim, has_boundary_kernel_ ? &boundary_view_c_ : nullptr, gm, bc_,
                                 has_boundary_kernel_ ? &boundary_kernel_ : nullptr,
-                                has_boundary_kernel_ ? &boundary_context_ : nullptr);
+                                has_boundary_kernel_ ? &boundary_context_for_level_(0) : nullptr);
   } else {
     if (m - 1 == 0)
       fill_ghosts(phi_c_, geom_c_.domain, bc_);
@@ -926,8 +927,7 @@ inline void CompositeFacPoisson::project_base_correction_rhs_() {
     local_count += static_cast<std::size_t>(valid.num_cells());
   }
   if (local_count == 0)
-    throw std::runtime_error(
-        "CompositeFacPoisson: replicated base correction has no local cells");
+    throw std::runtime_error("CompositeFacPoisson: replicated base correction has no local cells");
   const Real mean = local_sum / static_cast<Real>(local_count);
   for (int li = 0; li < rhs.local_size(); ++li)
     for_each_cell(rhs.box(li), detail::FacShiftKernel{rhs.fab(li).array(), mean});

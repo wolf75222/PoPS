@@ -106,8 +106,11 @@ Supported native routes include:
   conditional scratch. Field-coupled `rhs_jacvec` re-solves its exact prepared provider from the
   perturbed state on level zero and every refined level. Dynamic physical field boundaries may read
   level-qualified conservative states, already-solved fields and the exact stage/local time under
-  `LevelByLevelSolve`; multilevel composite dynamic boundaries remain fail-closed until the
-  composite FAC provider exposes one boundary context per physical level.
+  both `LevelByLevelSolve` and `CompositeHierarchySolve`; the composite FAC provider requires one
+  exact dependency carrier per materialized level before entering a solve. Partially refined FAC
+  patches carrying a dynamic physical boundary must remain strictly interior; a patch touching a
+  non-periodic domain face fails closed. A selected solve with a field dependency also fails closed
+  until its complete dependency closure can share one transaction.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
 - Runtime accepted-state checkpoint v5 for Uniform and AMR. The single-file MPI route captures

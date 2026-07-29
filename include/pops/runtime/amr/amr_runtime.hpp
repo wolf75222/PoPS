@@ -3700,6 +3700,21 @@ class AmrRuntime {
   }
 
   SolveOutcome solve_named_fields(const std::string* selected = nullptr) {
+    // A selected solve snapshots and publishes only that exact field. Reusing an already-published
+    // boundary-field dependency here would make stage/JVP evaluations silently consume a stale
+    // value, while solving it first would escape the selected transaction. Refuse this narrow route
+    // before provider materialization; the all-fields route below owns the complete topological
+    // closure and publishes it atomically.
+    long selected_dependency_closure_is_unsupported = 0;
+    if (selected != nullptr) {
+      const auto found = named_fields_.find(*selected);
+      if (found != named_fields_.end() && !found->second.plan.boundary_field_blocks.empty())
+        selected_dependency_closure_is_unsupported = 1;
+    }
+    if (all_reduce_max(selected_dependency_closure_is_unsupported) != 0)
+      throw std::runtime_error(
+          "AmrRuntime: a selected named-field solve cannot consume a boundary-field dependency "
+          "outside its transaction; solve the complete named-field dependency graph");
     return run_field_solve_transaction(
         FieldSolveScope{false,
                         selected == nullptr ? NamedFieldSnapshotScope::kAll
@@ -3713,25 +3728,6 @@ class AmrRuntime {
   /// consumed; only the provider's candidate publication remains transactional. This is the native
   /// field-coupled Jacobian seam used by AmrProgramContext.
   ///
-  /// A level-local provider receives one exact dependency carrier per materialized level. Composite
-  /// providers retain one coupled context and therefore remain fail-closed for state-dependent
-  /// dynamic boundaries until their solver ABI exposes an equally exact per-level route.
-  [[nodiscard]] bool named_field_stage_state_is_level_qualified(const std::string& provider_slot,
-                                                                int level) const {
-    const auto field = named_fields_.find(provider_slot);
-    if (field == named_fields_.end())
-      throw std::invalid_argument(
-          "AmrRuntime::named_field_stage_state_is_level_qualified selected an unknown provider "
-          "slot");
-    if (level < 0 || level >= nlev_)
-      throw std::out_of_range(
-          "AmrRuntime::named_field_stage_state_is_level_qualified level is out of range");
-    return level == 0 || !field->second.plan.has_boundary_kernel ||
-           (field->second.plan.boundary_state_blocks.empty() &&
-            field->second.plan.boundary_field_blocks.empty()) ||
-           field->second.plan.hierarchy_policy.policy_id == "pops.field-hierarchy.level-local";
-  }
-
   SolveOutcome solve_named_fields_from_state_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       std::size_t block, const MultiFab& stage_state) {
@@ -3742,10 +3738,6 @@ class AmrRuntime {
       throw std::out_of_range("AmrRuntime::solve_named_fields_from_state_at level is out of range");
     if (block >= blocks_.size())
       throw std::out_of_range("AmrRuntime::solve_named_fields_from_state_at block is out of range");
-    if (!named_field_stage_state_is_level_qualified(provider_slot, point.level))
-      throw std::logic_error(
-          "solve_fields_from_state_at_fine_level: a fine-level dynamic field boundary requires "
-          "level-qualified dependency views");
 
     MultiFab& live = (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U;
     if (!same_exact_multifab_layout_(live, stage_state))
@@ -3932,8 +3924,7 @@ class AmrRuntime {
             nf.plan.boundary_field_blocks.size() != nf.plan.boundary_field_keys.size() ||
             nf.plan.boundary_field_blocks.size() != nf.plan.boundary_field_components.size())
           dependency_error = 1;
-        if (levels != nlev_ || (levels > 1 && nf.plan.hierarchy_policy.policy_id !=
-                                                  "pops.field-hierarchy.level-local"))
+        if (levels != nlev_)
           dependency_error = std::max(dependency_error, 2L);
         if (dependency_error == 0) {
           for (int level = 0; level < levels; ++level)
@@ -4040,14 +4031,43 @@ class AmrRuntime {
           throw std::runtime_error(
               "AmrRuntime: level-qualified boundary state/field carriers could not be prepared "
               "collectively");
-        nf.boundary_level_contexts = std::move(prepared_contexts);
-        for (int level = 0; level < levels; ++level) {
-          auto& carrier = nf.boundary_level_contexts[static_cast<std::size_t>(level)];
-          carrier.context.states = carrier.state_buffers.data();
-          carrier.context.state_distributions = carrier.state_distributions.data();
-          carrier.context.fields = carrier.field_buffers.data();
-          carrier.context.field_distributions = carrier.field_distributions.data();
-          nf.solver->set_boundary_context_at_level(level, carrier.context);
+        const bool transactional_composite_refresh = nf.solver->couples_hierarchy_levels();
+        std::vector<NamedField::BoundaryLevelContext>* installation_contexts = &prepared_contexts;
+        if (!transactional_composite_refresh) {
+          // Level-local providers consume each carrier independently. Preserve their established
+          // stable-owner route; composite providers instead stage the complete batch below.
+          nf.boundary_level_contexts = std::move(prepared_contexts);
+          installation_contexts = &nf.boundary_level_contexts;
+        }
+        long installation_error = 0;
+        std::exception_ptr installation_exception;
+        try {
+          for (int level = 0; level < levels; ++level) {
+            auto& carrier = installation_contexts->at(static_cast<std::size_t>(level));
+            carrier.context.states = carrier.state_buffers.data();
+            carrier.context.state_distributions = carrier.state_distributions.data();
+            carrier.context.fields = carrier.field_buffers.data();
+            carrier.context.field_distributions = carrier.field_distributions.data();
+            nf.solver->set_boundary_context_at_level(level, carrier.context);
+          }
+        } catch (...) {
+          installation_error = 11;
+          installation_exception = std::current_exception();
+        }
+        installation_error = all_reduce_max(installation_error);
+        if (installation_error != 0) {
+          if (n_ranks() == 1 && installation_exception)
+            std::rethrow_exception(installation_exception);
+          throw std::runtime_error(
+              "AmrRuntime: prepared field provider refused at least one exact level-qualified "
+              "boundary carrier collectively");
+        }
+        if (transactional_composite_refresh) {
+          // Moving the vector transfers its backing allocation, so every pointer installed in the
+          // provider remains stable. The previously accepted carriers stay alive until the complete
+          // provider batch succeeds; a late refusal therefore cannot leave its active context
+          // dangling.
+          nf.boundary_level_contexts = std::move(prepared_contexts);
         }
       } else if (nf.plan.has_boundary_kernel) {
         FieldBoundaryExecutionContext context = nf.plan.boundary_context;

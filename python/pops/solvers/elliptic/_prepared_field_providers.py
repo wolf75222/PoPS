@@ -189,19 +189,6 @@ def _validate_geometric_mg(use: Any, where: str) -> None:
     if (
         facts.target == "amr_system"
         and levels > 1
-        and (
-            facts.boundary.get("state_dependent")
-            or facts.boundary.get("field_dependent")
-        )
-        and hierarchy != _LEVEL_LOCAL_HIERARCHY_POLICY
-    ):
-        raise ValueError(
-            "%s state/field-dependent multilevel AMR boundaries require the level-local "
-            "hierarchy policy" % where
-        )
-    if (
-        facts.target == "amr_system"
-        and levels > 1
         and hierarchy == _LEVEL_LOCAL_HIERARCHY_POLICY
         and facts.boundary.get("iterate_dependent")
     ):
@@ -284,8 +271,8 @@ def _register_ready_providers() -> tuple[Any, Any]:
                     "pops.field-hierarchy.composite@1",
                 ),
                 "amr_boundary_dependencies": (
-                    "level-local-state@1",
-                    "level-local-field@1",
+                    "level-qualified-state@1",
+                    "level-qualified-field@1",
                     "logical-timepoint@1",
                 ),
             },

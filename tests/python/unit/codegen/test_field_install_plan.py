@@ -494,8 +494,8 @@ def test_multilevel_amr_level_local_boundary_state_has_exact_level_route() -> No
     assert solver_binding.provider["use_policy"]["capabilities"][
         "amr_boundary_dependencies"
     ] == (
-        "level-local-state@1",
-        "level-local-field@1",
+        "level-qualified-state@1",
+        "level-qualified-field@1",
         "logical-timepoint@1",
     )
 
@@ -507,7 +507,7 @@ def test_multilevel_amr_level_local_boundary_state_has_exact_level_route() -> No
     assert "context.point.stage_slot" in source
 
 
-def test_multilevel_amr_composite_boundary_state_fails_closed() -> None:
+def test_multilevel_amr_composite_boundary_state_has_exact_level_route() -> None:
     model = Model("amr-composite-boundary-model")
     state = model.state("U", components=["rho"])
     (rho,) = state
@@ -528,16 +528,28 @@ def test_multilevel_amr_composite_boundary_state_fails_closed() -> None:
         hierarchy_policy=CompositeHierarchySolve(),
     ))
 
-    with pytest.raises(
-        LoweringRejection,
-        match="select LevelByLevelSolve for exact per-level dependency views",
-    ):
-        capture_field_plans(
-            problem,
-            lambda value: value,
-            target="amr_system",
-            layout=_MULTILEVEL_AMR_LAYOUT,
-        )
+    plan = capture_field_plans(
+        problem,
+        lambda value: value,
+        target="amr_system",
+        layout=_MULTILEVEL_AMR_LAYOUT,
+    )["potential"]
+
+    assert plan.native_options["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
+    dependencies = plan.native_options["boundary_dependencies"]
+    assert [(row["owner_block"], row["component"])
+            for row in dependencies["states"]] == [("material", 0)]
+    dependency_evidence = [
+        output
+        for row in plan.coverage
+        if "boundary-dependency" in row.source
+        for output in row.targets
+    ]
+    assert dependency_evidence == [
+        "field-install:potential:boundary-buffer:states:level-qualified"
+    ]
 
 
 def test_multilevel_amr_level_local_boundary_field_has_exact_level_route() -> None:
