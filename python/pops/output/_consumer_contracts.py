@@ -576,6 +576,16 @@ class ConsumerManifest:
                 ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
             raise ValueError(
                 "only ConsoleMonitor or ScientificOutput can carry diagnostic quantities")
+        has_accepted_balance = any(
+            operation["reduction"] == "accepted_balance"
+            for quantity in diagnostic_quantities
+            for operation in quantity.execution["operations"]
+        )
+        if has_accepted_balance and self.schedule.consumer_may_fire_at_start():
+            raise ValueError(
+                "Balance schedule cannot fire at_start: accepted balance evidence exists "
+                "only after a native step attempt"
+            )
         object.__setattr__(self, "diagnostic_quantities", diagnostic_quantities)
         if not isinstance(self.dependencies, tuple):
             raise TypeError("ConsumerManifest.dependencies must be a tuple")
