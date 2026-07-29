@@ -36,12 +36,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
   reflux source. `AMRRegrid.frozen()` exposes the materialize-once public hierarchy policy, and the
-  installed shared-interface route covers one or two frozen levels with exact SSPRK2/subcycling
-  evaluation when both endpoint hierarchies already provide matching full-face fine coverage.
+  the installed shared-interface route covers one or two frozen levels, plus a serial dynamic
+  two-level hierarchy whose complete depth is active at bind, with exact SSPRK2/subcycling
+  evaluation when both endpoint hierarchies provide matching full-face fine coverage. A
+  depth-preserving regrid transaction now rematerializes face cells, ownership, scratch and
+  collective layout identity before the next Program stage; a missing face or active-depth change
+  fails closed and restores the accepted interface registry.
   Level-zero interface ownership is authenticated before AMR bootstrap, so proper-nesting may cross
   only the exact physical faces deliberately omitted from their paired boundary plans.
-  One-sided tag propagation, deeper or dynamically regridded hierarchies, refined MPI, implicit JVP
-  and historical-rate paths remain fail-closed.
+  One-sided tag propagation, deeper hierarchies, dynamic active-depth changes, refined MPI,
+  implicit JVP and historical-rate paths remain fail-closed.
 - Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the
   held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
   hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay

@@ -397,7 +397,9 @@ def _validate_refined_shared_interface_execution(
             "MPI_COMM_WORLD with multiple ranks is rejected during bind")
 
 
-def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
+def finalize_runtime_authorities(
+    engine: Any, install_plan: Any, *, complete: bool = False
+) -> None:
     """Install authorities for the currently materialized native level prefix.
 
     Physical ghost plans are installed before block construction so generated closures capture them.
@@ -483,18 +485,27 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
     adaptive = {row.adaptive for row in install_plan.artifact.layout_plan.layouts}
     levels = (0,)
     if adaptive == {True}:
-        from pops.mesh._amr import FrozenHierarchy
+        from pops.mesh._amr import FrozenHierarchy, RegridSchedule
 
         hierarchy = install_plan.resolved_hierarchy.plan
-        if hierarchy.level_count not in (1, 2) \
-                or type(hierarchy.regrid) is not FrozenHierarchy:
+        frozen = type(hierarchy.regrid) is FrozenHierarchy
+        dynamic_two_level = (
+            type(hierarchy.regrid) is RegridSchedule and hierarchy.level_count == 2
+        )
+        if hierarchy.level_count not in (1, 2) or not (frozen or dynamic_two_level):
             raise NotImplementedError(
-                "shared interface runtime finalization requires one or two frozen AMR levels")
+                "shared interface runtime finalization requires one or two frozen AMR levels, "
+                "or one dynamic two-level hierarchy")
         levels = _materialized_shared_interface_levels(native, hierarchy)
         from pops import _pops
 
         _validate_refined_shared_interface_execution(
             levels, execution_data, _pops.n_ranks())
+        if complete and dynamic_two_level and levels != (0, 1):
+            raise NotImplementedError(
+                "dynamic two-level shared interfaces require both levels materialized at bind; "
+                "active-depth creation/removal is not yet an executable interface route"
+            )
     elif adaptive != {False}:
         raise ValueError("shared interface finalization requires one coherent layout capability")
 

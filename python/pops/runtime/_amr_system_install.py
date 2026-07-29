@@ -359,7 +359,7 @@ class _AmrSystemInstall(_AmrSystem):
         # and native lifecycle freeze.
         if install_plan is not None:
             from pops.runtime._runtime_authorities import finalize_runtime_authorities
-            finalize_runtime_authorities(self, install_plan)
+            finalize_runtime_authorities(self, install_plan, complete=True)
 
         # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
         # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the

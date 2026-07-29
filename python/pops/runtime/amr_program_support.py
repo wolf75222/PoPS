@@ -64,8 +64,11 @@ class AMRProgramSupportContext:
 
     @property
     def supports_shared_interface_fragments(self) -> bool:
-        """Whether the installed ledger route serves this exact hierarchy policy."""
-        return self.frozen_hierarchy and self.hierarchy_level_count <= 2
+        """Whether the installed ledger route serves this resolved hierarchy policy."""
+        if self.frozen_hierarchy:
+            return self.hierarchy_level_count <= 2
+        # Resolve validation admits only the exact scheduled-regrid policy on this branch.
+        return self.hierarchy_level_count == 2
 
 # --- Capability groups: the ONE mirror of the AmrProgramContext deferral surface ----------------
 # Each group names (a) the AmrProgramContext C++ methods that FAIL LOUD for it -- the header-derived

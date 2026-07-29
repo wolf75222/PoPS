@@ -86,6 +86,11 @@ using InterfaceFluxEvaluator =
     std::function<void(const BoundaryEvaluationPoint&, const InterfaceFluxBatch&)>;
 using InterfaceFluxEvaluatorFactory = std::function<InterfaceFluxEvaluator()>;
 
+enum class InterfaceRematerializationAuthority : std::uint8_t {
+  RuntimeTopology,
+  BindBootstrap,
+};
+
 using InterfaceFluxFragmentPayload = std::vector<Real>;
 using InterfaceFluxFragmentLedger =
     ::pops::amr::TransactionalInterfaceFluxLedger<InterfaceFluxFragmentPayload>;
@@ -106,6 +111,8 @@ struct InterfaceFluxFragmentPublication {
 };
 
 class InterfaceFluxScheduler {
+  struct PreparedInterface;
+
  public:
   /// Prepare and install one supported route.  Layout, component permutation, face orientation and
   /// equal discretisation are all proved here, before any residual evaluation can begin.
@@ -428,27 +435,95 @@ class InterfaceFluxScheduler {
     return false;
   }
 
+  /// Rebuild every layout-bound trace plan against a replacement AMR hierarchy.  The numerical
+  /// flux evaluator and its accepted evaluation count are retained; boxes, ownership, boundary-cell
+  /// maps, collective identity and persistent scratch are prepared afresh.  The returned scheduler
+  /// is a detached candidate, so a failed regrid never mutates the accepted registry.
+  template <class StateProvider, class GeometryProvider>
+  InterfaceFluxScheduler rematerialized(
+      int active_level_count, StateProvider&& state_provider, GeometryProvider&& geometry_provider,
+      InterfaceRematerializationAuthority authority =
+          InterfaceRematerializationAuthority::RuntimeTopology) const {
+    if (active_level_count < 1)
+      throw std::invalid_argument(
+          "multi-block interface rematerialization requires a positive active level count");
+    if (authority != InterfaceRematerializationAuthority::RuntimeTopology &&
+        authority != InterfaceRematerializationAuthority::BindBootstrap)
+      throw std::invalid_argument(
+          "multi-block interface rematerialization has an invalid lifecycle authority");
+    const bool collective_world = comm_active() && n_ranks() > 1;
+    InterfaceFluxScheduler candidate;
+    std::exception_ptr allocation_failure;
+    try {
+      candidate.interfaces_.reserve(interfaces_.size());
+    } catch (...) {
+      allocation_failure = std::current_exception();
+    }
+    finish_collective_preflight_(collective_world, allocation_failure,
+                                 "replacement registry allocation");
+
+    for (const PreparedInterface& prepared : interfaces_) {
+      PreparedInterface replacement;
+      std::exception_ptr structural_failure;
+      try {
+        if (prepared.route.level < 0 || prepared.route.level >= active_level_count)
+          throw std::runtime_error(
+              "multi-block interface replacement changed the active hierarchy depth");
+        MultiFab& left_state =
+            std::invoke(state_provider, prepared.route.left_block, prepared.route.level);
+        MultiFab& right_state =
+            std::invoke(state_provider, prepared.route.right_block, prepared.route.level);
+        const Geometry geometry = std::invoke(geometry_provider, prepared.route.level);
+        replacement =
+            rematerialize_prepared_(prepared, left_state, geometry, right_state, geometry);
+      } catch (...) {
+        structural_failure = std::current_exception();
+      }
+      finish_collective_preflight_(collective_world, structural_failure,
+                                   "replacement route/layout preflight");
+      std::exception_ptr storage_failure;
+      try {
+        // reserve() above gives every rank the complete registry capacity and PreparedInterface has
+        // a nothrow move constructor. Keep this materialization guarded nevertheless: a future
+        // carrier change must fail collectively instead of stranding another rank in the next
+        // preflight.
+        candidate.interfaces_.push_back(std::move(replacement));
+      } catch (...) {
+        storage_failure = std::current_exception();
+      }
+      finish_collective_preflight_(collective_world, storage_failure,
+                                   "replacement registry materialization");
+    }
+
+    std::exception_ptr registry_failure;
+    try {
+      // Bind bootstrap authenticates L0 before the native hierarchy creates L1, then installs the
+      // fine route immediately afterwards in the same bind transaction. Only that explicit
+      // lifecycle authority may carry the incremental prefix. Runtime topology changes remain
+      // strict even when no finest-level route exists.
+      const bool incremental_bind_prefix =
+          authority == InterfaceRematerializationAuthority::BindBootstrap &&
+          !candidate.has_interfaces(active_level_count - 1);
+      if (!incremental_bind_prefix)
+        candidate.require_complete_active_level_registry_(active_level_count);
+      if (collective_world && !candidate.registry_agrees_across_ranks_())
+        throw std::runtime_error(
+            "multi-block interface replacement registry differs across MPI ranks");
+    } catch (...) {
+      registry_failure = std::current_exception();
+    }
+    finish_collective_preflight_(collective_world, registry_failure,
+                                 "replacement registry completeness");
+    return candidate;
+  }
+
+  void swap(InterfaceFluxScheduler& other) noexcept { interfaces_.swap(other.interfaces_); }
+
   /// Boundary plans are shared across levels. A fixed two-level Program must therefore schedule the
   /// same interface on both levels instead of omitting a touching face on one level with no canonical
   /// flux to put back.
   void require_complete_fixed_two_level_registry() const {
-    for (const PreparedInterface& prepared : interfaces_) {
-      if (prepared.route.level != 0 && prepared.route.level != 1)
-        throw std::runtime_error(
-            "fixed two-level interface registry contains a route outside levels 0/1");
-      const int peer_level = 1 - prepared.route.level;
-      const PreparedInterface* peer = nullptr;
-      for (const PreparedInterface& candidate : interfaces_)
-        if (candidate.route.identity == prepared.route.identity &&
-            candidate.route.level == peer_level) {
-          peer = &candidate;
-          break;
-        }
-      if (peer == nullptr || !same_route_across_levels_(prepared.route, peer->route) ||
-          prepared.component_count != peer->component_count)
-        throw std::runtime_error(
-            "fixed two-level interface registry is missing an exact peer-level route");
-    }
+    require_complete_active_level_registry_(2);
   }
 
   bool participates(std::size_t block, int level) const {
@@ -514,6 +589,117 @@ class InterfaceFluxScheduler {
     std::vector<Real> consensus;
   };
   static_assert(std::is_nothrow_move_constructible_v<PreparedInterface>);
+
+  static PreparedInterface rematerialize_prepared_(const PreparedInterface& prepared,
+                                                   MultiFab& left_state,
+                                                   const Geometry& left_geometry,
+                                                   MultiFab& right_state,
+                                                   const Geometry& right_geometry) {
+    if (prepared.distributed && (!comm_active() || n_ranks() != prepared.communicator_size))
+      throw std::runtime_error(
+          "multi-block interface MPI world changed before hierarchy rematerialization");
+    if (!prepared.distributed && comm_active() && n_ranks() > 1)
+      throw std::runtime_error(
+          "serial multi-block interface cannot rematerialize in a multi-rank MPI world");
+    if (left_state.box_array().size() < 1 || right_state.box_array().size() < 1)
+      throw std::invalid_argument("multi-block interface replacement layouts cannot be empty");
+    if (!prepared.distributed && (left_state.local_size() != left_state.box_array().size() ||
+                                  right_state.local_size() != right_state.box_array().size()))
+      throw std::invalid_argument(
+          "local multi-block interface replacement requires every prepared box locally owned");
+    if (left_state.ncomp() != prepared.component_count ||
+        right_state.ncomp() != prepared.component_count)
+      throw std::invalid_argument("multi-block interface replacement changed its component spaces");
+
+    const AxisAlignedInterface& route = prepared.route;
+    const Box2D left_box = left_state.box_array().bounding_box();
+    const Box2D right_box = right_state.box_array().bounding_box();
+    if (!tiles_declared_physical_face_(left_box, left_geometry, route.left_axis, route.left_side) ||
+        !tiles_declared_physical_face_(right_box, right_geometry, route.right_axis,
+                                       route.right_side))
+      throw std::invalid_argument(
+          "multi-block interface replacement does not tile its declared physical face");
+    const int left_faces = tangential_count_(left_box, route.left_axis);
+    const int right_faces = tangential_count_(right_box, route.right_axis);
+    const Real left_normal = normal_spacing_(left_geometry, route.left_axis);
+    const Real right_normal = normal_spacing_(right_geometry, route.right_axis);
+    const Real left_tangential = tangential_spacing_(left_geometry, route.left_axis);
+    const Real right_tangential = tangential_spacing_(right_geometry, route.right_axis);
+    if (left_faces != right_faces || left_faces < 1 || !(left_normal > Real(0)) ||
+        !(right_normal > Real(0)) || left_normal != right_normal ||
+        left_tangential != right_tangential)
+      throw std::invalid_argument(
+          "multi-block interface replacement discretisations are not exactly equal");
+    const Real left_normal_coordinate =
+        normal_coordinate_(left_geometry, route.left_axis, route.left_side);
+    const Real mapped_right_normal =
+        normal_coordinate_(right_geometry, route.right_axis, route.right_side) +
+        route.right_normal_translation;
+    const Real mapped_right_low =
+        route.right_tangential_scale *
+            (route.tangential_orientation == TangentialOrientation::Aligned
+                 ? tangential_low_(right_geometry, route.right_axis)
+                 : tangential_high_(right_geometry, route.right_axis)) +
+        route.right_tangential_offset;
+    const Real mapped_right_high =
+        route.right_tangential_scale *
+            (route.tangential_orientation == TangentialOrientation::Aligned
+                 ? tangential_high_(right_geometry, route.right_axis)
+                 : tangential_low_(right_geometry, route.right_axis)) +
+        route.right_tangential_offset;
+    if (left_normal_coordinate != mapped_right_normal ||
+        tangential_low_(left_geometry, route.left_axis) != mapped_right_low ||
+        tangential_high_(left_geometry, route.left_axis) != mapped_right_high)
+      throw std::invalid_argument(
+          "multi-block interface replacement faces do not coincide in physical space");
+
+    PreparedInterface replacement = prepared;
+    replacement.left_boxes = left_state.box_array().boxes();
+    replacement.left_ranks = left_state.dmap().ranks();
+    replacement.right_boxes = right_state.box_array().boxes();
+    replacement.right_ranks = right_state.dmap().ranks();
+    replacement.left_cells =
+        boundary_cells_(left_state, route.left_axis, route.left_side, left_faces);
+    replacement.right_cells =
+        boundary_cells_(right_state, route.right_axis, route.right_side, right_faces);
+    replacement.left_normal_spacing = left_normal;
+    replacement.right_normal_spacing = right_normal;
+    replacement.face_measure = left_tangential;
+    replacement.face_count = left_faces;
+    replacement.collective_identity = collective_plan_identity_(
+        route, left_state, left_geometry, right_state, right_geometry, left_normal, right_normal,
+        left_faces, prepared.component_count, prepared.communicator_size);
+    const std::size_t packed_size =
+        static_cast<std::size_t>(left_faces) * static_cast<std::size_t>(prepared.component_count);
+    if (packed_size > static_cast<std::size_t>(std::numeric_limits<int>::max()) / 2)
+      throw std::overflow_error(
+          "multi-block interface replacement trace batch exceeds the native MPI count domain");
+    replacement.traces.assign(2 * packed_size, Real(0));
+    replacement.flux.assign(packed_size, std::numeric_limits<Real>::quiet_NaN());
+    replacement.consensus.assign(packed_size, Real(0));
+    return replacement;
+  }
+
+  void require_complete_active_level_registry_(int active_level_count) const {
+    for (const PreparedInterface& prepared : interfaces_) {
+      if (prepared.route.level < 0 || prepared.route.level >= active_level_count)
+        throw std::runtime_error(
+            "multi-block interface registry contains a route outside the active hierarchy");
+      for (int level = 0; level < active_level_count; ++level) {
+        const PreparedInterface* peer = nullptr;
+        for (const PreparedInterface& candidate : interfaces_)
+          if (candidate.route.identity == prepared.route.identity &&
+              candidate.route.level == level) {
+            peer = &candidate;
+            break;
+          }
+        if (peer == nullptr || !same_route_across_levels_(prepared.route, peer->route) ||
+            prepared.component_count != peer->component_count)
+          throw std::runtime_error(
+              "multi-block interface registry is incomplete on the active hierarchy");
+      }
+    }
+  }
 
   static void finish_collective_preflight_(bool collective, const std::exception_ptr& local_failure,
                                            const char* phase) {

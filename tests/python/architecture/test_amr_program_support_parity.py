@@ -162,9 +162,12 @@ def test_context_sensitive_deferrals_are_reported_only_when_reachable():
         }
     assert module.amr_program_op_support(
         _Program([]), context=_context(
-            module, refined=True, interfaces=True, frozen=False)) == {
-            "refined_shared_block_interfaces": "pending",
-        }
+            module, refined=True, interfaces=True, frozen=False)) == {}
+    assert module.amr_program_op_support(
+        _Program([]), context=_context(
+            module, refined=False, interfaces=True, frozen=False)) == {
+                "refined_shared_block_interfaces": "pending",
+            }
     assert module.amr_program_op_support(
         _Program([]), context=_context(
             module, refined=True, interfaces=True, frozen=True)) == {}
