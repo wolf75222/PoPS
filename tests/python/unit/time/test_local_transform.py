@@ -77,7 +77,7 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert "ctx.apply_projection" not in source
 
     amr_source = emit_cpp_program(program, model=model, target="amr_system")
-    assert "if (ctx.nlev() > 1)" in amr_source
+    assert "if (ctx.program_resource_topology().levels > 1)" in amr_source
     assert "post-synchronization Program phase" in amr_source
     refresh = amr_source.index("auto _refresh_level_programs")
     refreshed_guard = amr_source.index(

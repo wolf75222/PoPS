@@ -105,7 +105,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   AmrProgramContext(AmrRuntime* eng, AmrSystem* facade) : facade_(facade), eng_(eng) {
     // Keep the established contract-test seam: argument/rate validation must be exercisable before
     // any topology lookup. Every executable driver supplies a real engine and is ratio-validated here;
-    // the production void* constructor above remains fail-closed when the engine was not built.
+    // the production facade constructor above remains fail-closed when the engine was not built.
     if (eng_ != nullptr) {
       require_supported_program_refinement_ratios_(*eng_);
       stage_restore_scratch_.reserve(eng_->n_blocks());
@@ -116,24 +116,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   // --- hierarchy-driver state -----------------------------------------------------------------------
-  void set_level(int k) const {
-    level_ = k;
-    if (hierarchy_barrier_level_selection_active_ && current_window_) {
-      current_window_->begin.level = k;
-      current_window_->end.level = k;
-    }
-  }
-  int level() const { return level_; }
-  /// Epoch used by generated install-time resource bundles. A regrid/rebalance changes this value;
-  /// generated Programs then rematerialize every per-level persistent field/problem/workspace once,
-  /// before entering the next hierarchy advance. Compatible steps retain the same bundles.
-  std::uint64_t program_resource_topology_epoch() const { return eng_->topology_epoch(); }
-  /// Runtime-only companion to the checkpointed epoch. This changes whenever hierarchy storage is
-  /// reconstructed, including checkpoint restore and rejected-attempt rollback, so an equal restored
-  /// epoch/nlev pair can never authenticate stale layout-bound Program resources.
-  std::uint64_t program_resource_topology_generation() const {
-    return eng_->topology_materialization_generation();
-  }
   int nlev() const { return eng_->nlev(); }
   bool uses_prepared_krylov_fallback() const {
     return configured_hierarchy_tensor_solver_().execution_path() ==
@@ -3579,6 +3561,11 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     }
     throw std::logic_error("unknown Program scheduler cache operation");
   }
+  ProgramResourceTopology program_execution_resource_topology_() const {
+    return {eng_->topology_epoch(), eng_->topology_materialization_generation(), eng_->nlev()};
+  }
+  int program_execution_resource_level_() const noexcept { return level_; }
+  void program_execution_select_resource_level_(int selected) const noexcept { level_ = selected; }
   ProgramResourceStorage program_execution_resource_storage_() const {
     const bool replicated = eng_->level_is_replicated(level_);
     return {replicated ? PreparedVectorDistribution::Replicated
