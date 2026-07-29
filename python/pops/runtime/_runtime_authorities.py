@@ -395,9 +395,6 @@ def _validate_refined_shared_interface_execution(
         return
     if communicator != "MPI_COMM_WORLD":
         raise TypeError("shared-interface execution requires serial or exact MPI_COMM_WORLD")
-    if dynamic_regrid and len(levels) > 1 and rank_count > 1:
-        raise NotImplementedError(
-            "dynamic refined shared-interface rematerialization is not yet proven on MPI")
 
 
 def finalize_runtime_authorities(
