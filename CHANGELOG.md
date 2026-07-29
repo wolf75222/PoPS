@@ -27,9 +27,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
   reflux source. Public refined execution remains fail-closed until fixed-hierarchy authoring,
   bind-to-run conservation, and historical-rate provenance are proved end to end.
-- Strict Uniform/AMR accepted-state checkpoints now use payload v5, persist the held Program cadence
-  window and last accepted Program interval, commit clock restoration transactionally, and allow
-  selective history replay only for the exact ring/depth authority exported by the installed artifact.
+- Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the
+  held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
+  hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay
+  only for the exact ring/depth authority exported by the installed artifact. AMR v5 images are
+  rejected fail-closed rather than silently restarting without their missing hysteresis state.
   Explicit AMR bootstrap also republishes the Program's level-qualified accepted image before each
   hierarchy transition commits, so a checkpoint taken before the first accepted step (after the
   required zero-step `pops.run` establishes its controls identity) already covers every active level.

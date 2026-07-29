@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 
-_SCHEMA = 2
+_SCHEMA = 3
 _GUARANTEE = "bit_identical_accepted_state"
 _CONTRACT_KEYS = {
     "schema_version", "guarantee", "program_state", "ledger", "clocks",

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -45,6 +46,8 @@ struct AmrProgramSyncEvent {
 struct AmrProgramAcceptedState {
   std::vector<amr::ClockStamp> level_clocks;
   std::map<std::string, std::int64_t> logical_clock_ticks;
+  /// Rank-independent canonical image of the runtime-owned AMR tagging hysteresis.
+  std::vector<std::uint8_t> tagging_hysteresis_state;
   std::map<std::string, int> history_owners;
   std::map<std::string, std::string> history_states;
   std::map<std::string, std::string> history_spaces;
@@ -92,6 +95,10 @@ class Writer {
     size(value.size());
     bytes_.insert(bytes_.end(), value.begin(), value.end());
   }
+  void bytes(const std::vector<std::uint8_t>& value) {
+    size(value.size());
+    bytes_.insert(bytes_.end(), value.begin(), value.end());
+  }
   void size(std::size_t value) { u64(static_cast<std::uint64_t>(value)); }
   std::vector<std::uint8_t> take() { return std::move(bytes_); }
 
@@ -134,6 +141,14 @@ class Reader {
     const std::size_t count = size();
     require_(count);
     std::string value(reinterpret_cast<const char*>(bytes_.data() + cursor_), count);
+    cursor_ += count;
+    return value;
+  }
+  std::vector<std::uint8_t> bytes() {
+    const std::size_t count = size();
+    require_(count);
+    std::vector<std::uint8_t> value(bytes_.begin() + static_cast<std::ptrdiff_t>(cursor_),
+                                    bytes_.begin() + static_cast<std::ptrdiff_t>(cursor_ + count));
     cursor_ += count;
     return value;
   }
@@ -362,11 +377,12 @@ inline std::vector<std::uint8_t> serialize_amr_program_accepted_state(
     const AmrProgramAcceptedState& state) {
   using namespace checkpoint_detail;
   Writer out;
-  out.u64(0x3254534153504f50ULL);  // "POPSAST2", little-endian bytes
+  out.u64(0x3354534153504f50ULL);  // "POPSAST3", little-endian bytes
   out.size(state.level_clocks.size());
   for (const auto& clock : state.level_clocks)
     write_clock(out, clock);
   write_map(out, state.logical_clock_ticks, [](Writer& w, std::int64_t value) { w.i64(value); });
+  out.bytes(state.tagging_hysteresis_state);
   write_map(out, state.history_owners, [](Writer& w, int v) { w.i32(v); });
   write_map(out, state.history_states, [](Writer& w, const std::string& v) { w.string(v); });
   write_map(out, state.history_spaces, [](Writer& w, const std::string& v) { w.string(v); });
@@ -429,7 +445,7 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     const std::vector<std::uint8_t>& bytes) {
   using namespace checkpoint_detail;
   Reader in(bytes);
-  if (in.u64() != 0x3254534153504f50ULL)
+  if (in.u64() != 0x3354534153504f50ULL)
     throw std::runtime_error(
         "invalid AMR Program accepted-state payload: unsupported magic/version");
   AmrProgramAcceptedState state;
@@ -438,6 +454,7 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     clock = read_clock(in);
   state.logical_clock_ticks =
       read_map<decltype(state.logical_clock_ticks)>(in, [](Reader& r) { return r.i64(); });
+  state.tagging_hysteresis_state = in.bytes();
   state.history_owners =
       read_map<std::map<std::string, int>>(in, [](Reader& r) { return r.i32(); });
   state.history_states =
