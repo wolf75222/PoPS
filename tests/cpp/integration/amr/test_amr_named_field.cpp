@@ -274,6 +274,35 @@ static Real max_valid_scalar_diff(const MultiFab& lhs, const MultiFab& rhs) {
   return result;
 }
 
+static std::pair<Real, Real> fine_difference_linearity_error(const MultiFab& full_step,
+                                                             const MultiFab& half_step,
+                                                             const MultiFab& base) {
+  if (full_step.box_array().boxes() != half_step.box_array().boxes() ||
+      full_step.box_array().boxes() != base.box_array().boxes() ||
+      full_step.dmap().ranks() != half_step.dmap().ranks() ||
+      full_step.dmap().ranks() != base.dmap().ranks() ||
+      full_step.local_size() != half_step.local_size() ||
+      full_step.local_size() != base.local_size())
+    throw std::invalid_argument("fine-difference linearity oracle requires identical layouts");
+  device_fence();
+  Real error = Real(0);
+  Real response = Real(0);
+  for (int li = 0; li < full_step.local_size(); ++li) {
+    const ConstArray4 full = full_step.fab(li).const_array();
+    const ConstArray4 half = half_step.fab(li).const_array();
+    const ConstArray4 origin = base.fab(li).const_array();
+    const Box2D valid = full_step.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        const Real full_response = full(i, j) - origin(i, j);
+        const Real half_response = half(i, j) - origin(i, j);
+        error = std::max(error, std::fabs(full_response - Real(2) * half_response));
+        response = std::max(response, std::fabs(full_response));
+      }
+  }
+  return {error, response};
+}
+
 static Real max_abs_component_diff(const MultiFab& lhs, const MultiFab& rhs, int component) {
   device_fence();
   Real result = Real(0);
@@ -825,6 +854,14 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
       "main", 7, 1, 0, 3, ::pops::amr::Rational(1, 2), 0.01, 0.075};
   SolveOutcome perturbed =
       runtime.solve_named_fields_from_state_at(fine_point, field, 0, perturbed_fine_state);
+  EXPECT_THROW(
+      {
+        SolveOutcome overlapping =
+            runtime.solve_named_fields_from_state_at(fine_point, field, 0, perturbed_fine_state);
+        (void)consume_expected_solved(std::move(overlapping));
+      },
+      std::logic_error)
+      << "one fine-level perturbation must retain exclusive ownership of its field transaction";
   EXPECT_EQ(max_abs_diff(runtime.level_state(0, 1), accepted_fine_state), Real(0))
       << "the provisional fine stage state must be restored before outcome consumption";
   EXPECT_EQ(max_abs_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi), Real(0));
@@ -835,6 +872,7 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
             Real(1e-6))
       << "the composite provider must assemble from the exact fine-level stage state";
   EXPECT_EQ(max_abs_diff(runtime.level_state(0, 1), accepted_fine_state), Real(0));
+  const MultiFab full_step_phi = runtime.provider_potential_level(field, 1);
 
   SolveOutcome restored =
       runtime.solve_named_fields_from_state_at(fine_point, field, 0, accepted_fine_state);
@@ -842,6 +880,26 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   EXPECT_LT(max_valid_scalar_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi),
             Real(1e-8))
       << "re-solving from the frozen accepted state restores the field-coupled evaluation";
+
+  MultiFab half_perturbed_fine_state = accepted_fine_state;
+  add_valid_constant(half_perturbed_fine_state, Real(0.0625));
+  SolveOutcome half_perturbed =
+      runtime.solve_named_fields_from_state_at(fine_point, field, 0, half_perturbed_fine_state);
+  ASSERT_TRUE(consume_expected_solved(std::move(half_perturbed)).solved());
+  const MultiFab half_step_phi = runtime.provider_potential_level(field, 1);
+  const auto [jvp_linearity_error, jvp_response] =
+      fine_difference_linearity_error(full_step_phi, half_step_phi, accepted_fine_phi);
+  EXPECT_GT(jvp_response, Real(1e-6))
+      << "the fine-level finite-difference direction must produce a nonzero field response";
+  EXPECT_LT(jvp_linearity_error, Real(5e-4) * jvp_response + Real(1e-10))
+      << "halving the exact fine-level state perturbation must halve the prepared provider "
+         "response, the numerical contract used by field-coupled rhs_jacvec";
+
+  SolveOutcome final_restore =
+      runtime.solve_named_fields_from_state_at(fine_point, field, 0, accepted_fine_state);
+  ASSERT_TRUE(consume_expected_solved(std::move(final_restore)).solved());
+  EXPECT_LT(max_valid_scalar_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi),
+            Real(1e-8));
 
   for (int level = 0; level < runtime.nlev(); ++level)
     EXPECT_EQ(max_valid_component_error(runtime.provider_potential_level(field, level),
