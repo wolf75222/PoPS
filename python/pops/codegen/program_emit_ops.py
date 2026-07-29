@@ -134,16 +134,25 @@ def _append_pointwise_solve_report(
 
 
 def _append_local_nonlinear_report(
-        program: Any, solve: Any, status: str, report: str, lines: list[str]) -> None:
-    """Reduce one prepared local-solve status field into the common collective report."""
+    program: Any, solve: Any, status: str, report: str, lines: list[str]
+) -> str:
+    """Reduce one prepared local solve and return its collective ``SolveOutcome`` token."""
     action_kind, _ = _consumed_solve_action(program, solve)
     failure_action = (
         "pops::SolveAction::kRejectAttempt"
         if action_kind == "reject_attempt"
         else "pops::SolveAction::kFailRun"
     )
+    priority = "%s_priority" % report
+    lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 10));" % (priority, status))
+    reduced = {
+        "status": "%s_status" % report,
+    }
+    lines.append(
+        "const int %s = pops::local_nonlinear_status_code("
+        "pops::local_nonlinear_status_from_priority(%s));" % (reduced["status"], priority)
+    )
     fields = (
-        ("status", 0, "int"),
         ("iterations", 1, "int"),
         ("evaluations", 2, "int"),
         ("reference_residual", 3, "real"),
@@ -152,7 +161,6 @@ def _append_local_nonlinear_report(
         ("condition", 6, "real"),
         ("safeguard_steps", 7, "int"),
     )
-    reduced = {}
     for suffix, component, kind in fields:
         token = "%s_%s" % (report, suffix)
         reduced[suffix] = token
@@ -166,15 +174,20 @@ def _append_local_nonlinear_report(
     failed_i = "%s_failed_i" % report
     failed_j = "%s_failed_j" % report
     failed_component = "%s_failed_component" % report
+    encoded_priority = "%s_encoded_priority" % report
     lines += [
         "const pops::Real %s = pops::reduce_max(%s, 8);" % (encoded, status),
         "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
+        "int %s = 0;" % encoded_priority,
         "int %s = -1;" % failed_i,
         "int %s = -1;" % failed_j,
         "int %s = -1;" % failed_component,
         "if (%s > pops::Real(0))" % failed_count,
-        "  pops::detail::decode_local_nonlinear_failure("
-        "%s, %s, %s, %s);" % (encoded, failed_i, failed_j, failed_component),
+        "  pops::detail::decode_ranked_local_nonlinear_failure("
+        "%s, %s, %s, %s, %s);" % (encoded, encoded_priority, failed_i, failed_j, failed_component),
+        "if (%s > pops::Real(0) && %s != %s)" % (failed_count, encoded_priority, priority),
+        "  throw std::runtime_error("
+        '"local nonlinear collective status/location precedence mismatch");',
     ]
     lines.append(
         "pops::SolveReport %s = pops::local_nonlinear_solve_report("
@@ -193,7 +206,16 @@ def _append_local_nonlinear_report(
             failed_j,
             failed_component,
             failure_action,
-        ))
+        )
+    )
+    outcome = report.replace("_report_", "_outcome_", 1)
+    if outcome == report:
+        outcome = "%s_outcome" % report
+    lines.append(
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
+        % (outcome, report)
+    )
+    return outcome
 
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
@@ -399,14 +421,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         status = "ci_status_%d" % v.id
         prototype_block = next(iter(components))
         prototype = var[by_block[prototype_block].id]
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 10, 0);"
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 11, 0);"
                      % (status, int(v.id), prototype))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
-            tol=v.attrs["tol"], max_iter=int(v.attrs["max_iter"]),
-            fd_eps=v.attrs["fd_eps"], coefficient=v.attrs["coefficient"])
-        _append_pointwise_solve_report(
-            program, v, status, lines, label="coupled_implicit", stem="ci")
+            controls=v.attrs, coefficient=v.attrs["coefficient"])
+        report = "ci_report_%d" % v.id
+        outcome = _append_local_nonlinear_report(program, v, status, report, lines)
+        _append_solve_report_guard(
+            program, v, outcome, lines, label="coupled_implicit")
         var.update({("coupled_solution", v.id, block): token
                     for block, token in scratch.items()})
         var[v.id] = scratch[next(iter(scratch))]
@@ -652,30 +675,29 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         _append_pointwise_solve_report(
             program, v, status, lines, label="local_linear", stem="local_solve")
     elif v.op == "solve_local_nonlinear":
-        # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
-        # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
-        # uses. The provisional output remains in a fresh scratch until the collectively reduced
-        # per-cell status has formed a SolveReport and the exact SolveOutcome action accepts it.
+        # Generated code supplies the residual and controls; the single prepared provider owns the
+        # nonlinear algorithm and keeps the candidate private until the report is consumed.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
-        status = "local_solve_status_%d" % v.id
+        status = "ln_status_%d" % v.id
         if target == "system":
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
-                     % (status, int(v.id), var[v.id]))
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
+                     % (status, int(v.id), var[base.id]))
         active_mask = "local_solve_active_mask_%d" % v.id
         lines.append(
             "const pops::MultiFab* %s = ctx.pointwise_active_mask(%d, %s);"
             % (active_mask, bidx, status))
         lines += _emit_solve_local_nonlinear_kernel(
             node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx)
-        _append_pointwise_solve_report(
-            program, v, status, lines, label="local_nonlinear", stem="local_solve",
-            active_mask=active_mask, block=bidx)
+        report = "ln_report_%d" % v.id
+        outcome = _append_local_nonlinear_report(program, v, status, report, lines)
+        _append_solve_report_guard(
+            program, v, outcome, lines, label="local_nonlinear")
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block

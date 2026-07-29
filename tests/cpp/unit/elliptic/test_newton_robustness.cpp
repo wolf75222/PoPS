@@ -409,14 +409,18 @@ TEST_F(NewtonRobustnessTest, invalid_evaluation_reports_cell_and_does_not_publis
   ASSERT_EQ(outcome.report().status, pops::SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(max_difference3(Un2, accepted), 0.0)
       << "un candidat invalide a ete publie dans l'etat accepte";
-  EXPECT_TRUE(repf.n_failed >= 1) << "pas d'echec rapporte (n_failed=" << repf.n_failed << ")";
+  EXPECT_FALSE(repf.enabled) << "les diagnostics persistants ont ete modifies avant consommation";
+  EXPECT_TRUE(outcome.report().failed_i == 2 && outcome.report().failed_j == 3)
+      << "cellule fautive (" << outcome.report().failed_i << ", " << outcome.report().failed_j
+      << ") != (2, 3)";
+  EXPECT_EQ(outcome.report().failed_component, 1)
+      << "la composante NaN initiale doit rester l'origine de l'echec";
   const pops::SolveReport failed = outcome.consume(pops::SolveConsumption::kFailRun);
   EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
-  EXPECT_EQ(repf.diagnostics.count("newton.outcome.fail_run"), 1u)
-      << "FailRun non reporte comme consommation explicite";
-  EXPECT_TRUE(repf.failed_i == 2 && repf.failed_j == 3)
-      << "cellule fautive (" << repf.failed_i << ", " << repf.failed_j << ") != (2, 3)";
-  EXPECT_EQ(repf.failed_comp, 1) << "la composante NaN initiale doit rester l'origine de l'echec";
+  EXPECT_FALSE(repf.enabled);
+  EXPECT_EQ(repf.n_failed, 0);
+  EXPECT_EQ(repf.diagnostics.count("newton.outcome.fail_run"), 0u)
+      << "un echec ne doit pas publier de diagnostics persistants";
 }
 
 // (3b) Une tolerance non satisfaite a l'epuisement du budget ne publie jamais le dernier itere.
@@ -475,7 +479,8 @@ TEST_F(NewtonRobustnessTest, prepared_invalid_failure_is_consumed_once_as_fail_r
   const pops::SolveReport failed = outcome.consume(pops::SolveConsumption::kFailRun);
   EXPECT_EQ(failed.action, pops::SolveAction::kFailRun);
   EXPECT_EQ(max_difference3(state, accepted), 0.0);
-  EXPECT_EQ(diagnostics.diagnostics.count("newton.outcome.fail_run"), 1u);
+  EXPECT_FALSE(diagnostics.enabled);
+  EXPECT_EQ(diagnostics.diagnostics.count("newton.outcome.fail_run"), 0u);
   EXPECT_THROW(outcome.consume(pops::SolveConsumption::kFailRun), std::logic_error);
 }
 
@@ -753,6 +758,29 @@ struct HugeJacobian {
   }
 };
 
+struct FallibleScalarResidual {
+  pops::LocalNonlinearEvaluationStatus status = pops::LocalNonlinearEvaluationStatus::kOk;
+  std::uint32_t reason = 0;
+
+  POPS_HD pops::LocalNonlinearEvaluationResult operator()(const Real (&x)[1],
+                                                          Real (&residual)[1]) const {
+    residual[0] = x[0] - Real(1);
+    switch (status) {
+      case pops::LocalNonlinearEvaluationStatus::kOk:
+        return pops::LocalNonlinearEvaluationResult::ok();
+      case pops::LocalNonlinearEvaluationStatus::kRetry:
+        return pops::LocalNonlinearEvaluationResult::retry(reason);
+      case pops::LocalNonlinearEvaluationStatus::kReject:
+        return pops::LocalNonlinearEvaluationResult::reject(reason);
+      case pops::LocalNonlinearEvaluationStatus::kFailed:
+        return pops::LocalNonlinearEvaluationResult::failed(reason);
+      case pops::LocalNonlinearEvaluationStatus::kInvalid:
+        return pops::LocalNonlinearEvaluationResult::invalid(reason);
+    }
+    return pops::LocalNonlinearEvaluationResult::invalid(reason);
+  }
+};
+
 pops::PreparedLocalNonlinearControls scalar_controls() {
   pops::PreparedLocalNonlinearControls controls;
   controls.max_iterations = 20;
@@ -761,6 +789,46 @@ pops::PreparedLocalNonlinearControls scalar_controls() {
 }
 
 }  // namespace
+
+TEST(PreparedLocalNonlinear, FallibleEvaluationStatusAndReasonRemainDistinct) {
+  constexpr std::uint32_t reason = 0x1234abcdu;
+  const Real initial[1] = {Real(2)};
+  struct Expected {
+    pops::LocalNonlinearEvaluationStatus evaluation;
+    pops::LocalNonlinearStatus solve;
+  };
+  const std::array<Expected, 4> cases{{
+      {pops::LocalNonlinearEvaluationStatus::kRetry, pops::LocalNonlinearStatus::kEvaluationRetry},
+      {pops::LocalNonlinearEvaluationStatus::kReject,
+       pops::LocalNonlinearStatus::kEvaluationReject},
+      {pops::LocalNonlinearEvaluationStatus::kFailed,
+       pops::LocalNonlinearStatus::kEvaluationFailed},
+      {pops::LocalNonlinearEvaluationStatus::kInvalid,
+       pops::LocalNonlinearStatus::kInvalidEvaluation},
+  }};
+  for (const Expected& expected : cases) {
+    const auto problem = pops::prepare_local_nonlinear_problem<1>(
+        FallibleScalarResidual{expected.evaluation, reason},
+        pops::FiniteDifferenceLocalJacobian<1>{}, pops::AcceptAllLocalCandidates<1>{},
+        scalar_controls());
+    const auto result = pops::solve_prepared_local_nonlinear(problem, initial);
+    EXPECT_EQ(result.status, expected.solve);
+    EXPECT_EQ(result.reason_code, reason);
+    EXPECT_EQ(result.value[0], initial[0]);
+  }
+}
+
+TEST(PreparedLocalNonlinear, FatalImplicitFailureDominatesRecoverableCollectiveStatus) {
+  using pops::LocalNonlinearStatus;
+  EXPECT_GT(pops::local_nonlinear_status_priority(LocalNonlinearStatus::kSingularJacobian),
+            pops::local_nonlinear_status_priority(LocalNonlinearStatus::kEvaluationReject));
+  EXPECT_GT(pops::local_nonlinear_status_priority(LocalNonlinearStatus::kInvalidEvaluation),
+            pops::local_nonlinear_status_priority(LocalNonlinearStatus::kEvaluationRetry));
+  for (int priority = 0; priority <= 9; ++priority) {
+    const LocalNonlinearStatus status = pops::local_nonlinear_status_from_priority(priority);
+    EXPECT_EQ(pops::local_nonlinear_status_priority(status), priority);
+  }
+}
 
 TEST(PreparedLocalNonlinear, FiniteDifferenceAnalyticAndAdUseOneOutcomeContract) {
   const Real initial[1] = {Real(2)};
@@ -879,8 +947,9 @@ TEST(PreparedLocalNonlinear, EveryFailureClassIsExplicitAndLeavesTheGuessUntouch
   const auto unknown_safeguard_problem = pops::prepare_local_nonlinear_problem<1>(
       LinearResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
       pops::AcceptAllLocalCandidates<1>{}, unknown_safeguard_controls);
-  EXPECT_EQ(pops::solve_prepared_local_nonlinear(unknown_safeguard_problem, safeguard_initial).status,
-            pops::LocalNonlinearStatus::kUnsupportedCapability);
+  EXPECT_EQ(
+      pops::solve_prepared_local_nonlinear(unknown_safeguard_problem, safeguard_initial).status,
+      pops::LocalNonlinearStatus::kUnsupportedCapability);
 
   int decoded_i = -1;
   int decoded_j = -1;
@@ -891,6 +960,31 @@ TEST(PreparedLocalNonlinear, EveryFailureClassIsExplicitAndLeavesTheGuessUntouch
   EXPECT_EQ(decoded_i, 17);
   EXPECT_EQ(decoded_j, 23);
   EXPECT_EQ(decoded_component, 4);
+
+  const pops::Real recoverable = pops::detail::encode_ranked_local_nonlinear_failure(
+      pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kEvaluationReject), 1, 1,
+      2);
+  const pops::Real fatal = pops::detail::encode_ranked_local_nonlinear_failure(
+      pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kInvalidEvaluation), 7, 9,
+      3);
+  int decoded_priority = 0;
+  pops::detail::decode_ranked_local_nonlinear_failure(
+      std::max(recoverable, fatal), decoded_priority, decoded_i, decoded_j, decoded_component);
+  EXPECT_EQ(decoded_priority,
+            pops::local_nonlinear_status_priority(pops::LocalNonlinearStatus::kInvalidEvaluation));
+  EXPECT_EQ(decoded_i, 7);
+  EXPECT_EQ(decoded_j, 9);
+  EXPECT_EQ(decoded_component, 3);
+
+  const pops::Real first_fatal =
+      pops::detail::encode_ranked_local_nonlinear_failure(decoded_priority, 0, 0, -1);
+  const pops::Real last_fatal = pops::detail::encode_ranked_local_nonlinear_failure(
+      decoded_priority, (1 << 20) - 1, (1 << 20) - 1, 1022);
+  pops::detail::decode_ranked_local_nonlinear_failure(
+      std::max(first_fatal, last_fatal), decoded_priority, decoded_i, decoded_j, decoded_component);
+  EXPECT_EQ(decoded_i, 0);
+  EXPECT_EQ(decoded_j, 0);
+  EXPECT_EQ(decoded_component, -1);
 
   EXPECT_EQ(initial[0], Real(10));
   EXPECT_EQ(inadmissible_initial[0], Real(-1));

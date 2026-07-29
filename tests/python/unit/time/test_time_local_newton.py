@@ -263,25 +263,20 @@ def section_a(t):
     src = emit_cpp_program(reaction_program(t, "react_cg", model=m), model=m)
     for frag in (
         "auto residual_eval = [&]",
-        "pops::detail::mat_inverse<1>(",
-        "if (!pops::detail::mat_inverse<1>(",
-        "for (int it_ = 0;",
-        "J_[1][1]",
-        "std::fmax(rmax_, std::fabs(r_",
-        "if (rmax_ <= static_cast<pops::Real>(1e-12))",
-        "const pops::Real eps_",
-        "U_[i_] -= du_;",
-        "pops::SolveReport local_solve_report_",
-        "pops::SolveOutcome local_solve_outcome_",
-        "pops::SolveStatus::kIterationLimit",
-        "pops::SolveStatus::kSingular",
-        "pops::SolveStatus::kInvalidEvaluation",
+        "pops::prepare_local_nonlinear_problem<1>",
+        "pops::solve_prepared_local_nonlinear(prepared_, Gval)",
+        "pops::SolveReport ln_report_",
+        "pops::SolveOutcome ln_outcome_",
+        "pops::local_nonlinear_solve_report(",
         "pops::for_each_cell(",
         "ctx.pointwise_active_mask(0,",
-        "ctx.pointwise_status_max(0,",
+        "pops::reduce_max(ln_status_",
+        "pops::local_nonlinear_status_from_priority(",
+        "pops::detail::decode_ranked_local_nonlinear_failure(",
+        "collective status/location precedence mismatch",
     ):
         chk(frag in src, "the Newton kernel has %r" % frag)
-    guard = src.index("if (!local_solve_outcome_")
+    guard = src.index("if (!ln_outcome_")
     commit = src.index("ctx.commit_many(")
     chk(guard < commit, "a failed Newton report is consumed before the state commit")
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
@@ -310,7 +305,7 @@ def section_a(t):
     )
     reject_consumption = next(
         line for line in reject_src.splitlines()
-        if "local_solve_outcome_" in line
+        if "ln_outcome_" in line
         and ".consume(" in line
         and "SolveStatus::" in line
     )
@@ -330,7 +325,7 @@ def section_a(t):
         consumption_end,
     )
     chk(
-        "local_solve_outcome_" in reject_src[reject_guard - 80:reject_guard],
+        "ln_outcome_" in reject_src[reject_guard - 80:reject_guard],
         "the rejection guard reads the report returned by SolveOutcome.consume",
     )
 
@@ -340,7 +335,7 @@ def section_a(t):
     )
     fail_consumption = next(
         line for line in fail_src.splitlines()
-        if "local_solve_outcome_" in line
+        if "ln_outcome_" in line
         and ".consume(pops::SolveConsumption::kFailRun)" in line
     )
     chk(
@@ -348,7 +343,7 @@ def section_a(t):
         "FailRun is consumed exactly into one authoritative SolveReport",
     )
     chk(
-        '" action=" + local_solve_outcome_' in fail_src
+        '" action=" + ln_outcome_' in fail_src
         and ".action_name()" in fail_src,
         "the fatal diagnostic is rendered from SolveReport.action",
     )
