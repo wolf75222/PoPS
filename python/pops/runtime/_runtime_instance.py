@@ -1077,24 +1077,34 @@ class RuntimeInstance:
             accepted_stats = getattr(accepted_leaf, "transaction_stats", None)
             failed_stats = getattr(failed_leaf, "transaction_stats", None)
             restored_stats = getattr(restored_leaf, "transaction_stats", None)
-            if not all(type(stats) is dict for stats in (
-                accepted_stats, failed_stats, restored_stats,
-            )):
+            if (
+                type(accepted_stats) is not dict
+                or type(failed_stats) is not dict
+                or type(restored_stats) is not dict
+            ):
                 raise RuntimeError(
                     "transaction rollback received malformed temporal attempt statistics")
+            accepted_exact = cast(dict[str, int], accepted_stats)
+            failed_exact = cast(dict[str, int], failed_stats)
+            restored_exact = cast(dict[str, int], restored_stats)
             for status in ("rejected", "failed"):
-                before = accepted_stats.get(status)
-                after = failed_stats.get(status)
-                current = restored_stats.get(status)
-                if any(type(value) is not int or value < 0 for value in (
-                    before, after, current,
-                )):
+                before = accepted_exact.get(status)
+                after = failed_exact.get(status)
+                current = restored_exact.get(status)
+                if (
+                    type(before) is not int
+                    or before < 0
+                    or type(after) is not int
+                    or after < 0
+                    or type(current) is not int
+                    or current < 0
+                ):
                     raise RuntimeError(
                         "temporal attempt statistics require non-negative exact integers")
                 if after < before:
                     raise RuntimeError(
                         "temporal unsuccessful-attempt statistics moved backwards")
-                updates.append((restored_stats, status, current + after - before))
+                updates.append((restored_exact, status, current + after - before))
         for stats, status, value in updates:
             stats[status] = value
 
