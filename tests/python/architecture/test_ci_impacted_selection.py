@@ -492,6 +492,38 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
         args.targets.pop()
 
 
+def test_cpp_target_label_fence_selects_standalone_with_no_shard_targets(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest.json"
+    inventory.write_text(json.dumps({
+        "tests": [
+            {
+                "name": "Suite.OtherShard",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-target:test_other"]},
+                ],
+            },
+            {
+                "name": "test_standalone_contract",
+                "properties": [
+                    {"name": "LABELS", "value": ["cpp-standalone"]},
+                ],
+            },
+        ],
+    }))
+    standalone_regex = tmp_path / "standalone.regex"
+    args = SimpleNamespace(
+        ctest_json=str(inventory),
+        targets=[],
+        standalone_regex_file=str(standalone_regex),
+    )
+
+    assert sel.verify_cpp_target_labels(args) == 0
+    assert re.fullmatch(
+        standalone_regex.read_text().strip(), "test_standalone_contract"
+    )
+
+
 def test_cpp_target_label_fence_ignores_other_shards_but_rejects_ambiguous_owners(
     tmp_path,
 ):
@@ -833,6 +865,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
     assert "scripts/ci_select_tests.py verify-cpp-target-labels" in cpp_shards_block
     assert "--standalone-regex-file" in cpp_shards_block
+    assert 'if [ "${{ matrix.shard }}" -eq 0 ]; then' in cpp_shards_block
     assert "name: Standalone CTest contracts" in cpp_shards_block
     assert 'standalone_regex=$(<"$standalone_regex_file")' in cpp_shards_block
     assert '-R "$standalone_regex"' in cpp_shards_block
