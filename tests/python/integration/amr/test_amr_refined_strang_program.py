@@ -240,10 +240,10 @@ def _resolved(native_cxx):
 
 
 def _initial_state():
-    points = (np.arange(N, dtype=np.float64) + 0.5) / N
-    x, y = np.meshgrid(points, points, indexing="xy")
-    bump = np.exp(-80.0 * ((x - 0.4) ** 2 + (y - 0.55) ** 2))
-    return np.ascontiguousarray(np.stack((1.0 + 0.2 * bump, 0.3 - 0.1 * bump)))
+    return np.broadcast_to(
+        np.array((1.0, 0.3), dtype=np.float64)[:, None, None],
+        (2, N, N),
+    ).copy()
 
 
 def _strang_matrix():
