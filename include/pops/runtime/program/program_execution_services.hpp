@@ -142,6 +142,30 @@ class ProgramExecutionServices {
     int levels = 1;
   };
 
+ protected:
+  /// Scope one mutable prepared workspace to a single synchronous Program operation.
+  ///
+  /// Uniform and AMR providers own different workspace storage, but they share the same
+  /// fail-before-mutation and release-on-exit policy.  Keeping that policy here prevents a provider
+  /// from silently forgetting the exceptional-exit release path.
+  class ExclusiveUseGuard {
+   public:
+    ExclusiveUseGuard(bool& in_use, std::string_view conflict_message) : in_use_(&in_use) {
+      if (in_use)
+        throw std::logic_error(std::string(conflict_message));
+      in_use = true;
+    }
+    ExclusiveUseGuard(const ExclusiveUseGuard&) = delete;
+    ExclusiveUseGuard& operator=(const ExclusiveUseGuard&) = delete;
+    ExclusiveUseGuard(ExclusiveUseGuard&&) = delete;
+    ExclusiveUseGuard& operator=(ExclusiveUseGuard&&) = delete;
+    ~ExclusiveUseGuard() noexcept { *in_use_ = false; }
+
+   private:
+    bool* in_use_;
+  };
+
+ public:
   /// Install one compiled macro-step through the execution provider's lifecycle authority.
   void install(std::function<void(double)> step) const {
     provider_().program_execution_install_(std::move(step));

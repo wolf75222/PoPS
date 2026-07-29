@@ -427,13 +427,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     if (u_stages.size() != static_cast<std::size_t>(n_blocks()))
       throw std::runtime_error(
           "AmrProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
-    if (named_field_solve_in_use_)
-      throw std::logic_error("AMR simultaneous field-solve workspace is already in use");
-    struct WorkspaceUse {
-      bool& flag;
-      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
-      ~WorkspaceUse() { flag = false; }
-    } use(named_field_solve_in_use_);
+    ExclusiveUseGuard use(named_field_solve_in_use_,
+                          "AMR simultaneous field-solve workspace is already in use");
 
     // Validate the complete request before taking a snapshot or touching a live state.  In particular,
     // a stage may alias its own live block, but borrowing another block's live object would make the
