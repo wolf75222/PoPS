@@ -44,10 +44,13 @@ def build_exchange(k):
 
 
 def density_block(n0=1.0):
-    """Bloc scalaire (densite) transporte par la derive E x B ; densite uniforme + fond cale dessus
-    -> transport exactement nul, seules les sources couplees agissent (meme montage que coupled_source)."""
+    """Bloc scalaire transporte par E x B avec RHS elliptique nul.
+
+    Le test isole l'echange conservatif. Un alpha nul evite qu'un etage partiel du splitting forme
+    temporairement une charge periodique non neutre avant la mise a jour du second bloc.
+    """
     return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
-                     source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=n0))
+                     source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=n0))
 
 
 def make_system(n, na0, nb0):

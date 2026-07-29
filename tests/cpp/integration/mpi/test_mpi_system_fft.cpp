@@ -149,8 +149,8 @@ static int pops_run_test_mpi_system_fft(int argc, char** argv) {
     build_problem(sys, n, owns);
     bool threw = false;
     try {
-      sys.solve_fields();
-      sys.solve_fields();  // construit-puis-reutilise
+      (void)pops::consume_solve_outcome(sys.solve_fields());
+      (void)pops::consume_solve_outcome(sys.solve_fields());  // construit-puis-reutilise
     } catch (const std::exception& e) {
       threw = true;
       std::printf("[rank 0/1] np=1 inattendu : fft a leve : %s\n", e.what());
@@ -180,7 +180,7 @@ static int pops_run_test_mpi_system_fft(int argc, char** argv) {
       for (int i = 0; i < n; ++i)
         q[static_cast<std::size_t>(j) * n + i] = (i < n / 2) ? 1.0 : -1.0;
     ref.set_density("probe", q);
-    ref.solve_fields();
+    (void)pops::consume_solve_outcome(ref.solve_fields());
     const std::vector<double> phi_ref = ref.potential();
     chk(phi_ref.size() == nn, "np1_ref_size");
 
@@ -211,8 +211,9 @@ static int pops_run_test_mpi_system_fft(int argc, char** argv) {
     bool threw = false;
     std::string msg;
     try {
-      sys.solve_fields();
-      sys.solve_fields();  // construit-puis-reutilise (le solveur paresseux n'est bati qu'une fois)
+      (void)pops::consume_solve_outcome(sys.solve_fields());
+      (void)pops::consume_solve_outcome(
+          sys.solve_fields());  // construit-puis-reutilise (le solveur paresseux n'est bati qu'une fois)
     } catch (const std::exception& e) {
       threw = true;
       msg = e.what();
@@ -248,7 +249,7 @@ static int pops_run_test_mpi_system_fft(int argc, char** argv) {
           q[static_cast<std::size_t>(j) * n + i] = (i < n / 2) ? 1.0 : -1.0;
       ref.set_density("probe", q);
     }
-    ref.solve_fields();
+    (void)pops::consume_solve_outcome(ref.solve_fields());
     const std::vector<double> phi_ref = ref.potential_global();
     chk(phi_ref.size() == nn, "npN_ref_size");
 

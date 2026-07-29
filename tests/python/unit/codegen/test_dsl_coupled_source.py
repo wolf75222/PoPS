@@ -49,27 +49,28 @@ def build_source(k):
     return src.compile(backend="production")
 
 
-def density_block(alpha=1.0, n0=1.0):
-    """Bloc scalaire (densite) transporte par la derive E x B. Avec une densite UNIFORME et le fond
-    neutralisant cale dessus, le transport est exactement nul -> seules les sources couplees agissent."""
+def density_block(n0=1.0):
+    """Bloc scalaire transporte par la derive E x B avec un RHS elliptique nul.
+
+    Ce test cible exclusivement la source couplee. Un alpha nul garde le solveur Poisson dans le
+    chemin de production tout en evitant qu'un etage partiel du splitting cree artificiellement une
+    charge periodique non neutre entre les mises a jour des especes.
+    """
     return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
-                     source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=alpha, n0=n0))
+                     source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=n0))
 
 
 def make_system(n, ne0, ni0, ng0):
     sim = System(n=n, L=1.0, periodicity=(True, True))
-    # n0 = densite uniforme de chaque bloc : f = alpha (n - n0) = 0 a l'init (phi uniforme -> derive nulle)
-    # Electrons and ions carry opposite signed charge while neutrals do not contribute to Poisson.
-    # Ionization creates electron/ion pairs, so this explicit discrete background remains compatible
-    # at every step without any solver-side projection of the RHS.
+    # Le RHS elliptique est volontairement nul : cette preuve porte sur le couplage, pas sur Poisson.
     sim.add_equation(
-        "electrons", model=density_block(alpha=-1.0, n0=ne0),
+        "electrons", model=density_block(n0=ne0),
         spatial=engine.Spatial(none=True))
     sim.add_equation(
-        "ions", model=density_block(alpha=1.0, n0=ni0),
+        "ions", model=density_block(n0=ni0),
         spatial=engine.Spatial(none=True))
     sim.add_equation(
-        "neutrals", model=density_block(alpha=0.0, n0=ng0),
+        "neutrals", model=density_block(n0=ng0),
         spatial=engine.Spatial(none=True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density("electrons", np.full((n, n), ne0))

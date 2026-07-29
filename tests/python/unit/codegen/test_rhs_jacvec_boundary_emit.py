@@ -176,6 +176,17 @@ def test_apply_uses_point_qualified_core_and_exact_boundary_jvp(sources, flux_on
     assert "ctx.boundary_evaluation_point" not in apply_source
 
 
+def test_solve_guard_preserves_the_native_report_reason():
+    source, _, _, _ = _emit(sources=[])
+    failure_line = next(
+        line for line in source.splitlines()
+        if "throw std::runtime_error" in line and '" reason="' in line
+    )
+    assert ".status_name()" in failure_line
+    assert ".action_name()" in failure_line
+    assert re.search(r'\+ [A-Za-z0-9_]+\.reason\);$', failure_line)
+
+
 def test_zero_direction_has_a_positive_fallback_step_instead_of_dividing_by_zero():
     source, operator, jacvec, _ = _emit(sources=[])
     apply_source = _apply_source(source, operator)

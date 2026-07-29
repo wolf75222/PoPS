@@ -19,12 +19,10 @@ Scanned headers: `include/pops/runtime/numerical_defaults.hpp`,
 
 | Constant                              | Value   | Class            | Where configured |
 |---------------------------------------|---------|------------------|------------------|
-| kNewtonFailNone / Warn / Throw        | 0/1/2   | internal_default | fail-policy enum |
-| kNewtonDefaultMaxIters                | 2       | public_knob      | IMEX(newton_max_iters=) |
-| kNewtonDefaultRelTol / AbsTol         | 0       | public_knob      | IMEX(newton_rel_tol=, newton_abs_tol=) |
+| kNewtonDefaultMaxIters                | 25      | public_knob      | IMEX(newton_max_iters=) |
+| kNewtonDefaultRelTol / AbsTol         | 1e-10 / 1e-12 | public_knob | IMEX(newton_rel_tol=, newton_abs_tol=) |
 | kNewtonDefaultFdEps                   | 1e-7    | public_knob      | IMEX(newton_fd_eps=) |
 | kNewtonDefaultDamping                 | 1       | public_knob      | IMEX(newton_damping=) |
-| kNewtonDefaultFailPolicy              | none    | public_knob      | IMEX(newton_fail_policy=) |
 | kNewtonFiniteAbsLimit                 | 1e300   | internal_default | fixed overflow guard |
 | kKrylovDefaultRelTol                  | 1e-10   | public_knob      | GMRES/BiCGStab(rel_tol=) |
 | kPolarTensorKrylovDefaultMaxIters     | 400     | public_knob      | PolarTensorKrylovSolver default report |

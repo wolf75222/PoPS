@@ -44,8 +44,8 @@ from pops.codegen.program_emit_control import (
     _emit_while,
 )
 from pops.codegen.program_emit_solve import (
-    _SOLVE_STATUS_CPP,
     _consumed_solve_action,
+    _append_solve_report_guard,
     _emit_matrix_free_operator,
     _emit_solve_linear,
 )
@@ -72,26 +72,42 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
     return index
 
 
-def _append_solve_report_guard(
-        program: Any, solve: Any, report: str, lines: list[str], *, label: str) -> None:
-    """Consume a native SolveReport with the exact action authored for ``solve``."""
+def _append_pointwise_solve_report(
+        program: Any, solve: Any, status: str, lines: list[str], *,
+        label: str, stem: str) -> None:
+    """Reduce typed per-cell status and consume one collective ``SolveReport``.
+
+    Pointwise kernels own the report they create, so they author its failure disposition before
+    constructing the outcome. Prepared/provider solves retain their native action authority.
+    """
     action_kind, action_statuses = _consumed_solve_action(program, solve)
-    lines.append("if (!%s.solved_value_available()) {" % report)
-    if action_kind == "reject_attempt":
-        selected = " || ".join(
-            "%s.status == %s" % (report, _SOLVE_STATUS_CPP[status])
-            for status in action_statuses)
-        lines.append("  if (%s) {" % selected)
-        lines.append(
-            "    throw pops::runtime::program::StepAttemptRejected("
-            "%s.status, %s, std::string(%s) + %s.status_name());"
-            % (report, json.dumps(label), json.dumps(label + " failed: "), report))
-        lines.append("  }")
+
+    def failure_action(status_name: str) -> str:
+        if action_kind == "reject_attempt" and status_name in action_statuses:
+            return "pops::SolveAction::kRejectAttempt"
+        return "pops::SolveAction::kFailRun"
+
+    code = "%s_code_%d" % (stem, solve.id)
+    report = "%s_report_%d" % (stem, solve.id)
     lines.append(
-        "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
-        "\" action=fail_run\");"
-        % (json.dumps(label + " failed: "), report))
-    lines.append("}")
+        "const int %s = static_cast<int>(pops::reduce_max(%s, 0));"
+        % (code, status))
+    lines.append("pops::SolveReport %s;" % report)
+    lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
+    lines.append(
+        "else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit, %s);"
+        % (code, report, failure_action("iteration_limit")))
+    lines.append(
+        "else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular, %s);"
+        % (code, report, failure_action("singular")))
+    lines.append(
+        "else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s);"
+        % (report, failure_action("invalid_evaluation")))
+    outcome = "%s_outcome_%d" % (stem, solve.id)
+    lines.append(
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
+        % (outcome, report))
+    _append_solve_report_guard(program, solve, outcome, lines, label=label)
 
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
@@ -151,7 +167,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         field, _ = resolved_field_route(field_ref, field_plans)
         lines += field_point_cpp(program, v, field)
         report = "field_report_%d" % v.id
-        solve_stmt = ('const pops::SolveReport %s = '
+        solve_stmt = ('pops::SolveOutcome %s = '
                       'ctx.solve_fields_from_state(%s, %d, %s);'
                       % (report, json.dumps(field), bidx, var[state_in.id]))
         lines.append(solve_stmt)
@@ -180,7 +196,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += field_point_cpp(program, v, field)
         report = "field_report_%d" % v.id
         lines.append(
-            "const pops::SolveReport %s = ctx.solve_fields_from_blocks(%d, %s, {%s});"
+            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks(%d, %s, {%s});"
             % (report, int(v.id), json.dumps(field), ", ".join(overrides)))
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
@@ -246,17 +262,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             components, by_block, var, scratch, status,
             tol=v.attrs["tol"], max_iter=int(v.attrs["max_iter"]),
             fd_eps=v.attrs["fd_eps"], coefficient=v.attrs["coefficient"])
-        code = "ci_code_%d" % v.id
-        report = "ci_report_%d" % v.id
-        lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 0));" % (code, status))
-        lines.append("pops::SolveReport %s;" % report)
-        lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
-        lines.append("else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit);"
-                     % (code, report))
-        lines.append("else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular);"
-                     % (code, report))
-        lines.append("else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
-        _append_solve_report_guard(program, v, report, lines, label="coupled_implicit")
+        _append_pointwise_solve_report(
+            program, v, status, lines, label="coupled_implicit", stem="ci")
         var.update({("coupled_solution", v.id, block): token
                     for block, token in scratch.items()})
         var[v.id] = scratch[next(iter(scratch))]
@@ -481,28 +488,39 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
+        status = "local_solve_status_%d" % v.id
         if target == "system":
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_linear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                     % (status, int(v.id), var[v.id]))
         lines += _emit_solve_local_linear_kernel(
-            node_model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id], bidx)
+            node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
+            var[rhs_in.id], var[v.id], status, bidx)
+        _append_pointwise_solve_report(
+            program, v, status, lines, label="local_linear", stem="local_solve")
     elif v.op == "solve_local_nonlinear":
         # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
         # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
         # uses. The output is a fresh scratch state; the guess input seeds the iterate.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
+        status = "local_solve_status_%d" % v.id
         if target == "system":
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                     % (status, int(v.id), var[v.id]))
         lines += _emit_solve_local_nonlinear_kernel(
-            node_model, v, var[guess_in.id], var[v.id], bidx)
+            node_model, v, var[guess_in.id], var[v.id], status, bidx)
+        _append_pointwise_solve_report(
+            program, v, status, lines, label="local_nonlinear", stem="local_solve")
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block

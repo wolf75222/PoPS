@@ -134,7 +134,8 @@ extern "C" void pops_install_program(void* sys) {
   ctx.install([ctx](double dt) {
     ctx.begin_step(dt);
     ctx.set_stage_time(0, 1);
-    ctx.solve_fields();
+    auto field_outcome = ctx.solve_fields();
+    (void)field_outcome.consume(pops::SolveConsumption::kAccept);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       pops::MultiFab& U = ctx.state(b);
       pops::MultiFab R = ctx.rhs_scratch_like(U);
@@ -203,7 +204,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   System ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
-  ref.solve_fields();
+  (void)pops::consume_solve_outcome(ref.solve_fields());
   const std::vector<double> R0 = ref.eval_rhs("gas");
   std::vector<double> Uref(4 * nn);
   for (std::size_t k = 0; k < Uref.size(); ++k)
@@ -388,7 +389,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     replacement.program_cache().store(11, replacement.block_state(0), 0, "artifact-A-cache");
     replacement.record_program_diagnostic("artifact-A-diagnostic", Real(1));
     try {
-      (void)replacement.solve_fields_from_state(slot, 0, replacement.block_state(0));
+      (void)consume_solve_outcome(
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
       std::printf("FAIL dynamic-boundary artifact did not install its field kernel\\n");
       ++fails;
     } catch (const std::exception& e) {
@@ -405,8 +407,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
       ++fails;
     }
     try {
-      const SolveReport report =
-          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0));
+      const SolveReport report = consume_solve_outcome(
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
       if (!report.solved()) {
         std::printf("FAIL static replacement field solve returned %s\\n", report.status_name());
         ++fails;

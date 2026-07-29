@@ -162,6 +162,22 @@ def test_phase4_ops_lower_through_typed_handles(t):
     assert "mat_inverse" in source
 
 
+def test_local_linear_solve_is_collective_fail_closed_before_commit(t):
+    P, model = _predictor_corrector(t)
+    source = _emit(P, model)
+
+    assert source.count("pops::reduce_max(local_solve_status_") == 2
+    assert source.count("pops::SolveReport local_solve_report_") == 2
+    assert source.count("pops::SolveOutcome local_solve_outcome_") == 2
+    assert "pops::SolveStatus::kSingular" in source
+    assert "pops::SolveStatus::kInvalidEvaluation" in source
+    assert "if (solve_failure_ == 0 && !pops::detail::mat_inverse<1>" in source
+    first_guard = source.index("if (!local_solve_outcome_")
+    first_commit = source.index("ctx.commit_many(")
+    assert first_guard < first_commit
+    assert "ctx.commit_many(" not in source[:first_guard]
+
+
 def _run():
     t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

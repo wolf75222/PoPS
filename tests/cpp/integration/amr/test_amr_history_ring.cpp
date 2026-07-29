@@ -258,7 +258,10 @@ static void install_native_ab2_program(AmrSystem& system,
   context.install([&context, after_level = std::move(after_level)](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&context, &after_level](double level_dt) {
       context.set_stage_time(0, 1);
-      (void)context.solve_fields();
+      {
+        auto outcome = context.solve_fields();
+        (void)outcome.consume(SolveConsumption::kAccept);
+      }
       MultiFab& state = context.state(0);
       MultiFab rate = context.rhs_scratch_like(state);
       context.rhs_into(0, state, rate, 17);
@@ -294,7 +297,7 @@ static void install_transaction_probe_program(AmrSystem& system,
                    after_hierarchy = std::move(after_hierarchy)](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&context](double level_dt) {
       context.set_stage_time(0, 1);
-      (void)context.solve_fields();
+      (void)consume_solve_outcome(context.solve_fields());
       std::vector<MultiFab*> states;
       std::vector<MultiFab*> rates;
       states.reserve(static_cast<std::size_t>(context.n_blocks()));
@@ -701,6 +704,44 @@ TEST(test_amr_history_ring, BootstrapRefreshFailureRollsBackAcceptedStateAndCanR
   EXPECT_EQ(sim.program_accepted_state_revision(), revision_before + 1);
 }
 
+TEST(test_amr_history_ring, FineFieldReuseWaitsForCoarseOutcomeConsumption) {
+  constexpr int n = 8;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* runtime = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
+  ASSERT_NE(runtime, nullptr);
+  ASSERT_EQ(runtime->nlev(), 2);
+
+  runtime::program::AmrProgramContext context(runtime, &sim);
+  context.configure_primary_clock("clock.macro");
+  context.set_level(0);
+  SolveOutcome coarse = context.solve_fields();
+  ASSERT_TRUE(coarse.report().solved_value_available()) << coarse.report().reason;
+
+  context.set_level(1);
+  EXPECT_THROW((void)context.solve_fields(), std::logic_error)
+      << "a cached report must not expose the private coarse candidate before Accept";
+
+  MultiFab& destination = runtime->phi();
+  const BoxArray boxes = destination.box_array();
+  const DistributionMapping mapping = destination.dmap();
+  const int components = destination.ncomp();
+  const int ghosts = destination.n_grow();
+  destination = MultiFab(boxes, mapping, components, ghosts + 1);
+  context.set_level(0);
+  EXPECT_THROW((void)coarse.consume(SolveConsumption::kAccept), std::logic_error)
+      << "delayed Accept must validate the outer AMR field publication layout";
+  destination = MultiFab(boxes, mapping, components, ghosts);
+  EXPECT_TRUE(coarse.consume(SolveConsumption::kAccept).solved_value_available());
+  context.set_level(1);
+  SolveOutcome fine = context.solve_fields();
+  EXPECT_TRUE(fine.consume(SolveConsumption::kAccept).solved_value_available());
+}
+
 TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace) {
   constexpr int n = 8;
   constexpr double dt = 1.0e-4;
@@ -749,7 +790,10 @@ TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace)
   bool measured_coarse_capture = false;
   context.advance_hierarchy(dt, [&](double level_dt) {
     context.set_stage_time(0, 1);
-    (void)context.solve_fields();
+    {
+      auto outcome = context.solve_fields();
+      (void)outcome.consume(SolveConsumption::kAccept);
+    }
     MultiFab& state = context.state(0);
     MultiFab& rate = context.rhs_scratch(17, 0, state);
     Real* const rate_storage = rate.local_size() > 0 ? rate.fab(0).array().p : nullptr;
@@ -1134,7 +1178,10 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
         [&context, &initial_patches, &lagged_rate_before_regrid, &lagged_rate_spread_after_regrid,
          &nonflux_carry_kept_old_fine_overlap, rt, n](double level_dt) {
           context.set_stage_time(0, 1);
-          (void)context.solve_fields();
+          {
+            auto outcome = context.solve_fields();
+            (void)outcome.consume(SolveConsumption::kAccept);
+          }
           MultiFab& state = context.state(0);
           if (context.level() == 1 && context.history_flux_topology_rebind_count() == 1) {
             const std::vector<double> carry =
@@ -1599,7 +1646,7 @@ TEST(test_amr_history_ring, FineNonFiniteAfterCoarseSuccessRestoresCompleteAccep
   context.install([&](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&](double level_dt) {
       context.set_stage_time(0, 1);
-      const SolveReport field_report = context.solve_fields();
+      const SolveReport field_report = consume_solve_outcome(context.solve_fields());
       if (!field_report.solved())
         throw std::runtime_error("quadratic rollback fixture field solve did not succeed");
       if (context.level() == 0)

@@ -52,8 +52,8 @@
 /// SCOPE (ADC-636, generalized envelope). Cartesian, ratio 2, an arbitrary NESTED hierarchy: N
 /// levels, 1..N fine patches per level, ADJACENT (edge/corner-touching) patches allowed, and MPI
 /// (REPLICATED coarse + DISTRIBUTED fine). The 2-level non-adjacent mono-rank case is dispatched to
-/// the VERBATIM legacy body (solve_two_level_legacy_) and is byte-for-byte unchanged; the general
-/// path (composite_fac_nlevel.hpp) serves every other shape. Distributed equals replicated
+/// the legacy arithmetic body (solve_two_level_legacy_); the general path
+/// (composite_fac_nlevel.hpp) serves every other shape. Distributed equals replicated
 /// bit-identically at fixed np by construction. Only ratio != 2 (ADC-602 declared capability) and
 /// overlapping / non-nested / misaligned patches (semantically impossible) are refused.
 ///
@@ -542,8 +542,9 @@ class CompositeFacPoisson {
   /// report denominator is ||R(0)||inf for every nonzero forcing, however small, and one only when it
   /// is exactly zero. @p max_iters counts FAC two-way iterations; @p fine_sweeps is per fine solve.
   ///
-  /// DISPATCH (ADC-636). The 2-level, NON adjacent, MONO-RANK envelope routes to the VERBATIM legacy
-  /// body (solve_two_level_legacy_ below) -- same bytes, hence same bits, gated by the golden. Every
+  /// DISPATCH (ADC-636). The 2-level, NON adjacent, MONO-RANK envelope routes to the legacy
+  /// arithmetic body (solve_two_level_legacy_ below) -- same arithmetic, hence same bits, gated by
+  /// the golden. Every
   /// genuinely new shape (N > 2 levels, adjacent fine patches, or n_ranks() > 1) routes to the general
   /// FAC (solve_composite_nlevel_, composite_fac_nlevel.hpp). At L == 2 / non-adjacent / mono-rank the
   /// general path reduces algebraically to the legacy loop (cross-checked, not gated on).
@@ -759,14 +760,27 @@ class CompositeFacPoisson {
     return last_residual_;
   }
 
-  /// VERBATIM historical 2-level FAC driver (moved unchanged from solve(); ADC-636 dispatch). This is
-  /// the non-regression anchor: the 2-level non-adjacent mono-rank path executes exactly these bytes.
+  // Internal multigrid solves are fixed-cycle FAC preconditioner/correction applications. Reaching
+  // that cycle budget still provides a usable correction, but every other failed report must stop
+  // before its mutated iterate is copied into the composite hierarchy.
+  void require_usable_fixed_cycle_result_(const GeometricMG& solver, const char* phase) {
+    const SolveReport& report = solver.last_solve_report();
+    if (report.solved() || (report.valid() && report.status == SolveStatus::kIterationLimit))
+      return;
+    last_solve_report_ = report;
+    throw std::runtime_error(std::string("CompositeFacPoisson ") + phase +
+                             " failed: " + report.status_name());
+  }
+
+  /// Historical 2-level FAC arithmetic driver (ADC-636 dispatch). This is the non-regression anchor:
+  /// the 2-level non-adjacent mono-rank path retains the same floating-point operation sequence.
   LinearSolveResult solve_two_level_legacy_(int max_iters, int fine_sweeps, Real stop) {
     // 0) initial coarse solve (gives a phi_c for the 1st C-F ghost). ADC-614: the internal coarse
     // GeometricMG rel_tol / max_cycles come from the installed options (default = kFAC* constants).
     copy0(mg_.rhs(), f_c_);
     mg_.phi().set_val(Real(0));
     mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
+    require_usable_fixed_cycle_result_(mg_, "initial coarse solve");
     copy0(phi_c_, mg_.phi());
 
     // 1) bilinear C-F ghosts + fine solve (base ONE-WAY).
@@ -790,6 +804,7 @@ class CompositeFacPoisson {
       copy0(mg_.rhs(), res_c_);
       mg_.phi().set_val(Real(0));
       mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
+      require_usable_fixed_cycle_result_(mg_, "coarse correction solve");
       add_uncovered(phi_c_, mg_.phi());
       // re-ghost + re-solve fine on the corrected phi_c.
       refresh_fine(fine_sweeps);

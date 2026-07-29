@@ -7,6 +7,8 @@
 #include <pops/core/identity/prepared_provider_options.hpp>
 #include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
@@ -14,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -66,15 +69,63 @@ class PreparedHierarchyTensorSolver {
   [[nodiscard]] virtual std::uint64_t provider_version() const noexcept = 0;
   [[nodiscard]] virtual std::string_view exact_prepared_contract() const noexcept = 0;
   [[nodiscard]] virtual HierarchyTensorSolverExecutionPath execution_path() const noexcept = 0;
+  [[nodiscard]] virtual int level_count() const noexcept = 0;
   /// Resolve a provider-owned prepared field slot. The core treats the stable identity as opaque;
   /// a new operator envelope may add slots without modifying this protocol.
   virtual MultiFab& assembly_target(std::string_view field_slot_identity, int level) = 0;
   virtual MultiFab& solution(int level) = 0;
   virtual void stage_initial_guess(int level, const MultiFab* guess) = 0;
-  /// Return only after recomputing the true residual defined by exact_prepared_contract(). The core
-  /// validates the report structure collectively; scientific verification cannot be reconstructed
-  /// outside the provider because the operator and publication storage are intentionally opaque.
+
+ protected:
+  /// Provider execution is reachable only through the collective SolveOutcome publication seam.
+  /// Return only after recomputing the true residual defined by exact_prepared_contract().
   virtual SolveReport solve(const HierarchyTensorSolveControls& controls) = 0;
+
+ private:
+  friend SolveOutcome solve_prepared_hierarchy_tensor_collectively(
+      PreparedHierarchyTensorSolver&, const HierarchyTensorSolveControls&);
+
+  static bool same_publication_layout_(const MultiFab& lhs, const MultiFab& rhs) noexcept {
+    return lhs.box_array().boxes() == rhs.box_array().boxes() &&
+           lhs.dmap().ranks() == rhs.dmap().ranks() && lhs.ncomp() == rhs.ncomp() &&
+           lhs.n_grow() == rhs.n_grow() && lhs.local_size() == rhs.local_size();
+  }
+
+  void capture_publication_(std::vector<MultiFab>& storage) {
+    const int levels = level_count();
+    if (levels < 0)
+      throw std::logic_error("hierarchy tensor provider has a negative level count");
+    storage.resize(static_cast<std::size_t>(levels));
+    for (int level = 0; level < levels; ++level) {
+      MultiFab& live = solution(level);
+      MultiFab& saved = storage[static_cast<std::size_t>(level)];
+      if (!same_publication_layout_(saved, live))
+        saved = MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+      PureFieldAlgebra::copy_allocated(saved, live);
+    }
+  }
+
+  void restore_publication_(const std::vector<MultiFab>& storage) {
+    if (storage.size() != static_cast<std::size_t>(level_count()))
+      throw std::logic_error("hierarchy tensor publication depth changed during a solve");
+    for (int level = 0; level < level_count(); ++level)
+      PureFieldAlgebra::copy_allocated(solution(level), storage[static_cast<std::size_t>(level)]);
+  }
+
+  void validate_candidate_publication_() {
+    if (candidate_publication_.size() != static_cast<std::size_t>(level_count()))
+      throw std::logic_error("hierarchy tensor publication depth changed before Accept");
+    for (int level = 0; level < level_count(); ++level)
+      if (!same_publication_layout_(solution(level),
+                                    candidate_publication_[static_cast<std::size_t>(level)]))
+        throw std::logic_error("hierarchy tensor publication layout changed before Accept");
+  }
+
+  void release_publication_() noexcept { publication_active_ = false; }
+
+  std::vector<MultiFab> accepted_publication_;
+  std::vector<MultiFab> candidate_publication_;
+  bool publication_active_ = false;
 };
 
 class HierarchyTensorSolverProvider {
@@ -103,7 +154,7 @@ class HierarchyTensorSolverProvider {
 /// Execute one provider-owned hierarchy solve behind a collective publication boundary.  The exact
 /// operator and scientific residual remain provider-owned, while the core guarantees that an
 /// exception, malformed report or rank-divergent report rejects publication on every rank.
-inline SolveReport solve_prepared_hierarchy_tensor_collectively(
+inline SolveOutcome solve_prepared_hierarchy_tensor_collectively(
     PreparedHierarchyTensorSolver& solver, const HierarchyTensorSolveControls& controls) {
   const bool invalid_controls =
       !std::isfinite(controls.relative_tolerance) || controls.relative_tolerance < Real(0) ||
@@ -111,6 +162,20 @@ inline SolveReport solve_prepared_hierarchy_tensor_collectively(
       controls.maximum_iterations < 0;
   if (all_reduce_max(invalid_controls ? 1L : 0L) != 0)
     throw std::invalid_argument("hierarchy tensor solve controls are invalid");
+  if (all_reduce_max(solver.publication_active_ ? 1L : 0L) != 0)
+    throw std::logic_error(
+        "hierarchy tensor solve is reserved until its prior outcome is consumed");
+
+  long snapshot_failed_local = 0;
+  try {
+    solver.capture_publication_(solver.accepted_publication_);
+  } catch (...) {
+    snapshot_failed_local = 1;
+  }
+  if (all_reduce_max(snapshot_failed_local) != 0)
+    throw std::runtime_error(
+        "hierarchy tensor accepted-state snapshot failed on at least one MPI rank");
+  solver.publication_active_ = true;
 
   SolveReport report;
   bool solve_failed = false;
@@ -119,15 +184,77 @@ inline SolveReport solve_prepared_hierarchy_tensor_collectively(
   } catch (...) {
     solve_failed = true;
   }
-  if (all_reduce_max(solve_failed ? 1L : 0L) != 0)
+  if (all_reduce_max(solve_failed ? 1L : 0L) != 0) {
+    try {
+      solver.restore_publication_(solver.accepted_publication_);
+    } catch (...) {
+      std::terminate();
+    }
+    solver.release_publication_();
     throw std::runtime_error("hierarchy tensor-solver provider failed on at least one MPI rank");
+  }
   const bool malformed = !solve_report_is_publishable(report, controls.maximum_iterations);
-  if (all_reduce_max(malformed ? 1L : 0L) != 0)
+  if (all_reduce_max(malformed ? 1L : 0L) != 0) {
+    try {
+      solver.restore_publication_(solver.accepted_publication_);
+    } catch (...) {
+      std::terminate();
+    }
+    solver.release_publication_();
     throw std::runtime_error("hierarchy tensor-solver provider published a malformed SolveReport");
+  }
   ExactSolveReportConsensusScratch report_consensus;
-  if (!report_consensus.agrees(report))
+  if (!report_consensus.agrees(report)) {
+    try {
+      solver.restore_publication_(solver.accepted_publication_);
+    } catch (...) {
+      std::terminate();
+    }
+    solver.release_publication_();
     throw std::runtime_error("hierarchy tensor-solver provider report differs between MPI ranks");
-  return report;
+  }
+  if (!report.solved_value_available()) {
+    try {
+      solver.restore_publication_(solver.accepted_publication_);
+    } catch (...) {
+      std::terminate();
+    }
+    solver.release_publication_();
+    return SolveOutcome::collective_world(std::move(report));
+  }
+
+  long candidate_failed_local = 0;
+  try {
+    solver.capture_publication_(solver.candidate_publication_);
+    solver.restore_publication_(solver.accepted_publication_);
+  } catch (...) {
+    candidate_failed_local = 1;
+  }
+  if (all_reduce_max(candidate_failed_local) != 0) {
+    try {
+      solver.restore_publication_(solver.accepted_publication_);
+    } catch (...) {
+      std::terminate();
+    }
+    solver.release_publication_();
+    throw std::runtime_error("hierarchy tensor candidate staging failed on at least one MPI rank");
+  }
+  return SolveOutcome::collective_world(
+      std::move(report),
+      SolveOutcome::PublicationHooks{
+          &solver,
+          [](void* context) noexcept {
+            auto* prepared = static_cast<PreparedHierarchyTensorSolver*>(context);
+            prepared->restore_publication_(prepared->candidate_publication_);
+          },
+          nullptr,
+          [](void* context) noexcept {
+            static_cast<PreparedHierarchyTensorSolver*>(context)->release_publication_();
+          },
+          {},
+          [](void* context) {
+            static_cast<PreparedHierarchyTensorSolver*>(context)->validate_candidate_publication_();
+          }});
 }
 
 inline std::string exact_hierarchy_tensor_solver_provider_declaration(

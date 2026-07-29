@@ -14,13 +14,17 @@ uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::functio
     fallback; a valid implicit reaction lowers to a per-cell Newton kernel whose generated C++ has the
     residual lambda, the FD Jacobian, the mat_inverse step and the convergence break; refused w/o model.
 
-(B) End-to-end scalar implicit reaction parity (skips unless the full toolchain is present): a
+(B) End-to-end scalar implicit reaction parity and failure matrix (skips unless the full toolchain is
+    present): a
     1-variable model (rho) with a NON-LINEAR named source ``S(rho) = -k*rho^2``; a Program W solving
     ``r(rho) = rho - rho0 - dt*S(rho) = 0`` per cell; compile_problem -> problem.so, install_program,
     step(dt). The implicit step has the closed form rho = (-1 + sqrt(1 + 4*dt*k*rho0))/(2*dt*k); the
     stepped rho must match it AND an offline numpy Newton on the identical residual to ~1e-10, with the
-offline Newton taking > 1 iteration and its residual dropping by many orders. Skips (exit 0) without
-    numpy / _pops / a compiler / a visible Kokkos, or if the .so compile fails -- never faking the engine.
+    offline Newton taking > 1 iteration and its residual dropping by many orders. Two compiled fault
+    Programs (RejectAttempt / FailRun) then exercise singular, iteration-limit, invalid-residual and
+    invalid-Jacobian reports on fresh runtimes and prove the accepted transaction envelope is restored.
+    Skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos, or if the .so compile fails
+    -- never faking the engine.
 """
 
 from tests.python.support.requirements import require_native_or_skip
@@ -99,6 +103,59 @@ def reaction_program(t, name="implicit_reaction", model=None):
         solver=LocalNewton(tolerance=1e-12, max_iterations=50),
     ).consume(action=t.FailRun())
     P.commit(endpoint, W)
+    return P
+
+
+def fault_model(name):
+    """One residual whose four runtime coefficient sets inject distinct Newton failures."""
+    from pops.math import sqrt
+    from pops.physics._facade import Model
+
+    m = Model(name)
+    (rho,) = m.conservative_vars("rho")
+    u = m.primitive("u", 0.0 * rho)
+    m.primitive_vars(rho=rho, u=u)
+    m.conservative_from([rho])
+    m.flux(x=[0.0 * rho], y=[0.0 * rho])
+    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
+    offset = m.aux_field("fault_offset")
+    linear = m.aux_field("fault_linear")
+    quadratic = m.aux_field("fault_quadratic")
+    boundary = m.aux_field("fault_boundary")
+    root_weight = m.aux("B_z")
+    m.source_term(
+        "fault",
+        [offset + linear * rho + quadratic * rho * rho
+         + root_weight * sqrt(boundary - rho)],
+    )
+    return m
+
+
+def fault_program(t, *, name, model, action):
+    """Publish provisional history/diagnostics, then consume one injected LocalNewton report."""
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import LocalResidual
+
+    P = t.Program(name)
+    U = typed_state(P, "blk", model=model)
+    endpoint = typed_state(P, "blk", state_name="U", model=model).next
+    guess = P.value("fault_guess", 1.0 * U, at=endpoint.point)
+    P.store_history("blk.provisional", guess)
+    P.record_scalar("provisional_norm", P.norm2(guess))
+
+    def residual(P, Uit, _U0):
+        return P.value(
+            "fault_residual",
+            P.dt * P._source("fault", state=Uit),
+            at=Uit.point,
+        )
+
+    solved = P.solve(
+        LocalResidual(residual, guess),
+        name="fault_solution",
+        solver=LocalNewton(tolerance=1e-12, max_iterations=1),
+    ).consume(action=action)
+    P.commit(endpoint, solved)
     return P
 
 
@@ -200,15 +257,25 @@ def section_a(t):
     for frag in (
         "auto residual_eval = [&]",
         "pops::detail::mat_inverse<1>(",
+        "if (!pops::detail::mat_inverse<1>(",
         "for (int it_ = 0;",
         "J_[1][1]",
         "std::fmax(rmax_, std::fabs(r_",
-        "if (rmax_ < static_cast<pops::Real>(1e-12)) break;",
+        "if (rmax_ <= static_cast<pops::Real>(1e-12))",
         "const pops::Real eps_",
         "U_[i_] -= du_;",
+        "pops::reduce_max(local_solve_status_",
+        "pops::SolveReport local_solve_report_",
+        "pops::SolveOutcome local_solve_outcome_",
+        "pops::SolveStatus::kIterationLimit",
+        "pops::SolveStatus::kSingular",
+        "pops::SolveStatus::kInvalidEvaluation",
         "pops::for_each_cell(",
     ):
         chk(frag in src, "the Newton kernel has %r" % frag)
+    guard = src.index("if (!local_solve_outcome_")
+    commit = src.index("ctx.commit_many(")
+    chk(guard < commit, "a failed Newton report is consumed before the state commit")
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
     chk("Gval[0] = u" in src, "the frozen guess is read into a stack vector")
     chk("U_[0] = Gval[0]" in src, "the Newton iterate is seeded to the guess")
@@ -216,6 +283,64 @@ def section_a(t):
     # No forbidden constructs in the device kernel.
     for forbidden in ("std::function", "std::vector", "Eigen::", "new ", "malloc"):
         chk(forbidden not in src, "the Newton kernel has no %r (device-clean)" % forbidden)
+
+    # The unique consumed action is selected at the native SolveOutcome boundary. Selected
+    # RejectAttempt statuses reject, every unselected status fails the run, and the consumed report
+    # carries the authoritative action used by the guard.
+    fault = fault_model("fault_cg")
+    reject_src = emit_cpp_program(
+        fault_program(
+            t,
+            name="fault_reject_cg",
+            model=fault,
+            action=t.RejectAttempt(statuses=("singular", "invalid_evaluation")),
+        ),
+        model=fault,
+    )
+    reject_consumption = next(
+        line for line in reject_src.splitlines()
+        if "local_solve_outcome_" in line
+        and ".consume(" in line
+        and "SolveStatus::" in line
+    )
+    chk(
+        "SolveStatus::kSingular" in reject_consumption
+        and "SolveStatus::kInvalidEvaluation" in reject_consumption
+        and "SolveStatus::kIterationLimit" not in reject_consumption
+        and ".report().action == pops::SolveAction::kRejectAttempt"
+        in reject_consumption
+        and "SolveConsumption::kRejectAttempt" in reject_consumption
+        and "SolveConsumption::kFailRun" in reject_consumption,
+        "RejectAttempt is selected exactly at SolveOutcome consumption without downgrading FailRun",
+    )
+    consumption_end = reject_src.index("\n", reject_src.index(reject_consumption))
+    reject_guard = reject_src.index(
+        ".action == pops::SolveAction::kRejectAttempt",
+        consumption_end,
+    )
+    chk(
+        "local_solve_outcome_" in reject_src[reject_guard - 80:reject_guard],
+        "the rejection guard reads the report returned by SolveOutcome.consume",
+    )
+
+    fail_src = emit_cpp_program(
+        fault_program(t, name="fault_fail_cg", model=fault, action=t.FailRun()),
+        model=fault,
+    )
+    fail_consumption = next(
+        line for line in fail_src.splitlines()
+        if "local_solve_outcome_" in line
+        and ".consume(pops::SolveConsumption::kFailRun)" in line
+    )
+    chk(
+        "const pops::SolveReport" in fail_consumption,
+        "FailRun is consumed exactly into one authoritative SolveReport",
+    )
+    chk(
+        '" action=" + local_solve_outcome_' in fail_src
+        and ".action_name()" in fail_src,
+        "the fatal diagnostic is rendered from SolveReport.action",
+    )
 
     # --- refused without a model (the residual's named source needs the model coefficients) ---
     chk(
@@ -253,9 +378,12 @@ def section_a(t):
 # ============================ (B) end-to-end implicit-reaction parity ============================
 def section_b(t):
     try:
+        from copy import deepcopy
+
         import numpy as np
 
         import pops.runtime._engine_descriptors as engine
+        from pops._bootstrap import StepAttemptRejected
     except Exception as exc:  # noqa: BLE001
         if fails:
             raise AssertionError(
@@ -365,6 +493,207 @@ def section_b(t):
         "the residual drops from O(%.1e) to below tol (Newton converges)" % first_res,
     )
     chk(moved > 1e-2, "the implicit step actually moved the state (max|d| = %.2e)" % moved)
+
+    print("== (C) end-to-end: LocalNewton failure/action matrix + atomic rollback ==")
+    try:
+        fault_program_model = fault_model("fault_prog")
+        compiled_fault_programs = {
+            "reject_attempt": compile_drivers.compile_problem(
+                model=fault_program_model,
+                time=fault_program(
+                    t,
+                    name="fault_reject",
+                    model=fault_program_model,
+                    action=t.RejectAttempt(),
+                ),
+            ),
+            "fail_run": compile_drivers.compile_problem(
+                model=fault_program_model,
+                time=fault_program(
+                    t,
+                    name="fault_fail",
+                    model=fault_program_model,
+                    action=t.FailRun(),
+                ),
+            ),
+        }
+        compiled_fault_block = fault_model("fault_block").compile(backend="production")
+    except RuntimeError as exc:
+        _skip("fault-matrix compilation could not build the native packages: %s" % str(exc)[:160])
+
+    faults = {
+        "singular": {
+            "status": "singular",
+            "fault_offset": 1.0,
+            "fault_linear": 0.0,
+            "fault_quadratic": 0.0,
+            "fault_boundary": 4.0,
+            "root_weight": 0.0,
+        },
+        "iteration_limit": {
+            "status": "iteration_limit",
+            "fault_offset": -2.0,
+            "fault_linear": 0.0,
+            "fault_quadratic": 1.0,
+            "fault_boundary": 4.0,
+            "root_weight": 0.0,
+        },
+        "invalid_residual": {
+            "status": "invalid_evaluation",
+            "fault_offset": float("nan"),
+            "fault_linear": 0.0,
+            "fault_quadratic": 0.0,
+            "fault_boundary": 4.0,
+            "root_weight": 0.0,
+        },
+        "invalid_jacobian": {
+            "status": "invalid_evaluation",
+            "fault_offset": 1.0,
+            "fault_linear": 0.0,
+            "fault_quadratic": 0.0,
+            "fault_boundary": 1.0,
+            "root_weight": 1.0,
+        },
+    }
+
+    def fresh_fault_runtime(compiled_program, fault):
+        sim = System(n=8, L=1.0, periodicity=(True, True))
+        sim.add_equation(
+            "blk",
+            compiled_fault_block,
+            spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+            time=engine.Explicit(method="euler"),
+        )
+        initial = np.ones((1, 8, 8))
+        sim.set_state("blk", initial)
+        for field in (
+            "fault_offset", "fault_linear", "fault_quadratic", "fault_boundary",
+        ):
+            sim.set_aux_field("blk", field, np.full((8, 8), fault[field]))
+        sim.set_magnetic_field(np.full(64, fault["root_weight"]))
+        sim.install_program(compiled_program.so_path)
+        return sim
+
+    def array_fingerprint(value):
+        array = np.asarray(value)
+        return array.shape, array.dtype.str, array.tobytes()
+
+    def accepted_envelope(sim):
+        native = sim._s
+        histories = tuple(
+            (
+                name,
+                native.history_initialized(name),
+                native.history_fill_count(name),
+                tuple(
+                    array_fingerprint(native.history_global(name, slot))
+                    for slot in range(native.history_depth(name))
+                ),
+            )
+            for name in native.history_names()
+        )
+        caches = tuple(
+            (
+                node,
+                native.program_cache_name(node),
+                native.program_cache_last_update_step(node),
+                native.program_cache_accumulated_dt(node),
+                array_fingerprint(native.program_cache_global(node)),
+            )
+            for node in native.program_cache_nodes()
+        )
+        temporal = sim._temporal_restart_state
+        return {
+            "state": np.asarray(sim.get_state("blk")).copy(),
+            "clock": (float(sim.time()), int(sim.macro_step())),
+            "histories": histories,
+            "cache": caches,
+            "diagnostics": dict(sim.program_diagnostics()),
+            "schedule": deepcopy({
+                "program": temporal.program_schedule,
+                "clock": temporal.clock_cursors,
+                "schedule": temporal.schedule_cursors,
+                "synchronization": temporal.synchronization_cursors,
+                "history": temporal.history_cursors,
+                "cache": temporal.cache_cursors,
+                "events": temporal.event_queue,
+            }),
+            "program_contract": deepcopy(sim.program_report().step_transaction),
+        }
+
+    for action_name, compiled_program in compiled_fault_programs.items():
+        for fault_name, fault in faults.items():
+            sim = fresh_fault_runtime(compiled_program, fault)
+            before = accepted_envelope(sim)
+            chk(
+                sim._last_step_transaction_report is None,
+                "%s/%s starts without a terminal attempt report" % (action_name, fault_name),
+            )
+            error = None
+            try:
+                sim.step(0.1)
+            except RuntimeError as exc:
+                error = exc
+            after = accepted_envelope(sim)
+
+            chk(
+                error is not None,
+                "%s/%s publishes a failed solve" % (action_name, fault_name),
+            )
+            if action_name == "reject_attempt":
+                chk(
+                    isinstance(error, StepAttemptRejected)
+                    and getattr(error, "status", None) == fault["status"],
+                    "%s/%s carries typed status %s"
+                    % (action_name, fault_name, fault["status"]),
+                )
+            else:
+                chk(
+                    not isinstance(error, StepAttemptRejected)
+                    and fault["status"] in str(error)
+                    and "action=fail_run" in str(error),
+                    "%s/%s fails the run with status %s"
+                    % (action_name, fault_name, fault["status"]),
+                )
+
+            chk(
+                np.array_equal(after["state"], before["state"], equal_nan=True),
+                "%s/%s restores the accepted state" % (action_name, fault_name),
+            )
+            chk(
+                after["clock"] == before["clock"],
+                "%s/%s restores physical time and macro-step" % (action_name, fault_name),
+            )
+            chk(
+                after["histories"] == before["histories"],
+                "%s/%s restores history metadata, slots and pending rotation"
+                % (action_name, fault_name),
+            )
+            chk(
+                after["cache"] == before["cache"]
+                and after["diagnostics"] == before["diagnostics"],
+                "%s/%s restores caches and provisional diagnostics"
+                % (action_name, fault_name),
+            )
+            chk(
+                after["schedule"] == before["schedule"]
+                and after["program_contract"] == before["program_contract"],
+                "%s/%s preserves schedule cursors and the installed transaction contract"
+                % (action_name, fault_name),
+            )
+            terminal = sim._last_step_transaction_report
+            expected_terminal = (
+                ("rejected", "reject_attempt")
+                if action_name == "reject_attempt"
+                else ("failed", "fail_run")
+            )
+            chk(
+                terminal is not None
+                and (terminal.status, terminal.action) == expected_terminal
+                and terminal.phase == "solve",
+                "%s/%s publishes only the terminal %s report"
+                % (action_name, fault_name, expected_terminal[0]),
+            )
 
 
 def _run():

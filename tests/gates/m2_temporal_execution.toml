@@ -115,7 +115,7 @@ requirement = "step_transaction"
 polarity = "refusal"
 kind = "pytest"
 target = "transaction"
-nodeid = "tests/python/unit/time/test_step_transaction_contract.py::test_step_transaction_report_refuses_partial_publication"
+nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_fault_injection_matrix_restores_every_available_store_and_reports_exact_phase"
 
 [[check]]
 issue = "ADC-666"

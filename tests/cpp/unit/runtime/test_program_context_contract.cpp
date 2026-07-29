@@ -35,9 +35,11 @@
 #include <pops/runtime/program/program_context.hpp>  // ProgramContext (the contract under test)
 #include <pops/runtime/system.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -110,6 +112,21 @@ double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) 
   return d;
 }
 
+Real max_abs_diff(const MultiFab& a, const MultiFab& b) {
+  Real difference = 0;
+  for (int local = 0; local < a.local_size(); ++local) {
+    const ConstArray4 lhs = a.fab(local).const_array();
+    const ConstArray4 rhs = b.fab(local).const_array();
+    const Box2D box = a.fab(local).grown_box();
+    for (int component = 0; component < a.ncomp(); ++component)
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+          difference =
+              std::fmax(difference, std::fabs(lhs(i, j, component) - rhs(i, j, component)));
+  }
+  return static_cast<Real>(all_reduce_max(static_cast<double>(difference)));
+}
+
 }  // namespace
 
 // A Forward-Euler Program expressed through ProgramContext, driven by sim.step(dt), is bit-equal to the
@@ -128,7 +145,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   System ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
-  ref.solve_fields();
+  (void)pops::consume_solve_outcome(ref.solve_fields());
   const std::vector<double> R0 = ref.eval_rhs("gas");
   std::vector<double> Uref(U0.size());
   for (std::size_t k = 0; k < Uref.size(); ++k) {
@@ -146,7 +163,10 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
     ctx.set_stage_time(0, 1);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);
-      ctx.solve_fields_from_state(b, U);  // per-stage field solve at the block's own state
+      {
+        auto outcome = ctx.solve_fields_from_state(b, U);
+        (void)outcome.consume(SolveConsumption::kAccept);
+      }  // per-stage field solve at the block's own state
       MultiFab R = ctx.rhs_scratch_like(U);
       ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, Real(h), R);  // U <- U + h R
@@ -158,6 +178,81 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
 
   EXPECT_TRUE(max_abs_diff(Up, Uref) < 1e-12) << "FE parity max|d|=" << max_abs_diff(Up, Uref);
   EXPECT_TRUE(max_abs_diff(Up, U0) > 1e-9) << "step did not change the state";
+}
+
+TEST(ProgramContextContract, FailedFieldOutcomeDoesNotPublishAux) {
+  ensure_kokkos();
+  constexpr int n = 8;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+
+  System sim(cfg);
+  ModelSpec model;
+  model.transport = "exb";
+  model.source = "none";
+  model.elliptic = "charge";
+  model.q = 1.0;
+  model.B0 = 1.0;
+  sim.add_block("plasma", model);
+  sim.set_poisson("charge_density", "geometric_mg");
+  sim.set_program_block_map({0});
+
+  const double pi = 3.14159265358979323846;
+  std::vector<double> density(static_cast<std::size_t>(n) * n);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i)
+      density[static_cast<std::size_t>(j) * n + i] =
+          std::sin(2.0 * pi * (i + 0.5) / n) * std::sin(2.0 * pi * (j + 0.5) / n);
+  sim.set_density("plasma", density);
+
+  ProgramContext ctx(&sim);
+  MultiFab accepted_aux_before(ctx.aux());
+  const BoxArray aux_boxes = ctx.aux().box_array();
+  const DistributionMapping aux_mapping = ctx.aux().dmap();
+  const int aux_components = ctx.aux().ncomp();
+  const int aux_ghosts = ctx.aux().n_grow();
+  const std::vector<double> accepted_potential_before = sim.potential();
+  SolveOutcome direct = sim.solve_fields();
+  ASSERT_TRUE(direct.report().solved_value_available()) << direct.report().reason;
+  EXPECT_EQ(max_abs_diff(ctx.aux(), accepted_aux_before), Real(0));
+  EXPECT_EQ(sim.potential(), accepted_potential_before)
+      << "uniform aux and potential must remain physically unchanged before Accept";
+  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components + 1, aux_ghosts);
+  EXPECT_THROW((void)direct.consume(SolveConsumption::kAccept), std::logic_error)
+      << "Accept must validate every publication layout before copying a candidate";
+  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components, aux_ghosts);
+  EXPECT_THROW((void)sim.solve_fields(), std::logic_error);
+  EXPECT_THROW((void)ctx.solve_fields(), std::logic_error);
+  const SolveReport direct_report = direct.consume(SolveConsumption::kAccept);
+  ASSERT_TRUE(direct_report.solved_value_available()) << direct_report.reason;
+  EXPECT_GT(max_abs_diff(ctx.aux(), accepted_aux_before), Real(0));
+
+  for (double& value : density)
+    value *= 0.5;
+  sim.set_density("plasma", density);
+  MultiFab program_aux_before(ctx.aux());
+  const std::vector<double> program_potential_before = sim.potential();
+  SolveOutcome accepted = ctx.solve_fields();
+  ASSERT_TRUE(accepted.report().solved_value_available()) << accepted.report().reason;
+  EXPECT_EQ(max_abs_diff(ctx.aux(), program_aux_before), Real(0));
+  EXPECT_EQ(sim.potential(), program_potential_before);
+  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components + 1, aux_ghosts);
+  EXPECT_THROW((void)accepted.consume(SolveConsumption::kAccept), std::logic_error)
+      << "ProgramContext must use the same read-only System publication validation";
+  ctx.aux() = MultiFab(aux_boxes, aux_mapping, aux_components, aux_ghosts);
+  EXPECT_THROW((void)ctx.solve_fields(), std::logic_error);
+  const SolveReport accepted_report = accepted.consume(SolveConsumption::kAccept);
+  ASSERT_TRUE(accepted_report.solved_value_available()) << accepted_report.reason;
+  EXPECT_GT(max_abs_diff(ctx.aux(), program_aux_before), Real(0));
+  MultiFab published_aux(ctx.aux());
+
+  std::fill(density.begin(), density.end(), std::numeric_limits<double>::quiet_NaN());
+  sim.set_density("plasma", density);
+  EXPECT_THROW((void)consume_solve_outcome(ctx.solve_fields()), std::runtime_error);
+  EXPECT_EQ(max_abs_diff(ctx.aux(), published_aux), Real(0))
+      << "a throwing field solve must restore every valid and ghost aux value";
 }
 
 TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageState) {
@@ -405,14 +500,15 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   System ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
-  ref.solve_fields();
+  (void)pops::consume_solve_outcome(ref.solve_fields());
   const std::vector<double> R0 = ref.eval_rhs("gas");
   std::vector<double> U1(U0.size());
   for (std::size_t k = 0; k < U1.size(); ++k) {
     U1[k] = U0[k] + dt * R0[k];
   }
   ref.set_state("gas", U1);
-  ref.solve_fields();  // re-solve the fields at the stage-1 state
+  (void)pops::consume_solve_outcome(
+      ref.solve_fields());  // re-solve the fields at the stage-1 state
   const std::vector<double> R1 = ref.eval_rhs("gas");
   std::vector<double> Uref(U0.size());
   for (std::size_t k = 0; k < Uref.size(); ++k) {
@@ -433,7 +529,10 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
       MultiFab& U = ctx.state(b);
       // stage 1: u1 = U + dt R(U)
       ctx.set_stage_time(0, 1);
-      ctx.solve_fields_from_state(b, U);
+      {
+        auto outcome = ctx.solve_fields_from_state(b, U);
+        (void)outcome.consume(SolveConsumption::kAccept);
+      }
       MultiFab u1 = ctx.scratch_state_like(U);
       ctx.lincomb(u1, Real(1), U, Real(0), U);  // u1 <- U
       MultiFab R = ctx.rhs_scratch_like(U);
@@ -441,7 +540,10 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
       ctx.axpy(u1, Real(h), R);  // u1 <- U + dt R(U)  (= the Euler predictor U1)
       // stage 2 (Heun): U <- 1/2 U + 1/2 (U1 + dt R(U1)) = 1/2 U + 1/2 U1 + 1/2 dt R(U1)
       ctx.set_stage_time(1, 1);
-      ctx.solve_fields_from_state(b, u1);  // re-solve fields at the stage-1 state
+      {
+        auto outcome = ctx.solve_fields_from_state(b, u1);
+        (void)outcome.consume(SolveConsumption::kAccept);
+      }  // re-solve fields at the stage-1 state
       MultiFab R1 = ctx.rhs_scratch_like(u1);
       ctx.rhs_into(b, u1, R1, 0);
       ctx.axpy(u1, Real(h), R1);                    // u1 <- U1 + dt R(U1)
@@ -475,7 +577,10 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   ctx.configure_primary_clock("clock.macro");
   ctx.begin_step(dt);
   ctx.set_stage_time(0, 1);
-  ctx.solve_fields();
+  {
+    auto outcome = ctx.solve_fields();
+    (void)outcome.consume(SolveConsumption::kAccept);
+  }
 
   const int b = 0;
   MultiFab& U = ctx.state(b);
@@ -691,7 +796,7 @@ TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
   const std::vector<const MultiFab*> stages{&sim.block_state(0)};
 
   EXPECT_THROW(ctx.sys_block(0), std::runtime_error) << "an empty map must not imply identity";
-  EXPECT_THROW(ctx.solve_fields_from_blocks(stages), std::runtime_error)
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks(stages), std::runtime_error)
       << "the coupled solve must not treat an empty map as identity";
 
   sim.set_program_block_map({0});

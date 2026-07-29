@@ -93,6 +93,54 @@ def _consumed_solve_action(program: Any, solve: Any) -> tuple[str, tuple[str, ..
     return matches[0]
 
 
+def _append_solve_report_guard(
+        program: Any, solve: Any, outcome: str, lines: list[str], *, label: str,
+        phase: str | None = None) -> None:
+    """Consume one native ``SolveOutcome`` with the unique authored action.
+
+    Success is accepted explicitly. Failure is consumed as RejectAttempt or FailRun according to the
+    authored status filter; ``SolveOutcome`` then materializes the authoritative report action.  The
+    generated exception includes ``report.reason`` so typed native evaluation detail is not replaced
+    by the coarser status name at the Python/C++ program boundary.
+    """
+    action_kind, action_statuses = _consumed_solve_action(program, solve)
+    report = "%s_report" % outcome
+    if action_kind == "reject_attempt":
+        selected_status = " || ".join(
+            "%s.report().status == %s" % (outcome, _SOLVE_STATUS_CPP[status])
+            for status in action_statuses)
+        selected = (
+            "%s.report().action == pops::SolveAction::kRejectAttempt && (%s)"
+            % (outcome, selected_status)
+        )
+        failure_consumption = (
+            "(%s ? pops::SolveConsumption::kRejectAttempt : "
+            "pops::SolveConsumption::kFailRun)"
+            % selected
+        )
+    else:
+        failure_consumption = "pops::SolveConsumption::kFailRun"
+    failure_phase = label if phase is None else phase
+    lines.append("if (!%s.report().solved_value_available()) {" % outcome)
+    lines.append(
+        "  const pops::SolveReport %s = %s.consume(%s);"
+        % (report, outcome, failure_consumption))
+    if action_kind == "reject_attempt":
+        lines.append("  if (%s.action == pops::SolveAction::kRejectAttempt) {" % report)
+        lines.append(
+            "    throw pops::runtime::program::StepAttemptRejected("
+            "%s.status, %s, std::string(%s) + %s.reason);"
+            % (report, json.dumps(failure_phase), json.dumps(label + " failed: "), report))
+        lines.append("  }")
+    lines.append(
+        "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
+        "\" action=\" + %s.action_name() + \" reason=\" + %s.reason);"
+        % (json.dumps(label + " failed: "), report, report, report))
+    lines.append("}")
+    lines.append(
+        "(void)%s.consume(pops::SolveConsumption::kAccept);" % outcome)
+
+
 def _validate_matrix_free_contract(v: Any, model: Any) -> None:
     """Validate matrix-free facts that need either the final node or physical model metadata."""
     if v.op == "rhs_jacvec":
@@ -798,22 +846,6 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     max_iter = int(v.attrs["max_iter"])
     rhs_tok = var[rhs_in.id]
     kr = "kr%d" % v.id
-    action_kind, action_statuses = _consumed_solve_action(program, v)
-
-    def _append_report_guard() -> None:
-        lines.append("if (!%s.solved_value_available()) {" % kr)
-        if action_kind == "reject_attempt":
-            selected = " || ".join(
-                "%s.status == %s" % (kr, _SOLVE_STATUS_CPP[status])
-                for status in action_statuses)
-            lines.append("  if (%s) {" % selected)
-            lines.append("    throw pops::runtime::program::StepAttemptRejected("
-                         "%s.status, \"solve\", std::string(\"solve_linear failed: \") + "
-                         "%s.status_name());" % (kr, kr))
-            lines.append("  }")
-        lines.append("  throw std::runtime_error(std::string(\"solve_linear failed: \") + "
-                     "%s.status_name() + \" action=fail_run\");" % kr)
-        lines.append("}")
 
     abs_tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["abs_tol"])
     hierarchy_emission = None
@@ -837,7 +869,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         if hierarchy_emission is None:
             raise ValueError("a direct hierarchy phase has no native provider emission")
         lines.extend(hierarchy_emission.solve)
-        _append_report_guard()
+        _append_solve_report_guard(
+            program, v, kr, lines, label="solve_linear", phase="solve")
         return
 
     if footprint is None or problem_contract is None:
@@ -957,7 +990,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     lines.append("%s->prepare(*%s);" % (problem_name, snapshot_name))
     lines.append("%s->bind(*%s);" % (workspace_name, problem_name))
     lines.append(
-        "pops::SolveReport %s = ctx.solve_prepared_linear("
+        "pops::SolveOutcome %s = ctx.solve_prepared_linear("
         "*%s, *%s, *%s, %s, %s);"
         % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
-    _append_report_guard()
+    _append_solve_report_guard(
+        program, v, kr, lines, label="solve_linear", phase="solve")

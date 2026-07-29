@@ -504,7 +504,9 @@ TEST(GeometricMgTest, nonfinite_rhs_and_residual_are_invalid_evaluations) {
     EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
     EXPECT_EQ(report.action, SolveAction::kRejectAttempt);
     EXPECT_FALSE(report.solved());
-    EXPECT_TRUE(std::isinf(static_cast<double>(report.rel_residual)));
+    EXPECT_TRUE(std::isfinite(static_cast<double>(report.rel_residual)));
+    EXPECT_EQ(report.rel_residual, std::numeric_limits<Real>::max());
+    EXPECT_TRUE(solve_report_is_publishable(report, /*maximum_iterations=*/4));
   }
 
   GeometricMG invalid_iterate(geometry, boxes, BCRec{});
@@ -518,6 +520,11 @@ TEST(GeometricMgTest, nonfinite_rhs_and_residual_are_invalid_evaluations) {
   invalid_robust.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
   EXPECT_EQ(invalid_robust.solve_robust(Real(1e-8), /*max_cycles=*/4), 0);
   EXPECT_EQ(invalid_robust.last_solve_report().status, SolveStatus::kInvalidEvaluation);
+
+  GeometricMG invalid_legacy(geometry, boxes, BCRec{});
+  invalid_legacy.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_THROW(invalid_legacy.solve(), std::runtime_error);
+  EXPECT_EQ(invalid_legacy.last_solve_report().status, SolveStatus::kInvalidEvaluation);
 }
 
 TEST(GeometricMgTest, rejects_nonfinite_or_out_of_domain_controls) {

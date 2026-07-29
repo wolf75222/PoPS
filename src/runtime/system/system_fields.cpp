@@ -4,9 +4,11 @@
 // accessors. This TU is a subdivision of system.cpp (state marshaling + field derivation surface).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+#include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
+#include <exception>
 #include <tuple>
 
 namespace pops {
@@ -58,7 +60,7 @@ void System::set_density(const std::string& name, const std::vector<double>& rho
 }
 
 POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                             CellConvert cons_to_prim) {
+                                              CellConvert cons_to_prim) {
   Impl::Species& s = p_->find(name);
   s.prim_to_cons = std::move(prim_to_cons);
   s.cons_to_prim = std::move(cons_to_prim);
@@ -123,7 +125,7 @@ std::vector<double> System::get_primitive_state(const std::string& name) {
   return prim;
 }
 
-SolveReport System::solve_fields() {
+SolveReport System::solve_fields_in_place_() {
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
   const SolveReport report = p_->solve_fields();
   // ELLIPTIC-SOLVER NATIVE COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43). The opaque
@@ -146,13 +148,13 @@ SolveReport System::solve_fields() {
   return report;
 }
 
-SolveReport System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+SolveReport System::solve_fields_from_state_in_place_(int block_idx, const MultiFab& U_stage) {
   return p_->solve_fields_from_state(block_idx, U_stage);
 }
 
-SolveReport System::solve_fields_from_state_at(
-    const runtime::multiblock::BoundaryEvaluationPoint& /*point*/,
-    const std::string& provider_slot, int block_idx, const MultiFab& U_stage) {
+SolveReport System::solve_fields_from_state_at_in_place_(
+    const runtime::multiblock::BoundaryEvaluationPoint& /*point*/, const std::string& provider_slot,
+    int block_idx, const MultiFab& U_stage) {
   if (provider_slot.empty())
     throw std::invalid_argument(
         "System::solve_fields_from_state_at requires an exact provider slot");
@@ -163,8 +165,8 @@ SolveReport System::solve_fields_from_state_at(
 // assembles the system Poisson RHS as Sum_s elliptic_rhs_s(U_s) reading EVERY block's stage state at
 // once (U_stages indexed by block index; nullptr -> the block's live state), then re-fills the shared
 // aux. POPS_EXPORT: resolved by a generated problem.so (ProgramContext) across the dlopen boundary.
-POPS_EXPORT SolveReport System::solve_fields_from_blocks(
-    const std::vector<const MultiFab*>& U_stages) {
+POPS_EXPORT SolveReport
+System::solve_fields_from_blocks_in_place_(const std::vector<const MultiFab*>& U_stages) {
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "field_solve");
   const SolveReport report = p_->solve_fields_from_blocks(U_stages);
   // Same elliptic-solver counters as System::solve_fields (ADC-479 criteria 42/43), read back AFTER
@@ -182,24 +184,221 @@ POPS_EXPORT SolveReport System::solve_fields_from_blocks(
 // NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve for @p field from block @p block_idx's
 // stage state. Forwards to the field solver, which assembles the per-field RHS (sum of the blocks'
 // named bricks), solves with a dedicated native solver, and writes the field's OWN aux components.
-POPS_EXPORT SolveReport System::solve_fields_from_state(const std::string& field, int block_idx,
-                                                       const MultiFab& U_stage) {
+POPS_EXPORT SolveReport System::solve_fields_from_state_in_place_(const std::string& field,
+                                                                  int block_idx,
+                                                                  const MultiFab& U_stage) {
   return p_->solve_named_field_from_state(field, block_idx, U_stage);
 }
 
-POPS_EXPORT SolveReport System::solve_fields_from_blocks(
+POPS_EXPORT SolveReport System::solve_fields_from_blocks_in_place_(
     const std::string& field, const std::vector<const MultiFab*>& U_stages) {
   return p_->solve_named_field_from_blocks(field, U_stages);
+}
+
+SolveOutcome System::solve_fields() {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_([this]() { return solve_fields_in_place_(); });
+}
+
+SolveOutcome System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_([this, block_idx, &U_stage]() {
+    return solve_fields_from_state_in_place_(block_idx, U_stage);
+  });
+}
+
+SolveOutcome System::solve_fields_from_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+    int block_idx, const MultiFab& U_stage) {
+  if (provider_slot.empty())
+    throw std::invalid_argument(
+        "System::solve_fields_from_state_at requires an exact provider slot");
+  prepare_named_field_publication_storage_(provider_slot);
+  return run_field_publication_outcome_([this, &point, &provider_slot, block_idx, &U_stage]() {
+    return solve_fields_from_state_at_in_place_(point, provider_slot, block_idx, U_stage);
+  });
+}
+
+SolveOutcome System::solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+  prepare_default_field_publication_storage_();
+  return run_field_publication_outcome_(
+      [this, &U_stages]() { return solve_fields_from_blocks_in_place_(U_stages); });
+}
+
+SolveOutcome System::solve_fields_from_state(const std::string& field, int block_idx,
+                                             const MultiFab& U_stage) {
+  prepare_named_field_publication_storage_(field);
+  return run_field_publication_outcome_([this, &field, block_idx, &U_stage]() {
+    return solve_fields_from_state_in_place_(field, block_idx, U_stage);
+  });
+}
+
+SolveOutcome System::solve_fields_from_blocks(
+    const std::string& field, const std::vector<const MultiFab*>& U_stages) {
+  prepare_named_field_publication_storage_(field);
+  return run_field_publication_outcome_([this, &field, &U_stages]() {
+    return solve_fields_from_blocks_in_place_(field, U_stages);
+  });
+}
+
+void System::prepare_default_field_publication_storage_() {
+  p_->fields_.prepare_default_publication_storage();
+}
+
+void System::prepare_named_field_publication_storage_(const std::string& field) {
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-publication", field}}))
+    throw std::invalid_argument("System named field publication request differs between MPI ranks");
+  p_->fields_.prepare_named_publication_storage(field);
+}
+
+SolveOutcome System::run_field_publication_outcome_(const std::function<SolveReport()>& solve) {
+  begin_field_publication_outcome_();
+  SolveReport report;
+  std::exception_ptr local_error;
+  bool solve_failed_local = false;
+  try {
+    report = solve();
+  } catch (...) {
+    local_error = std::current_exception();
+    solve_failed_local = true;
+  }
+  if (all_reduce_max(solve_failed_local ? 1L : 0L) != 0) {
+    rollback_field_publication_transaction();
+    if (n_ranks() == 1 && local_error != nullptr)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("System field solver failed on at least one MPI rank");
+  }
+  return stage_field_publication_outcome_(std::move(report));
+}
+
+void System::begin_field_publication_outcome_() {
+  const bool active_local = p_->field_publication_active_;
+  if (all_reduce_max(active_local ? 1L : 0L) != 0)
+    throw std::logic_error(
+        "System field solves are sequential until their prior SolveOutcome is consumed");
+
+  bool begin_failed_local = false;
+  try {
+    begin_field_publication_transaction();
+  } catch (...) {
+    begin_failed_local = true;
+  }
+  if (all_reduce_max(begin_failed_local ? 1L : 0L) != 0) {
+    rollback_field_publication_transaction();
+    throw std::runtime_error("System field publication snapshot failed on at least one MPI rank");
+  }
+}
+
+SolveOutcome System::stage_field_publication_outcome_(SolveReport report) {
+  const bool malformed = !solve_report_is_publishable(report, std::numeric_limits<int>::max());
+  if (all_reduce_max(malformed ? 1L : 0L) != 0) {
+    rollback_field_publication_transaction();
+    throw std::runtime_error("System field solver published a malformed SolveReport");
+  }
+  ExactSolveReportConsensusScratch consensus;
+  if (!consensus.agrees(report)) {
+    rollback_field_publication_transaction();
+    throw std::runtime_error("System field solver report differs between MPI ranks");
+  }
+  if (!report.solved_value_available()) {
+    rollback_field_publication_transaction();
+    return SolveOutcome::collective_world(std::move(report));
+  }
+
+  bool stage_failed_local = false;
+  try {
+    stage_field_publication_candidate();
+  } catch (...) {
+    stage_failed_local = true;
+  }
+  if (all_reduce_max(stage_failed_local ? 1L : 0L) != 0) {
+    rollback_field_publication_transaction();
+    throw std::runtime_error("System field candidate staging failed on at least one MPI rank");
+  }
+  return SolveOutcome::collective_world(
+      std::move(report),
+      SolveOutcome::PublicationHooks{
+          this,
+          [](void* context) noexcept {
+            static_cast<System*>(context)->accept_field_publication_candidate();
+          },
+          nullptr,
+          [](void* context) noexcept {
+            try {
+              static_cast<System*>(context)->rollback_field_publication_transaction();
+            } catch (...) {
+              std::terminate();
+            }
+          },
+          {},
+          [](void* context) {
+            static_cast<System*>(context)->validate_field_publication_candidate();
+          }});
+}
+
+void System::begin_field_publication_transaction() {
+  if (p_->field_publication_active_)
+    throw std::logic_error(
+        "System field solves are sequential until their publication outcome is consumed");
+  if (p_->accepted_field_publication_)
+    p_->accepted_field_publication_->capture(*p_);
+  else
+    p_->accepted_field_publication_ = std::make_unique<Impl::FieldPublicationSnapshot>(*p_);
+  p_->field_publication_active_ = true;
+  p_->field_publication_candidate_ready_ = false;
+}
+
+void System::stage_field_publication_candidate() {
+  if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
+      p_->field_publication_candidate_ready_)
+    throw std::logic_error("System field publication has no unique active candidate slot");
+  if (p_->candidate_field_publication_)
+    p_->candidate_field_publication_->capture(*p_);
+  else
+    p_->candidate_field_publication_ = std::make_unique<Impl::FieldPublicationSnapshot>(*p_);
+  p_->field_publication_candidate_ready_ = true;
+  p_->accepted_field_publication_->restore(*p_);
+}
+
+void System::validate_field_publication_candidate() {
+  if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
+      !p_->candidate_field_publication_ || !p_->field_publication_candidate_ready_)
+    throw std::logic_error("System field publication has no staged candidate");
+  if (!p_->candidate_field_publication_->publication_layout_matches(*p_))
+    throw std::logic_error(
+        "System field publication snapshot layout changed before Accept");
+}
+
+void System::accept_field_publication_candidate() noexcept {
+  if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
+      !p_->candidate_field_publication_ || !p_->field_publication_candidate_ready_)
+    std::terminate();
+  p_->candidate_field_publication_->restore_copy_only(*p_);
+  p_->field_publication_candidate_ready_ = false;
+  p_->field_publication_active_ = false;
+}
+
+void System::rollback_field_publication_transaction() {
+  if (!p_->field_publication_active_)
+    return;
+  if (!p_->accepted_field_publication_)
+    std::terminate();
+  p_->accepted_field_publication_->restore(*p_);
+  p_->field_publication_candidate_ready_ = false;
+  p_->field_publication_active_ = false;
+}
+
+bool System::field_publication_transaction_active_() const noexcept {
+  return p_->field_publication_active_;
 }
 
 // Register a named elliptic field (ADC-428): records WHERE the field's solved phi / centered grad land
 // in the aux channel (@p phi_comp / @p gx_comp / @p gy_comp, the model's named aux slots). The native
 // loader calls this for each m.elliptic_field after the block is installed. POPS_EXPORT: resolved by the
 // generated problem.so / native loader across the dlopen boundary.
-POPS_EXPORT void System::register_elliptic_field(const std::string& block,
-                                                const std::string& field, int phi_comp,
-                                                int gx_comp, int gy_comp,
-                                                int gradient_sign) {
+POPS_EXPORT void System::register_elliptic_field(const std::string& block, const std::string& field,
+                                                 int phi_comp, int gx_comp, int gy_comp,
+                                                 int gradient_sign) {
   p_->register_elliptic_field(block, field, phi_comp, gx_comp, gy_comp, gradient_sign);
 }
 
@@ -254,8 +453,7 @@ std::vector<std::string> System::field_provider_slots() const {
   return p_->fields_.provider_slots();
 }
 
-void System::set_field_potential(const std::string& provider_slot,
-                                 const std::vector<double>& phi) {
+void System::set_field_potential(const std::string& provider_slot, const std::vector<double>& phi) {
   MultiFab& field = p_->fields_.provider_potential(provider_slot);
   if (field.local_size() == 0)
     return;
@@ -286,8 +484,8 @@ double System::reduce_component(const std::string& block, const std::string& kin
   const int nc = s.ncomp;
   if (comp < 0 || comp >= nc)
     throw std::out_of_range("System::reduce_component: component " + std::to_string(comp) +
-                            " is outside block '" + block + "' with " +
-                            std::to_string(nc) + " components");
+                            " is outside block '" + block + "' with " + std::to_string(nc) +
+                            " components");
   RelativeCellMeasure measure;
   if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None) {
     measure.active_cells = &p_->domain_mask_;
@@ -328,10 +526,10 @@ double System::reduce_component(const std::string& block, const std::string& kin
       m = std::max(m, static_cast<double>(pops::reduce_norm_inf(u, c, measure)));
     return m;
   }
-  throw std::runtime_error(
-      "System::reduce_component: unknown reduction kind '" + kind + "' for block '" + block +
-      "' (expected one of: sum, min, max, abs_sum, sum_sq, abs_max, "
-      "sum_all, abs_sum_all, sum_sq_all, abs_max_all)");
+  throw std::runtime_error("System::reduce_component: unknown reduction kind '" + kind +
+                           "' for block '" + block +
+                           "' (expected one of: sum, min, max, abs_sum, sum_sq, abs_max, "
+                           "sum_all, abs_sum_all, sum_sq_all, abs_max_all)");
 }
 MultiFab System::alloc_scalar_field(int n_comp, int n_ghost) {
   // Co-distributed with the block storage (Impl::ba / Impl::dm -- the same (ba, dm) every block U is
@@ -346,10 +544,11 @@ MultiFab System::alloc_scalar_field(int n_comp, int n_ghost) {
 // field across macro-steps (Adams-Bashforth), reaching the SYSTEM-OWNED ring buffers through these
 // accessors. The rings live in Impl::program_.hist_ (the extracted Program subsystem, ADC-594) so a
 // later checkpoint slice (ADC-406b) can serialize them without touching the .so ABI.
-MultiFab& System::register_history(
-    const std::string& name, int lag, int ncomp, int owner,
-    const std::string& state_identity, const std::string& space_identity,
-    const std::string& clock_identity, const std::string& interpolation_identity) {
+MultiFab& System::register_history(const std::string& name, int lag, int ncomp, int owner,
+                                   const std::string& state_identity,
+                                   const std::string& space_identity,
+                                   const std::string& clock_identity,
+                                   const std::string& interpolation_identity) {
   if (lag < 1)
     throw std::runtime_error("System::register_history: lag must be >= 1 (got " +
                              std::to_string(lag) + ") for history '" + name + "'");
@@ -359,12 +558,13 @@ MultiFab& System::register_history(
         "state (add the block before installing the program)");
   const bool qualified = owner >= 0 || !state_identity.empty() || !space_identity.empty() ||
                          !clock_identity.empty() || !interpolation_identity.empty();
-  if (qualified && (owner < 0 || owner >= static_cast<int>(p_->sp.size()) ||
-                    state_identity.empty() || space_identity.empty() || clock_identity.empty() ||
-                    interpolation_identity.empty()))
+  if (qualified &&
+      (owner < 0 || owner >= static_cast<int>(p_->sp.size()) || state_identity.empty() ||
+       space_identity.empty() || clock_identity.empty() || interpolation_identity.empty()))
     throw std::runtime_error(
         "System::register_history: qualified registration requires owner/state/space/clock/"
-        "interpolation identities for history '" + name + "'");
+        "interpolation identities for history '" +
+        name + "'");
   const int want_depth = lag + 1;
   auto it = p_->program_.hist_.histories.find(name);
   if (it != p_->program_.hist_.histories.end()) {
@@ -382,14 +582,13 @@ MultiFab& System::register_history(
                  histories.space_identity.at(name) != space_identity ||
                  prior->second != clock_identity ||
                  histories.interpolation_identity.at(name) != interpolation_identity) {
-        throw std::runtime_error(
-            "System::register_history: history '" + name +
-            "' cannot be re-registered with a different qualified identity");
+        throw std::runtime_error("System::register_history: history '" + name +
+                                 "' cannot be re-registered with a different qualified identity");
       }
     }
     if (ncomp >= 1 && it->second[0].ncomp() != ncomp)
-      throw std::runtime_error(
-          "System::register_history: ncomp mismatch for history '" + name + "'");
+      throw std::runtime_error("System::register_history: ncomp mismatch for history '" + name +
+                               "'");
     // Idempotent re-registration: the ring depth is the MAX lag any caller requests. A read at the
     // declared max lag and the store (which only needs the current slot, register_history(name, 1))
     // can register in EITHER order without conflict -- a smaller request is a no-op (returns the
@@ -470,14 +669,13 @@ std::int64_t System::set_analytic_expression_state(
     const std::vector<std::vector<double>>& literals) {
   auto prepared = analytic::collectively_prepare_analytic_request(
       "System::set_analytic_expression_state",
-      {{"centering", centering}, {"name", name}, {"projection", projection}, {"space", space}},
-      {}, opcodes, literals, [&]() {
+      {{"centering", centering}, {"name", name}, {"projection", projection}, {"space", space}}, {},
+      opcodes, literals, [&]() {
         require_assembling(p_->lifecycle_, "set_analytic_expression_state");
         if (p_->polar_)
           throw std::runtime_error(
               "System::set_analytic_expression_state requires a Cartesian frame");
-        if (space != "cell" || centering != "cell" ||
-            projection != "conservative_cell_average")
+        if (space != "cell" || centering != "cell" || projection != "conservative_cell_average")
           throw std::runtime_error(
               "System::set_analytic_expression_state requires cell-centred "
               "conservative_cell_average projection");
@@ -490,17 +688,15 @@ std::int64_t System::set_analytic_expression_state(
         return std::pair<Impl::Species*, std::vector<analytic::AnalyticProgram>>{
             &state, std::move(programs)};
       });
-  return analytic::materialize_cell_average(
-      prepared.first->U, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
-      prepared.second);
+  return analytic::materialize_cell_average(prepared.first->U, p_->geom.xlo, p_->geom.ylo,
+                                            p_->geom.dx(), p_->geom.dy(), prepared.second);
 }
-std::int64_t System::set_analytic_mapped_state(
-    const std::string& name, const std::vector<std::vector<std::string>>& opcodes,
-    const std::vector<std::vector<double>>& literals,
-    const std::vector<std::string>& input_sources) {
+std::int64_t System::set_analytic_mapped_state(const std::string& name,
+                                               const std::vector<std::vector<std::string>>& opcodes,
+                                               const std::vector<std::vector<double>>& literals,
+                                               const std::vector<std::string>& input_sources) {
   auto prepared = analytic::collectively_prepare_analytic_request(
-      "System::set_analytic_mapped_state",
-      {{"name", name}}, {}, opcodes, literals, [&]() {
+      "System::set_analytic_mapped_state", {{"name", name}}, {}, opcodes, literals, [&]() {
         require_assembling(p_->lifecycle_, "set_analytic_mapped_state");
         if (p_->polar_)
           throw std::runtime_error("System::set_analytic_mapped_state requires a Cartesian frame");
@@ -557,22 +753,21 @@ std::int64_t System::set_analytic_mapped_state(
           dst(i, j, c) = src(i, j, c);
   }
   device_fence();
-  return analytic::materialize_discrete_mapped_state(
-      state->U, seed, p_->aux, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
-      programs, bindings);
+  return analytic::materialize_discrete_mapped_state(state->U, seed, p_->aux, p_->geom.xlo,
+                                                     p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
+                                                     programs, bindings);
 }
-std::int64_t System::set_analytic_gaussian_state(
-    const std::string& name, double center_x, double center_y, double background,
-    double amplitude, double inverse_width) {
+std::int64_t System::set_analytic_gaussian_state(const std::string& name, double center_x,
+                                                 double center_y, double background,
+                                                 double amplitude, double inverse_width) {
   require_assembling(p_->lifecycle_, "set_analytic_gaussian_state");
   if (p_->polar_)
     throw std::runtime_error("System::set_analytic_gaussian_state requires a Cartesian frame");
   Impl::Species& state = p_->find(name);
   return analytic::materialize_gaussian_cell_average(
       state.U, p_->geom.xlo, p_->geom.ylo, p_->geom.dx(), p_->geom.dy(),
-      static_cast<Real>(center_x), static_cast<Real>(center_y),
-      static_cast<Real>(background), static_cast<Real>(amplitude),
-      static_cast<Real>(inverse_width));
+      static_cast<Real>(center_x), static_cast<Real>(center_y), static_cast<Real>(background),
+      static_cast<Real>(amplitude), static_cast<Real>(inverse_width));
 }
 int System::n_vars(const std::string& name) const {
   return p_->find(name).ncomp;
@@ -706,30 +901,34 @@ std::vector<double> System::field_potential_global(const std::string& provider_s
 }
 
 std::vector<OutputPiece> System::output_state_local_pieces(const std::string& name,
-                                                          int level) const {
+                                                           int level) const {
   if (level != 0)
-    throw std::out_of_range("System::output_state_local_pieces: uniform layout has only level zero");
+    throw std::out_of_range(
+        "System::output_state_local_pieces: uniform layout has only level zero");
   const Impl::Species& species = p_->find(name);
   return output_local_pieces(species.U, 0, false);
 }
 
 std::vector<OutputPiece> System::output_field_local_pieces(const std::string& provider_slot,
-                                                          int level) {
+                                                           int level) {
   if (level != 0)
-    throw std::out_of_range("System::output_field_local_pieces: uniform layout has only level zero");
+    throw std::out_of_range(
+        "System::output_field_local_pieces: uniform layout has only level zero");
   MultiFab& field = p_->fields_.provider_potential(provider_slot);
   return output_local_pieces(field, 0, false);
 }
 
-std::vector<OutputPiece> System::output_state_root_pieces(
-    const WorldCommunicator& world, const std::string& name, int level) const {
-  return output_pieces_to_root(
-      world, detail::output_collective_identity("System", "state", name, level),
-      [&] { return output_state_local_pieces(name, level); });
+std::vector<OutputPiece> System::output_state_root_pieces(const WorldCommunicator& world,
+                                                          const std::string& name,
+                                                          int level) const {
+  return output_pieces_to_root(world,
+                               detail::output_collective_identity("System", "state", name, level),
+                               [&] { return output_state_local_pieces(name, level); });
 }
 
-std::vector<OutputPiece> System::output_field_root_pieces(
-    const WorldCommunicator& world, const std::string& provider_slot, int level) {
+std::vector<OutputPiece> System::output_field_root_pieces(const WorldCommunicator& world,
+                                                          const std::string& provider_slot,
+                                                          int level) {
   return output_pieces_to_root(
       world, detail::output_collective_identity("System", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
@@ -771,6 +970,5 @@ std::vector<double> System::local_state(const std::string& name, int li) const {
             static_cast<double>(u(i, j, c));
   return out;
 }
-
 
 }  // namespace pops

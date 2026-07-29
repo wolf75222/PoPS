@@ -236,7 +236,8 @@ def test_structured_regions_hoist_prepared_storage_and_emit_solve_in_region(
     assert all(owner < install for owner in solution_owners)
     assert all(call > region for call in solve_calls)
     assert source.count("ctx.operator_evaluation_snapshot(") == solve_count
-    assert source.count(" action=fail_run") == solve_count
+    assert source.count('" action=" +') == solve_count
+    assert source.count(".action_name()") == solve_count
 
     if kind == "while_cond":
         assert solve_calls[0] < source.index("break;", region)

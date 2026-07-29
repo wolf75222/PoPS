@@ -565,45 +565,52 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// The AMR runtime runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard):
   /// calling it again at fine levels within the same macro-step is a no-op cache-hit (parity: the
   /// body stays atomic, the solve fires once -- the OncePerStep cadence the native AMR step uses).
-  SolveReport solve_fields() const {
+  SolveOutcome solve_fields() const {
     if (level_ == 0 || !default_solve_report_) {
       default_solve_report_.reset();
-      const SolveReport report = eng_->solve_default_field();
+      SolveOutcome outcome = eng_->solve_default_field();
+      const SolveReport report = outcome.report();
       if (report.solved())
         default_solve_report_ = report;
-      return report;
+      return outcome;
     }
-    return *default_solve_report_;
+    if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
+      throw std::logic_error(
+          "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
+    return SolveOutcome::collective_world(*default_solve_report_);
   }
   /// Per-stage re-solve from a stage state is currently a coarse-only capability.  A fine-level request
   /// is rejected explicitly; it never consumes a stale injected auxiliary field.
-  SolveReport solve_fields_from_state(int b, MultiFab& u_stage) const {
+  SolveOutcome solve_fields_from_state(int b, MultiFab& u_stage) const {
     if (level_ == 0) {
       MultiFab& live = state(b);
       MultiFab& saved = stage_state_scratch_for_(b, level_, live);
       PureFieldAlgebra::copy_allocated(saved, live);
       default_solve_report_.reset();
-      SolveReport report;
-      try {
-        PureFieldAlgebra::copy_allocated(live, u_stage);
-        report = eng_->solve_default_field();
-        PureFieldAlgebra::copy_allocated(live, saved);
-      } catch (...) {
-        PureFieldAlgebra::copy_allocated(live, saved);
-        throw;
-      }
+      SolveOutcome outcome = [&]() -> SolveOutcome {
+        try {
+          PureFieldAlgebra::copy_allocated(live, u_stage);
+          SolveOutcome candidate = eng_->solve_default_field();
+          PureFieldAlgebra::copy_allocated(live, saved);
+          return candidate;
+        } catch (...) {
+          PureFieldAlgebra::copy_allocated(live, saved);
+          throw;
+        }
+      }();
+      const SolveReport report = outcome.report();
       if (report.solved())
         default_solve_report_ = report;
-      return report;
+      return outcome;
     }
     deferred_op(
         "solve_fields_from_state_default",
         "the default per-stage fine-level field re-solve requires a composite stage solver; use "
         "OncePerStep field cadence or an exact named field provider");
   }
-  SolveReport solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                         const std::string& provider_slot, int b,
-                                         MultiFab& u_stage) const {
+  SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          const std::string& provider_slot, int b,
+                                          MultiFab& u_stage) const {
     if (provider_slot.empty())
       throw std::invalid_argument(
           "AmrProgramContext::solve_fields_from_state_at requires an exact provider slot");
@@ -617,18 +624,21 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     MultiFab& live = eng_->level_state(static_cast<std::size_t>(sys_block(b)), point.level);
     MultiFab& saved = stage_state_scratch_for_(b, point.level, live);
     PureFieldAlgebra::copy_allocated(saved, live);
-    SolveReport report;
-    try {
-      PureFieldAlgebra::copy_allocated(live, u_stage);
-      report = eng_->solve_named_fields(&provider_slot);
-      PureFieldAlgebra::copy_allocated(live, saved);
-    } catch (...) {
-      PureFieldAlgebra::copy_allocated(live, saved);
-      named_solve_reports_.insert_or_assign(provider_slot, SolveReport{});
-      throw;
-    }
+    SolveOutcome outcome = [&]() -> SolveOutcome {
+      try {
+        PureFieldAlgebra::copy_allocated(live, u_stage);
+        SolveOutcome candidate = eng_->solve_named_fields(&provider_slot);
+        PureFieldAlgebra::copy_allocated(live, saved);
+        return candidate;
+      } catch (...) {
+        PureFieldAlgebra::copy_allocated(live, saved);
+        named_solve_reports_.insert_or_assign(provider_slot, SolveReport{});
+        throw;
+      }
+    }();
+    const SolveReport report = outcome.report();
     named_solve_reports_.insert_or_assign(provider_slot, report);
-    return report;
+    return outcome;
   }
   template <class Body>
   void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -636,13 +646,13 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                                     MultiFab& evaluation_state, MultiFab& restore_state,
                                     Body&& body) const {
     const auto restore = [&]() {
-      const SolveReport restored =
-          solve_fields_from_state_at(point, provider_slot, b, restore_state);
+      const SolveReport restored = consume_field_outcome_(
+          solve_fields_from_state_at(point, provider_slot, b, restore_state));
       if (!restored.solved_value_available())
         throw_field_solve_failure_(restored, "restoring the frozen field state");
     };
-    const SolveReport prepared =
-        solve_fields_from_state_at(point, provider_slot, b, evaluation_state);
+    const SolveReport prepared = consume_field_outcome_(
+        solve_fields_from_state_at(point, provider_slot, b, evaluation_state));
     if (!prepared.solved_value_available()) {
       restore();
       throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
@@ -658,49 +668,59 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
   /// fine levels consume only that exact provider-qualified report.
-  SolveReport solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
+  SolveOutcome solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
     if (level_ != 0) {
+      if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
+        throw std::logic_error(
+            "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
       const auto cached = named_solve_reports_.find(field);
       if (cached == named_solve_reports_.end() || !cached->second.solved())
         throw std::runtime_error(
             "AmrProgramContext::solve_fields_from_state(field): fine-level reuse requires an "
             "accepted coarse SolveReport");
-      return cached->second;  // the coarse solve publishes/injects every level once per stage
+      return SolveOutcome::collective_world(
+          cached->second);  // the coarse solve publishes/injects every level once per stage
     }
     MultiFab& live = state(b);
     MultiFab& published = stage_state_scratch_for_(b, level_, live);
     PureFieldAlgebra::copy_allocated(published, live);
-    SolveReport report;
-    try {
-      PureFieldAlgebra::copy_allocated(live, u_stage);
-      report = eng_->solve_named_fields(&field);
-      PureFieldAlgebra::copy_allocated(live, published);
-    } catch (...) {
-      PureFieldAlgebra::copy_allocated(live, published);
-      named_solve_reports_.insert_or_assign(field, SolveReport{});
-      throw;
-    }
+    SolveOutcome outcome = [&]() -> SolveOutcome {
+      try {
+        PureFieldAlgebra::copy_allocated(live, u_stage);
+        SolveOutcome candidate = eng_->solve_named_fields(&field);
+        PureFieldAlgebra::copy_allocated(live, published);
+        return candidate;
+      } catch (...) {
+        PureFieldAlgebra::copy_allocated(live, published);
+        named_solve_reports_.insert_or_assign(field, SolveReport{});
+        throw;
+      }
+    }();
+    const SolveReport report = outcome.report();
     named_solve_reports_.insert_or_assign(field, report);
-    return report;
+    return outcome;
   }
   /// Retained default-provider overload: the final Program IR always carries an exact field identity,
   /// while an unqualified coupled solve has no provider authority and therefore fails loud.
-  SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& /*u_stages*/) const {
+  SolveOutcome solve_fields_from_blocks(const std::vector<const MultiFab*>& /*u_stages*/) const {
     deferred_op(
         "solve_fields_from_blocks_default",
         "an unqualified coupled multi-block field solve has no AMR provider authority; use the "
         "exact field-qualified Program operation");
   }
 
-  SolveReport solve_fields_from_blocks(const std::string& field,
-                                       const std::vector<const MultiFab*>& u_stages) const {
+  SolveOutcome solve_fields_from_blocks(const std::string& field,
+                                        const std::vector<const MultiFab*>& u_stages) const {
     if (level_ != 0) {
+      if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
+        throw std::logic_error(
+            "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
       const auto cached = named_solve_reports_.find(field);
       if (cached == named_solve_reports_.end() || !cached->second.solved())
         throw std::runtime_error(
             "AmrProgramContext::solve_fields_from_blocks(field): fine-level reuse requires an "
             "accepted coarse SolveReport");
-      return cached->second;
+      return SolveOutcome::collective_world(cached->second);
     }
     if (u_stages.size() != static_cast<std::size_t>(n_blocks()))
       throw std::runtime_error(
@@ -748,28 +768,31 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       for (const auto& [live, published] : stage_restore_scratch_)
         PureFieldAlgebra::copy_allocated(*live, *published);
     };
-    SolveReport report;
-    try {
-      for (std::size_t p = 0; p < u_stages.size(); ++p) {
-        if (u_stages[p] != nullptr)
-          PureFieldAlgebra::copy_allocated(state(static_cast<int>(p)), *u_stages[p]);
+    SolveOutcome outcome = [&]() -> SolveOutcome {
+      try {
+        for (std::size_t p = 0; p < u_stages.size(); ++p) {
+          if (u_stages[p] != nullptr)
+            PureFieldAlgebra::copy_allocated(state(static_cast<int>(p)), *u_stages[p]);
+        }
+        SolveOutcome candidate = eng_->solve_named_fields(&field);
+        restore();
+        return candidate;
+      } catch (...) {
+        restore();
+        named_solve_reports_.insert_or_assign(field, SolveReport{});
+        throw;
       }
-      report = eng_->solve_named_fields(&field);
-      restore();
-    } catch (...) {
-      restore();
-      named_solve_reports_.insert_or_assign(field, SolveReport{});
-      throw;
-    }
+    }();
+    const SolveReport report = outcome.report();
     named_solve_reports_.insert_or_assign(field, report);
-    return report;
+    return outcome;
   }
 
   /// Generated allocation-free route. The static initializer-list request is copied into one
   /// context-owned pointer workspace keyed by the exact IR identity; field and ordered block pack
   /// cannot drift across replays. The vector overload above remains the manual C++ API.
-  SolveReport solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
-                                       std::initializer_list<FieldStageOverride> overrides) const {
+  SolveOutcome solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
+                                        std::initializer_list<FieldStageOverride> overrides) const {
     const std::vector<const MultiFab*>& stages =
         generated_field_solve_stages_(value_id, field, overrides);
     return solve_fields_from_blocks(generated_field_solve_workspaces_.at(value_id).field_identity,
@@ -1433,22 +1456,22 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
 
   /// Level-local prepared Krylov route. Direct composite hierarchy solves remain a separate typed
   /// backend and never discard an authored prepared operator.
-  SolveReport solve_prepared_linear(const PreparedAffineLinearProblem& problem,
-                                    KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
-                                    const KrylovControls& controls) const {
-    return pops::solve_prepared_affine(problem, workspace, sol, rhs, controls);
+  SolveOutcome solve_prepared_linear(const PreparedAffineLinearProblem& problem,
+                                     KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
+                                     const KrylovControls& controls) const {
+    return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
   }
 
   /// Solve the configured operator through the provider-owned direct hierarchy path. A provider may
   /// select this path for one or many levels; topology shape and solver family remain provider-private.
-  SolveReport solve_hierarchy_tensor(int program_block, int ncomp, Real rel_tol, Real abs_tol,
-                                     int max_iter) const {
+  SolveOutcome solve_hierarchy_tensor(int program_block, int ncomp, Real rel_tol, Real abs_tol,
+                                      int max_iter) const {
     require_tensor_binding(program_block, ncomp);
     PreparedHierarchyTensorSolver& solver = configured_hierarchy_tensor_solver_();
     if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider) {
       SolveReport report;
       report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
-      return report;
+      return SolveOutcome::collective_world(std::move(report));
     }
     const HierarchyTensorSolveControls controls{rel_tol, abs_tol, max_iter};
     return solve_prepared_hierarchy_tensor_collectively(solver, controls);
@@ -1609,6 +1632,14 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   static std::runtime_error block_map_error_(std::string message) {
     return std::runtime_error(std::move(message));
+  }
+
+  static SolveReport consume_field_outcome_(SolveOutcome outcome) {
+    return outcome.consume(outcome.report().solved_value_available()
+                               ? SolveConsumption::kAccept
+                               : (outcome.report().action == SolveAction::kRejectAttempt
+                                      ? SolveConsumption::kRejectAttempt
+                                      : SolveConsumption::kFailRun));
   }
 
   [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,

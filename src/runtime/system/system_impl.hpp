@@ -92,8 +92,7 @@ inline std::vector<double> gather_global(const MultiFab& mf, int ncomp, int gnx,
 inline bool newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
   return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
          newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
-         diagnostics || newton.damping != kNewtonDefaultDamping ||
-         newton.fail_policy != kNewtonDefaultFailPolicy;
+         diagnostics || newton.damping != kNewtonDefaultDamping;
 }
 
 inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newton,
@@ -104,7 +103,6 @@ inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newt
   out.abs_tol = static_cast<double>(newton.abs_tol);
   out.fd_eps = static_cast<double>(newton.fd_eps);
   out.damping = static_cast<double>(newton.damping);
-  out.fail_policy = newton_fail_policy_name(newton.fail_policy);
   out.diagnostics = diagnostics;
   out.non_default = newton_options_non_default(newton, diagnostics);
   return out;
@@ -683,6 +681,56 @@ struct System::Impl {
       impl.program_driver_.restore_last_dt_reason(last_dt_reason);
     }
   };
+
+  struct FieldPublicationSnapshot {
+    MultiFab aux;
+    typename pops::field_solver::SystemFieldSolver<Impl>::StepSnapshot fields;
+
+    explicit FieldPublicationSnapshot(Impl& impl)
+        : aux(impl.aux), fields(impl.fields_.step_snapshot()) {}
+
+    [[nodiscard]] static bool same_layout(const MultiFab& lhs,
+                                          const MultiFab& rhs) noexcept {
+      return lhs.box_array().boxes() == rhs.box_array().boxes() &&
+             lhs.dmap().ranks() == rhs.dmap().ranks() && lhs.ncomp() == rhs.ncomp() &&
+             lhs.n_grow() == rhs.n_grow() && lhs.local_size() == rhs.local_size();
+    }
+
+    void capture(Impl& impl) {
+      const bool same_aux_layout = same_layout(aux, impl.aux);
+      if (!same_aux_layout)
+        aux = MultiFab(impl.aux.box_array(), impl.aux.dmap(), impl.aux.ncomp(),
+                       impl.aux.n_grow());
+      PureFieldAlgebra::copy_allocated(aux, impl.aux);
+      fields = impl.fields_.step_snapshot();
+    }
+
+    void restore(Impl& impl) const {
+      const bool same_aux_layout = same_layout(aux, impl.aux);
+      if (same_aux_layout)
+        PureFieldAlgebra::copy_allocated(impl.aux, aux);
+      else
+        impl.aux = aux;
+      impl.fields_.restore_step_snapshot(fields);
+    }
+
+    [[nodiscard]] bool publication_layout_matches(Impl& impl) const {
+      return same_layout(aux, impl.aux) &&
+             impl.fields_.step_snapshot_publication_layout_matches(fields);
+    }
+
+    void restore_copy_only(Impl& impl) noexcept {
+      if (!publication_layout_matches(impl))
+        std::terminate();
+      PureFieldAlgebra::copy_allocated(impl.aux, aux);
+      impl.fields_.restore_step_snapshot_copy_only(fields);
+    }
+  };
+
+  std::unique_ptr<FieldPublicationSnapshot> accepted_field_publication_;
+  std::unique_ptr<FieldPublicationSnapshot> candidate_field_publication_;
+  bool field_publication_active_ = false;
+  bool field_publication_candidate_ready_ = false;
 
   std::unique_ptr<AcceptedSnapshot> external_step_transaction_;
   bool external_step_transaction_committed_ = false;

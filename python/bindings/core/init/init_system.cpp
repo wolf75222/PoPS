@@ -124,16 +124,14 @@ void bind_system_assembly(py::class_<System>& cls) {
              int substeps, bool evolve, int stride, const std::vector<std::string>& implicit_vars,
              const std::vector<std::string>& implicit_roles, int newton_max_iters,
              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-             bool newton_diagnostics, double newton_damping, const std::string& newton_fail_policy,
-             double positivity_floor, bool wave_speed_cache, double weno_epsilon) {
+             bool newton_diagnostics, double newton_damping, double positivity_floor,
+             bool wave_speed_cache, double weno_epsilon) {
             NewtonOptions newton;
             newton.max_iters = newton_max_iters;
             newton.rel_tol = static_cast<Real>(newton_rel_tol);
             newton.abs_tol = static_cast<Real>(newton_abs_tol);
             newton.fd_eps = static_cast<Real>(newton_fd_eps);
             newton.damping = static_cast<Real>(newton_damping);
-            newton.fail_policy =
-                newton_fail_policy_from_string(newton_fail_policy, "System::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, evolve, stride,
                         implicit_vars, implicit_roles, newton, newton_diagnostics, positivity_floor,
                         wave_speed_cache, weno_epsilon);
@@ -147,15 +145,14 @@ void bind_system_assembly(py::class_<System>& cls) {
           // bit-identical. Resolved on the C++ side against the block's names/roles (error on a missing name/role).
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // Options of the implicit IMEX source Newton (defaults = historical constants 2 / 1e-7,
-          // bit-identical). newton_diagnostics=True enables the report (newton_report(name)).
+          // Options of the implicit IMEX source Newton. newton_diagnostics=True enables the report
+          // (newton_report(name)).
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_diagnostics") = false,
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_fail_policy") = "none",
           // Zhang-Shu POSITIVITY limiter (ADC-76): density floor of the reconstructed face states
           // (conservative scaling toward the cell mean). 0 (default) = inactive,
           // bit-identical path. Requires a model exposing the Density role.
@@ -344,7 +341,8 @@ void bind_system_program(py::class_<System>& cls) {
       .def("mark_bound", &System::mark_bound)
       .def("lifecycle_state", &System::lifecycle_state)
       // ADC-466 (Spec criterion 24): configured field (Poisson) solver token (the last set_poisson
-      // solver, default "geometric_mg"). install_program reads it to validate a field operator's
+      // solver (geometry-specific default: geometric_mg Cartesian, polar on a ring). install_program
+      // reads it to validate a field operator's
       // solver requirement; exposed so the unified sim.install can pre-validate host-side too.
       .def("poisson_solver", &System::poisson_solver)
       // ADC-414 (spec op 23): scalar diagnostics a compiled Program records via P.record_scalar,
@@ -759,7 +757,8 @@ void bind_system_physics(py::class_<System>& cls) {
 
 // Stepping + profiling + custom-integrator primitives (field solve, step/advance/CFL, eval_rhs/state).
 void bind_system_stepping(py::class_<System>& cls) {
-  cls.def("solve_fields", &System::solve_fields)
+  cls.def("solve_fields",
+          [](System& system) { return consume_solve_outcome(system.solve_fields()); })
       .def("step", &System::step, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)

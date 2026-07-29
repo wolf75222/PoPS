@@ -121,7 +121,7 @@ static void install_multirate_forward_euler_program(AmrSystem& system, std::vect
   context->install(
       [context, substeps = std::move(substeps), strides = std::move(strides)](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context, &substeps, &strides](double level_dt) {
-          (void)context->solve_fields();
+          (void)consume_solve_outcome(context->solve_fields());
           for (int block = 0; block < context->n_blocks(); ++block) {
             const auto index = static_cast<std::size_t>(block);
             if ((context->macro_step() + 1) % strides[index] != 0)
@@ -290,12 +290,12 @@ TEST(test_amr_multiblock_substeps, Runs) {
         context->advance_hierarchy(macro_dt, [context, per_stage](double) {
           if (!per_stage) {
             context->set_stage_time(0, 1);
-            (void)context->solve_fields();
+            (void)consume_solve_outcome(context->solve_fields());
             return;
           }
           for (int stage = 0; stage < 4; ++stage) {
             context->set_stage_time(stage, 4);
-            (void)context->solve_fields();
+            (void)consume_solve_outcome(context->solve_fields());
           }
         });
       });

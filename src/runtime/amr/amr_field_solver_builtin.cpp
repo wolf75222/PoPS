@@ -39,18 +39,14 @@ GeometricMgAmrOptions decode_options(const AmrFieldSolverOptions& options) {
   GeometricMgAmrOptions decoded;
   decoded.mg.abs_tol = static_cast<Real>(solver_option<double>(options, "mg.abs_tol"));
   decoded.mg.rel_tol = static_cast<Real>(solver_option<double>(options, "mg.rel_tol"));
-  decoded.mg.max_cycles =
-      static_cast<int>(solver_option<std::int64_t>(options, "mg.max_cycles"));
-  decoded.mg.min_coarse =
-      static_cast<int>(solver_option<std::int64_t>(options, "mg.min_coarse"));
+  decoded.mg.max_cycles = static_cast<int>(solver_option<std::int64_t>(options, "mg.max_cycles"));
+  decoded.mg.min_coarse = static_cast<int>(solver_option<std::int64_t>(options, "mg.min_coarse"));
   decoded.mg.nu1 = static_cast<int>(solver_option<std::int64_t>(options, "mg.pre_smooth"));
   decoded.mg.nu2 = static_cast<int>(solver_option<std::int64_t>(options, "mg.post_smooth"));
-  decoded.mg.nbottom =
-      static_cast<int>(solver_option<std::int64_t>(options, "mg.bottom_sweeps"));
+  decoded.mg.nbottom = static_cast<int>(solver_option<std::int64_t>(options, "mg.bottom_sweeps"));
   decoded.mg.coarse_threshold =
       static_cast<int>(solver_option<std::int64_t>(options, "mg.coarse_threshold"));
-  decoded.fac.max_iters =
-      static_cast<int>(solver_option<std::int64_t>(options, "fac.max_iters"));
+  decoded.fac.max_iters = static_cast<int>(solver_option<std::int64_t>(options, "fac.max_iters"));
   decoded.fac.fine_sweeps =
       static_cast<int>(solver_option<std::int64_t>(options, "fac.fine_sweeps"));
   decoded.fac.rel_tol = static_cast<Real>(solver_option<double>(options, "fac.rel_tol"));
@@ -99,16 +95,15 @@ std::optional<HierarchyPolicy> decode_hierarchy_policy(
 
 class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
  public:
-  PreparedGeometricMgFieldSolver(const AmrFieldSolverBuildRequest& request,
-                                 std::string contract)
-      : contract_(std::move(contract)), plan_(request.plan), options_(decode_options(
-                                                               request.plan.solver_options)) {
+  PreparedGeometricMgFieldSolver(const AmrFieldSolverBuildRequest& request, std::string contract)
+      : contract_(std::move(contract)),
+        plan_(request.plan),
+        options_(decode_options(request.plan.solver_options)) {
     validate_options(options_);
     const auto policy = decode_hierarchy_policy(request.plan.hierarchy_policy);
     if (!policy)
       throw std::invalid_argument("geometric-MG received an unknown hierarchy-policy authority");
-    const bool composite =
-        *policy == HierarchyPolicy::Composite && request.hierarchy.nlev() > 1;
+    const bool composite = *policy == HierarchyPolicy::Composite && request.hierarchy.nlev() > 1;
     if (composite) {
       distributions_.assign(static_cast<std::size_t>(request.hierarchy.nlev()),
                             FieldDistribution::Distributed);
@@ -191,26 +186,30 @@ class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
   }
   SolveReport solve() override {
     if (fac_) {
-      try {
-        fac_->solve();
-      } catch (...) {
+      if (plan_.has_boundary_kernel && plan_.boundary_kernel.observes_iteration) {
+        if (!plan_.has_newton) {
+          report_ = SolveReport::capability_failure();
+          return report_;
+        }
+        report_ = fac_->solve_boundary_fas(plan_.newton);
+      } else {
+        const CompositeFacOptions& options = options_.fac;
+        fac_->solve(options.max_iters, options.fine_sweeps, options.rel_tol, options.abs_tol);
         report_ = fac_->last_solve_report();
-        throw;
       }
-      report_ = fac_->last_solve_report();
       return report_;
     }
     for (auto& solver : level_solvers_) {
-      try {
-        if (plan_.has_boundary_kernel && plan_.boundary_kernel.observes_iteration)
-          solver->solve();
-        else
-          solver->solve(options_.mg.rel_tol, options_.mg.max_cycles, options_.mg.abs_tol);
-      } catch (...) {
+      if (plan_.has_boundary_kernel && plan_.boundary_kernel.observes_iteration) {
+        if (!plan_.has_newton) {
+          report_ = SolveReport::capability_failure();
+          return report_;
+        }
+        report_ = solver->solve_boundary_newton(plan_.newton);
+      } else {
+        solver->solve(options_.mg.rel_tol, options_.mg.max_cycles, options_.mg.abs_tol);
         report_ = solver->last_solve_report();
-        throw;
       }
-      report_ = solver->last_solve_report();
       if (!report_.solved())
         return report_;
     }
@@ -277,13 +276,13 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
       return PreparedProviderSupport::reject(10, "field solver options are incompatible");
     const auto policy = decode_hierarchy_policy(request.plan.hierarchy_policy);
     if (!policy)
-      return PreparedProviderSupport::reject(11, "hierarchy policy is not implemented by this provider");
+      return PreparedProviderSupport::reject(
+          11, "hierarchy policy is not implemented by this provider");
     const bool composite = *policy == HierarchyPolicy::Composite;
     const bool level_local = *policy == HierarchyPolicy::LevelLocal;
     const bool default_field =
         request.use_contract_identity == "pops.amr.field-solver-use.default@1";
-    const bool named_field =
-        request.use_contract_identity == "pops.amr.field-solver-use.named@1";
+    const bool named_field = request.use_contract_identity == "pops.amr.field-solver-use.named@1";
     if (!default_field && !named_field)
       return PreparedProviderSupport::reject(12, "field-solver use contract is unsupported");
     if (default_field && (!level_local || request.hierarchy.nlev() != 1))
@@ -305,8 +304,8 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
   }
   [[nodiscard]] std::unique_ptr<AmrPreparedFieldSolver> build(
       const AmrFieldSolverBuildRequest& request) const override {
-    return std::make_unique<PreparedGeometricMgFieldSolver>(
-        request, expected_prepared_contract(request));
+    return std::make_unique<PreparedGeometricMgFieldSolver>(request,
+                                                            expected_prepared_contract(request));
   }
 };
 

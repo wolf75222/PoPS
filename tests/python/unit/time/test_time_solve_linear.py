@@ -133,7 +133,28 @@ def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
     assert "solve_linear failed" in src, src
     assert ".status == pops::SolveStatus::kIterationLimit" in src, src
     assert ".status == pops::SolveStatus::kBreakdown" not in src, src
-    assert "action=fail_run" in src, src
+    assert ".action == pops::SolveAction::kRejectAttempt" in src, src
+    assert '" action=" +' in src and ".action_name()" in src, src
+    consumption = next(
+        line for line in src.splitlines()
+        if ".consume(" in line and "SolveConsumption::kRejectAttempt" in line
+    )
+    assert ".report().action == pops::SolveAction::kRejectAttempt" in consumption, src
+    assert (
+        consumption.index(".report().action == pops::SolveAction::kRejectAttempt")
+        < consumption.index("SolveConsumption::kRejectAttempt")
+    ), consumption
+
+
+def test_solve_outcome_is_consumed_before_graph_publication(t):
+    src = emit_cpp_program(_solve_program(t, method="cg"))
+    solve = src.index("pops::SolveOutcome kr")
+    guard = src.index(".report().solved_value_available()", solve)
+    accept = src.index(".consume(pops::SolveConsumption::kAccept)", guard)
+    commit = src.index("ctx.commit_many(", accept)
+
+    assert solve < guard < accept < commit
+    assert "throw " in src[guard:accept]
 
 
 def test_bicgstab_codegen(t):

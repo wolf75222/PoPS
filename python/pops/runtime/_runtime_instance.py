@@ -1048,7 +1048,7 @@ class RuntimeInstance:
         native = self._executor
         begin, commit, finalize, rollback = self._step_transaction_methods()
         snapshot = self._step_envelope_snapshot()
-        phase = "begin"
+        phase = "prepare"
         attempts = 1
         failure_report = None
         transactions = ()
@@ -1125,7 +1125,13 @@ class RuntimeInstance:
                                 f"{rollback_error}")
             finally:
                 self._restore_step_envelope(snapshot)
-            if phase in {"effect", "commit"}:
+            # A prepare failure can escape before the controller replaces the previous accepted
+            # report.  Object identity distinguishes that stale snapshot from a report produced by
+            # this attempt; effect/commit failures deliberately supersede its provisional success.
+            if (
+                failure_report is snapshot["last_step_transaction_report"]
+                or phase in {"effect", "commit"}
+            ):
                 transaction_plan = getattr(native, "_step_transaction_plan", None)
                 stores = tuple(
                     store.value

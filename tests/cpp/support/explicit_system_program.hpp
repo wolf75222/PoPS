@@ -23,7 +23,7 @@ inline void install_forward_euler_program(System& system) {
   context.install([context](double dt) {
     context.begin_step(dt);
     context.set_stage_time(0, 1);
-    (void)context.solve_fields();
+    (void)consume_solve_outcome(context.solve_fields());
 
     std::vector<MultiFab*> states;
     std::vector<MultiFab*> next_states;

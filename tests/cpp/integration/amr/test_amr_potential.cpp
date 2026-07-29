@@ -105,7 +105,7 @@ TEST(test_amr_potential, Runs) {
   sys.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.set_poisson("charge_density", "geometric_mg", "auto");
   sys.set_density("phi_test", rho);
-  sys.solve_fields();
+  (void)pops::consume_solve_outcome(sys.solve_fields());
   const std::vector<double> ps = sys.potential();
   EXPECT_EQ(ps.size(), pa.size()) << "System.potential() meme taille qu'AmrSystem.potential()";
 

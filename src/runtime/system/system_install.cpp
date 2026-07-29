@@ -162,7 +162,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     const GridContext ctx = P->grid_ctx(name);
     // Preserve the requested diagnostic carrier until the typed implicit Program primitive owns and
     // writes it. The spatial closures never capture this state.
-    if (newton_diagnostics || newton.fail_policy != NewtonOptions::kFailNone) {
+    if (newton_diagnostics) {
       auto rep = std::make_shared<NewtonReport>();
       P->diagnostics_.newton_reports[name] = rep;
     }
@@ -633,8 +633,7 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
   if (rp == nullptr)
     throw std::runtime_error(
         "System::newton_report : Newton diagnostics not enabled for block '" + name +
-        "' ; enable diagnostics on the installed private implicit-solve policy or set "
-        "newton_fail_policy='warn'/'throw'");
+        "' ; pass newton_diagnostics=True when installing the block");
   const NewtonReport& r = *rp;
   return SourceNewtonReport{r.enabled,
                             r.converged,
@@ -721,6 +720,13 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (!std::isfinite(epsilon) || epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : finite epsilon != 0 required");
+  if (p_->polar_ && solver != "polar")
+    throw std::runtime_error(
+        "System::set_poisson: polar geometry requires solver='polar'; solver substitution is "
+        "forbidden");
+  if (!p_->polar_ && solver == "polar")
+    throw std::runtime_error(
+        "System::set_poisson: solver='polar' requires polar geometry");
   using FieldSolver = field_solver::SystemFieldSolver<Impl>;
   if (solver == "geometric_mg") {
     GeometricMgOptions mg_options;

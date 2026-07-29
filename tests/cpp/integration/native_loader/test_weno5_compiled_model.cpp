@@ -57,7 +57,7 @@ void run_compiled(int n, double L, const std::vector<double>& rho, double rho0, 
                      "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
   sys.set_density("gas", rho);
-  sys.solve_fields();
+  (void)pops::consume_solve_outcome(sys.solve_fields());
   R = sys.eval_rhs("gas");
   phi = sys.potential();
 }
@@ -81,7 +81,7 @@ void run_native(int n, double L, const std::vector<double>& rho, double rho0, co
   sys.add_block("gas", spec, limiter, "rusanov", "conservative", "explicit", 1, true);
   sys.set_poisson("charge_density", "geometric_mg");
   sys.set_density("gas", rho);
-  sys.solve_fields();
+  (void)pops::consume_solve_outcome(sys.solve_fields());
   R = sys.eval_rhs("gas");
   phi = sys.potential();
 }

@@ -137,13 +137,15 @@ std::string package_source() {
                                         int substeps, int evolve, int stride, const double* params,
                                         int nparams, double) {
       if (std::string(limiter) != "none" || std::string(recon) != "conservative" ||
-          std::string(time) != "explicit" || params == nullptr || nparams != 1)
+          params == nullptr || nparams != 1)
         throw std::invalid_argument("attempt-control test package received an invalid route");
       auto& system = *reinterpret_cast<pops::System*>(raw);
-      if (params[0] == 0.0)
+      if (params[0] == 0.0 && std::string(time) == "explicit")
         install_attempt_block<RetryFlux>(system, name, substeps, evolve != 0, stride);
-      else
+      else if (params[0] == 1.0 && std::string(time) == "explicit")
         install_attempt_block<RejectFlux>(system, name, substeps, evolve != 0, stride);
+      else
+        throw std::invalid_argument("attempt-control test package received an invalid mode");
     }
   )CPP";
 }
@@ -170,11 +172,26 @@ int exercise_attempt(const std::string& library, double mode,
     caught = rejected.status() == pops::SolveStatus::kInvalidEvaluation &&
              rejected.disposition() == expected_disposition &&
              rejected.reason_code() == expected_reason;
+    if (!caught)
+      std::fprintf(stderr,
+                   "attempt-control mismatch: status=%u disposition=%u reason=0x%08x "
+                   "(expected disposition=%u reason=0x%08x)\n",
+                   static_cast<unsigned>(rejected.status()),
+                   static_cast<unsigned>(rejected.disposition()), rejected.reason_code(),
+                   static_cast<unsigned>(expected_disposition), expected_reason);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "unexpected attempt-control exception: %s\n", error.what());
+    return 1;  // FluxEvaluationFailure must not escape the host transaction boundary.
   } catch (...) {
+    std::fprintf(stderr, "unexpected non-standard attempt-control exception\n");
     return 1;  // FluxEvaluationFailure must not escape the host transaction boundary.
   }
-  if (!caught || system.time() != 0.0 || system.get_state("scalar") != accepted)
+  if (!caught || system.time() != 0.0 || system.get_state("scalar") != accepted) {
+    std::fprintf(stderr, "attempt-control rollback mismatch: caught=%d time=%.17g state=%s\n",
+                 caught ? 1 : 0, system.time(),
+                 system.get_state("scalar") == accepted ? "accepted" : "mutated");
     return 1;
+  }
   return 0;
 }
 

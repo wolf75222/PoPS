@@ -137,6 +137,9 @@ class KrylovWorkspace {
       fields_.front().halo_cache();
       for (std::size_t index = 1; index < fields_.size(); ++index)
         fields_[index].share_halo_cache_from(fields_.front());
+      publication_candidate_.emplace(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
+                                     footprint_.input_ghosts);
+      publication_candidate_->share_halo_cache_from(fields_.front());
       real_values_.assign(requirements_.real_count, Real(0));
       scaled_values_.assign(requirements_.scaled_scalar_count, detail::ScaledScalar::zero());
       collective_values_.assign(requirements_.collective_value_count, 0.0);
@@ -164,11 +167,12 @@ class KrylovWorkspace {
       distribution_validation_data_.clear();
       state_words_.clear();
       preconditioner_constant_.reset();
+      publication_candidate_.reset();
       throw std::runtime_error(
           "prepared Krylov persistent workspace materialization failed on at least one "
           "communicator rank");
     }
-    allocation_count_ = requirements_.field_count + (footprint_.preconditioned ? 1u : 0u);
+    allocation_count_ = requirements_.field_count + (footprint_.preconditioned ? 1u : 0u) + 1u;
   }
   static std::size_t required_fields(const PreparedKrylovMethod& method,
                                      const KrylovWorkspaceRequest& request) {
@@ -319,7 +323,7 @@ class KrylovWorkspace {
     // peers may already have advanced to the next provider or collective callback.
     MultiFab& zero = field(0);
     MultiFab& operator_probe = field(1);
-    const PreparedApplyStatus operator_probe_status = operator_session.apply(operator_probe, zero);
+    const PreparedApplyResult operator_probe_status = operator_session.apply(operator_probe, zero);
     if (all_reduce_max(prepared_apply_succeeded(operator_probe_status) ? 0L : 1L, lane_) != 0) {
       invalidate_bound_state_();
       throw std::runtime_error(
@@ -391,7 +395,7 @@ class KrylovWorkspace {
             "communicator rank");
       }
 
-      const PreparedApplyStatus preconditioner_probe_status =
+      const PreparedApplyResult preconditioner_probe_status =
           preconditioner_session.apply(*preconditioner_constant_, zero);
       if (all_reduce_max(prepared_apply_succeeded(preconditioner_probe_status) ? 0L : 1L, lane_) !=
           0) {
@@ -636,6 +640,40 @@ class KrylovWorkspace {
   const KrylovWorkspaceRequirements& requirements() const { return requirements_; }
   std::size_t metric_robust_payload_width() const { return metric_.robust_payload_width(); }
 
+  MultiFab& publication_candidate_field_() {
+    if (!publication_candidate_)
+      throw std::logic_error("KrylovWorkspace has no publication candidate");
+    return *publication_candidate_;
+  }
+  void arm_publication_(const PreparedAffineLinearProblem& problem,
+                        MultiFab& destination) noexcept {
+    publication_problem_ = &problem;
+    publication_destination_ = &destination;
+    publication_active_ = true;
+  }
+  void publish_candidate_() {
+    if (!publication_active_ || publication_destination_ == nullptr || !publication_candidate_)
+      throw std::logic_error("KrylovWorkspace has no active publication");
+    detail::PreparedFieldAlgebra::copy(*publication_destination_, *publication_candidate_);
+  }
+  void validate_publication_() const {
+    if (!publication_active_ || publication_destination_ == nullptr || !publication_candidate_ ||
+        !PureFieldAlgebra::same_vector_space(*publication_destination_, *publication_candidate_) ||
+        publication_destination_->n_grow() != publication_candidate_->n_grow() ||
+        publication_destination_->local_size() != publication_candidate_->local_size())
+      throw std::invalid_argument(
+          "prepared Krylov publication destination layout changed before Accept");
+  }
+  void release_publication_() noexcept {
+    const PreparedAffineLinearProblem* problem = publication_problem_;
+    publication_problem_ = nullptr;
+    publication_destination_ = nullptr;
+    publication_active_ = false;
+    release_solve_();
+    if (problem != nullptr)
+      detail::PreparedProblemAccess::release_use(*problem);
+  }
+
   bool provider_report_agrees_(const SolveReport& report) {
     return provider_report_consensus_.agrees(report, lane_);
   }
@@ -658,16 +696,67 @@ class KrylovWorkspace {
   }
 
   void reset_provider_apply_status_() noexcept {
-    provider_apply_status_ = PreparedApplyStatus::Success;
+    provider_apply_result_ = PreparedApplyResult::success();
     operator_session_.reset_apply_status();
     preconditioner_session_.reset_apply_status();
   }
-  void latch_provider_apply_status_(PreparedApplyStatus status) noexcept {
-    if (!prepared_apply_succeeded(status))
-      provider_apply_status_ = PreparedApplyStatus::Failure;
+  void latch_provider_apply_status_(const PreparedApplyResult& result) noexcept {
+    latch_prepared_apply_failure(provider_apply_result_, result);
   }
   [[nodiscard]] bool provider_apply_succeeded_() const noexcept {
-    return prepared_apply_succeeded(provider_apply_status_);
+    return prepared_apply_succeeded(provider_apply_result_);
+  }
+  [[nodiscard]] PreparedApplyResult collective_provider_apply_result_() const {
+    const PreparedApplyResult& local = provider_apply_result_;
+    const long any_failure = all_reduce_max(local.succeeded() ? 0L : 1L, lane_);
+    if (any_failure == 0)
+      return PreparedApplyResult::success();
+
+    bool eligible = !local.succeeded();
+    const auto select_max = [&](long local_value) {
+      const long candidate = eligible ? local_value : -1L;
+      const long selected = all_reduce_max(candidate, lane_);
+      eligible = eligible && local_value == selected;
+      return selected;
+    };
+
+    PreparedApplyResult collective;
+    collective.action =
+        static_cast<PreparedApplyFailureAction>(select_max(static_cast<long>(local.action)));
+    collective.kind =
+        static_cast<PreparedApplyFailureKind>(select_max(static_cast<long>(local.kind)));
+    const long selected_severity =
+        select_max(static_cast<long>(flux_evaluation_severity(local.evaluation_status)));
+    switch (selected_severity) {
+      case 0:
+        collective.evaluation_status = EvaluationStatus::kOk;
+        break;
+      case 1:
+        collective.evaluation_status = EvaluationStatus::kRetry;
+        break;
+      case 2:
+        collective.evaluation_status = EvaluationStatus::kReject;
+        break;
+      default:
+        collective.evaluation_status = EvaluationStatus::kFailed;
+        break;
+    }
+    collective.reason_code =
+        static_cast<std::uint32_t>(select_max(static_cast<long>(local.reason_code)));
+
+    for (std::size_t index = 0; index < PreparedApplyResult::kPhaseCapacity; ++index) {
+      const long local_byte =
+          index < local.phase_size
+              ? static_cast<long>(static_cast<unsigned char>(local.phase_bytes[index])) + 1L
+              : 0L;
+      const long selected_byte = select_max(local_byte);
+      if (selected_byte == 0)
+        break;
+      collective.phase_bytes[index] = static_cast<char>(selected_byte - 1L);
+      ++collective.phase_size;
+    }
+    collective.phase_truncated = select_max(local.phase_truncated ? 1L : 0L) != 0;
+    return collective;
   }
   void republish_provider_apply_failure_(MultiFab& out) const noexcept {
     if (!provider_apply_succeeded_())
@@ -682,7 +771,7 @@ class KrylovWorkspace {
     preconditioner_source_identity_ = detail::PreparedProviderSourceIdentity{};
     operator_session_allocation_count_ = 0;
     preconditioner_session_allocation_count_ = 0;
-    provider_apply_status_ = PreparedApplyStatus::Success;
+    provider_apply_result_ = PreparedApplyResult::success();
   }
 
   PreparedKrylovMethod method_;
@@ -712,8 +801,12 @@ class KrylovWorkspace {
   detail::PreparedProviderSourceIdentity preconditioner_source_identity_{};
   std::size_t operator_session_allocation_count_ = 0;
   std::size_t preconditioner_session_allocation_count_ = 0;
-  PreparedApplyStatus provider_apply_status_ = PreparedApplyStatus::Success;
+  PreparedApplyResult provider_apply_result_{};
   std::optional<MultiFab> preconditioner_constant_{};
+  std::optional<MultiFab> publication_candidate_{};
+  MultiFab* publication_destination_ = nullptr;
+  const PreparedAffineLinearProblem* publication_problem_ = nullptr;
+  bool publication_active_ = false;
   ExactSolveReportConsensusScratch provider_report_consensus_{};
   std::atomic<ReservationState> reservation_state_{ReservationState::Idle};
 };
