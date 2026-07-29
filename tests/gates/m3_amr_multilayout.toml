@@ -250,10 +250,27 @@ nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_checkpoint_
 [[check]]
 issue = "ADC-678"
 requirement = "restart_hierarchy_policy"
+polarity = "refusal"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_regrid_on_restart_refuses_bit_identity_uniform_and_multilayout_before_artifact"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
 polarity = "positive"
 kind = "pytest"
 target = "restart_hierarchy_policy"
-nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_regrid_on_restart_refuses_bit_identity_but_resolves_explicit_policy"
+nodeid = "tests/python/integration/amr/test_amr_regrid_on_restart.py::test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "positive"
+kind = "mpi_python"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::test_regrid_on_restart_mpi_collective_rollback_and_lineage"
+nproc = 2
 
 [[check]]
 issue = "ADC-678"

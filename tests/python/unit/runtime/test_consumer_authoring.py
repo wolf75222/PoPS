@@ -156,7 +156,7 @@ def test_checkpoint_hierarchy_policies_have_distinct_exact_identities_and_guaran
     assert operation["supports_regrid_on_restart"] is True
 
 
-def test_regrid_on_restart_refuses_bit_identity_but_resolves_explicit_policy():
+def test_regrid_on_restart_refuses_bit_identity_uniform_and_multilayout_before_artifact():
     case, _, _ = _case()
     schedule = every(10, clock=Clock("macro", owner=case.owner_path))
     with pytest.raises(ValueError, match="bit_identical=True with RegridOnRestart"):
@@ -182,10 +182,30 @@ def test_regrid_on_restart_refuses_bit_identity_but_resolves_explicit_policy():
         blocks=subjects.blocks,
         handle_resolver=case.resolve,
     )
-    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
-    assert resolved.is_resolved
-    (node,) = resolved.nodes
-    assert node.operation_data["hierarchy"]["mode"] == "regrid_on_restart"
+    with pytest.raises(
+        ValueError,
+        match="requires exactly one AMR layout.*before artifact creation",
+    ):
+        graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    builder = LayoutPlanBuilder(
+        case.owner_path.canonical(),
+        handle_resolver=case.resolve,
+    )
+    primary = builder.layout("primary", Uniform(cartesian_grid(n=8)))
+    builder.layout("unused", Uniform(cartesian_grid(n=8)))
+    for block in subjects.blocks:
+        builder.assign_block(block, primary)
+    for state in subjects.states:
+        builder.assign_state(state, primary)
+    multi_layout = builder.resolve(
+        blocks=subjects.blocks,
+        states=subjects.states,
+    )
+    with pytest.raises(
+        ValueError,
+        match="requires exactly one AMR layout.*before artifact creation",
+    ):
+        graph.resolve(case.resolve, multi_layout, owner=case.owner_path.canonical())
 
 
 def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():

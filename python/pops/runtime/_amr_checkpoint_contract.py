@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 
 from pops.identity import make_identity
@@ -192,7 +193,16 @@ def validate_regridded_contract(sim, payload, receipt):
         raise ValueError(
             "restart: RegridOnRestart receipt differs from the live transformed hierarchy"
         )
-    changed = receipt["before"] != receipt["after"]
+    before = receipt["before"]
+    after = receipt["after"]
+    if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+        raise TypeError("restart: RegridOnRestart topology receipt must contain mappings")
+    if "topology_identity" not in before or "topology_identity" not in after:
+        raise ValueError("restart: RegridOnRestart topology receipt lacks its structural identity")
+    # A scientific regrid attempt advances its audit counters even when tagging reproduces the
+    # exact same boxes and owner map.  ``changed`` reports a structural hierarchy change, not merely
+    # that the restart policy executed.
+    changed = before["topology_identity"] != after["topology_identity"]
     if receipt["changed"] is not changed:
         raise ValueError("restart: RegridOnRestart receipt has an inconsistent changed flag")
 

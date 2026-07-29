@@ -1510,6 +1510,32 @@ def test_collective_restart_authenticates_regrid_mode_and_identity_before_prepar
     ]
 
 
+def test_collective_restart_refuses_an_ignored_recorded_hierarchy_identity():
+    from pops.output import RestoreRecordedHierarchy
+    from pops.output._checkpoint_collective import restore_checkpoint_payload
+
+    class _UnreachableExecutor:
+        def __getattr__(self, name):
+            raise AssertionError("restart protocol must not be inspected: %s" % name)
+
+    owner = SimpleNamespace(
+        _execution_context=SimpleNamespace(
+            communicator=SimpleNamespace(identity="serial", handle=None)
+        )
+    )
+    hierarchy = RestoreRecordedHierarchy()
+
+    with pytest.raises(ValueError, match="only valid with RegridOnRestart"):
+        restore_checkpoint_payload(
+            owner,
+            _UnreachableExecutor(),
+            b"checkpoint",
+            bit_identical=False,
+            hierarchy_mode=hierarchy.mode,
+            hierarchy_identity=hierarchy.identity.token,
+        )
+
+
 def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkeypatch):
     from pops.output import RegridOnRestart
     from pops.output import _checkpoint_collective

@@ -1097,6 +1097,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("begin_restart_transaction", &AmrSystem::begin_restart_transaction)
       .def("commit_restart_transaction", &AmrSystem::commit_restart_transaction)
       .def("rollback_restart_transaction", &AmrSystem::rollback_restart_transaction)
+      .def("preflight_regrid_on_restart", &AmrSystem::preflight_regrid_on_restart)
       .def("regrid_on_restart", &AmrSystem::regrid_on_restart)
       .def("checkpoint_regrid_count", &AmrSystem::checkpoint_regrid_count)
       .def("checkpoint_topology_epoch", &AmrSystem::checkpoint_topology_epoch)

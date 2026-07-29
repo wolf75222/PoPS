@@ -241,7 +241,9 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
     receipt = {
         "schema_version": 1,
         "policy_identity": "pops.restart-hierarchy.v1:sha256:" + "0" * 64,
-        "changed": True,
+        # The policy executed and advanced its audit counters, but the structural hierarchy
+        # identity did not change.
+        "changed": False,
         "accepted_time": 0.4,
         "accepted_macro_step": 4,
         "before": {**after, "topology_epoch": 7, "regrid_count": 4},

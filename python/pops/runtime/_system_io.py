@@ -258,10 +258,13 @@ class _SystemIO(_System):
         hierarchy_identity: str | None = None,
     ) -> _PreparedUniformRestart:
         """Authenticate and validate every byte before the first native state write."""
-        del hierarchy_identity
         if hierarchy_mode != "restore_recorded_hierarchy":
             raise NotImplementedError(
                 "Uniform restart does not support RegridOnRestart; use an AMR layout"
+            )
+        if hierarchy_identity is not None:
+            raise ValueError(
+                "Uniform restart hierarchy identity is only valid with RegridOnRestart"
             )
         import numpy as np
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION

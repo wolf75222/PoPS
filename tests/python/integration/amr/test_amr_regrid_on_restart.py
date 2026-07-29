@@ -6,9 +6,10 @@ recorded fine boxes are stale relative to the installed tagger. RegridOnRestart 
 that exact accepted image, then execute one real native tag/cluster/regrid pass at the same physical
 time and macro-step.
 
-The test also injects a failure after the native topology mutation. The restart transaction must
-restore the fresh runtime bit-for-bit before a second, successful restart can publish its weaker
-continuation identity.
+The compiled Program is AB2, so the accepted image includes a real multistep history and lagged
+conservative-flux authority. The test also injects a failure after the native topology mutation.
+The restart transaction must restore the fresh runtime bit-for-bit before a second, successful
+restart can rebind that history, publish its weaker continuation identity, and advance one step.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from pops.initial import InitialCondition
 from pops.layouts import AMR
 from pops.lib.amr import BergerRigoutsos, StateTransfer
 from pops.lib.initial import Gaussian
-from pops.lib.time import SSPRK2
+from pops.lib.time import AdamsBashforth
 from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -64,7 +65,7 @@ pytestmark = [
 ]
 
 
-def _resolved(native_cxx):
+def _resolved(native_cxx=None):
     frame = Rectangle(
         "regrid-on-restart-domain",
         lower=(0.0, 0.0),
@@ -103,7 +104,7 @@ def _resolved(native_cxx):
         ),
     )
     case.numerics(numerics, block=block)
-    program = SSPRK2(block_state, rate=rate)
+    program = AdamsBashforth(block_state, rate=rate, order=2)
     program.step_strategy(FixedDt(DT))
     case.program(program)
     case.initials.add(
@@ -156,11 +157,14 @@ def _resolved(native_cxx):
             )
         )
     )
+    compile_options = {"include": str(ROOT / "include")}
+    if native_cxx is not None:
+        compile_options["cxx"] = native_cxx
     return pops.resolve(
         pops.validate(case),
         layout=layout,
         backend=Production(),
-        compile_options={"include": str(ROOT / "include"), "cxx": native_cxx},
+        compile_options=compile_options,
     )
 
 
@@ -174,6 +178,16 @@ def _bind(artifact):
 def _accepted_image(runtime):
     native = runtime._executor._s
     levels = int(runtime.n_levels())
+    histories = tuple(
+        (
+            str(name),
+            tuple(
+                np.asarray(runtime.history_global(name, slot), dtype=np.float64).copy()
+                for slot in range(int(runtime.history_depth(name)))
+            ),
+        )
+        for name in runtime.history_names()
+    )
     return {
         "time": float(runtime.time()),
         "step": int(runtime.macro_step()),
@@ -188,20 +202,30 @@ def _accepted_image(runtime):
             for level in range(levels)
         ),
         "program_state": bytes(native.program_accepted_state()),
+        "histories": histories,
         "run_identity": runtime.last_run_identity,
+        "consumer_cursors": runtime.consumer_cursors.to_data(),
     }
 
 
 def _assert_same_accepted_image(runtime, expected):
     actual = _accepted_image(runtime)
-    assert {
-        key: value for key, value in actual.items() if key != "states"
-    } == {
-        key: value for key, value in expected.items() if key != "states"
+    arrays = {"states", "histories"}
+    assert {key: value for key, value in actual.items() if key not in arrays} == {
+        key: value for key, value in expected.items() if key not in arrays
     }
     assert len(actual["states"]) == len(expected["states"])
     for current, recorded in zip(actual["states"], expected["states"], strict=True):
         np.testing.assert_array_equal(current, recorded)
+    assert [name for name, _slots in actual["histories"]] == [
+        name for name, _slots in expected["histories"]
+    ]
+    for (_name, current_slots), (_expected_name, recorded_slots) in zip(
+        actual["histories"], expected["histories"], strict=True
+    ):
+        assert len(current_slots) == len(recorded_slots)
+        for current, recorded in zip(current_slots, recorded_slots, strict=True):
+            np.testing.assert_array_equal(current, recorded)
 
 
 def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
@@ -223,6 +247,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
         console=False,
     )
     assert report.accepted_steps == NSTEPS
+    assert tuple(source.history_names())
     assert tuple(source.patch_boxes()) == bootstrap_boxes
     assert source._executor._s.checkpoint_regrid_count() == bootstrap_regrids
     source_time = float(source.time())
@@ -269,6 +294,12 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert restart_identity == restarted.last_restart_identity
     assert restarted.last_run_identity.domain == "run"
     assert restarted.last_run_identity != source_run_identity
+    assert tuple(restarted.history_names()) == tuple(source.history_names())
+    assert all(
+        np.all(np.isfinite(np.asarray(restarted.history_global(name, slot))))
+        for name in restarted.history_names()
+        for slot in range(int(restarted.history_depth(name)))
+    )
 
     before = receipt["composite_integrals_before"]
     after = receipt["composite_integrals_after"]
@@ -280,4 +311,21 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
         [row["value"] for row in before],
         rtol=2.0e-12,
         atol=2.0e-13,
+    )
+
+    continuation_identity = restarted.last_run_identity
+    continued = pops.run(
+        restarted,
+        t_end=source_time + DT,
+        max_steps=1,
+        console=False,
+    )
+    assert continued.accepted_steps == 1
+    assert float(restarted.time()) == pytest.approx(source_time + DT)
+    assert restarted._executor.last_run_manifest.continuation_identity == continuation_identity
+    assert continued.run_identity != source_run_identity
+    assert all(
+        np.all(np.isfinite(np.asarray(restarted.history_global(name, slot))))
+        for name in restarted.history_names()
+        for slot in range(int(restarted.history_depth(name)))
     )

@@ -343,7 +343,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
             refresh_resources();
           owner->refresh_accepted_hierarchy_state_();
         });
-    facade_->install_program_restart_hooks([owner]() { owner->regrid_on_restart_(); },
+    facade_->install_program_restart_hooks([owner]() { owner->preflight_regrid_on_restart_(); },
+                                           [owner]() { owner->regrid_on_restart_(); },
                                            [owner]() { owner->resync_after_restart_rollback_(); });
   }
 
@@ -2588,19 +2589,31 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           "AMR RegridOnRestart does not yet support shared-interface flux groups");
   }
 
-  /// Transform one exactly restored accepted hierarchy through the runtime's real scientific
-  /// tagging/clustering/regrid path. This is deliberately not cadence-gated: the restart policy
-  /// requests exactly one regrid at the restored accepted `(macro_step,time)` coordinate.
-  void regrid_on_restart_() const {
+  /// Validate every rank-local prerequisite before the Python collective transaction lets peers
+  /// enter the native scientific regrid. Importing the accepted Program image is rollback-safe and
+  /// contains no MPI collective.
+  void preflight_regrid_on_restart_() const {
     require_restart_regrid_boundary_();
     import_program_accepted_state_(true);
-    const HistoryFluxTopology before = history_flux_topology_snapshot_();
     const std::int64_t accepted_step = macro_step();
     const double accepted_time = facade_->time();
     if (accepted_step < 0 || accepted_step > std::numeric_limits<int>::max() ||
         !std::isfinite(accepted_time))
       throw std::runtime_error("AMR RegridOnRestart requires a representable accepted clock");
     eng_->require_restart_regrid_supported();
+    restart_regrid_prepared_ = true;
+  }
+
+  /// Transform one exactly restored accepted hierarchy through the runtime's real scientific
+  /// tagging/clustering/regrid path. This is deliberately not cadence-gated: the restart policy
+  /// requests exactly one regrid at the restored accepted `(macro_step,time)` coordinate.
+  void regrid_on_restart_() const {
+    if (!restart_regrid_prepared_)
+      throw std::logic_error("AMR RegridOnRestart was not collectively preflighted");
+    restart_regrid_prepared_ = false;
+    const HistoryFluxTopology before = history_flux_topology_snapshot_();
+    const std::int64_t accepted_step = macro_step();
+    const double accepted_time = facade_->time();
     eng_->set_component_logical_time(accepted_step, accepted_time);
     eng_->regrid();
     materialize_capture_flux_scratch_();
@@ -2620,6 +2633,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// Rebuild every topology-bound workspace and bypass the revision fast-path immediately so the
   /// next step cannot observe a post-regrid context over the rolled-back native hierarchy.
   void resync_after_restart_rollback_() const {
+    restart_regrid_prepared_ = false;
     require_restart_regrid_boundary_();
     materialize_capture_flux_scratch_();
     import_program_accepted_state_(true);
@@ -4134,6 +4148,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   // the image resident lets stable retries reuse every compact reflux/history allocation.
   mutable AttemptSnapshot attempt_snapshot_;
   mutable bool attempt_snapshot_active_ = false;
+  mutable bool restart_regrid_prepared_ = false;
   mutable int automatic_regrid_macro_step_ = -1;
   mutable std::vector<amr::ClockStamp> level_clocks_;
   mutable std::uint64_t accepted_state_revision_ = 0;

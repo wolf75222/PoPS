@@ -1718,6 +1718,10 @@ class RuntimeInstance:
         selected_hierarchy_mode = require_restart_hierarchy_mode(
             hierarchy_mode, where="RuntimeInstance restart"
         )
+        if selected_hierarchy_mode != "regrid_on_restart" and hierarchy_identity is not None:
+            raise ValueError(
+                "RuntimeInstance restart hierarchy identity is only valid with RegridOnRestart"
+            )
         stored = decode_checkpoint_bytes(payload)
         from ._checkpoint_manifest import checkpoint_run_identity
 

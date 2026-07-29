@@ -485,7 +485,9 @@ def restore_checkpoint_payload(
                 raise ValueError("restart preparation hierarchy identity has the wrong domain")
             selected_hierarchy_identity = selected.token
         elif hierarchy_identity is not None:
-            selected_hierarchy_identity = str(hierarchy_identity)
+            raise ValueError(
+                "restart preparation hierarchy identity is only valid with RegridOnRestart"
+            )
     except BaseException as error:
         policy_error = error
     policy_rows = consensus(
@@ -659,6 +661,8 @@ def restore_checkpoint_path(
     selected_hierarchy_mode = require_restart_hierarchy_mode(
         hierarchy_mode, where="restart path policy"
     )
+    if selected_hierarchy_mode != "regrid_on_restart" and hierarchy_identity is not None:
+        raise ValueError("restart path hierarchy identity is only valid with RegridOnRestart")
     topology = checkpoint_topology(owner)
     target = None
     target_text = None
