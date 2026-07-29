@@ -264,6 +264,14 @@ def _fine_valid_mask(simulation):
     return valid
 
 
+def _coarse_coverage(fine_valid):
+    refined_children = fine_valid.reshape(N, 2, N, 2)
+    any_child = refined_children.any(axis=(1, 3))
+    all_children = refined_children.all(axis=(1, 3))
+    np.testing.assert_array_equal(any_child, all_children)
+    return all_children
+
+
 def test_generated_strang_runs_only_through_program_on_refined_amr(
     native_cxx,
     isolated_native_cache,
@@ -282,29 +290,39 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
         assert simulation.n_levels() == 2
         assert simulation.patch_boxes()
         assert simulation.installed_program_hash()
+        initial_fine_valid = _fine_valid_mask(simulation).copy()
         report = pops.run(
             simulation,
             t_end=NSTEPS * DT,
             max_steps=NSTEPS,
             console=False,
         )
-        return simulation, report
+        return simulation, report, initial_fine_valid
 
-    simulation, report = run_once()
+    simulation, report, initial_fine_valid = run_once()
     evolved = np.asarray(
         simulation.block_level_state_global("oscillator", 0),
         dtype=np.float64,
     ).reshape(initial.shape)
     fine_valid = _fine_valid_mask(simulation)
-    coarse_covered = fine_valid.reshape(N, 2, N, 2).any(axis=(1, 3))
+    initially_covered = _coarse_coverage(initial_fine_valid)
+    coarse_covered = _coarse_coverage(fine_valid)
+    newly_covered = coarse_covered & ~initially_covered
+    assert np.all(initial_fine_valid <= fine_valid)
+    assert np.any(initially_covered)
+    assert np.any(newly_covered)
     assert np.any(coarse_covered)
     assert np.any(~coarse_covered)
 
-    # The every(1) regrid materializes the fine patches after the first accepted coarse step.
-    # Uncovered coarse cells therefore take two full Strang steps. Fine cells inherit the state
-    # after the first full step, then take the two ratio-2 substeps of the second interval.
+    # The initial tagging pass already materializes the core fine patch. The every(1) regrid expands
+    # that patch after the first accepted coarse step. Initial fine cells therefore take four
+    # ratio-2 substeps; newly refined cells inherit one full coarse step and then take the two fine
+    # substeps of the second interval. Uncovered coarse cells take two full Strang steps.
     coarse_expected = np.linalg.matrix_power(_strang_matrix(DT), NSTEPS) @ initial[:, 0, 0]
-    fine_expected = (
+    initial_fine_expected = (
+        np.linalg.matrix_power(_strang_matrix(0.5 * DT), 2 * NSTEPS) @ initial[:, 0, 0]
+    )
+    new_fine_expected = (
         np.linalg.matrix_power(_strang_matrix(0.5 * DT), 2 * (NSTEPS - 1))
         @ _strang_matrix(DT)
         @ initial[:, 0, 0]
@@ -321,10 +339,17 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
         rtol=0.0,
         atol=2.0e-13,
     )
-    covered_actual = evolved[:, coarse_covered]
+    initially_covered_actual = evolved[:, initially_covered]
     np.testing.assert_allclose(
-        covered_actual,
-        np.broadcast_to(fine_expected[:, None], covered_actual.shape),
+        initially_covered_actual,
+        np.broadcast_to(initial_fine_expected[:, None], initially_covered_actual.shape),
+        rtol=0.0,
+        atol=2.0e-13,
+    )
+    newly_covered_actual = evolved[:, newly_covered]
+    np.testing.assert_allclose(
+        newly_covered_actual,
+        np.broadcast_to(new_fine_expected[:, None], newly_covered_actual.shape),
         rtol=0.0,
         atol=2.0e-13,
     )
@@ -334,10 +359,18 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
         dtype=np.float64,
     ).reshape(2, 2 * N, 2 * N)
     assert np.isfinite(fine[:, fine_valid]).all()
-    fine_actual = fine[:, fine_valid]
+    initial_fine_actual = fine[:, initial_fine_valid]
     np.testing.assert_allclose(
-        fine_actual,
-        np.broadcast_to(fine_expected[:, None], fine_actual.shape),
+        initial_fine_actual,
+        np.broadcast_to(initial_fine_expected[:, None], initial_fine_actual.shape),
+        rtol=0.0,
+        atol=2.0e-13,
+    )
+    new_fine_valid = fine_valid & ~initial_fine_valid
+    new_fine_actual = fine[:, new_fine_valid]
+    np.testing.assert_allclose(
+        new_fine_actual,
+        np.broadcast_to(new_fine_expected[:, None], new_fine_actual.shape),
         rtol=0.0,
         atol=2.0e-13,
     )
@@ -358,10 +391,11 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
 
     # A fresh bind of the same immutable artifact must reproduce the accepted image exactly.
     # This catches stage/candidate storage escaping the previous Program execution.
-    replay, replay_report = run_once()
+    replay, replay_report, replay_initial_fine_valid = run_once()
     replay_state = np.asarray(
         replay.block_level_state_global("oscillator", 0),
         dtype=np.float64,
     ).reshape(initial.shape)
     assert replay_report.accepted_steps == NSTEPS
+    np.testing.assert_array_equal(replay_initial_fine_valid, initial_fine_valid)
     np.testing.assert_array_equal(replay_state, evolved)
