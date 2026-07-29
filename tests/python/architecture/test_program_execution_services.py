@@ -32,6 +32,7 @@ SHARED_SIGNATURES = (
     "void evaluate_with_field_state_at(",
     "void rhs_group(",
     "void source_default_into(",
+    "void apply_projection(",
     "MultiFab rhs_scratch_like(",
     "MultiFab scratch_state_like(",
     "MultiFab& rhs_scratch(",
@@ -213,6 +214,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_logical_parent_dt_",
             "program_execution_rhs_group_",
             "program_execution_source_default_into_",
+            "program_execution_apply_projection_",
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
@@ -382,6 +384,23 @@ def test_shared_storage_facade_maps_blocks_once_and_owns_nullspace_assignment():
     assert "basis.cell_measure = cell_measures;" in shared
     assert "basis.cell_measure =" not in uniform
     assert "basis.cell_measure =" not in amr
+
+
+def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatch_to_providers():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert "program_execution_apply_projection_(sys_block(block), state)" in shared
+    assert "sys_->block_project(runtime_block, state);" in uniform
+    assert (
+        "eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);"
+        in amr
+    )
+    for provider in (uniform, amr):
+        projection_hook = provider.split("program_execution_apply_projection_", 1)[1].split(
+            "}", 1
+        )[0]
+        assert "sys_block(" not in projection_hook
 
 
 def test_shared_commit_many_owns_layout_and_alias_semantics():

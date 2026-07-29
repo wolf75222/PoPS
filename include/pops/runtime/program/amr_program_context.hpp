@@ -363,10 +363,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     eng_->level_neg_div_flux_into_at(static_cast<std::size_t>(sys_block(b)), level_,
                                      boundary_point_(rate_id), u, r);
   }
-  void apply_projection(int b, MultiFab& u) const {
-    eng_->project_level_state(static_cast<std::size_t>(sys_block(b)), level_, u);
-  }
-
   // --- dt bound primitives (evaluated at the COARSE level, where the AMR CFL lives) -----------------
   Real hmin() const { return eng_->level_hmin(level_); }
   Real max_wave_speed(int b, const MultiFab& u) const {
@@ -3531,6 +3527,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void program_execution_source_default_into_(int runtime_block, MultiFab& state,
                                               MultiFab& rhs) const {
     eng_->level_source_into(static_cast<std::size_t>(runtime_block), level_, state, rhs);
+  }
+  void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
+    eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);
   }
 
   struct LogicalEvaluationRollback {
