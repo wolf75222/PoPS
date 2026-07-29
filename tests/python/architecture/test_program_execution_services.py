@@ -14,6 +14,7 @@ SHARED_SIGNATURES = (
     "struct FieldStageOverride",
     "struct CouplingStateOverride",
     "enum class ScratchKind",
+    "enum class SchedulerCacheOperation",
     "struct ProgramResourceStorage",
     "struct LogicalEvaluationInterval",
     "class LogicalEvaluationScope",
@@ -46,6 +47,13 @@ SHARED_SIGNATURES = (
     "bool schedule_is_due(",
     "bool schedule_at_start(",
     "bool schedule_decision(",
+    "bool cache_should_update(",
+    "void cache_store_aux(",
+    "void cache_restore_aux(",
+    "void cache_store_scratch(",
+    "void cache_restore_scratch(",
+    "void cache_accumulate_dt(",
+    "Real cache_effective_dt(",
     "ClockScheduleState::SubcycleScope subcycle_scope(",
     "void synchronize_sample_and_hold(",
     "int sys_block(",
@@ -169,6 +177,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_block_grid_context_",
             "program_execution_state_",
             "program_execution_alloc_scalar_field_",
+            "program_execution_cache_",
             "program_execution_resource_storage_",
             "program_execution_resource_cell_measures_",
             "program_execution_publish_axpy_",
@@ -213,6 +222,44 @@ def test_amr_topology_generation_and_scratch_lifecycle_remain_provider_owned():
         assert topology_authority not in shared
         assert topology_authority in amr
     assert "topology_materialization_generation()" in amr
+
+
+def test_scheduler_cache_algorithm_is_shared_but_storage_lifecycle_is_provider_owned():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert shared.count('#include <pops/runtime/program/cache_manager.hpp>') == 1
+    assert '#include <pops/runtime/program/cache_manager.hpp>' not in uniform
+    assert "program_execution_cache_(SchedulerCacheOperation" in uniform
+    assert "return sys_->program_cache();" in uniform
+    assert "program_execution_cache_(SchedulerCacheOperation operation)" in amr
+    assert "has no AMR checkpoint/regrid storage provider" in amr
+    assert "CacheManager cache_" not in shared
+    for counter in ("cache_misses", "nodes_due", "cache_hits", "nodes_skipped"):
+        assert shared.count('count("%s")' % counter) == 1
+
+
+def test_history_ledger_clock_and_regrid_lifecycle_remain_provider_owned():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    for operation in (
+        "register_history(",
+        "history_zero_start(",
+        "store_history(",
+        "rotate_histories(",
+    ):
+        assert operation not in shared
+        assert operation in uniform
+        assert operation in amr
+    for amr_authority in (
+        "rotate_pending_",
+        "ring_clocks_",
+        "ring_identities_",
+        "rebind_history_flux_topology_",
+    ):
+        assert amr_authority not in shared
+        assert amr_authority in amr
 
 
 def test_shared_storage_facade_maps_blocks_once_and_owns_nullspace_assignment():

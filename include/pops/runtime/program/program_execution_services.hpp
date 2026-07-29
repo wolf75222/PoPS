@@ -28,6 +28,7 @@
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
+#include <pops/runtime/program/cache_manager.hpp>
 #include <pops/runtime/context/grid_context.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
@@ -57,6 +58,15 @@ class ProgramExecutionServices {
   };
 
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
+  enum class SchedulerCacheOperation : std::uint8_t {
+    ShouldUpdate,
+    StoreAux,
+    RestoreAux,
+    StoreScratch,
+    RestoreScratch,
+    AccumulateDt,
+    EffectiveDt,
+  };
 
   struct ProgramResourceStorage {
     const PreparedVectorDistribution& vector_distribution;
@@ -450,6 +460,61 @@ class ProgramExecutionServices {
     if (node_id < 0)
       throw std::runtime_error("Program schedule decision requires a valid node");
     return profiler().schedule_decision(due, cache_backed);
+  }
+
+  /// Scheduler cache semantics shared by every capable Program storage provider.
+  ///
+  /// The service owns cadence, profiling and value movement.  A provider supplies only the
+  /// checkpoint-visible CacheManager authority; a topology without that capability fails loudly at
+  /// the hook instead of fabricating a cache detached from its restart lifecycle.
+  bool cache_should_update(int node_id, int every_n) const {
+    CacheManager& cache =
+        provider_().program_execution_cache_(SchedulerCacheOperation::ShouldUpdate);
+    const bool due = cache.is_due(node_id, macro_step(), every_n);
+    if (due) {
+      profiler().count("cache_misses");
+      profiler().count("nodes_due");
+    } else {
+      profiler().count("cache_hits");
+      profiler().count("nodes_skipped");
+    }
+    return due;
+  }
+
+  void cache_store_aux(int node_id) const {
+    provider_()
+        .program_execution_cache_(SchedulerCacheOperation::StoreAux)
+        .store(node_id, aux(), macro_step());
+  }
+
+  void cache_restore_aux(int node_id) const {
+    provider_()
+        .program_execution_cache_(SchedulerCacheOperation::RestoreAux)
+        .restore_into(node_id, aux());
+  }
+
+  void cache_store_scratch(int node_id, const MultiFab& scratch) const {
+    provider_()
+        .program_execution_cache_(SchedulerCacheOperation::StoreScratch)
+        .store(node_id, scratch, macro_step());
+  }
+
+  void cache_restore_scratch(int node_id, MultiFab& scratch) const {
+    provider_()
+        .program_execution_cache_(SchedulerCacheOperation::RestoreScratch)
+        .restore_into(node_id, scratch);
+  }
+
+  void cache_accumulate_dt(int node_id, Real dt) const {
+    provider_()
+        .program_execution_cache_(SchedulerCacheOperation::AccumulateDt)
+        .accumulate_dt(node_id, dt);
+  }
+
+  Real cache_effective_dt(int node_id, Real dt_now) const {
+    return provider_()
+        .program_execution_cache_(SchedulerCacheOperation::EffectiveDt)
+        .effective_dt(node_id, dt_now);
   }
 
   ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,

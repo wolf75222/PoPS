@@ -1237,47 +1237,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         "whose flux IR runs through the level RHS.");
   }
 
-  // --- scheduler value cache: DEFERRED on AMR, fail loud ---------------------------------------------
-  // The codegen lowers a held / scheduled field-solve node (ADC-458) against these cache seams. The
-  // CacheManager that backs them is owned by System (per-installed-Program, keyed by node id); AMR
-  // has no AmrSystem cache store, so a held schedule on AMR is not wired. Same EXACT signatures as
-  // ProgramContext; each throws rather than silently caching nothing (which would read a stale value).
-  bool cache_should_update(int /*node_id*/, int /*every_n*/) const {
-    deferred_op("cache_should_update",
-                "a held / scheduled field solve under a compiled Program on AMR is deferred; use "
-                "System (the scheduler cache lives on System), or drop the schedule.");
-  }
-  void cache_store_aux(int /*node_id*/) const {
-    deferred_op("cache_store_aux",
-                "the scheduler aux cache under a compiled Program on AMR is deferred; use System.");
-  }
-  void cache_restore_aux(int /*node_id*/) const {
-    deferred_op("cache_restore_aux",
-                "the scheduler aux cache under a compiled Program on AMR is deferred; use System.");
-  }
-  void cache_store_scratch(int /*node_id*/, const MultiFab& /*scratch*/) const {
-    deferred_op(
-        "cache_store_scratch",
-        "the scheduler scratch cache under a compiled Program on AMR is deferred; use System.");
-  }
-  void cache_restore_scratch(int /*node_id*/, MultiFab& /*scratch*/) const {
-    deferred_op(
-        "cache_restore_scratch",
-        "the scheduler scratch cache under a compiled Program on AMR is deferred; use System.");
-  }
-  void cache_accumulate_dt(int /*node_id*/, Real /*dt*/) const {
-    deferred_op(
-        "cache_accumulate_dt",
-        "the scheduler accumulate_dt policy under a compiled Program on AMR is deferred; use "
-        "System.");
-  }
-  Real cache_effective_dt(int /*node_id*/, Real /*dt_now*/) const {
-    deferred_op(
-        "cache_effective_dt",
-        "the scheduler accumulate_dt policy under a compiled Program on AMR is deferred; use "
-        "System.");
-  }
-
  private:
   struct CouplingWorkspace {
     std::vector<int> program_to_runtime;
@@ -3673,6 +3632,28 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   MultiFab program_execution_alloc_scalar_field_(int n_comp, int n_ghost) const {
     return eng_->level_scalar_field(level_, n_comp, n_ghost);
+  }
+  CacheManager& program_execution_cache_(SchedulerCacheOperation operation) const {
+    const std::string detail =
+        "the scheduler value cache has no AMR checkpoint/regrid storage provider; use System, or "
+        "drop the held schedule.";
+    switch (operation) {
+      case SchedulerCacheOperation::ShouldUpdate:
+        deferred_op("cache_should_update", detail);
+      case SchedulerCacheOperation::StoreAux:
+        deferred_op("cache_store_aux", detail);
+      case SchedulerCacheOperation::RestoreAux:
+        deferred_op("cache_restore_aux", detail);
+      case SchedulerCacheOperation::StoreScratch:
+        deferred_op("cache_store_scratch", detail);
+      case SchedulerCacheOperation::RestoreScratch:
+        deferred_op("cache_restore_scratch", detail);
+      case SchedulerCacheOperation::AccumulateDt:
+        deferred_op("cache_accumulate_dt", detail);
+      case SchedulerCacheOperation::EffectiveDt:
+        deferred_op("cache_effective_dt", detail);
+    }
+    throw std::logic_error("unknown Program scheduler cache operation");
   }
   ProgramResourceStorage program_execution_resource_storage_() const {
     const bool replicated = eng_->level_is_replicated(level_);
