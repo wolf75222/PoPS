@@ -23,10 +23,12 @@
 #include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
@@ -41,11 +43,11 @@ namespace pops::runtime::program {
 
 /// Backend-independent Program operations shared by every execution topology.
 ///
-/// The provider owns topology and storage only.  It exposes the narrow
-/// ``program_execution_*`` hooks below; generated Program operations themselves live here exactly
-/// once.  This is deliberately CRTP instead of a virtual facade: a generated artifact still calls
-/// the concrete context directly, and the compiler resolves each provider hook without a second
-/// runtime dispatch table.
+/// The provider owns topology, storage and explicitly qualified non-Cartesian stencil capabilities
+/// only. It exposes the narrow ``program_execution_*`` hooks below; generated Program operations
+/// themselves live here exactly once. This is deliberately CRTP instead of a virtual facade: a
+/// generated artifact still calls the concrete context directly, and the compiler resolves each
+/// provider hook without a second runtime dispatch table.
 template <class Provider>
 class ProgramExecutionServices {
  public:
@@ -364,6 +366,146 @@ class ProgramExecutionServices {
   }
   GridContext grid_context() const { return provider_().program_execution_default_grid_context_(); }
   Geometry geom() const { return grid_context().geom; }
+
+  /// Apply the topology-qualified scalar Laplacian.
+  ///
+  /// Halo ownership, profiling and the Cartesian stencil are Program semantics and live here once.
+  /// A provider participates only when it advertises a non-Cartesian geometry; that hook is explicit
+  /// and fail-closed, so AMR cannot silently reinterpret a polar operator as Cartesian.
+  void laplacian(MultiFab& out, MultiFab& in) const {
+    count_kernel();
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_ghosts(in, context.geom.domain, context.bc);
+    apply_spatial_laplacian_(out, in, context.geom, nullptr, nullptr, nullptr, nullptr);
+  }
+
+  void laplacian(MultiFab& out, MultiFab& in, const ExecutionLane& lane) const {
+    require_lane_or_prepared_laplacian_();
+    count_kernel();
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_ghosts(in, context.geom.domain, context.bc, lane);
+    apply_spatial_laplacian_(out, in, context.geom, nullptr, nullptr, nullptr, nullptr);
+  }
+
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary) const {
+    require_lane_or_prepared_laplacian_();
+    count_kernel();
+    boundary.fill(in);
+    apply_spatial_laplacian_(out, in, boundary.context().geom, nullptr, nullptr, nullptr, nullptr);
+  }
+
+  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary,
+                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    require_lane_or_prepared_laplacian_();
+    count_kernel();
+    boundary.fill(in, point);
+    apply_spatial_laplacian_(out, in, boundary.context().geom, nullptr, nullptr, nullptr, nullptr);
+  }
+
+  /// Metric-aware tensor ``div(A grad(in))``.
+  ///
+  /// The four authored coefficient fields and the exact prepared boundary session are passed
+  /// unchanged. Cartesian Uniform and AMR providers execute the same stencil below; only the
+  /// explicitly advertised polar provider receives the non-Cartesian hook.
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx) const {
+    count_kernel();
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_grid_ghosts(in, context);
+    apply_spatial_laplacian_(out, in, context.geom, &a_xx, &a_yy, &a_xy, &a_yx);
+  }
+
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_grid_ghosts(in, context, lane);
+    apply_spatial_laplacian_(out, in, context.geom, &a_xx, &a_yy, &a_xy, &a_yx);
+  }
+
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(in);
+    apply_spatial_laplacian_(out, in, boundary.context().geom, &a_xx, &a_yy, &a_xy, &a_yx);
+  }
+
+  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
+                        const MultiFab& a_xy, const MultiFab& a_yx,
+                        const PreparedGridBoundarySession& boundary,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(in, point);
+    apply_spatial_laplacian_(out, in, boundary.context().geom, &a_xx, &a_yy, &a_xy, &a_yx);
+  }
+
+  /// Centered gradient with the topology-qualified transport boundary.
+  void gradient(MultiFab& out, MultiFab& phi) const {
+    count_kernel();
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_ghosts(phi, context.geom.domain, context.bc);
+    apply_spatial_gradient_(out, phi, context.geom);
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_ghosts(phi, context.geom.domain, context.bc, lane);
+    apply_spatial_gradient_(out, phi, context.geom);
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(phi);
+    apply_spatial_gradient_(out, phi, boundary.context().geom);
+  }
+
+  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary,
+                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(phi, point);
+    apply_spatial_gradient_(out, phi, boundary.context().geom);
+  }
+
+  /// Centered divergence. The y flux may alias the x flux, matching the gradient layout.
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy) const {
+    count_kernel();
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_ghosts(fx, context.geom.domain, context.bc);
+    if (&fy != &fx)
+      fill_ghosts(fy, context.geom.domain, context.bc);
+    apply_divergence(fx, fy, context.geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
+    count_kernel();
+    const GridContext context = provider_().program_execution_default_grid_context_();
+    fill_ghosts(fx, context.geom.domain, context.bc, lane);
+    if (&fy != &fx)
+      fill_ghosts(fy, context.geom.domain, context.bc, lane);
+    apply_divergence(fx, fy, context.geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary) const {
+    count_kernel();
+    boundary.fill(fx);
+    if (&fy != &fx)
+      boundary.fill(fy);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
+  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
+                  const PreparedGridBoundarySession& boundary,
+                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    count_kernel();
+    boundary.fill(fx, point);
+    if (&fy != &fx)
+      boundary.fill(fy, point);
+    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
+  }
 
   /// Declare one persistent Program history ring.
   ///
@@ -1008,6 +1150,40 @@ class ProgramExecutionServices {
   };
 
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
+
+  void require_lane_or_prepared_laplacian_() const {
+    if (provider_().program_execution_is_polar_geometry_())
+      throw std::logic_error(
+          "lane-isolated or prepared Program laplacian requires an explicit polar tensor "
+          "operator");
+  }
+
+  void apply_spatial_laplacian_(MultiFab& out, MultiFab& in, const Geometry& geometry,
+                                const MultiFab* a_xx, const MultiFab* a_yy, const MultiFab* a_xy,
+                                const MultiFab* a_yx) const {
+    const int coefficient_count =
+        static_cast<int>(a_xx != nullptr) + static_cast<int>(a_yy != nullptr) +
+        static_cast<int>(a_xy != nullptr) + static_cast<int>(a_yx != nullptr);
+    if (coefficient_count != 0 && coefficient_count != 4)
+      throw std::logic_error(
+          "Program tensor Laplacian requires all four authored coefficient fields");
+    if (provider_().program_execution_is_polar_geometry_()) {
+      provider_().program_execution_apply_polar_tensor_(out, in, a_xx, a_yy, a_xy, a_yx);
+      return;
+    }
+    if (coefficient_count == 0) {
+      apply_laplacian(in, geometry, out);
+      return;
+    }
+    apply_laplacian(in, geometry, out, nullptr, a_xx, nullptr, a_yy, a_xy, a_yx);
+  }
+
+  static void apply_spatial_gradient_(MultiFab& out, const MultiFab& phi,
+                                      const Geometry& geometry) {
+    const Real cx = Real(1) / (Real(2) * geometry.dx());
+    const Real cy = Real(1) / (Real(2) * geometry.dy());
+    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
+  }
 
   static HistoryBinding history_binding_(const HistoryRegistration& registration) {
     return {registration.program_owner,          registration.state_identity,

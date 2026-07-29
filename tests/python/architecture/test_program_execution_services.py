@@ -115,6 +115,10 @@ SHARED_SIGNATURES = (
 )
 
 SHARED_OVERLOAD_COUNTS = {
+    "void laplacian(": 4,
+    "void tensor_laplacian(": 4,
+    "void gradient(": 4,
+    "void divergence(": 4,
     "void axpy(": 2,
     "void lincomb(": 2,
     "Real sum_component(": 2,
@@ -238,6 +242,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_is_polar_geometry_",
             "program_execution_radial_origin_",
             "program_execution_radial_spacing_",
+            "program_execution_apply_polar_tensor_",
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
@@ -305,6 +310,30 @@ def test_shared_service_uses_only_explicit_provider_hooks():
     calls = re.findall(r"provider_\(\)\.(\w+)\(", shared)
     assert calls
     assert all(call.startswith("program_execution_") for call in calls), calls
+
+
+def test_spatial_algorithms_are_shared_and_only_polar_stencil_is_provider_owned():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+
+    for shared_authority in (
+        "void apply_spatial_laplacian_(",
+        "static void apply_spatial_gradient_(",
+        "fill_grid_ghosts(in, context",
+        "apply_divergence(fx, fy, context.geom, out",
+        "Program tensor Laplacian requires all four authored coefficient fields",
+    ):
+        assert shared_authority in shared
+        assert shared_authority not in uniform
+        assert shared_authority not in amr
+
+    assert "apply_polar_tensor(" in uniform
+    assert "Cartesian Program provider cannot execute a polar tensor stencil" in uniform
+    assert "AMR Program provider does not support polar tensor spatial operators" in amr
+    assert "field_postprocess(" not in uniform
+    assert "field_postprocess(" not in amr
+    assert "apply_laplacian(" not in amr
 
 
 def test_resource_topology_transaction_is_shared_while_raw_topology_and_scratch_stay_provider_owned():
