@@ -3784,49 +3784,70 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   friend class ProgramExecutionServices<AmrProgramContext>;
-  LogicalEvaluationState program_execution_begin_logical_evaluation_(int iteration,
-                                                                     int count) const {
-    LogicalEvaluationState state;
-    state.window = current_window_;
-    state.parent_dt = current_level_dt_;
-    state.stage = stage_time_;
-    if (!state.window || !std::isfinite(state.parent_dt) || state.parent_dt <= 0.0)
+  struct LogicalEvaluationRollback {
+    std::optional<amr::ClockWindow> window;
+    double parent_dt = 0.0;
+    amr::Rational stage{0, 1};
+  };
+
+  double program_execution_logical_parent_dt_() const noexcept { return current_level_dt_; }
+  LogicalEvaluationRollback program_execution_capture_logical_evaluation_() const {
+    if (!current_window_)
       throw std::logic_error(
           "AMR Program logical evaluation requires a prepared parent level window");
-    state.child_dt = state.parent_dt / static_cast<double>(count);
-    const double child_physical_time =
-        state.window->begin.physical_time + static_cast<double>(iteration) * state.child_dt;
-    if (!std::isfinite(state.child_dt) || state.child_dt <= 0.0 ||
-        !std::isfinite(child_physical_time))
+    return {current_window_, current_level_dt_, stage_time_};
+  }
+  void program_execution_apply_logical_evaluation_(
+      const LogicalEvaluationInterval& interval) const {
+    if (!current_window_)
+      throw std::logic_error(
+          "AMR Program logical evaluation requires a prepared parent level window");
+    const double child_physical_time = current_window_->begin.physical_time +
+                                       static_cast<double>(interval.iteration) * interval.child_dt;
+    const double child_end_physical_time = child_physical_time + interval.child_dt;
+    if (!std::isfinite(child_physical_time) || !std::isfinite(child_end_physical_time))
       throw std::overflow_error("AMR Program logical evaluation child window is not finite");
-    const amr::Rational parent_span = state.window->end.phase - state.window->begin.phase;
+    const amr::Rational parent_span = current_window_->end.phase - current_window_->begin.phase;
     const amr::Rational child_begin_phase =
-        state.window->begin.phase + parent_span * amr::Rational(iteration, count);
+        current_window_->begin.phase + parent_span * interval.child_begin;
     const amr::Rational child_end_phase =
-        state.window->begin.phase + parent_span * amr::Rational(iteration + 1, count);
-    amr::ClockStamp child_begin = state.window->begin;
+        current_window_->begin.phase + parent_span * interval.child_end;
+    amr::ClockStamp child_begin = current_window_->begin;
     child_begin.phase = child_begin_phase;
     child_begin.physical_time = child_physical_time;
     amr::ClockStamp child_end = child_begin;
     child_end.phase = child_end_phase;
-    child_end.physical_time = child_physical_time + state.child_dt;
+    child_end.physical_time = child_end_physical_time;
 
     invalidate_active_operator_snapshot_();
     current_window_ = amr::ClockWindow{child_begin, child_end};
-    current_level_dt_ = state.child_dt;
+    current_level_dt_ = interval.child_dt;
     stage_time_ = amr::Rational(0, 1);
-    return state;
   }
   void program_execution_restore_logical_evaluation_(
-      const LogicalEvaluationState& state) const noexcept {
-    current_window_ = state.window;
-    current_level_dt_ = state.parent_dt;
-    stage_time_ = state.stage;
+      const LogicalEvaluationRollback& rollback) const noexcept {
+    current_window_ = rollback.window;
+    current_level_dt_ = rollback.parent_dt;
+    stage_time_ = rollback.stage;
     invalidate_active_operator_snapshot_();
+  }
+  SolveReport program_execution_solve_fields_from_state_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int block, MultiFab& state) const {
+    return solve_fields_from_state_at(point, provider_slot, block, state);
   }
   MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
                                        const MultiFab& prototype, int n_comp, int n_ghost) const {
     return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
+  }
+  void program_execution_validate_commit_aliases_(bool has_aliased_source) const {
+    if (has_aliased_source && capturing())
+      throw std::invalid_argument(
+          "AmrProgramContext::commit_many aliased target/source requires a flat hierarchy; "
+          "materialize an explicit provisional state before a conservative multi-level commit");
+  }
+  void program_execution_commit_copy_(MultiFab& target, const MultiFab& source) const {
+    lincomb(target, Real(0), target, Real(1), source);
   }
   const std::vector<int>& program_execution_block_map_() const {
     return facade_->program_block_map();

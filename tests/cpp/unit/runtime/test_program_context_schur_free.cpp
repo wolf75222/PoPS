@@ -55,15 +55,40 @@ template <bool Amr>
 class ExecutionServicesFixture
     : public pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>> {
  public:
+  using SharedServices =
+      pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
+
   explicit ExecutionServicesFixture(int active_level) : active_level_(active_level) {}
 
   int last_params_block() const { return last_params_block_; }
   int field_update_count() const { return field_update_count_; }
   pops::Real diagnostic(const std::string& name) const { return diagnostics_.at(name); }
+  double logical_dt() const { return logical_dt_; }
+  void fail_next_logical_apply() { fail_logical_apply_ = true; }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
 
+  struct LogicalRollback {
+    double dt = 0.0;
+  };
+
+  double program_execution_logical_parent_dt_() const noexcept { return logical_dt_; }
+  LogicalRollback program_execution_capture_logical_evaluation_() const noexcept {
+    return {logical_dt_};
+  }
+  void program_execution_apply_logical_evaluation_(
+      const typename SharedServices::LogicalEvaluationInterval& interval) const {
+    logical_dt_ = interval.child_dt;
+    if (fail_logical_apply_) {
+      fail_logical_apply_ = false;
+      throw std::runtime_error("injected logical projection failure");
+    }
+  }
+  void program_execution_restore_logical_evaluation_(
+      const LogicalRollback& rollback) const noexcept {
+    logical_dt_ = rollback.dt;
+  }
   const std::vector<int>& program_execution_block_map_() const { return block_map_; }
   int program_execution_block_count_() const { return 2; }
   pops::Real program_execution_physical_time_() const { return pops::Real(3.5); }
@@ -96,6 +121,8 @@ class ExecutionServicesFixture
   mutable int last_params_block_ = -1;
   mutable int field_update_count_ = 0;
   mutable pops::runtime::program::Profiler profiler_;
+  mutable double logical_dt_ = 0.4;
+  mutable bool fail_logical_apply_ = false;
 };
 
 template <class Context>
@@ -120,6 +147,18 @@ void expect_shared_program_services(Context& context, bool amr) {
   }
   subcycle.finish();
   context.synchronize_sample_and_hold("clock.macro", "clock.fast", 4, pops::Real(0));
+
+  EXPECT_DOUBLE_EQ(context.logical_dt(), 0.4);
+  {
+    auto child = context.logical_evaluation_scope(1, 2);
+    EXPECT_DOUBLE_EQ(static_cast<double>(child.dt()), 0.2);
+    EXPECT_DOUBLE_EQ(context.logical_dt(), 0.2);
+  }
+  EXPECT_DOUBLE_EQ(context.logical_dt(), 0.4);
+  context.fail_next_logical_apply();
+  EXPECT_THROW((void)context.logical_evaluation_scope(0, 2), std::runtime_error);
+  EXPECT_DOUBLE_EQ(context.logical_dt(), 0.4)
+      << "the shared RAII scope restores a provider that throws after partial mutation";
 
   EXPECT_EQ(context.sys_block(0), 1);
   EXPECT_EQ(context.sys_block(1), 0);
