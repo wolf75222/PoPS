@@ -40,6 +40,7 @@
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/profiler.hpp>
+#include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/wire_ids.hpp>
 
@@ -171,6 +172,10 @@ class ProgramExecutionServices {
     return field.box_array().boxes() == prototype.box_array().boxes() &&
            field.dmap().ranks() == prototype.dmap().ranks() && field.ncomp() == n_comp &&
            field.n_grow() == n_ghost;
+  }
+
+  ProgramRuntimeState& program_runtime_state_() const {
+    return provider_().program_execution_runtime_state_();
   }
 
  public:
@@ -1270,7 +1275,7 @@ class ProgramExecutionServices {
   }
 
   int sys_block(int program_block) const {
-    const std::vector<int>& block_map = provider_().program_execution_block_map_();
+    const std::vector<int>& block_map = program_runtime_state_().block_map();
     if (block_map.empty())
       throw std::runtime_error(
           "Program execution has no explicit program-to-runtime block map; positional block "
@@ -1293,16 +1298,14 @@ class ProgramExecutionServices {
   Real physical_time() const { return provider_().program_execution_physical_time_(); }
 
   void record_scalar(const std::string& name, Real value) const {
-    provider_().program_execution_record_scalar_(name, value);
+    program_runtime_state_().record_diagnostic(name, value);
   }
 
   void note_step_projection(const std::string& name) const {
-    provider_().program_execution_note_step_projection_(name);
+    program_runtime_state_().note_step_projection(name);
   }
 
-  RuntimeParams program_params(int block) const {
-    return provider_().program_execution_params_(block);
-  }
+  RuntimeParams program_params(int block) const { return program_runtime_state_().params(block); }
 
   void set_field_logical_timepoint(const std::string& field,
                                    const FieldLogicalTimePoint& point) const {
@@ -1319,7 +1322,7 @@ class ProgramExecutionServices {
     provider_().program_execution_set_field_kernel_(field, kernel);
   }
 
-  Profiler& profiler() const { return provider_().program_execution_profiler_(); }
+  Profiler& profiler() const { return program_runtime_state_().profiler(); }
 
   ProfileScope profile_node(const std::string& name) const {
     return ProfileScope(profiler(), name);
@@ -1571,7 +1574,7 @@ class ProgramExecutionServices {
   }
 
   void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
-    const std::vector<int>& block_map = provider_().program_execution_block_map_();
+    const std::vector<int>& block_map = program_runtime_state_().block_map();
     const std::size_t runtime_blocks =
         static_cast<std::size_t>(provider_().program_execution_block_count_());
     if (block_map.empty())
