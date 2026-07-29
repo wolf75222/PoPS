@@ -143,6 +143,12 @@ class ProgramExecutionServices {
     int levels = 1;
   };
 
+  struct ProgramClockCoordinate {
+    Real physical_time = Real(0);
+    int macro_step = 0;
+    int active_level = -1;
+  };
+
  protected:
   /// Scope one mutable prepared workspace to a single synchronous Program operation.
   ///
@@ -1295,7 +1301,9 @@ class ProgramExecutionServices {
 
   int n_blocks() const { return provider_().program_execution_block_count_(); }
 
-  Real physical_time() const { return provider_().program_execution_physical_time_(); }
+  Real physical_time() const {
+    return provider_().program_execution_clock_coordinate_().physical_time;
+  }
 
   void record_scalar(const std::string& name, Real value) const {
     program_runtime_state_().record_diagnostic(name, value);
@@ -1346,7 +1354,7 @@ class ProgramExecutionServices {
     service.count_max("scratch_peak_bytes", bytes);
   }
 
-  int macro_step() const { return provider_().program_execution_macro_step_(); }
+  int macro_step() const { return provider_().program_execution_clock_coordinate_().macro_step; }
 
   [[noreturn]] void scheduler_error(const std::string& what) const {
     throw std::runtime_error("pops Program scheduler: " + what);
@@ -1646,8 +1654,9 @@ class ProgramExecutionServices {
                                                          const std::string& clock,
                                                          const std::string& stage_identity,
                                                          int level) const {
-    return clock_schedule_.coordinate(kind, clock, stage_identity, level,
-                                      provider_().program_execution_active_level_(), macro_step());
+    const ProgramClockCoordinate coordinate = provider_().program_execution_clock_coordinate_();
+    return clock_schedule_.coordinate(kind, clock, stage_identity, level, coordinate.active_level,
+                                      coordinate.macro_step);
   }
 
   mutable CouplingWorkspace coupling_workspace_;
