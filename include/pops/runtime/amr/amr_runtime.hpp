@@ -3057,15 +3057,20 @@ class AmrRuntime {
   }
 
   /// Complete a Program-owned grouped capture with the ordinary canonical shared-interface
-  /// evaluator, then publish its one level-qualified raw fragment into the caller's active attempt
+  /// evaluator, then publish its one level-qualified fragment into the caller's active attempt
   /// transaction. The scheduler still applies the one shared flux to both blocks with opposite
-  /// signs. Local flux-materialising residuals must already have omitted the prepared face.
-  /// This first wiring slice is deliberately restricted to a frozen two-level serial hierarchy.
+  /// signs. Local flux-materialising residuals must already have omitted the prepared face. The
+  /// Program resolves each current fragment's exact contribution weight from both consumer states
+  /// before the outer transaction may commit. This route remains restricted to a frozen two-level
+  /// serial hierarchy.
   void publish_level_interface_flux_fragments(
       int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
       const std::vector<int>& requested_blocks, const std::vector<MultiFab*>& requested_states,
       const std::vector<MultiFab*>& requested_rhs,
       runtime::multiblock::InterfaceFluxFragmentPublication& publication) {
+    if (n_ranks() != 1)
+      throw std::runtime_error(
+          "AMR interface-flux fragment publication is not yet available on multiple MPI ranks");
     if (nlev_ != 2 || k < 0 || k >= nlev_ || point.level != k || requested_blocks.empty() ||
         requested_blocks.size() != requested_states.size() ||
         requested_blocks.size() != requested_rhs.size())
