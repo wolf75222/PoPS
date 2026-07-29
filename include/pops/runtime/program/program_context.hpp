@@ -39,7 +39,6 @@
 #include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/context/grid_context.hpp>    // GridContext (System aux seam)
-#include <pops/runtime/program/cache_manager.hpp>   // CacheManager (held-node value cache, ADC-458)
 #include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
 #include <pops/runtime/program/program_execution_services.hpp>
 #include <pops/runtime/system.hpp>  // System (the runtime this facade forwards to)
@@ -849,71 +848,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     count_kernel(static_cast<std::int64_t>(applied));
   }
 
-  /// @name Scheduler value cache (Spec 3 section 17-18, ADC-458)
-  /// A held field-solve node recomputes only when DUE (every N macro-steps) and reuses the cached
-  /// System aux (phi / grad / E) in between. The cache is owned by the System (one CacheManager per
-  /// installed Program, keyed by the Program node id) so the checkpoint can reach it (Spec 3 section
-  /// 30); every ProgramContext copy forwards to that single manager via sys_->program_cache(). The
-  /// codegen wraps a held solve_fields in
-  /// ``if (schedule_decision(id, schedule_is_due(...), true)) {
-  ///  solve_fields_from_state(...); cache_store_aux(id); } else { cache_restore_aux(id); }``.
-  /// The runtime cadence/checkpoint is exercised in a compiled
-  /// .so step loop (validated on ROMEO; not buildable on a host-only Mac).
-  /// @{
-  /// True if node @p node_id is due to recompute at the current macro step: cold start (never stored),
-  /// then every @p every_n macro steps. Wraps CacheManager::is_due with System::macro_step().
-  ///
-  /// PROFILER scheduler counters (ADC-459, Spec 3 section 29): a DUE step recomputes the node (a cache
-  /// "miss" + a "due" scheduled node); a NOT-due step reuses the held value (a cache "hit" + a
-  /// "skipped" scheduled node). Counted here at the one decision point every scheduled node routes
-  /// through, gated on the profiler (zero cost when off). These move only under the compiled .so step
-  /// loop that exercises a held schedule (validated on Kokkos/ROMEO, not buildable host-only).
-  bool cache_should_update(int node_id, int every_n) const {
-    const bool due = sys_->program_cache().is_due(node_id, sys_->macro_step(), every_n);
-    if (due) {
-      sys_->profiler().count("cache_misses");
-      sys_->profiler().count("nodes_due");
-    } else {
-      sys_->profiler().count("cache_hits");
-      sys_->profiler().count("nodes_skipped");
-    }
-    return due;
-  }
-  /// Store a copy of the System aux (the field solve's output) as node @p node_id's cached value,
-  /// stamped at the current macro step (resets its accumulated dt).
-  void cache_store_aux(int node_id) const {
-    sys_->program_cache().store(node_id, *sys_->grid_context().aux, sys_->macro_step());
-  }
-  /// Restore node @p node_id's cached aux into the System aux (a held step: no elliptic solve).
-  void cache_restore_aux(int node_id) const {
-    sys_->program_cache().restore_into(node_id, *sys_->grid_context().aux);
-  }
-
-  /// Store a copy of a NAMED scratch MultiFab (a held rhs / source / linear_combine output) as node
-  /// @p node_id's cached value, stamped at the current macro step. The aux variants cache the System
-  /// aux; this caches an arbitrary step-body scratch so ANY schedulable node can hold, not only a
-  /// field solve.
-  void cache_store_scratch(int node_id, const MultiFab& scratch) const {
-    sys_->program_cache().store(node_id, scratch, sys_->macro_step());
-  }
-  /// Restore node @p node_id's cached scratch into @p scratch (a held step: no recompute).
-  void cache_restore_scratch(int node_id, MultiFab& scratch) const {
-    sys_->program_cache().restore_into(node_id, scratch);
-  }
-  /// Add a skipped step's @p dt to node @p node_id's accumulator (accumulate_dt policy): on a NOT-due
-  /// step the held node does not recompute but records the dt so the next due step sees the full
-  /// skipped interval. Variable step_cfl safe (the actual skipped dt, not N * dt_current).
-  void cache_accumulate_dt(int node_id, Real dt) const {
-    sys_->program_cache().accumulate_dt(node_id, dt);
-  }
-  /// The effective dt a due accumulate_dt step applies: @p dt_now plus the summed skipped dt since the
-  /// last recompute (resets the accumulator). The codegen feeds this as the step's dt into the held
-  /// node's recompute so it advances over the whole skipped interval at once.
-  Real cache_effective_dt(int node_id, Real dt_now) const {
-    return sys_->program_cache().effective_dt(node_id, dt_now);
-  }
-  /// @}
-
  private:
   struct CouplingWorkspace {
     std::vector<int> program_to_system;
@@ -1384,6 +1318,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
   MultiFab program_execution_alloc_scalar_field_(int n_comp, int n_ghost) const {
     return sys_->alloc_scalar_field(n_comp, n_ghost);
+  }
+  CacheManager& program_execution_cache_(SchedulerCacheOperation /*operation*/) const {
+    return sys_->program_cache();
   }
   ProgramResourceStorage program_execution_resource_storage_() const noexcept {
     return {PreparedVectorDistribution::Distributed, FieldDistribution::Distributed, 0};
