@@ -179,9 +179,34 @@ pops::SystemLayoutTransferSpec transfer_spec() {
           POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1};
 }
 
-pops::SystemLayoutTransferExecution transfer_execution() {
+class ScopedMpiCommunicator {
+ public:
+  explicit ScopedMpiCommunicator(MPI_Comm source) {
+    if (MPI_Comm_dup(source, &communicator_) != MPI_SUCCESS)
+      throw std::runtime_error("MPI_Comm_dup failed for the layout-transfer test lane");
+    if (MPI_Comm_set_errhandler(communicator_, MPI_ERRORS_RETURN) != MPI_SUCCESS) {
+      MPI_Comm_free(&communicator_);
+      throw std::runtime_error("MPI_Comm_set_errhandler failed for the layout-transfer test lane");
+    }
+  }
+
+  ~ScopedMpiCommunicator() {
+    if (communicator_ != MPI_COMM_NULL)
+      MPI_Comm_free(&communicator_);
+  }
+
+  ScopedMpiCommunicator(const ScopedMpiCommunicator&) = delete;
+  ScopedMpiCommunicator& operator=(const ScopedMpiCommunicator&) = delete;
+
+  MPI_Comm get() const { return communicator_; }
+
+ private:
+  MPI_Comm communicator_ = MPI_COMM_NULL;
+};
+
+pops::SystemLayoutTransferExecution transfer_execution(MPI_Comm communicator) {
   return {1,
-          "test::execution::mpi-world-host",
+          "test::execution::mpi-lane-host",
           POPS_MEMORY_SPACE_HOST_V1,
           "test::backend::mpi-cpu",
           "test::device::cpu:0",
@@ -192,9 +217,9 @@ pops::SystemLayoutTransferExecution transfer_execution() {
           POPS_PRECISION_FLOAT64_V1,
           0,
           "test::stream::host-synchronous",
-          static_cast<std::int64_t>(MPI_Comm_c2f(MPI_COMM_WORLD)),
+          static_cast<std::int64_t>(MPI_Comm_c2f(communicator)),
           static_cast<std::int64_t>(MPI_Type_c2f(MPI_DOUBLE)),
-          "MPI_COMM_WORLD",
+          "test::mpi-system-layout-transfer-lane",
           "MPI_DOUBLE"};
 }
 
@@ -289,6 +314,13 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
     return finish();
 
   {
+    const ScopedMpiCommunicator transfer_lane(MPI_COMM_WORLD);
+    int world_relation = MPI_UNEQUAL;
+    check(MPI_Comm_compare(transfer_lane.get(), MPI_COMM_WORLD, &world_relation) == MPI_SUCCESS,
+          "layout-transfer lane comparison succeeds");
+    check(world_relation == MPI_CONGRUENT,
+          "layout-transfer test executes on a distinct world-congruent communicator");
+
     std::shared_ptr<pops::component::LoadedComponent> component;
     bool healthy = phase("authenticated Transfer DSO load", [&] {
       component = std::make_shared<pops::component::LoadedComponent>(
@@ -335,7 +367,7 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
             "coarse System has one owner and one empty peer");
       healthy = phase("collective prepared Transfer construction", [&] {
         transfer = pops::PreparedSystemLayoutTransfer::prepare(
-            *fine, *coarse, component, transfer_spec(), transfer_execution());
+            *fine, *coarse, component, transfer_spec(), transfer_execution(transfer_lane.get()));
       });
     }
 
@@ -348,7 +380,7 @@ int run_mpi_system_layout_transfer(int argc, char** argv) {
                 receipt.source_layout_identity == kFineLayout &&
                 receipt.target_layout_identity == kCoarseLayout && receipt.source_block == "fine" &&
                 receipt.target_block == "coarse" &&
-                receipt.execution_identity == "test::execution::mpi-world-host" &&
+                receipt.execution_identity == "test::execution::mpi-lane-host" &&
                 receipt.operation == POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 &&
                 receipt.generation == generation && receipt.attempt == attempt &&
                 receipt.source_element_count == 16 && receipt.destination_element_count == 4,
