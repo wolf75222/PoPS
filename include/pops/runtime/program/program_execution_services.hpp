@@ -8,6 +8,7 @@
 #include <exception>
 #include <initializer_list>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -96,6 +97,26 @@ class ProgramExecutionServices {
     RestoreScratch,
     AccumulateDt,
     EffectiveDt,
+  };
+  enum class HistoryReadMode : std::uint8_t { RequireInitialized, ZeroStart };
+  enum class HistoryRotationAction : std::uint8_t { Skip, Rotate, Defer };
+
+  struct HistoryRegistration {
+    std::string name;
+    int lag = 1;
+    int ncomp = -1;
+    int program_owner = -1;
+    int runtime_owner = -1;
+    std::string state_identity;
+    std::string space_identity;
+    std::string clock_identity;
+    std::string interpolation_identity;
+    bool qualified = false;
+  };
+
+  struct HistoryStorePlan {
+    bool due = true;
+    std::optional<Real> outgoing_dt;
   };
 
   struct ProgramResourceStorage {
@@ -343,6 +364,111 @@ class ProgramExecutionServices {
   }
   GridContext grid_context() const { return provider_().program_execution_default_grid_context_(); }
   Geometry geom() const { return grid_context().geom; }
+
+  /// Declare one persistent Program history ring.
+  ///
+  /// Registration, identity binding, owner mapping and idempotent growth are Program semantics and
+  /// therefore live once in this service. Providers only materialize the ring on their storage
+  /// topology.
+  void register_history(const std::string& name, int lag, int ncomp = -1) const {
+    HistoryRegistration registration =
+        history_registration_(name, lag, ncomp, /*program_owner=*/-1);
+    provider_().program_execution_register_history_storage_(registration);
+    history_bindings_.insert_or_assign(name, history_binding_(registration));
+  }
+
+  void register_history(const std::string& name, int lag, int ncomp, int owner,
+                        const std::string& state_identity, const std::string& space_identity,
+                        const std::string& clock_identity,
+                        const std::string& interpolation_identity) const {
+    if (owner < 0 || state_identity.empty() || space_identity.empty() || clock_identity.empty() ||
+        interpolation_identity.empty())
+      throw std::runtime_error(
+          "Program qualified history requires owner/state/space/clock/interpolation identities");
+    const int runtime_owner = sys_block(owner);
+    HistoryRegistration registration{name,
+                                     lag,
+                                     ncomp,
+                                     owner,
+                                     runtime_owner,
+                                     state_identity,
+                                     space_identity,
+                                     clock_identity,
+                                     interpolation_identity,
+                                     true};
+    validate_history_registration_(registration);
+    provider_().program_execution_register_history_storage_(registration);
+    history_bindings_.insert_or_assign(name, history_binding_(registration));
+  }
+
+  /// Read one retained history slot. A normal read stays fail-loud before the first store.
+  MultiFab& history(const std::string& name, int lag = 1) const {
+    const HistoryRegistration registration =
+        ensure_history_registered_(name, lag == 0 ? 1 : lag, -1, /*program_owner=*/-1);
+    return provider_().program_execution_read_history_storage_(registration, lag,
+                                                               HistoryReadMode::RequireInitialized);
+  }
+
+  MultiFab& history(const std::string& name, int lag, int owner) const {
+    const HistoryRegistration registration =
+        ensure_history_registered_(name, lag == 0 ? 1 : lag, -1, owner);
+    return provider_().program_execution_read_history_storage_(registration, lag,
+                                                               HistoryReadMode::RequireInitialized);
+  }
+
+  /// Read a declared zero cold-start history. The first read authenticates the zero-filled slots.
+  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
+    const HistoryRegistration registration =
+        ensure_history_registered_(name, lag, ncomp, /*program_owner=*/-1);
+    if (!provider_().program_execution_history_initialized_storage_(registration))
+      provider_().program_execution_set_history_initialized_storage_(registration, true);
+    return provider_().program_execution_read_history_storage_(registration, lag,
+                                                               HistoryReadMode::ZeroStart);
+  }
+
+  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp, int owner) const {
+    const HistoryRegistration registration = ensure_history_registered_(name, lag, ncomp, owner);
+    if (!provider_().program_execution_history_initialized_storage_(registration))
+      provider_().program_execution_set_history_initialized_storage_(registration, true);
+    return provider_().program_execution_read_history_storage_(registration, lag,
+                                                               HistoryReadMode::ZeroStart);
+  }
+
+  /// Publish one current history value. Cadence and outgoing-time selection remain topology hooks;
+  /// registration, validation and the single store decision live here.
+  void store_history(const std::string& name, const MultiFab& value) const {
+    store_history_(name, value, /*program_owner=*/-1);
+  }
+
+  void store_history(const std::string& name, const MultiFab& value, int owner) const {
+    store_history_(name, value, owner);
+  }
+
+  /// Rotate every history ring once at an accepted Program boundary.
+  void rotate_histories() const { rotate_histories_(""); }
+
+  /// Rotate histories belonging to one logical clock. A topology without independent per-clock
+  /// rings may execute this only when every qualified ring belongs to that same clock.
+  void rotate_histories(const std::string& clock_identity) const {
+    if (clock_identity.empty())
+      throw std::runtime_error("Program history rotation requires a logical-clock identity");
+    bool found = false;
+    bool mixed = false;
+    for (const auto& [name, binding] : history_bindings_) {
+      (void)name;
+      if (!binding.qualified)
+        continue;
+      found = found || binding.clock_identity == clock_identity;
+      mixed = mixed || binding.clock_identity != clock_identity;
+    }
+    if (!found)
+      return;
+    if (mixed && !provider_().program_execution_history_supports_selective_rotation_())
+      throw std::runtime_error(
+          "Program history storage cannot rotate mixed logical clocks independently");
+    rotate_histories_(
+        provider_().program_execution_history_supports_selective_rotation_() ? clock_identity : "");
+  }
 
   /// Allocate one scalar field on the provider's active storage topology.
   MultiFab alloc_scalar_field(int n_comp = 1, int n_ghost = 1) const {
@@ -866,6 +992,15 @@ class ProgramExecutionServices {
   mutable amr::Rational stage_time_{0, 1};
 
  private:
+  struct HistoryBinding {
+    int program_owner = -1;
+    std::string state_identity;
+    std::string space_identity;
+    std::string clock_identity;
+    std::string interpolation_identity;
+    bool qualified = false;
+  };
+
   struct CouplingWorkspace {
     std::vector<int> program_to_runtime;
     std::vector<MultiFab*> runtime_states;
@@ -873,6 +1008,96 @@ class ProgramExecutionServices {
   };
 
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
+
+  static HistoryBinding history_binding_(const HistoryRegistration& registration) {
+    return {registration.program_owner,          registration.state_identity,
+            registration.space_identity,         registration.clock_identity,
+            registration.interpolation_identity, registration.qualified};
+  }
+
+  void validate_history_registration_(const HistoryRegistration& registration) const {
+    if (registration.name.empty())
+      throw std::runtime_error("Program history name must be non-empty");
+    if (registration.lag < 1)
+      throw std::runtime_error("Program history lag must be >= 1");
+    if (registration.ncomp == 0)
+      throw std::runtime_error("Program history component count cannot be zero");
+    const auto prior = history_bindings_.find(registration.name);
+    if (prior == history_bindings_.end() || !prior->second.qualified)
+      return;
+    const HistoryBinding& binding = prior->second;
+    if (binding.program_owner != registration.program_owner ||
+        binding.state_identity != registration.state_identity ||
+        binding.space_identity != registration.space_identity ||
+        binding.clock_identity != registration.clock_identity ||
+        binding.interpolation_identity != registration.interpolation_identity)
+      throw std::runtime_error("Program history '" + registration.name +
+                               "' cannot be re-registered with a different identity");
+  }
+
+  HistoryRegistration history_registration_(const std::string& name, int lag, int ncomp,
+                                            int program_owner) const {
+    if (name.empty())
+      throw std::runtime_error("Program history name must be non-empty");
+    if (lag < 1)
+      throw std::runtime_error("Program history lag must be >= 1");
+    if (ncomp == 0)
+      throw std::runtime_error("Program history component count cannot be zero");
+    const auto prior = history_bindings_.find(name);
+    if (prior != history_bindings_.end()) {
+      const HistoryBinding& binding = prior->second;
+      if (program_owner >= 0 && binding.qualified && binding.program_owner != program_owner)
+        throw std::runtime_error("history '" + name + "' is not qualified by owner program.block." +
+                                 std::to_string(program_owner));
+      const int owner = binding.program_owner >= 0 ? binding.program_owner : program_owner;
+      return {name,
+              lag,
+              ncomp,
+              owner,
+              owner < 0 ? -1 : sys_block(owner),
+              binding.state_identity,
+              binding.space_identity,
+              binding.clock_identity,
+              binding.interpolation_identity,
+              binding.qualified};
+    }
+    return {name, lag, ncomp, program_owner, program_owner < 0 ? -1 : sys_block(program_owner), "",
+            "",   "",  "",    false};
+  }
+
+  HistoryRegistration ensure_history_registered_(const std::string& name, int lag, int ncomp,
+                                                 int program_owner) const {
+    HistoryRegistration registration = history_registration_(name, lag, ncomp, program_owner);
+    provider_().program_execution_register_history_storage_(registration);
+    history_bindings_.insert_or_assign(name, history_binding_(registration));
+    return registration;
+  }
+
+  void store_history_(const std::string& name, const MultiFab& value, int program_owner) const {
+    const HistoryRegistration registration =
+        ensure_history_registered_(name, /*lag=*/1, /*ncomp=*/-1, program_owner);
+    const HistoryStorePlan plan = provider_().program_execution_history_store_plan_(registration);
+    if (!plan.due)
+      return;
+    if (plan.outgoing_dt &&
+        (!std::isfinite(static_cast<double>(*plan.outgoing_dt)) || *plan.outgoing_dt < Real(0)))
+      throw std::runtime_error("Program history store requires a finite non-negative outgoing dt");
+    provider_().program_execution_store_history_storage_(registration, value, plan.outgoing_dt);
+  }
+
+  void rotate_histories_(const std::string& clock_identity) const {
+    switch (provider_().program_execution_history_rotation_action_()) {
+      case HistoryRotationAction::Skip:
+        return;
+      case HistoryRotationAction::Defer:
+        provider_().program_execution_defer_history_rotation_();
+        return;
+      case HistoryRotationAction::Rotate:
+        provider_().program_execution_rotate_history_storage_(clock_identity);
+        return;
+    }
+    throw std::logic_error("unknown Program history rotation action");
+  }
 
   void select_program_resource_level_(int selected) const noexcept {
     static_assert(
@@ -959,6 +1184,7 @@ class ProgramExecutionServices {
   }
 
   mutable CouplingWorkspace coupling_workspace_;
+  mutable std::map<std::string, HistoryBinding> history_bindings_;
 };
 
 /// Compile-time association between a public runtime facade and its topology/storage provider.
