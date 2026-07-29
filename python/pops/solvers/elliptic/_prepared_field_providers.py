@@ -176,14 +176,40 @@ def _geometric_mg_resolver(
 
 def _validate_geometric_mg(use: Any, where: str) -> None:
     facts = use.facts
+    hierarchy = _hierarchy_policy_identity(facts, where=where)
+    levels = facts.layout.get("levels", 0)
     if use.options.get("fac") is not None and (
         facts.target != "amr_system"
-        or _hierarchy_policy_identity(facts, where=where)
-        != _COMPOSITE_HIERARCHY_POLICY
-        or facts.layout.get("levels", 0) < 2
+        or hierarchy != _COMPOSITE_HIERARCHY_POLICY
+        or levels < 2
     ):
         raise ValueError(
             "%s authored CompositeFAC requires a composite multi-level AMR backend" % where
+        )
+    if (
+        facts.target == "amr_system"
+        and levels > 1
+        and facts.boundary.get("state_dependent")
+        and hierarchy != _LEVEL_LOCAL_HIERARCHY_POLICY
+    ):
+        raise ValueError(
+            "%s state-dependent multilevel AMR boundaries require the level-local "
+            "hierarchy policy" % where
+        )
+    if facts.target == "amr_system" and facts.boundary.get("field_dependent"):
+        raise ValueError(
+            "%s AMR boundaries depending on another solved field have no prepared "
+            "materialization route" % where
+        )
+    if (
+        facts.target == "amr_system"
+        and levels > 1
+        and hierarchy == _LEVEL_LOCAL_HIERARCHY_POLICY
+        and facts.boundary.get("iterate_dependent")
+    ):
+        raise ValueError(
+            "%s iterate-dependent multilevel AMR boundaries have no qualified nonlinear "
+            "transaction" % where
         )
 
 
@@ -258,6 +284,10 @@ def _register_ready_providers() -> tuple[Any, Any]:
                 "hierarchy_policies": (
                     "pops.field-hierarchy.level-local@1",
                     "pops.field-hierarchy.composite@1",
+                ),
+                "amr_boundary_dependencies": (
+                    "level-local-state@1",
+                    "logical-timepoint@1",
                 ),
             },
             _validate_geometric_mg,
