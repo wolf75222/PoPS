@@ -710,127 +710,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       boundary.fill(fy, point);
     apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
   }
-  // --- history (ADC-631): per-level ring slots on the AmrRuntime engine, driven by the SAME lowered
-  // body as Uniform (the level index is the driver's set_level cursor -- no scheme dispatch, no new IR).
-  // register/read/store address the CURRENT level; rotate fires ONCE per accepted hierarchy step. The
-  // recursively invoked body requests rotation after each local advance, and the context defers the
-  // actual hierarchy-wide rotation until synchronization has corrected the committed states.
-  // @p ncomp mirrors ProgramContext::register_history so the SAME lowered body (a single problem.so)
-  // compiles against BOTH contexts. The narrow-ring AMR phi^n carry (ADC-427) threads @p ncomp into
-  // AmrHistoryOps: ncomp < 0 uses the owner-qualified program block's width; an
-  // explicit ncomp >= 1 (the 1-component condensed-Schur phi^n carry) narrows the per-level ring, which
-  // rides the same alloc / remap / replay machinery (each slot is sized by ncomp internally).
-  void register_history(const std::string& name, int lag, int ncomp, int owner,
-                        const std::string& state_identity, const std::string& space_identity,
-                        const std::string& clock_identity,
-                        const std::string& interpolation_identity) const {
-    if (state_identity.empty() || space_identity.empty())
-      throw std::runtime_error("AMR history requires qualified state and space identities");
-    if (clock_identity.empty() || interpolation_identity.empty())
-      throw std::runtime_error(
-          "AMR history requires qualified logical-clock and interpolation identities");
-    const auto prior_owner = history_owners_.find(name);
-    const auto prior_state = history_state_ids_.find(name);
-    const auto prior_space = history_space_ids_.find(name);
-    const auto prior_clock = history_clock_ids_.find(name);
-    const auto prior_interpolation = history_interpolation_ids_.find(name);
-    if ((prior_owner != history_owners_.end() && prior_owner->second != owner) ||
-        (prior_state != history_state_ids_.end() && prior_state->second != state_identity) ||
-        (prior_space != history_space_ids_.end() && prior_space->second != space_identity) ||
-        (prior_clock != history_clock_ids_.end() && prior_clock->second != clock_identity) ||
-        (prior_interpolation != history_interpolation_ids_.end() &&
-         prior_interpolation->second != interpolation_identity))
-      throw std::runtime_error("AMR history '" + name +
-                               "' cannot be re-registered with a different identity");
-    pops::detail::AmrHistoryOps::register_history(*eng_, static_cast<std::size_t>(sys_block(owner)),
-                                                  name, lag, ncomp);
-    history_owners_[name] = owner;
-    history_state_ids_[name] = state_identity;
-    history_space_ids_[name] = space_identity;
-    history_clock_ids_[name] = clock_identity;
-    history_interpolation_ids_[name] = interpolation_identity;
-  }
-  MultiFab& history(const std::string& name, int lag, int owner) const {
-    require_history_owner_(name, owner);
-    validate_history_clock_(name, lag);
-    MultiFab& mf = pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
-    if (capturing())
-      restore_ring_flux_(name, lag,
-                         mf);  // re-publish the lagged buffer's flux strip into the live ledger
-    return mf;
-  }
-  // ZERO COLD-START read (ADC-427), mirroring ProgramContext::history_zero_start so the SAME lowered
-  // body compiles on both contexts: a read-first cross-step carry reads the zero-filled slots on its
-  // very first read instead of failing loud. @p ncomp binds the ring width at the first register (the
-  // codegen prelude locks it before any read), exactly like register_history above: ncomp < 0 keeps
-  // the owner-qualified block width; explicit ncomp >= 1 narrows the ring.
-  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp, int owner) const {
-    require_history_owner_(name, owner);
-    if (history_state_ids_.find(name) == history_state_ids_.end() ||
-        history_space_ids_.find(name) == history_space_ids_.end())
-      throw std::runtime_error("AMR history '" + name + "' has no registered state/space identity");
-    pops::detail::AmrHistoryOps::register_history(*eng_, static_cast<std::size_t>(sys_block(owner)),
-                                                  name, lag, ncomp);
-    if (!pops::detail::AmrHistoryOps::initialized(*eng_, name))
-      pops::detail::AmrHistoryOps::set_initialized(*eng_, name, true);
-    MultiFab& mf = pops::detail::AmrHistoryOps::read_history(*eng_, name, lag, level_);
-    if (capturing())
-      restore_ring_flux_(name, lag, mf);
-    return mf;
-  }
-  void store_history(const std::string& name, const MultiFab& value, int owner) const {
-    require_history_owner_(name, owner);
-    // The supported AMR histories belong to the primary macro clock.  The generated body is
-    // evaluated at every child substep, but that implementation detail must not overwrite the same
-    // logical ring slot at progressively later fine-level phases: doing so creates a "hierarchy
-    // snapshot" whose coarse and fine slices denote different physical times and cannot be replayed
-    // from one anchor.  Publish each level exactly once, at the first child window of the macro tick.
-    // Explicit child-clock histories are rejected by the AMR lowering until they have their own
-    // independently rotating provider.
-    if (current_window_ && current_window_->begin.phase != amr::Rational(0, 1))
-      return;
-    // A primary-clock AMR ring rotates once per accepted MACRO step, even though its fine-level
-    // value is stored once per child substep.  Its one scalar slot_dt therefore belongs to that
-    // macro-step, not to whichever level happened to store last.  Using current_level_dt_ let the
-    // finest level overwrite dt with dt/ref_ratio; selective restart then replayed only that
-    // fraction of a macro-step.  AMR child-clock histories are rejected by the lowering until a
-    // distinct per-clock ring provider exists, so the facade's installed-Program dt is the exact
-    // clock authority for every supported ring here.
-    pops::detail::AmrHistoryOps::store_history(*eng_, name, level_, value,
-                                               static_cast<Real>(facade_->program_last_dt()));
-    record_history_clock_(name);
-    if (capturing())
-      save_ring_flux_(name, value, owner);
-  }
-  void rotate_histories() const {
-    // ADC-631/639: DEFER the rotate. The body's terminal rotate fires inside the recursive advance, before
-    // couple_levels reflux touches the coarse live state; deferring it to couple_levels keeps a multistep
-    // Program's lag read consistent with the refluxed live state. On nlev==1 (or no reflux) the deferral
-    // collapses to the original store->rotate order -> bit-identical. Guarded to the last level like v1.
-    if (level_ != nlev() - 1)
-      return;
-    if (capturing()) {
-      rotate_pending_ = true;  // couple_levels executes it after the reflux + slot-0 resync
-      return;
-    }
-    pops::detail::AmrHistoryOps::rotate_histories(*eng_);
-  }
-  void rotate_histories(const std::string& clock_identity) const {
-    if (clock_identity.empty())
-      throw std::runtime_error("AMR history rotation requires a logical-clock identity");
-    bool found = false;
-    for (const auto& [name, identity] : history_clock_ids_)
-      if (identity == clock_identity)
-        found = true;
-    if (!found)
-      return;
-    for (const auto& [name, identity] : history_clock_ids_)
-      if (identity != clock_identity)
-        throw std::runtime_error(
-            "AMR selective history rotation cannot mix logical clocks in one hierarchy step");
-    rotate_histories();
-  }
-
   // --- condensed-implicit elliptic primitives on the hierarchy (ADC-633 / ADC-637): WIRED per level ---
   // The codegen lowers a condensed-implicit (ADC-637) Program to inline block-inverse assembly kernels
   // referencing ONLY the variable `ctx`, so the SAME emitted body compiles against this context. With its
@@ -3372,12 +3251,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     }
   }
 
-  void require_history_owner_(const std::string& name, int owner) const {
-    const auto found = history_owners_.find(name);
-    if (found == history_owners_.end() || found->second != owner)
-      throw std::runtime_error("history '" + name + "' is not qualified by owner program.block." +
-                               std::to_string(owner));
-  }
   void validate_history_clock_(const std::string& name, int lag) const {
     const auto clocks = ring_clocks_.find(name);
     const auto identities = ring_identities_.find(name);
@@ -3553,6 +3426,75 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   std::size_t program_execution_apply_coupling_(
       Real dt, const std::vector<MultiFab*>& runtime_states) const {
     return eng_->apply_coupling_operators_at_level(level_, dt, runtime_states);
+  }
+  void program_execution_register_history_storage_(const HistoryRegistration& registration) const {
+    const int program_owner = registration.program_owner < 0 ? 0 : registration.program_owner;
+    const int runtime_owner =
+        registration.runtime_owner < 0 ? sys_block(program_owner) : registration.runtime_owner;
+    pops::detail::AmrHistoryOps::register_history(*eng_, static_cast<std::size_t>(runtime_owner),
+                                                  registration.name, registration.lag,
+                                                  registration.ncomp);
+    history_owners_[registration.name] = program_owner;
+    history_state_ids_[registration.name] = registration.qualified
+                                                ? registration.state_identity
+                                                : "legacy-history:" + registration.name;
+    history_space_ids_[registration.name] =
+        registration.qualified ? registration.space_identity : "legacy-field";
+    history_clock_ids_[registration.name] =
+        registration.qualified ? registration.clock_identity
+                               : (primary_clock_.empty() ? "legacy-clock" : primary_clock_);
+    history_interpolation_ids_[registration.name] =
+        registration.qualified ? registration.interpolation_identity : "legacy";
+  }
+  MultiFab& program_execution_read_history_storage_(const HistoryRegistration& registration,
+                                                    int lag, HistoryReadMode mode) const {
+    if (registration.qualified && mode == HistoryReadMode::RequireInitialized)
+      validate_history_clock_(registration.name, lag);
+    MultiFab& field =
+        pops::detail::AmrHistoryOps::read_history(*eng_, registration.name, lag, level_);
+    if (capturing())
+      restore_ring_flux_(registration.name, lag, field);
+    return field;
+  }
+  bool program_execution_history_initialized_storage_(
+      const HistoryRegistration& registration) const {
+    return pops::detail::AmrHistoryOps::initialized(*eng_, registration.name);
+  }
+  void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
+                                                          bool initialized) const {
+    pops::detail::AmrHistoryOps::set_initialized(*eng_, registration.name, initialized);
+  }
+  HistoryStorePlan program_execution_history_store_plan_(
+      const HistoryRegistration& /*registration*/) const {
+    // A primary-clock AMR ring publishes each level only at the first child window of the macro
+    // tick. Its scalar slot timestamp is the accepted macro dt, never a fine-level substep dt.
+    if (current_window_ && current_window_->begin.phase != amr::Rational(0, 1))
+      return {false, std::nullopt};
+    return {true, static_cast<Real>(facade_->program_last_dt())};
+  }
+  void program_execution_store_history_storage_(const HistoryRegistration& registration,
+                                                const MultiFab& value,
+                                                const std::optional<Real>& outgoing_dt) const {
+    if (!outgoing_dt)
+      throw std::logic_error("AMR Program history storage requires an exact outgoing dt");
+    pops::detail::AmrHistoryOps::store_history(*eng_, registration.name, level_, value,
+                                               *outgoing_dt);
+    record_history_clock_(registration.name);
+    if (capturing()) {
+      const int owner = registration.program_owner < 0 ? 0 : registration.program_owner;
+      save_ring_flux_(registration.name, value, owner);
+    }
+  }
+  bool program_execution_history_supports_selective_rotation_() const noexcept { return false; }
+  HistoryRotationAction program_execution_history_rotation_action_() const noexcept {
+    if (level_ != nlev() - 1)
+      return HistoryRotationAction::Skip;
+    return capturing() ? HistoryRotationAction::Defer : HistoryRotationAction::Rotate;
+  }
+  void program_execution_defer_history_rotation_() const noexcept { rotate_pending_ = true; }
+  void program_execution_rotate_history_storage_(const std::string& clock_identity) const {
+    (void)clock_identity;  // the shared service passes empty for non-selective storage
+    pops::detail::AmrHistoryOps::rotate_histories(*eng_);
   }
   CacheManager& program_execution_cache_(SchedulerCacheOperation operation) const {
     const std::string detail =
