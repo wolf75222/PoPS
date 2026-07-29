@@ -23,7 +23,11 @@ T.commit(state.next, state_next)
 `subcycle` is structured IR. The child duration is exactly the enclosing duration divided by
 `count`; nested subcycles compose their ratios. Generated native code opens an exception-safe clock
 scope, checks every child iteration in order, and closes it only after the exact authored count.
-An unsupported synchronization provider is rejected during lowering, before a binary is published.
+Uniform programs additionally lower `InterpolateHistory(...LinearInterpolation())` against native
+retained slots owned by either the primary clock or a child clock. Every generated child-clock
+store publishes the active child interval in the exact accepted `slot_dt` ledger. Dense-output
+capabilities and AMR interpolation remain rejected until they have an equally exact native
+provider; no callback or sample-and-hold fallback is substituted.
 
 ## Qualified histories and schedules
 
@@ -45,11 +49,26 @@ clocks, subcycles, synchronization nodes, schedules, histories, held caches, the
 controller proposal state, and transaction statistics. Field/history/cache values remain in their
 native checkpoint sections, authenticated by this envelope.
 
+For `ErrorControlledDt`, the queue head is the exact next proposal: it determines the native `dt`,
+survives a rejected attempt until the controller explicitly replaces it with the typed reduced
+proposal, and is consumed exactly once by acceptance. The accepted boundary immediately publishes
+the following proposal, so restart replays the same next decision rather than recomputing it from a
+display-only field.
+
 A checkpoint is legal only at an accepted fully synchronized boundary. Rejection and failure leave
 all accepted cursors unchanged and make checkpointing ineligible. Restart compares the checkpointed
 program schedule with the installed program before native state mutation and requires the exact
 checkpointed step strategy for the next attempt. Schema v1 and other historical payloads require an
 offline migration; runtime restart contains no compatibility branch.
+
+Offline envelope inspection authenticates only the integrity of a canonical checkpoint; it is not
+a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
+identities, temporal state, consumer cursors, and field-provider state. Later sealed v2 payloads
+still have no reviewed semantic/Program-version mapping to the current schema. A real migration
+therefore requires an explicit version table covering semantic identity, Program IR and hash,
+schedule/cadence, histories, caches, controller state, consumers, and run controls. Until that
+mapping exists, both offline inspection and runtime restart fail closed without publishing a
+destination.
 
 `RuntimeInstance` obtains each consumer moment from the accepted cursor of the consumer's qualified
 clock. A missing clock, provisional phase, or desynchronized cursor is an error. Consequently a

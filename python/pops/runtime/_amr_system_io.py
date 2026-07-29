@@ -68,9 +68,9 @@ class _AmrSystemIO(_AmrSystem):
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
         require_exact_payload_version(
             data,
-            "pops_amr_checkpoint_version",
-            AMR_CHECKPOINT_PAYLOAD_VERSION,
-            runtime="AMR",
+            key="pops_amr_checkpoint_version",
+            expected=AMR_CHECKPOINT_PAYLOAD_VERSION,
+            runtime_kind="AMR",
         )
         return _PreparedAMRSystemRestart(
             identity,

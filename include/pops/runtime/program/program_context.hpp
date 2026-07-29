@@ -1079,7 +1079,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// changes an already-declared ring's width; a narrower ring (ADC-427) is declared by the prelude
   /// register_history(name, lag, ncomp) the codegen emits before any read. @p lag defaults to 1.
   MultiFab& history(const std::string& name, int lag = 1) const {
-    sys_->register_history(name, lag);  // idempotent: allocate the ring on first use
+    // System::register_history requires a retained depth of at least one even though slot 0 is a
+    // valid read target. Register that minimum depth when the caller asks for the current slot.
+    sys_->register_history(name, lag == 0 ? 1 : lag);
     return sys_->read_history(name, lag);
   }
   /// Owner-qualified mirror used by sources that also contain an AMR entry point.  @p owner is a
@@ -1109,14 +1111,78 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return history_zero_start(name, lag, ncomp);
   }
 
+  /// Reconstruct one primary-clock retained state at an exact target-clock coordinate. The
+  /// bracketing slots and every intervening accepted interval come from the native history ledger;
+  /// no Python callback, current-state alias, or fixed-dt inference participates.
+  void interpolate_history_linear(MultiFab& out, const std::string& name, int max_lag, int owner,
+                                  const std::string& source_clock, const std::string& target_clock,
+                                  int target_step, Real target_offset) const {
+    (void)sys_block(owner);
+    if (max_lag < 1)
+      throw std::invalid_argument(
+          "linear history interpolation requires at least one retained lag");
+    if (!std::isfinite(static_cast<double>(target_offset)))
+      throw std::invalid_argument("linear history interpolation offset must be finite");
+    if (!sys_->history_initialized(name))
+      throw std::runtime_error(
+          "linear history interpolation requires an initialized native history");
+    const double source_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(source_clock));
+    const double target_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(target_clock));
+    const double coordinate =
+        (static_cast<double>(target_step) + static_cast<double>(target_offset)) * source_ticks /
+        target_ticks;
+    if (!std::isfinite(coordinate) || coordinate > 0.0 ||
+        coordinate < -static_cast<double>(max_lag))
+      throw std::runtime_error(
+          "linear history interpolation target lies outside retained timestamps");
+
+    if (coordinate == 0.0) {
+      MultiFab& exact = history(name, 0);
+      lincomb(out, Real(1), exact, Real(0), exact);
+      return;
+    }
+    const int older_lag = static_cast<int>(std::ceil(-coordinate));
+    if (older_lag < 1 || older_lag > max_lag)
+      throw std::runtime_error("linear history interpolation could not select bracketing slots");
+
+    double newer_time = static_cast<double>(physical_time());
+    double older_time = newer_time;
+    double bracket_dt = 0.0;
+    for (int lag = 1; lag <= older_lag; ++lag) {
+      const double interval = sys_->history_slot_dt(name, lag);
+      if (!std::isfinite(interval) || interval <= 0.0)
+        throw std::runtime_error(
+            "linear history interpolation requires positive exact slot timestamps");
+      bracket_dt = interval;
+      older_time = newer_time - interval;
+      if (lag != older_lag)
+        newer_time = older_time;
+    }
+    const double logical_fraction = coordinate + static_cast<double>(older_lag);
+    const double target_time = older_time + logical_fraction * bracket_dt;
+    const double timestamp_fraction = (target_time - older_time) / (newer_time - older_time);
+    if (!std::isfinite(timestamp_fraction) || timestamp_fraction < 0.0 || timestamp_fraction > 1.0)
+      throw std::runtime_error(
+          "linear history interpolation target does not bracket native timestamps");
+
+    MultiFab& older = history(name, older_lag);
+    MultiFab& newer = history(name, older_lag - 1);
+    const Real alpha = static_cast<Real>(timestamp_fraction);
+    lincomb(out, Real(1) - alpha, older, alpha, newer);
+  }
+
   /// Store @p value into the CURRENT slot of history @p name (ADC-406a). Registers the ring on first
   /// use (at least a current slot; the lag the program reads via @ref history sets the real depth) and
   /// forwards to System::store_history (which fills every slot on the first store -- the cold start).
-  /// The codegen emits ``ctx.store_history("<name>", <value>)`` near the end of the step body. Uses the
-  /// default ncomp on register (the width is fixed by the prelude register_history the codegen emits).
+  /// A generated logical scope publishes its active dt explicitly, so a child-clock ring records the
+  /// child interval. Hand-written contexts that did not call begin_step retain the legacy System-owned
+  /// macro-dt route. Uses the default ncomp on register (the width is fixed by the prelude register).
   void store_history(const std::string& name, const MultiFab& value) const {
     sys_->register_history(name, 1);  // idempotent: at least a current slot exists before the store
-    sys_->store_history(name, value);
+    if (std::isfinite(current_dt_) && current_dt_ > 0.0)
+      sys_->store_history(name, value, current_dt_);
+    else
+      sys_->store_history(name, value);
   }
   void store_history(const std::string& name, const MultiFab& value, int owner) const {
     (void)sys_block(owner);
