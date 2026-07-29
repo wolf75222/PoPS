@@ -937,16 +937,11 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
   }
   void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
-  const std::vector<int>& program_execution_block_map_() const { return sys_->program_block_map(); }
+  ProgramRuntimeState& program_execution_runtime_state_() const {
+    return sys_->program_runtime_state_();
+  }
   int program_execution_block_count_() const { return sys_->n_blocks(); }
   Real program_execution_physical_time_() const { return static_cast<Real>(sys_->time()); }
-  void program_execution_record_scalar_(const std::string& name, Real value) const {
-    sys_->record_program_diagnostic(name, value);
-  }
-  void program_execution_note_step_projection_(const std::string& name) const {
-    sys_->note_step_projection(name);
-  }
-  RuntimeParams program_execution_params_(int block) const { return sys_->program_params(block); }
   void program_execution_set_field_timepoint_(const std::string& field,
                                               const FieldLogicalTimePoint& point) const {
     sys_->set_field_logical_timepoint(field, point);
@@ -959,7 +954,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                            const CompiledFieldBoundaryKernel& kernel) const {
     sys_->set_field_boundary_kernel(field, kernel);
   }
-  Profiler& program_execution_profiler_() const { return sys_->profiler(); }
   int program_execution_macro_step_() const { return sys_->macro_step(); }
   int program_execution_active_level_() const { return -1; }
 

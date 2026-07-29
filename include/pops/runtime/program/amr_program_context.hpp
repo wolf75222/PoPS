@@ -3425,20 +3425,11 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           "AmrProgramContext::commit_many aliased target/source requires a flat hierarchy; "
           "materialize an explicit provisional state before a conservative multi-level commit");
   }
-  const std::vector<int>& program_execution_block_map_() const {
-    return facade_->program_block_map();
+  ProgramRuntimeState& program_execution_runtime_state_() const {
+    return facade_->program_runtime_state_();
   }
   int program_execution_block_count_() const { return static_cast<int>(eng_->n_blocks()); }
   Real program_execution_physical_time_() const { return static_cast<Real>(facade_->time()); }
-  void program_execution_record_scalar_(const std::string& name, Real value) const {
-    facade_->record_program_diagnostic(name, value);
-  }
-  void program_execution_note_step_projection_(const std::string& name) const {
-    facade_->note_step_projection(name);
-  }
-  RuntimeParams program_execution_params_(int block) const {
-    return facade_->program_params(block);
-  }
   void program_execution_set_field_timepoint_(const std::string& field,
                                               const FieldLogicalTimePoint& point) const {
     facade_->set_field_logical_timepoint(field, point);
@@ -3451,7 +3442,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                                            const CompiledFieldBoundaryKernel& kernel) const {
     facade_->set_field_boundary_kernel(field, kernel);
   }
-  Profiler& program_execution_profiler_() const { return facade_->profiler_handle(); }
   int program_execution_macro_step_() const { return facade_->macro_step(); }
   int program_execution_active_level_() const { return level_; }
 
