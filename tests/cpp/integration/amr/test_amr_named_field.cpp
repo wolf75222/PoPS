@@ -850,6 +850,8 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 1);
+  EXPECT_THROW((void)runtime.level_state(1, 0), std::out_of_range);
+  EXPECT_THROW((void)runtime.level_state(0, -1), std::out_of_range);
 
   auto driver_rhs_calls = std::make_shared<int>(0);
   auto plan = [&](const std::string& field, int component) {
@@ -938,7 +940,7 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
     accepted_driver.push_back(runtime.provider_potential_level("z_driver", level));
     accepted_potential.push_back(runtime.provider_potential_level("a_potential", level));
     accepted_aux.push_back(runtime.aux(level));
-    scale(runtime.level_state(level, 0), Real(1.25));
+    scale(runtime.level_state(0, level), Real(1.25));
   }
 
   *driver_rhs_calls = 0;
@@ -1016,7 +1018,7 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
     rollback_driver.push_back(runtime.provider_potential_level("z_driver", level));
     rollback_potential.push_back(runtime.provider_potential_level("a_potential", level));
     rollback_aux.push_back(runtime.aux(level));
-    scale(runtime.level_state(level, 0), Real(1.25));
+    scale(runtime.level_state(0, level), Real(1.25));
   }
   *driver_rhs_calls = 0;
   *dependent_rhs_calls = 0;

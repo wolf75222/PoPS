@@ -2373,8 +2373,18 @@ class AmrRuntime {
   /// @{
   /// The live state MultiFab of block @p b at level @p k (zero-copy; same address an AmrProgramContext
   /// reads each macro-step). @c b is the AMR block index (sys_block-resolved by the caller).
-  MultiFab& level_state(std::size_t b, int k) { return (*blocks_[b].levels)[k].U; }
-  const MultiFab& level_state(std::size_t b, int k) const { return (*blocks_[b].levels)[k].U; }
+  MultiFab& level_state(std::size_t b, int k) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || !blocks_[b].levels ||
+        static_cast<std::size_t>(k) >= blocks_[b].levels->size())
+      throw std::out_of_range("AmrRuntime::level_state block/level index is out of range");
+    return (*blocks_[b].levels)[static_cast<std::size_t>(k)].U;
+  }
+  const MultiFab& level_state(std::size_t b, int k) const {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || !blocks_[b].levels ||
+        static_cast<std::size_t>(k) >= blocks_[b].levels->size())
+      throw std::out_of_range("AmrRuntime::level_state block/level index is out of range");
+    return (*blocks_[b].levels)[static_cast<std::size_t>(k)].U;
+  }
 
   /// Apply every registered coupled-source operator to one complete candidate-state pack at an exact
   /// AMR level.  This is the Program-owned splitting primitive: it never solves fields, walks another
