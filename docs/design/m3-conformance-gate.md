@@ -50,9 +50,15 @@ the complete pre-restart Program image; a second successful attempt must reprodu
 transformed tagging bytes before continuation. Dense-history fingerprints are exact phase-local
 all-rank consensus witnesses; they are deliberately not compared across the interpolation. The
 distinct scientific invariant is native composite conservation of every accepted solution
-component before and after the regrid.
-The source validator requires that exact pytest path to remain in the manifest's
-`mpi_orchestrators` category; removing or reclassifying it invalidates `--check-only`.
+component before and after the regrid. The mandatory two-rank entrypoint also compiles a real
+two-block `NumericalFlux`, advances both endpoints with persistent AB2 histories on distributed
+coarse/fine patches, checkpoints a non-empty accepted interface audit, injects one post-transform
+rank divergence, proves exact rollback of owners/histories/ledgers/Program bytes, retries, then
+requires a new topology-qualified interface audit, exact all-rank audit/receipt consensus and
+conservative continuation.
+The source validator requires that exact Python entrypoint to remain in the manifest's
+`mpi_entrypoints` category with `nproc = 2`; removing or reclassifying it invalidates
+`--check-only`.
 All Python checks run with native and MPI requirements forced on; a missing capability cannot turn
 this proof into an optional skip. Pytest also emits a mandatory JUnit report with strict xfail
 semantics; any skipped or xfailed proof fails the M3 gate.
