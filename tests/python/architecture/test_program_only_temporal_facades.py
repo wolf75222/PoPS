@@ -135,7 +135,7 @@ def test_static_system_temporal_driver_is_test_only():
 
 def test_local_implicit_solve_has_one_typed_options_route():
     source = IMPLICIT_STEPPER.read_text(encoding="utf-8")
-    assert "const NewtonOptions& opts" in source
+    assert "const NewtonOptions& options" in source
     assert "int iters = 2" not in source
     assert "Legacy signature with a bare iteration budget" not in source
 
