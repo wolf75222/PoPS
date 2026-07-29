@@ -260,6 +260,15 @@ class ProgramExecutionServices {
     provider_().program_execution_rhs_group_(batch);
   }
 
+  /// r <- S(u, aux) for one Program block, without any flux divergence.
+  ///
+  /// Profiling and Program-to-runtime block qualification are topology-independent. The provider
+  /// receives only the exact runtime block and owns the Uniform or level-qualified source kernel.
+  void source_default_into(int block, MultiFab& state, MultiFab& rhs) const {
+    count_kernel();
+    provider_().program_execution_source_default_into_(sys_block(block), state, rhs);
+  }
+
   MultiFab rhs_scratch_like(const MultiFab& prototype) const {
     MultiFab scratch(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
                      prototype.n_grow());
