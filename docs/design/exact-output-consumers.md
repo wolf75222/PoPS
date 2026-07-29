@@ -460,14 +460,27 @@ The `pops.balance-term` namespace is reserved. Ordinary `Program.record_scalar(.
 the Python runtime diagnostic binding both reject it; generated `record_balance` code reaches a
 separate native sink that validates the route and canonical term before touching the mailbox.
 
-`record_balance` is not currently gated by the matching Consumer cadence. Its five term-producing
-Program reduction paths run whenever execution reaches the call, including every cadence/substep,
-even if the `Balance` consumer is due only every N accepted steps. Use this explicit route with a
-dense (every-invocation) balance cadence unless that collective cost is intentionally acceptable:
-a sparse Consumer cadence does not save the upstream reductions. Scheduling only the five terminal
-record nodes would not fix this, because their reduction inputs would still execute. A future
-low-overhead sparse route therefore needs one typed due decision shared by the Program and
-ConsumerGraph.
+The resolved `ConsumerGraph` now compiles one immutable `BalanceDueContract` into the Program
+artifact. For `every(n, clock=program.clock)`, the native Program queries the next outer accepted
+macro-step before any balance reduction. Off-cadence sum/dot and scalar-arithmetic chains are
+short-circuited, and the five terminal records are omitted; no Kokkos kernel, MPI collective or
+Python callback is entered for that balance route. Multiple consumers of the same route are joined
+by an OR of their exact accepted-step periods. `Always` and `when(True)` are period one,
+`when(False)` contributes no occurrence, and a route with no consumer is compiled off.
+
+The compiler traces the complete reduction/scalar chain rather than scheduling only the terminal
+records. If a value is also consumed by an ordinary Program diagnostic or another non-balance
+operation, that shared producer remains unconditional so cadence fusion cannot change unrelated
+semantics. A `Balance` consumer with no matching five-term `Program.record_balance` producer fails
+before native code generation. Program stride/substeps use one attempt-local outer accepted-step
+target, so every substep of one due public step sees the same decision and accumulates into the same
+attempt mailbox.
+
+This first sparse cutover is exact only for accepted-step `every(n)` schedules. Physical-time
+`every_dt`, `on_end`, and extension domains/triggers remain conservatively active for every Program
+invocation; their consumer still publishes only when its own runtime schedule is due, but upstream
+balance reductions are not yet skipped. This fallback can add work but cannot suppress required
+evidence.
 
 This route is explicit evidence, not automatic numerical instrumentation: a Program that cannot
 produce its actual reflux or projection increment cannot declare `Balance`. In particular, the
