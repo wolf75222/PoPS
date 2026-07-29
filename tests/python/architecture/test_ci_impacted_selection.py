@@ -611,6 +611,11 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py",
+            "nproc": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_scientific_output_mpi.py",
             "nproc": 2,
         },
@@ -661,6 +666,7 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/io/test_hdf5_parallel.py",
         "2\ttests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_history_mpi.py",
+        "2\ttests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py",
         "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
         "2\ttests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py",
     ]
@@ -673,8 +679,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "6"
-    assert outputs["python_mpi_entrypoint_count"] == "5"
+    assert outputs["python_mpi_count"] == "7"
+    assert outputs["python_mpi_entrypoint_count"] == "6"
     assert outputs["python_mpi_orchestrator_count"] == "1"
 
 
