@@ -225,7 +225,7 @@ class System {
   /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
   ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
   ///                 aggregated over the substeps of each advance and available via newton_report(name).
-  ///                 OPT-IN: false (default) = historical path with no extra cost. Stays
+  ///                 OPT-IN: false (default) omits the retained diagnostic summary. Stays
   ///                 flat (a separate bool, outside the homogeneous family of convergence options).
   /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
   ///                 every exact reconstructed face-trace pair, then reuses that interval from both
@@ -321,14 +321,26 @@ class System {
   POPS_EXPORT GridContext grid_context(int block);
   /// Install one executable built-in hyperbolic ghost plan. Face identities remain block/owner
   /// qualified and component roles declare reflection behavior; no component index is interpreted.
+  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
+                                         int required_depth,
+                                         const std::vector<std::string>& face_types,
+                                         const std::vector<double>& face_values,
+                                         const std::vector<std::string>& face_identities,
+                                         const std::vector<std::string>& component_roles,
+                                         const std::vector<int>& omitted_interface_faces = {},
+                                         const std::string& state_identity = {},
+                                         PreparedBoundaryReadDependencies read_dependencies = {});
+  /// Exact-topology overload. Physical laws and component transforms remain model-aware; the
+  /// additional table only identifies periodic face pairs whose coordinate map is not the
+  /// axis-aligned translation represented by Periodicity.
   POPS_EXPORT void install_boundary_plan(
       const std::string& name, const std::string& identity, int required_depth,
       const std::vector<std::string>& face_types, const std::vector<double>& face_values,
       const std::vector<std::string>& face_identities,
       const std::vector<std::string>& component_roles,
-      const std::vector<int>& omitted_interface_faces = {}, const std::string& state_identity = {},
-      PreparedBoundaryReadDependencies read_dependencies = {},
-      std::vector<PeriodicIdentification2D> periodic_identifications = {},
+      const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+      PreparedBoundaryReadDependencies read_dependencies,
+      std::vector<PeriodicIdentification2D> periodic_identifications,
       const std::vector<std::string>& face_representations = {},
       const std::vector<std::string>& face_converter_identities = {},
       const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
@@ -1139,10 +1151,10 @@ class System {
   /// @}
   /// Load a generated problem.so and install its compiled time Program. dlopens @p so_path, checks
   /// its ABI key against this module (fail-loud on mismatch), and calls its pops_install_program(this),
-  /// which wraps the System in a ProgramContext and installs the macro-step closure. The .so resolves
-  /// the seam accessors above from the globally promoted host, while the package itself stays local
-  /// so independent semantic artifacts cannot interpose. Mirrors add_native_block; the .so stays
-  /// loaded for the process lifetime.
+  /// whose shared facade factory selects the Program execution provider and installs the macro-step
+  /// closure. The .so resolves the seam accessors above from the globally promoted host, while the
+  /// package itself stays local so independent semantic artifacts cannot interpose. Mirrors
+  /// add_native_block; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash),
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against

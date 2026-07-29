@@ -29,7 +29,7 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/validation/numerics/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -72,7 +72,7 @@ static double solve_l2(int nc, int max_grid_size) {
   GeometricMG mg = make_mg(geom, ba);
   mg.rhs().set_val(Real(-2.0 * (kEx + kEy)));  // f = div(diag(ex,ey) grad(R^2-r^2)) = -2(ex+ey)
   mg.phi().set_val(0.0);
-  mg.solve_robust(1e-10, 300);
+  validation::GeometricMGValidationAccess::solve_robust(mg, 1e-10, 300);
 
   const double dx = 1.0 / nc;
   double s = 0;

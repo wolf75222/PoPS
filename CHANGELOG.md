@@ -18,10 +18,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ADC-749 carries exact periodic face identifications through the model-aware hyperbolic boundary
+  plan. Uniform scalar layouts execute mapped periodic halos (including cross-axis maps); mapped
+  vector/axial component transforms and AMR mapped periodic fill-patch/regrid remain explicit
+  fail-closed capabilities until their model-aware component and hierarchy contracts are available.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
-  non-bit-identical rank-count rematerialization with Dense persisted histories, and state explicitly
-  that `RegridOnRestart()` remains unsupported. The M3 gate now executes the persisted two-rank to
-  one-rank restart proof.
+  non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
+  executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
+  policy restores and authenticates the recorded accepted state before one artifact-owned
+  scientific regrid, emits a global before/after receipt, and derives a distinct continuation run
+  identity. This first operational slice is one AMR layout, unchanged MPI cardinality, and refuses
+  fields, shared interfaces, and bootstrap staggered caches.
+- Add an explicit offline-only migration for the byte-exact frozen Uniform-v2 checkpoint fixture.
+  Migration requires a complete authenticated current-v5 authority plus a reviewed mapping that pins
+  both artifacts, all lifecycle/ABI/Program identities, every block/component/history
+  correspondence, and every missing metadata class inherited from the authority. The first route is
+  deliberately limited to same-grid/same-clock, Dense fully stored histories and empty
+  field-provider/cache/ConsumerGraph state; it validates before atomic no-clobber publication.
+  Runtime restart remains unchanged and fail-closed for every historical payload.
 - Internal frozen two-level serial AMR shared-interface transactions now retain endpoint-qualified
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second

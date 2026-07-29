@@ -24,8 +24,6 @@
 #include <cstdio>
 #include <new>
 #include <stdexcept>
-#include <utility>
-#include <vector>
 
 using namespace pops;
 
@@ -118,13 +116,11 @@ static int pops_run_test_mpi_fillboundary(int argc, char** argv) {
         for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
           field(i, j, 0) = mapped_value(i, j);
     }
-    auto boundary = prepare_hyperbolic_boundary<2>(
-        {"periodic", "periodic", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
-        {"test::mpi::reflected-periodic::xlo", "test::mpi::reflected-periodic::xhi",
-         "test::mpi::reflected-periodic::ylo", "test::mpi::reflected-periodic::yhi"},
-        {"Scalar"}, true);
     const PeriodicIdentification2D reflected_x{0, 1, std::array<int, 2>{{0, 1}},
                                                std::array<int, 2>{{1, -1}}};
+    auto boundary = prepare_hyperbolic_boundary<2>(
+        {"periodic", "periodic", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+        {"test::mpi::xlo", "test::mpi::xhi", "test::mpi::ylo", "test::mpi::yhi"}, {"Scalar"}, true);
     PreparedBoundaryPlan plan("test::mpi::reflected-periodic", mapped_ng, std::move(boundary), {},
                               "", {}, {reflected_x});
 

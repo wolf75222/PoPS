@@ -15,7 +15,7 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/validation/numerics/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -50,7 +50,7 @@ static void solve_err(int nc, bool cut, double& l2, double& linf) {
   const double dx = 1.0 / nc;
   mg.rhs().set_val(-4.0);  // f = lap(phi) = -4 ; cellules conductrices ignorees (masquees)
   mg.phi().set_val(0.0);
-  mg.solve_robust(1e-10, 300);
+  validation::GeometricMGValidationAccess::solve_robust(mg, 1e-10, 300);
   const ConstArray4 p = mg.phi().fab(0).const_array();
   double s = 0, mx = 0;
   long cnt = 0;

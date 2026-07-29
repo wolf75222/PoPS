@@ -154,7 +154,17 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
     assert native.prepare_overrides == ("", "")
 
 
-def test_signed_periodic_identification_reaches_native_install_without_callback():
+@pytest.mark.parametrize(
+    ("target_axis", "target_face", "permutation", "signs", "face_types"),
+    (
+        (0, 1, [0, 1], [1, -1],
+         ["periodic", "periodic", "dirichlet", "foextrap"]),
+        (1, 3, [1, 0], [1, 1],
+         ["periodic", "foextrap", "dirichlet", "periodic"]),
+    ),
+)
+def test_signed_periodic_identification_reaches_native_install_without_callback(
+        target_axis, target_face, permutation, signs, face_types):
     def boundary_identity(name, axis, side):
         return {
             "qualified_id": "case::%s" % name,
@@ -167,8 +177,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         }
 
     source = boundary_identity("xlo", 0, "lower")
-    target = boundary_identity("xhi", 0, "upper")
-    face_types = ["periodic", "periodic", "dirichlet", "foextrap"]
+    target = boundary_identity("target", target_axis, "upper")
     runtime_data = {
         "schema_version": 1,
         "authority_type": "prepared_boundary_plan",
@@ -195,9 +204,9 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
             "source": source,
             "target": target,
             "source_face": 0,
-            "target_face": 1,
-            "permutation": [0, 1],
-            "signs": [1, -1],
+            "target_face": target_face,
+            "permutation": permutation,
+            "signs": signs,
         }],
         "component_regions": [],
         "interface_component_bindings": [],
@@ -253,7 +262,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         "case::block::reflected-periodic::face::3",
     ]
     assert native.installed[6] == ["Scalar"]
-    assert native.installed[9] == [[0, 1, 0, 1, 1, -1]]
+    assert native.installed[9] == [[0, target_face, *permutation, *signs]]
     assert native.installed[10] == ["conservative"] * 4
     assert native.installed[11] == [""] * 4
     assert native.installed[12] == [[], [], ["x", "input", "add"], []]
