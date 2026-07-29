@@ -2617,19 +2617,15 @@ def test_series_lock_contention_fails_explicitly_and_is_retryable(tmp_path, monk
 
 
 def test_generic_series_policy_excludes_paraview_pvd_collections():
+    import inspect
+
     assert HDF5().series is True
     assert NPZ().series is True
     assert ParaView().series is False
     assert ParaView().series_catalog() is None
-    with pytest.warns(DeprecationWarning, match="collection"):
-        enabled = ParaView(series=True)
-    assert enabled.collection is True
-    with pytest.warns(DeprecationWarning, match="collection"):
-        disabled = ParaView(series=False)
-    assert disabled.collection is False
-    with pytest.warns(DeprecationWarning, match="collection"):
-        with pytest.raises(ValueError, match="disagree"):
-            ParaView(collection=True, series=False)
+    assert "series" not in inspect.signature(ParaView).parameters
+    assert ParaView(collection=True).collection is True
+    assert ParaView(collection=False).collection is False
 
 
 def test_format_writers_publish_structural_preflight_capabilities():
