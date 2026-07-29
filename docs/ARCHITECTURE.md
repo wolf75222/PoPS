@@ -748,9 +748,12 @@ scientific concrete-class switch, `provides(any)` capability escape hatch or pro
 registry. Registration is atomic, content-addressed and explicitly frozen. Builtins and extensions
 emit the same provenance/report shape.
 
-A fallible evaluation returns an explicit `EvaluationOutcome` (`ok`, `retry`, `reject` or
-`failed`). It has no implicit Python truth value. Native and Python callers therefore propagate the
-declared transaction action instead of converting a missing/error outcome into a neutral value.
+A manifest `FallibleEvaluation` returns an explicit `EvaluationOutcome` (`ok`, `retry`, `reject` or
+`failed`). It has no implicit Python truth value. `ComponentAdapter` validates this envelope and
+exposes its declared transaction action; it is not a native solver-execution engine. Native
+nonlinear-source and linear-operator solver routes use device-safe typed evaluation results and
+propagate their status into the common `SolveOutcome`. A failed evaluation therefore cannot become
+a neutral or publishable solved value.
 
 Finite-volume components use the same small-interface rule. `PhysicalFluxView` exposes only
 constitutive density, wave/stability and declared Riemann structure. A `NumericalFlux` consumes two
