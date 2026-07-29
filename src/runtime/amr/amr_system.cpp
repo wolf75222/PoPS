@@ -442,6 +442,7 @@ struct AmrSystem::Impl {
     // One prepared endpoint owns facade, stages and serialized AMR accepted clocks. Do not recompute
     // it as either accepted_time + dt or window_start + effective_dt after Program execution.
     t = cadence.window_end;
+    program_.complete_balance_step(cadence.due);
   }
 
   struct AcceptedSnapshot {
@@ -461,6 +462,8 @@ struct AmrSystem::Impl {
     int cadence_clock_restore_macro_step = 0;
     std::map<std::string, Real> program_diagnostics;
     std::map<std::string, Real> step_balance_terms;
+    bool balance_step_completed = false;
+    bool balance_program_was_due = false;
     pops::runtime::program::CacheManager cache;
     pops::runtime::program::HistoryManager history;
     pops::runtime::program::Profiler profiler;
@@ -506,6 +509,8 @@ struct AmrSystem::Impl {
       cadence_clock_restore_macro_step = impl.program_.cadence_clock_restore_macro_step_;
       copy_value_map_into(program_diagnostics, impl.program_.diagnostics_);
       copy_value_map_into(step_balance_terms, impl.program_.step_balance_terms_);
+      balance_step_completed = impl.program_.balance_step_completed_;
+      balance_program_was_due = impl.program_.balance_program_was_due_;
       // AMR currently owns its native cache/history rings inside AmrRuntime.  These two shared
       // ProgramRuntimeState containers are therefore empty on the AMR path, but retain their value
       // contract so a future target can populate them without weakening rollback semantics.
@@ -537,6 +542,8 @@ struct AmrSystem::Impl {
       impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       copy_value_map_into(impl.program_.diagnostics_, program_diagnostics);
       copy_value_map_into(impl.program_.step_balance_terms_, step_balance_terms);
+      impl.program_.balance_step_completed_ = balance_step_completed;
+      impl.program_.balance_program_was_due_ = balance_program_was_due;
       impl.program_.cache_ = cache;
       impl.program_.hist_ = history;
       impl.program_.profiler_ = profiler;
@@ -4448,7 +4455,8 @@ int AmrSystem::rebuild_history_slots(const std::string& name,
         p_->program_.stride_, [imp](double dt, int cursor) {
           imp->macro_step_ = cursor;  // ctx.macro_step() -> facade cursor -> regrid_if_due schedule
           imp->program_.last_dt_ = static_cast<Real>(dt);
-          imp->program_.step_(dt);
+          imp->program_.run_balance_replay("AmrSystem::rebuild_history_slots",
+                                           [&] { imp->program_.step_(dt); });
         });
   } catch (...) {
     p_->macro_step_ = m;

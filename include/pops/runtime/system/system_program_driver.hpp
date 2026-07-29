@@ -213,6 +213,7 @@ class SystemProgramDriver {
     // accepted_time + dt or window_start + effective_dt here would reintroduce a second authority.
     P->t = cadence.window_end;  // clock ticks EVERY macro-step (held steps included), like native
     P->macro_step_++;
+    P->program_.complete_balance_step(cadence.due);
   }
 
   /// One macro-step of length @p dt through the installed whole-system Program.

@@ -269,6 +269,15 @@ struct ProgramRuntimeState {
   /// balance code must not infer the public target from `macro_step()+1`.
   bool balance_due_window_active_ = false;
   int balance_due_target_step_ = 0;
+  /// Selective checkpoint reconstruction re-executes scientific Program code without accepting a
+  /// public step. Balance evidence is therefore compiled off for that replay: it must neither query
+  /// a nonexistent public-step due window nor populate the current accepted-attempt mailbox.
+  bool balance_replay_active_ = false;
+  /// A stride-held public step executes no Program work, so its exact discrete balance is the
+  /// additive identity for every route. These transient flags distinguish that valid zero from a
+  /// due Program that failed to publish all five terms; neither flag is checkpoint state.
+  bool balance_step_completed_ = false;
+  bool balance_program_was_due_ = false;
   /// Attempt-local identities of ProjectAndRecheck branches that actually executed. This report
   /// mailbox is cleared at attempt entry and consumed by the Python transaction coordinator before
   /// commit or rollback; it is deliberately not checkpoint or accepted scientific state.
@@ -763,6 +772,13 @@ struct ProgramRuntimeState {
     step_balance_terms_.clear();
     balance_due_window_active_ = false;
     balance_due_target_step_ = 0;
+    balance_step_completed_ = false;
+    balance_program_was_due_ = false;
+  }
+
+  void complete_balance_step(bool program_was_due) noexcept {
+    balance_step_completed_ = true;
+    balance_program_was_due_ = program_was_due;
   }
 
   /// Return exactly the five native Program scalars recorded for one typed balance route during the
@@ -774,6 +790,11 @@ struct ProgramRuntimeState {
                                                        "sources", "reflux", "projection"};
     require_balance_route(route, runtime + "::_accepted_balance_terms");
     std::map<std::string, Real> result;
+    if (step_balance_terms_.empty() && balance_step_completed_ && !balance_program_was_due_) {
+      for (const char* term : kTerms)
+        result.emplace(term, Real(0));
+      return result;
+    }
     for (const char* term : kTerms) {
       const std::string record = "pops.balance-term.v1:" + route + ":" + term;
       const auto found = step_balance_terms_.find(record);
@@ -794,6 +815,8 @@ struct ProgramRuntimeState {
   void begin_balance_due_window(int accepted_macro_step, const std::string& runtime) {
     if (balance_due_window_active_)
       throw std::logic_error(runtime + " balance due window is already active");
+    if (balance_replay_active_)
+      throw std::logic_error(runtime + " cannot enter a public-step window during balance replay");
     if (accepted_macro_step < 0 || accepted_macro_step == std::numeric_limits<int>::max())
       throw std::overflow_error(runtime + " balance due target step is not representable");
     balance_due_target_step_ = accepted_macro_step + 1;
@@ -817,12 +840,30 @@ struct ProgramRuntimeState {
     end_balance_due_window();
   }
 
+  template <class Body>
+  void run_balance_replay(const std::string& runtime, Body&& body) {
+    if (balance_replay_active_)
+      throw std::logic_error(runtime + " balance replay is already active");
+    if (balance_due_window_active_)
+      throw std::logic_error(runtime + " cannot enter balance replay inside a public-step window");
+    balance_replay_active_ = true;
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      balance_replay_active_ = false;
+      throw;
+    }
+    balance_replay_active_ = false;
+  }
+
   bool balance_consumer_is_due(const std::string& contract, const std::string& route, int every_n,
                                const std::string& runtime) const {
     require_balance_due_contract(contract, runtime + "::balance_consumer_is_due");
     require_balance_route(route, runtime + "::balance_consumer_is_due");
     if (every_n <= 0)
       throw std::invalid_argument(runtime + "::balance_consumer_is_due requires a positive period");
+    if (balance_replay_active_)
+      return false;
     if (!balance_due_window_active_ || balance_due_target_step_ <= 0)
       throw std::logic_error(runtime +
                              "::balance_consumer_is_due requires an active public-step window");
