@@ -199,7 +199,7 @@ def _build(program_factory, regrid_every):
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="ssprk2"))
     install_prepared_threshold_union(
-        amr, (("blk", "n", 1.2), ("bg", "n", 1.2)))
+        amr, (("blk", "rho", 1.2), ("bg", "rho", 1.2)))
     initials = {"blk": _blob(), "bg": np.full((N, N), 0.5)}
     amr.set_density("blk", initials["blk"])
     amr.set_density("bg", initials["bg"])  # smooth and below threshold throughout the run
