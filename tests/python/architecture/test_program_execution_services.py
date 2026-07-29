@@ -252,6 +252,19 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             )
 
 
+def test_amr_grouped_rhs_registers_exact_membership_before_fragment_publication():
+    amr = _read(AMR)
+    hook = amr.split("void program_execution_rhs_group_", 1)[1].split(
+        "void program_execution_source_default_into_", 1
+    )[0]
+    registration = (
+        "register_interface_flux_group_(batch.group_id, batch.runtime_blocks, batch.rate_ids)"
+    )
+    publication = "eng_->publish_level_interface_flux_fragments("
+    assert registration in hook
+    assert hook.index(registration) < hook.index(publication)
+
+
 def test_shared_service_uses_only_explicit_provider_hooks():
     shared = _read(SHARED)
     calls = re.findall(r"provider_\(\)\.(\w+)\(", shared)
