@@ -403,11 +403,12 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
     artifact = pops.compile(resolved)
     left_initial = np.zeros((1, 8, 8), dtype=np.float64)
     right_initial = np.zeros((1, 8, 8), dtype=np.float64)
-    # The first public refined route requires an already matched fine interface: refine full-height
-    # bands on both mapped faces while keeping the domain interior coarse.  One-sided tag propagation
-    # across a BlockInterface is a separate capability and must not be implied by this proof.
-    left_initial[0, :, -2:] = 1.0
-    right_initial[0, :, :2] = 1.0
+    # The first public refined route requires an already matched fine interface: refine one
+    # full-height coarse-cell band on both mapped faces while keeping the domain interior coarse.
+    # One-sided tag propagation across a BlockInterface is a separate capability and must not be
+    # implied by this proof.
+    left_initial[0, :, -1:] = 1.0
+    right_initial[0, :, :1] = 1.0
     params = {
         core.case.resolve(handle, block=block): value
         for block in (core.tracer, right)
