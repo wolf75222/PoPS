@@ -37,6 +37,7 @@ SHARED_SIGNATURES = (
     "struct HistoryStorePlan",
     "struct ProgramResourceStorage",
     "struct ProgramResourceTopology",
+    "struct ProgramClockCoordinate",
     "class ExclusiveUseGuard",
     "static bool field_layout_matches_(",
     "ProgramRuntimeState& program_runtime_state_()",
@@ -344,12 +345,10 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_validate_commit_aliases_",
             "program_execution_runtime_state_",
             "program_execution_block_count_",
-            "program_execution_physical_time_",
+            "program_execution_clock_coordinate_",
             "program_execution_set_field_timepoint_",
             "program_execution_set_field_parameters_",
             "program_execution_set_field_kernel_",
-            "program_execution_macro_step_",
-            "program_execution_active_level_",
         ):
             assert source.count(hook) == 1, (
                 "%s must provide exactly one explicit provider hook %s" % (context, hook)
@@ -375,6 +374,29 @@ def test_grid_free_program_state_services_are_shared_not_mirrored():
         "program_execution_note_step_projection_",
         "program_execution_params_",
         "program_execution_profiler_",
+    ):
+        assert retired_hook not in shared
+        assert all(retired_hook not in provider for provider in providers)
+
+
+def test_clock_coordinate_is_one_shared_contract_not_three_provider_queries():
+    shared = _read(SHARED)
+    providers = (_read(UNIFORM), _read(AMR))
+
+    for field in (
+        "Real physical_time = Real(0);",
+        "int macro_step = 0;",
+        "int active_level = -1;",
+    ):
+        assert field in shared
+    assert "const ProgramClockCoordinate coordinate =" in shared
+    assert "coordinate.active_level" in shared
+    assert "coordinate.macro_step" in shared
+
+    for retired_hook in (
+        "program_execution_physical_time_",
+        "program_execution_macro_step_",
+        "program_execution_active_level_",
     ):
         assert retired_hook not in shared
         assert all(retired_hook not in provider for provider in providers)
