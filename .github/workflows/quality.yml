@@ -166,10 +166,10 @@ jobs:
 
   # --- Prewarm natif : contrats exacts par profil qualite ----------------------------------------
   # Warnings, ASan et coverage portent trois jeux de flags incompatibles avec le build de production
-  # et entre eux. Pour chaque profil, trois runners compilent une partition exacte et disjointe des
+  # et entre eux. Pour chaque profil, quatre runners compilent une partition exacte et disjointe des
   # objets runtime lourds puis publient uniquement les entrees ccache et leur contrat
   # compilateur/flags/revision/sources. Les jobs finaux reconfigurent leur preset officiel,
-  # authentifient les trois contrats et restent seuls responsables des liens, tests et rapports.
+  # authentifient les quatre contrats et restent seuls responsables des liens, tests et rapports.
   quality-native-prewarm:
     name: quality native prewarm (${{ matrix.profile }}, ${{ matrix.lane }})
     runs-on: ubuntu-latest
@@ -180,7 +180,7 @@ jobs:
       fail-fast: false
       matrix:
         profile: [warnings, asan, coverage]
-        lane: [system, amr-base, amr-compressible]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-quality-prewarm
       CCACHE_MAXSIZE: 2G
@@ -330,7 +330,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/quality-prewarm-warnings" \
               -name 'quality-warnings-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 3
+          test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -345,7 +345,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/quality-prewarm-warnings" \
               -name 'quality-warnings-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos-warnings \
             --verify-contracts "${compile_contracts[@]}"
@@ -475,7 +475,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/quality-prewarm-asan" \
               -name 'quality-asan-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 3
+          test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -493,7 +493,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/quality-prewarm-asan" \
               -name 'quality-asan-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos-asan \
             --verify-contracts "${compile_contracts[@]}"
@@ -638,7 +638,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/quality-prewarm-coverage" \
               -name 'quality-coverage-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 3
+          test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -652,7 +652,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/quality-prewarm-coverage" \
               -name 'quality-coverage-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos-coverage \
             --verify-contracts "${compile_contracts[@]}"
