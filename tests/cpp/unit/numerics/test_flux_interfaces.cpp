@@ -25,6 +25,21 @@ struct Advect {
 
 struct OtherAdvect : Advect {};
 
+struct NonFiniteRoeAdvect : Advect {
+  POPS_HD State roe_dissipation(const State&, const Aux&, const State&, const Aux&, int) const {
+    return State{std::numeric_limits<pops::Real>::quiet_NaN()};
+  }
+};
+
+struct NonFiniteRoeFluxAdvect : Advect {
+  POPS_HD State flux(const State&, const Aux&, int) const {
+    return State{std::numeric_limits<pops::Real>::quiet_NaN()};
+  }
+  POPS_HD State roe_dissipation(const State&, const Aux&, const State&, const Aux&, int) const {
+    return State{};
+  }
+};
+
 struct SelectiveInvalidAdvect {
   using State = pops::StateVec<1>;
   using Aux = pops::Aux;
@@ -265,6 +280,31 @@ TEST(test_flux_interfaces, failed_evaluation_never_publishes_a_density) {
   EXPECT_EQ(evaluation.failure_action(), pops::TransactionFailureAction::kRejectStep);
   EXPECT_EQ(evaluation.reason_code, 0x682u);
   EXPECT_TRUE(std::isnan(evaluation.checked_density().value[0]));
+}
+
+TEST(test_flux_interfaces, roe_rejects_nonfinite_dissipation_with_a_typed_cause) {
+  const NonFiniteRoeAdvect physical{};
+  const NonFiniteRoeAdvect::State left{pops::Real(1)}, right{pops::Real(2)};
+  const auto bound = providers<NonFiniteRoeAdvect>();
+  const auto evaluation = pops::evaluate_numerical_flux(
+      pops::RoeFlux{}, physical, left, bound, right, bound, pops::FaceContext::axis_aligned(0));
+
+  EXPECT_EQ(evaluation.status, pops::EvaluationStatus::kReject);
+  EXPECT_EQ(evaluation.failure_action(), pops::TransactionFailureAction::kRejectStep);
+  EXPECT_EQ(evaluation.reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteDissipation));
+  EXPECT_TRUE(std::isnan(evaluation.checked_density().value[0]));
+
+  const NonFiniteRoeFluxAdvect invalid_flux{};
+  const auto invalid_flux_bound = providers<NonFiniteRoeFluxAdvect>();
+  const auto flux_evaluation = pops::evaluate_numerical_flux(
+      pops::RoeFlux{}, invalid_flux, NonFiniteRoeFluxAdvect::State{pops::Real(1)},
+      invalid_flux_bound, NonFiniteRoeFluxAdvect::State{pops::Real(2)}, invalid_flux_bound,
+      pops::FaceContext::axis_aligned(0));
+  EXPECT_EQ(flux_evaluation.status, pops::EvaluationStatus::kReject);
+  EXPECT_EQ(flux_evaluation.reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteFlux));
+  EXPECT_TRUE(std::isnan(flux_evaluation.checked_density().value[0]));
 }
 
 TEST(test_flux_interfaces, device_failure_reduction_orders_status_then_reason_deterministically) {
