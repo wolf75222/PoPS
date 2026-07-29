@@ -139,7 +139,7 @@ TEST(test_block_builder, isothermal_model_without_hllc_capability_is_rejected) {
   Us.set_val(1.0);
   auto refused_with = [&](const char* riem, const char* frag) {
     try {
-        make_block(iso, "minmod", riem, ctx, false);
+      make_block(iso, "minmod", riem, ctx, false);
       return false;
     } catch (const std::runtime_error& e) {
       return std::string(e.what()).find(frag) != std::string::npos;

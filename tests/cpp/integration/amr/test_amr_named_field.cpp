@@ -59,8 +59,8 @@
 using namespace pops;
 
 static SolveReport consume_expected_solved(SolveOutcome outcome) {
-  const SolveConsumption action = outcome.report().solved() ? SolveConsumption::kAccept
-                                                            : SolveConsumption::kFailRun;
+  const SolveConsumption action =
+      outcome.report().solved() ? SolveConsumption::kAccept : SolveConsumption::kFailRun;
   return outcome.consume(action);
 }
 
@@ -678,10 +678,10 @@ TEST(test_amr_named_field, Runs) {
   context.set_level(0);
   std::string context_diagnostic;
   try {
-  {
-    auto outcome = context.solve_fields();
-    (void)outcome.consume(SolveConsumption::kAccept);
-  }
+    {
+      auto outcome = context.solve_fields();
+      (void)outcome.consume(SolveConsumption::kAccept);
+    }
     FAIL() << "periodic default RHS with non-zero mean was accepted or silently projected";
   } catch (const FieldNullspaceIncompatibleRhs& error) {
     context_diagnostic = error.what();

@@ -1205,7 +1205,7 @@ class CompositeFacPoisson {
   void cascade_avgdown_();                      // fine-to-coarse average-down of the whole tower
   void correct_level_(int m);                   // L_m e_m = res_m; phi_m += e_m on uncovered
   void project_base_correction_rhs_();  // periodic Poisson correction -> compatible mean-zero range
-  Real composite_residual_(int m);              // res_m + C/F flux correction; return ||.||_inf
+  Real composite_residual_(int m);      // res_m + C/F flux correction; return ||.||_inf
   void fine_sor_level_(int m, const MultiFab& f_eff, int sweeps);  // red-black SOR on level m
   // Accumulate the level-m/level-(m+1) two-way C-F flux correction into dst (level-m residual or
   // effective RHS), enumerated from the uncovered coarse side (design 4c). single_writer_gather

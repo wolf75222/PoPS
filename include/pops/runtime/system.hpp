@@ -767,14 +767,15 @@ class System {
   /// its solved phi (+ centered gradient) into the field's own aux components. The codegen lowers
   /// P.solve_fields(field=name, state=U) to this. @throws if @p field is unregistered, the block index
   /// is invalid, or the geometry is polar (cartesian only for now).
-  [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state(
-      const std::string& field, int block_idx, const MultiFab& U_stage);
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state(const std::string& field,
+                                                                 int block_idx,
+                                                                 const MultiFab& U_stage);
   /// Solve named @p field from the exact simultaneous stage states of all contributing blocks.
   /// @p U_stages is indexed by System block; nullptr keeps that block at its accepted live state.
   /// Unlike the historical ProgramContext route, this contract never selects or mutates a
   /// representative block.
-  [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_blocks(
-      const std::string& field, const std::vector<const MultiFab*>& U_stages);
+  [[nodiscard]] POPS_EXPORT SolveOutcome
+  solve_fields_from_blocks(const std::string& field, const std::vector<const MultiFab*>& U_stages);
   /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
   /// equal -1 => only phi is written; @p gradient_sign is exactly -1 or +1 and scales both derivatives.
@@ -1357,15 +1358,13 @@ class System {
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.
   POPS_EXPORT SolveReport solve_fields_in_place_();
-  POPS_EXPORT SolveReport solve_fields_from_state_in_place_(int block_idx,
-                                                            const MultiFab& U_stage);
+  POPS_EXPORT SolveReport solve_fields_from_state_in_place_(int block_idx, const MultiFab& U_stage);
   POPS_EXPORT SolveReport solve_fields_from_state_at_in_place_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const std::string& provider_slot, int block_idx, const MultiFab& U_stage);
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int block_idx, const MultiFab& U_stage);
   POPS_EXPORT SolveReport
   solve_fields_from_blocks_in_place_(const std::vector<const MultiFab*>& U_stages);
-  POPS_EXPORT SolveReport solve_fields_from_state_in_place_(const std::string& field,
-                                                            int block_idx,
+  POPS_EXPORT SolveReport solve_fields_from_state_in_place_(const std::string& field, int block_idx,
                                                             const MultiFab& U_stage);
   POPS_EXPORT SolveReport solve_fields_from_blocks_in_place_(
       const std::string& field, const std::vector<const MultiFab*>& U_stages);

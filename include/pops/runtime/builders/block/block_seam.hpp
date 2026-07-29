@@ -98,11 +98,10 @@ BuiltBlock build_block_for_make(TR tr, const ModelSpec& model, const BlockBuildA
 /// flux-subdivided (exb -- only rusanov reachable via the capability guards; isothermal -- rusanov+hll).
 template <class TR>
 BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& a) {
-  return build_block_for_make(
-      std::move(tr), model, a, [](auto m, const BlockBuildArgs& aa) {
-        return make_block(m, aa.limiter, aa.riemann, aa.ctx, aa.recon_prim,
-                          aa.positivity_floor, aa.wave_speed_cache, aa.weno_epsilon);
-      });
+  return build_block_for_make(std::move(tr), model, a, [](auto m, const BlockBuildArgs& aa) {
+    return make_block(m, aa.limiter, aa.riemann, aa.ctx, aa.recon_prim, aa.positivity_floor,
+                      aa.wave_speed_cache, aa.weno_epsilon);
+  });
 }
 
 // Per-transport seam functions (defined in python/system_<transport>.cpp). The TR construction matches

@@ -287,26 +287,24 @@ TEST(test_coupled_fieldsolve, named_solve_honors_every_qualified_stage_without_l
                                                  {"pre_smooth", std::int64_t{2}},
                                                  {"rel_tol", 1.0e-8}}};
   system.register_configured_field_solver_provider("geometric_mg", slot, backend_options);
-  system.set_field_solver_plan(
-      slot, "test:qualified-coupled-plan", "test:qualified-coupled-provider",
-      "test:qualified-coupled-field", "n0", "potential",
-      {"test:n0/potential/rhs", "test:n1/potential/rhs"}, {"n0", "n1"},
-      {"potential", "potential"}, {1.0, 1.0}, slot);
+  system.set_field_solver_plan(slot, "test:qualified-coupled-plan",
+                               "test:qualified-coupled-provider", "test:qualified-coupled-field",
+                               "n0", "potential",
+                               {"test:n0/potential/rhs", "test:n1/potential/rhs"}, {"n0", "n1"},
+                               {"potential", "potential"}, {1.0, 1.0}, slot);
   const std::string conflicting_slot = "conflicting-output-provider";
   system.register_configured_field_solver_provider("geometric_mg", conflicting_slot,
                                                    backend_options);
-  EXPECT_THROW(
-      system.set_field_solver_plan(
-          conflicting_slot, "test:conflicting-output-plan",
-          "test:conflicting-output-provider", "test:other-owner", "n0", "potential",
-          {"test:n0/other/rhs"}, {"n0"}, {"other"}, {1.0}, conflicting_slot),
-      std::runtime_error)
+  EXPECT_THROW(system.set_field_solver_plan(conflicting_slot, "test:conflicting-output-plan",
+                                            "test:conflicting-output-provider", "test:other-owner",
+                                            "n0", "potential", {"test:n0/other/rhs"}, {"n0"},
+                                            {"other"}, {1.0}, conflicting_slot),
+               std::runtime_error)
       << "one output block/key must identify exactly one qualified provider slot";
   system.set_field_topology_authority(slot, "builtin_rectangular_cell_graph_v1",
                                       "test:periodic-cartesian", "test:periodic-cartesian:v1");
   system.set_field_boundary_plan(slot, {"periodic", "periodic", "periodic", "periodic"},
-                                 {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0},
-                                 {0.0, 0.0, 0.0, 0.0});
+                                 {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0});
   system.register_field_nullspace_provider(std::make_shared<DecoratedNullspaceProvider>());
   system.set_field_nullspace(
       slot, "test.field-nullspace.decorated",
@@ -444,8 +442,8 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   });
   system.set_density("plasma", charge_density(n, 1.0, 0.0));
 
-  const SolveReport report = consume_solve_outcome(
-      system.solve_fields_from_state(slot, 0, system.block_state(0)));
+  const SolveReport report =
+      consume_solve_outcome(system.solve_fields_from_state(slot, 0, system.block_state(0)));
   ASSERT_TRUE(report.solved()) << report.status_name();
   const std::vector<double> phi = system.field_potential_global(slot);
   const std::vector<double> gx = system.aux_field_component(kAuxNamedBase + 1);

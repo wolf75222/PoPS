@@ -382,8 +382,7 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
 
   MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
-  EXPECT_THROW(ctx.commit_many({{&first, &wrong_components}}),
-               std::invalid_argument);
+  EXPECT_THROW(ctx.commit_many({{&first, &wrong_components}}), std::invalid_argument);
   EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
   EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
 }
@@ -499,9 +498,8 @@ TEST(ProgramContextContract,
   MultiFab subset_stage(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
                         subset_live.n_grow());
   subset_stage.set_val(Real(11));
-  EXPECT_THROW(
-      (void)ctx.solve_fields_from_blocks(505, "missing-subset-provider", {{0, &live_a}}),
-      std::invalid_argument)
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks(505, "missing-subset-provider", {{0, &live_a}}),
+               std::invalid_argument)
       << "a subset Program must not borrow an unlisted System block's live state as its stage";
   auto subset_solve = [&]() {
     return ctx.solve_fields_from_blocks(504, "missing-subset-provider", {{0, &subset_stage}});

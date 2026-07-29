@@ -63,8 +63,7 @@ TEST(AuxRuntimeBz, RuntimeSystemReadsSharedBzChannelAndClearsWithZero) {
   sys.set_poisson("charge_density", "geometric_mg");
   sys.set_density("a", ones);
   sys.set_magnetic_field(bz);  // peuple la composante B_z du canal partage
-  (void)pops::consume_solve_outcome(
-      sys.solve_fields());  // phi=0 (elliptic_rhs nul) ; B_z preserve
+  (void)pops::consume_solve_outcome(sys.solve_fields());  // phi=0 (elliptic_rhs nul) ; B_z preserve
 
   // eval_rhs = -div F + S. flux ExB(grad=0)=0 -> R = source = B_z u = c.
   const std::vector<double> R = sys.eval_rhs("a");

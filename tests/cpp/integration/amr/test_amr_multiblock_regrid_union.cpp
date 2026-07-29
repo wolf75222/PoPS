@@ -158,11 +158,10 @@ static void install_regrid_state_authorities(AmrSystem& sim) {
 
 static void install_regrid_threshold_union(AmrSystem& sim, double threshold) {
   test::install_prepared_threshold_union(
-      sim,
-      {{"a", "n", threshold, test::PreparedThresholdRelation::Above,
-        "test://amr-regrid-union/block/a/state/U"},
-       {"b", "n", threshold, test::PreparedThresholdRelation::Above,
-        "test://amr-regrid-union/block/b/state/U"}});
+      sim, {{"a", "n", threshold, test::PreparedThresholdRelation::Above,
+             "test://amr-regrid-union/block/a/state/U"},
+            {"b", "n", threshold, test::PreparedThresholdRelation::Above,
+             "test://amr-regrid-union/block/b/state/U"}});
 }
 
 // Bounding box (coords du niveau FIN) de la BoxArray fine du bloc 0 (layout partage : identique pour

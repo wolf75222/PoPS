@@ -668,8 +668,7 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_rusanov(const Model& m, const std::string& lim,
                                               const GridContext& ctx, bool recon_prim,
-                                              Real pos_floor,
-                                              Real weno_eps = kWenoEpsilon) {
+                                              Real pos_floor, Real weno_eps = kWenoEpsilon) {
   return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
     using L = typename decltype(tag)::type;
     return build_block<L, RusanovFlux>(m, ctx, recon_prim, pos_floor,
@@ -680,8 +679,7 @@ POPS_COLD_FN BlockClosures make_block_rusanov(const Model& m, const std::string&
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim,
                                           const GridContext& ctx, bool recon_prim, Real pos_floor,
-                                          bool wave_speed_cache,
-                                          Real weno_eps = kWenoEpsilon) {
+                                          bool wave_speed_cache, Real weno_eps = kWenoEpsilon) {
   // HLL (Harten-Lax-van Leer, 2 waves): less diffusive than Rusanov (dissipation ~ signed |sR-sL|
   // instead of symmetric 2*max|v|), but does NOT require pressure (unlike HLLC/Roe) -- only SIGNED
   // wave speeds model.wave_speeds. Available as soon as a model exposes its signed eigenvalues (the
@@ -751,9 +749,8 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
 template <class Model>
 POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
                                       const std::string& riem, const GridContext& ctx,
-                                      bool recon_prim,
-                                      Real pos_floor = Real(0), bool wave_speed_cache = false,
-                                      Real weno_eps = kWenoEpsilon) {
+                                      bool recon_prim, Real pos_floor = Real(0),
+                                      bool wave_speed_cache = false, Real weno_eps = kWenoEpsilon) {
   // CENTRALIZED VALIDATION (registry dispatch_tags.hpp) BEFORE the dispatch: same tag acceptances /
   // rejections as before, identical messages (validate_* keeps the historical wording). The flux
   // dispatch now forwards to the per-flux helpers above (each holds the unchanged capability

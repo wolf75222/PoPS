@@ -421,8 +421,7 @@ inline void AmrRuntime::restore_field_solve_snapshot(const FieldSolveSnapshot& s
 inline void AmrRuntime::validate_field_solve_snapshot(const FieldSolveSnapshot& snapshot) {
   if (snapshot.topology_generation != topology_materialization_generation_)
     throw std::logic_error("field publication snapshot crossed an AMR topology generation");
-  if (snapshot.packed_aux.size() !=
-      (snapshot.aux_components.empty() ? 0u : aux_.size()))
+  if (snapshot.packed_aux.size() != (snapshot.aux_components.empty() ? 0u : aux_.size()))
     throw std::logic_error("field publication aux depth changed before Accept");
   for (std::size_t level = 0; level < snapshot.packed_aux.size(); ++level) {
     const MultiFab& packed = snapshot.packed_aux[level];
@@ -435,10 +434,8 @@ inline void AmrRuntime::validate_field_solve_snapshot(const FieldSolveSnapshot& 
   }
   if (snapshot.has_default &&
       (!default_field_solver_ ||
-       !same_exact_multifab_layout_(snapshot.default_phi,
-                                    default_field_solver_->phi_level(0)) ||
-       !same_exact_multifab_layout_(snapshot.default_rhs,
-                                    default_field_solver_->rhs_level(0))))
+       !same_exact_multifab_layout_(snapshot.default_phi, default_field_solver_->phi_level(0)) ||
+       !same_exact_multifab_layout_(snapshot.default_rhs, default_field_solver_->rhs_level(0))))
     throw std::logic_error("default field publication layout changed before Accept");
 
   const auto includes = [&](const std::string& name) {
@@ -467,10 +464,10 @@ inline void AmrRuntime::validate_field_solve_snapshot(const FieldSolveSnapshot& 
     if (state.phi.size() != levels || state.rhs.size() != levels)
       throw std::logic_error("field publication named depth changed before Accept");
     for (std::size_t level = 0; level < levels; ++level)
-      if (!same_exact_multifab_layout_(
-              state.phi[level], field.solver->phi_level(static_cast<int>(level))) ||
-          !same_exact_multifab_layout_(
-              state.rhs[level], field.solver->rhs_level(static_cast<int>(level))))
+      if (!same_exact_multifab_layout_(state.phi[level],
+                                       field.solver->phi_level(static_cast<int>(level))) ||
+          !same_exact_multifab_layout_(state.rhs[level],
+                                       field.solver->rhs_level(static_cast<int>(level))))
         throw std::logic_error("field publication named layout changed before Accept");
   }
   if (snapshot.named.size() != expected_named)
@@ -483,11 +480,10 @@ inline SolveOutcome AmrRuntime::run_field_solve_transaction(const FieldSolveScop
   if (all_reduce_max(field_solve_transaction_active_ ? 1L : 0L) != 0)
     throw std::logic_error(
         "AmrRuntime field solves are sequential until their prior SolveOutcome is consumed");
-  const long invalid_scope =
-      scope.named_fields == NamedFieldSnapshotScope::kSelected &&
-              scope.selected_named_field == nullptr
-          ? 1L
-          : 0L;
+  const long invalid_scope = scope.named_fields == NamedFieldSnapshotScope::kSelected &&
+                                     scope.selected_named_field == nullptr
+                                 ? 1L
+                                 : 0L;
   if (all_reduce_max(invalid_scope) != 0)
     throw std::invalid_argument("selected field-solve scope requires an exact field identity");
 
@@ -523,8 +519,7 @@ inline SolveOutcome AmrRuntime::run_field_solve_transaction(const FieldSolveScop
   if (all_reduce_max(materialization_failed_local) != 0) {
     if (n_ranks() == 1 && materialization_error != nullptr)
       std::rethrow_exception(materialization_error);
-    throw std::runtime_error(
-        "AMR field solver materialization failed on at least one MPI rank");
+    throw std::runtime_error("AMR field solver materialization failed on at least one MPI rank");
   }
 
   FieldSolveSnapshot* snapshot = nullptr;
@@ -601,15 +596,13 @@ inline SolveOutcome AmrRuntime::run_field_solve_transaction(const FieldSolveScop
                                      },
                                      {},
                                      [](void* context) {
-                                       auto* accepted =
-                                           static_cast<FieldSolveSnapshot*>(context);
+                                       auto* accepted = static_cast<FieldSolveSnapshot*>(context);
                                        if (accepted->publication_owner == nullptr ||
                                            accepted->publication_candidate == nullptr)
                                          throw std::logic_error(
                                              "AMR field publication candidate is unavailable");
-                                       accepted->publication_owner
-                                           ->validate_field_solve_snapshot(
-                                               *accepted->publication_candidate);
+                                       accepted->publication_owner->validate_field_solve_snapshot(
+                                           *accepted->publication_candidate);
                                      }});
 }
 

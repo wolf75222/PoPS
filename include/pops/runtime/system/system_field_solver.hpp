@@ -396,13 +396,11 @@ class SystemFieldSolver {
 
   /// Read-only proof that @p snapshot can be restored without materializing, invalidating or
   /// replacing any solver storage. This is evaluated collectively by SolveOutcome before Accept.
-  [[nodiscard]] bool step_snapshot_publication_layout_matches(
-      const StepSnapshot& snapshot) {
+  [[nodiscard]] bool step_snapshot_publication_layout_matches(const StepSnapshot& snapshot) {
     if (snapshot.had_elliptic != static_cast<bool>(ell_) ||
         snapshot.potential.has_value() != snapshot.had_elliptic)
       return false;
-    if (snapshot.potential &&
-        !same_publication_layout(ell_->phi(), *snapshot.potential))
+    if (snapshot.potential && !same_publication_layout(ell_->phi(), *snapshot.potential))
       return false;
 
     if (snapshot.had_polar_solver != pell_.has_value() ||
@@ -414,12 +412,10 @@ class SystemFieldSolver {
 
     if (snapshot.polar_source.has_value() != phi_src_polar_.has_value())
       return false;
-    if (snapshot.polar_source &&
-        !same_publication_layout(*phi_src_polar_, *snapshot.polar_source))
+    if (snapshot.polar_source && !same_publication_layout(*phi_src_polar_, *snapshot.polar_source))
       return false;
 
-    if (snapshot.named_potentials.size() + snapshot.named_unbuilt.size() !=
-        named_fields_.size())
+    if (snapshot.named_potentials.size() + snapshot.named_unbuilt.size() != named_fields_.size())
       return false;
     for (const auto& [name, field] : named_fields_) {
       const auto saved = snapshot.named_potentials.find(name);
@@ -429,8 +425,7 @@ class SystemFieldSolver {
       if ((saved != snapshot.named_potentials.end()) == was_unbuilt)
         return false;
       if (saved != snapshot.named_potentials.end() &&
-          (!field.backend ||
-           !same_publication_layout(field.backend->phi(), saved->second)))
+          (!field.backend || !same_publication_layout(field.backend->phi(), saved->second)))
         return false;
       if (was_unbuilt && field.backend)
         return false;
@@ -1977,8 +1972,7 @@ class SystemFieldSolver {
   }
 
   template <class StageForBlock>
-  void prepare_boundary_dependencies_from_(NamedField& field,
-                                           StageForBlock&& stage_for_block) {
+  void prepare_boundary_dependencies_from_(NamedField& field, StageForBlock&& stage_for_block) {
     auto& plan = field.plan;
     plan.boundary_state_buffers.clear();
     plan.boundary_state_buffers.reserve(plan.boundary_state_blocks.size());
@@ -2034,8 +2028,8 @@ class SystemFieldSolver {
     });
   }
 
-  void prepare_boundary_dependencies_from_blocks(
-      NamedField& field, const std::vector<const MultiFab*>& stage_states) {
+  void prepare_boundary_dependencies_from_blocks(NamedField& field,
+                                                 const std::vector<const MultiFab*>& stage_states) {
     if (stage_states.size() != owner_->sp.size())
       throw std::invalid_argument(
           "prepare_boundary_dependencies_from_blocks: stage-state count does not match the "
@@ -2750,9 +2744,8 @@ class SystemFieldSolver {
     }
   }
 
-  void assemble_named_poisson_rhs_from_blocks(
-      const std::string& field, MultiFab& rhs,
-      const std::vector<const MultiFab*>& stage_states) {
+  void assemble_named_poisson_rhs_from_blocks(const std::string& field, MultiFab& rhs,
+                                              const std::vector<const MultiFab*>& stage_states) {
     if (stage_states.size() != owner_->sp.size())
       throw std::invalid_argument(
           "assemble_named_poisson_rhs_from_blocks: stage-state count does not match the "
@@ -2790,26 +2783,24 @@ class SystemFieldSolver {
     require_collective_named_field_request_(field, block_idx, U_stage);
     NamedField& nf = require_named_field_(field);
     require_collective_field_providers_(nf);
-    require_collective_boundary_dependencies_(
-        nf, [&](int block) -> const MultiFab& {
-          return block == block_idx ? U_stage : owner_->sp[static_cast<std::size_t>(block)].U;
-        });
+    require_collective_boundary_dependencies_(nf, [&](int block) -> const MultiFab& {
+      return block == block_idx ? U_stage : owner_->sp[static_cast<std::size_t>(block)].U;
+    });
     prepare_boundary_dependencies(nf, block_idx, &U_stage);
     return solve_named_field_request_(field, nf, [&](MultiFab& rhs) {
       assemble_named_poisson_rhs(field, rhs, block_idx, &U_stage);
     });
   }
 
-  SolveReport solve_named_field_from_blocks(
-      const std::string& field, const std::vector<const MultiFab*>& stage_states) {
+  SolveReport solve_named_field_from_blocks(const std::string& field,
+                                            const std::vector<const MultiFab*>& stage_states) {
     require_collective_named_field_request_(field, stage_states);
     NamedField& nf = require_named_field_(field);
     require_collective_field_providers_(nf);
-    require_collective_boundary_dependencies_(
-        nf, [&](int block) -> const MultiFab& {
-          const MultiFab* stage = stage_states[static_cast<std::size_t>(block)];
-          return stage == nullptr ? owner_->sp[static_cast<std::size_t>(block)].U : *stage;
-        });
+    require_collective_boundary_dependencies_(nf, [&](int block) -> const MultiFab& {
+      const MultiFab* stage = stage_states[static_cast<std::size_t>(block)];
+      return stage == nullptr ? owner_->sp[static_cast<std::size_t>(block)].U : *stage;
+    });
     prepare_boundary_dependencies_from_blocks(nf, stage_states);
     return solve_named_field_request_(field, nf, [&](MultiFab& rhs) {
       assemble_named_poisson_rhs_from_blocks(field, rhs, stage_states);
@@ -2823,8 +2814,7 @@ class SystemFieldSolver {
     if (it != named_fields_.end()) {
       const NamedField& candidate = it->second;
       const bool has_gradient = candidate.gx_comp >= 0 && candidate.gy_comp >= 0;
-      invalid = invalid || candidate.phi_comp < 0 ||
-                candidate.phi_comp >= owner_->aux_ncomp_ ||
+      invalid = invalid || candidate.phi_comp < 0 || candidate.phi_comp >= owner_->aux_ncomp_ ||
                 (candidate.gradient_sign != -1 && candidate.gradient_sign != 1) ||
                 (has_gradient && (candidate.gx_comp >= owner_->aux_ncomp_ ||
                                   candidate.gy_comp >= owner_->aux_ncomp_));
@@ -2850,11 +2840,10 @@ class SystemFieldSolver {
     return true;
   }
 
-  static void append_named_stage_layout_(ExactContractBuilder& contract,
-                                         const MultiFab& stage) {
-    detail::append_elliptic_field_layout_contract(
-        contract, "stage", stage.box_array(), stage.dmap(), stage.ncomp(), stage.n_grow(),
-        FieldDistribution::Distributed);
+  static void append_named_stage_layout_(ExactContractBuilder& contract, const MultiFab& stage) {
+    detail::append_elliptic_field_layout_contract(contract, "stage", stage.box_array(),
+                                                  stage.dmap(), stage.ncomp(), stage.n_grow(),
+                                                  FieldDistribution::Distributed);
   }
 
   void require_collective_named_field_request_(const std::string& field, int block,
@@ -2868,8 +2857,8 @@ class SystemFieldSolver {
         .scalar(static_cast<std::int64_t>(block));
     append_named_stage_layout_(request, stage);
     const std::string exact_request = std::move(request).release();
-    const bool ranks_agree = all_ranks_agree_exact_ordered_byte_pairs(
-        {{"system-named-field-request", exact_request}});
+    const bool ranks_agree =
+        all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-request", exact_request}});
     const bool invalid = !named_stage_layout_matches_(block, stage);
     const long any_invalid = all_reduce_max(invalid ? 1L : 0L);
     if (!ranks_agree)
@@ -2881,8 +2870,8 @@ class SystemFieldSolver {
           "communicator rank");
   }
 
-  void require_collective_named_field_request_(
-      const std::string& field, const std::vector<const MultiFab*>& stage_states) {
+  void require_collective_named_field_request_(const std::string& field,
+                                               const std::vector<const MultiFab*>& stage_states) {
     require_field_plan_consensus();
     ExactContractBuilder request;
     request.text("pops.system.named-field-request")
@@ -2903,8 +2892,8 @@ class SystemFieldSolver {
         invalid = invalid || stage_states[previous] == stage;
     }
     const std::string exact_request = std::move(request).release();
-    const bool ranks_agree = all_ranks_agree_exact_ordered_byte_pairs(
-        {{"system-named-field-request", exact_request}});
+    const bool ranks_agree =
+        all_ranks_agree_exact_ordered_byte_pairs({{"system-named-field-request", exact_request}});
     const long any_invalid = all_reduce_max(invalid ? 1L : 0L);
     if (!ranks_agree)
       throw std::invalid_argument(
@@ -2940,12 +2929,10 @@ class SystemFieldSolver {
   template <class StageForBlock>
   void require_collective_boundary_dependencies_(const NamedField& field,
                                                  StageForBlock&& stage_for_block) const {
-    bool invalid = field.plan.boundary_state_blocks.size() !=
-                       field.plan.boundary_state_components.size() ||
-                   field.plan.boundary_field_blocks.size() !=
-                       field.plan.boundary_field_keys.size() ||
-                   field.plan.boundary_field_blocks.size() !=
-                       field.plan.boundary_field_components.size();
+    bool invalid =
+        field.plan.boundary_state_blocks.size() != field.plan.boundary_state_components.size() ||
+        field.plan.boundary_field_blocks.size() != field.plan.boundary_field_keys.size() ||
+        field.plan.boundary_field_blocks.size() != field.plan.boundary_field_components.size();
     if (!invalid) {
       for (std::size_t index = 0; index < field.plan.boundary_state_blocks.size(); ++index) {
         const int block = block_index_or_negative_(field.plan.boundary_state_blocks[index]);
@@ -2999,8 +2986,8 @@ class SystemFieldSolver {
       nf.backend->configure_boundary(nf.plan);
       published_phi =
           &reusable_scratch_(nf.published_phi_scratch, phi_mf, phi_mf.ncomp(), phi_mf.n_grow());
-      published_aux = &reusable_scratch_(nf.published_aux_scratch, owner_->aux,
-                                        owner_->aux.ncomp(), owner_->aux.n_grow());
+      published_aux = &reusable_scratch_(nf.published_aux_scratch, owner_->aux, owner_->aux.ncomp(),
+                                         owner_->aux.n_grow());
     } catch (...) {
       snapshot_failed = true;
     }
@@ -3043,9 +3030,8 @@ class SystemFieldSolver {
           const ConstArray4 p = phi_mf.fab(li).const_array();
           Array4 a = owner_->aux.fab(li).array();
           const Box2D v = owner_->aux.box(li);
-          for_each_cell(
-              v, detail::SystemNamedFieldPostprocessKernel{
-                     a, p, cphi, cgx, cgy, gradient_scale, dx, dy, has_gradient});
+          for_each_cell(v, detail::SystemNamedFieldPostprocessKernel{
+                               a, p, cphi, cgx, cgy, gradient_scale, dx, dy, has_gradient});
         }
         device_fence();
       });

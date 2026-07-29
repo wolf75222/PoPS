@@ -257,9 +257,9 @@ TEST(ComponentInterfaces, PreparedTaggingExecutesGradientLogicOnNegativeMultiblo
 
   const auto refill = [&] {
     for (int local = 0; local < scalar.local_size(); ++local)
-      pops::for_each_cell(scalar.fab(local).grown_box(),
-                          FillPreparedTaggingFields{scalar.fab(local).array(),
-                                                    vector.fab(local).array()});
+      pops::for_each_cell(
+          scalar.fab(local).grown_box(),
+          FillPreparedTaggingFields{scalar.fab(local).array(), vector.fab(local).array()});
     pops::device_fence();
   };
   const std::size_t expected_coarsen = second.coarsen.count();
@@ -272,19 +272,16 @@ TEST(ComponentInterfaces, PreparedTaggingExecutesGradientLogicOnNegativeMultiblo
 
   refill();
   vector.set_val(pops::Real(-1));
-  const auto& without_positive_value =
-      plan.execute(0, domain, pops::Real(1), pops::Real(1), 7);
+  const auto& without_positive_value = plan.execute(0, domain, pops::Real(1), pops::Real(1), 7);
   EXPECT_EQ(without_positive_value.refine.count(), 0u)
       << "mutating the value field must change its exact expression child";
-  EXPECT_EQ(without_positive_value.coarsen.count(),
-            static_cast<std::size_t>(domain.num_cells()));
+  EXPECT_EQ(without_positive_value.coarsen.count(), static_cast<std::size_t>(domain.num_cells()));
   refill();
 
   Program magnitude = program;
   magnitude.stencils.clear();
   magnitude.leaves = {
-      Program::Leaf{1, 0, POPS_TAGGING_MAGNITUDE_ABOVE_V1, 17.0,
-                    POPS_TAGGING_NO_STENCIL_V1}};
+      Program::Leaf{1, 0, POPS_TAGGING_MAGNITUDE_ABOVE_V1, 17.0, POPS_TAGGING_NO_STENCIL_V1}};
   magnitude.refine_ops = {POPS_TAGGING_MAGNITUDE_ABOVE_V1};
   magnitude.refine_args = {0};
   magnitude.coarsen_ops.clear();
@@ -300,22 +297,19 @@ TEST(ComponentInterfaces, PreparedTaggingExecutesGradientLogicOnNegativeMultiblo
   magnitude.leaves[0].threshold = 16.0;
   auto magnitude_strict_plan = pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
       magnitude, {{{"case::scalar::U", &scalar}, {"case::vector::U", &vector}}}, {domain}, 9);
-  EXPECT_EQ(magnitude_strict_plan.execute(
-                0, domain, pops::Real(1), pops::Real(1), 9).refine.count(),
-            static_cast<std::size_t>(domain.num_cells()));
+  EXPECT_EQ(
+      magnitude_strict_plan.execute(0, domain, pops::Real(1), pops::Real(1), 9).refine.count(),
+      static_cast<std::size_t>(domain.num_cells()));
 
   Program gradient_equality = program;
-  gradient_equality.leaves = {
-      Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 1.0, 0}};
+  gradient_equality.leaves = {Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 1.0, 0}};
   gradient_equality.refine_ops = {POPS_TAGGING_GRADIENT_ABOVE_V1};
   gradient_equality.refine_args = {0};
   gradient_equality.coarsen_ops.clear();
   gradient_equality.coarsen_args.clear();
-  auto gradient_equality_plan =
-      pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
-          gradient_equality,
-          {{{"case::scalar::U", &scalar}, {"case::vector::U", &vector}}},
-          {domain}, 10);
+  auto gradient_equality_plan = pops::runtime::amr::PreparedTaggingExecutionPlan::prepare(
+      gradient_equality, {{{"case::scalar::U", &scalar}, {"case::vector::U", &vector}}}, {domain},
+      10);
   const auto& gradient_boundary =
       gradient_equality_plan.execute(0, domain, pops::Real(1), pops::Real(1), 10);
   EXPECT_EQ(gradient_boundary.refine.count(), 0u);
