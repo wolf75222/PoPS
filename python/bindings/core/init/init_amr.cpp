@@ -1069,6 +1069,39 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
             s.rebuild_hierarchy(bx, owner_ranks);
           },
           py::arg("boxes"), py::arg("owner_ranks"))
+      .def(
+          "rematerialize_hierarchy_ownership",
+          [](AmrSystem& s, const std::vector<std::tuple<int, int, int, int, int>>& boxes) {
+            std::vector<pops::PatchBox> bx;
+            bx.reserve(boxes.size());
+            for (const auto& b : boxes)
+              bx.push_back(pops::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
+                                          std::get<3>(b), std::get<4>(b)});
+            py::gil_scoped_release release;
+            return s.rematerialize_hierarchy_ownership(bx);
+          },
+          py::arg("boxes"),
+          "Collectively rematerialize exact recorded patch ownership for this communicator.")
+      .def(
+          "rematerialize_program_accepted_state",
+          [](AmrSystem& s, const std::vector<py::bytes>& source_states,
+             const std::vector<std::vector<int>>& source_level_owners,
+             const std::vector<std::vector<int>>& target_level_owners) {
+            std::vector<std::vector<std::uint8_t>> bytes;
+            bytes.reserve(source_states.size());
+            for (const py::bytes& source : source_states) {
+              const std::string value = source;
+              bytes.emplace_back(value.begin(), value.end());
+            }
+            const auto rematerialized = s.rematerialize_program_accepted_state(
+                bytes, source_level_owners, target_level_owners);
+            if (rematerialized.empty())
+              return py::bytes();
+            return py::bytes(reinterpret_cast<const char*>(rematerialized.data()),
+                             rematerialized.size());
+          },
+          py::arg("source_states"), py::arg("source_level_owners"), py::arg("target_level_owners"),
+          "Merge exact source-rank Program images and return this rank's current-ownership image.")
       .def("begin_restart_transaction", &AmrSystem::begin_restart_transaction)
       .def("commit_restart_transaction", &AmrSystem::commit_restart_transaction)
       .def("rollback_restart_transaction", &AmrSystem::rollback_restart_transaction)

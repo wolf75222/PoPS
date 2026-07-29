@@ -73,7 +73,15 @@ class _AmrSystemIO(_AmrSystem):
             runtime="AMR",
         )
         return _PreparedAMRSystemRestart(
-            identity, prepare_v3(self, self._s, data, (self._L, self._Ly), (self._xlo, self._ylo))
+            identity,
+            prepare_v3(
+                self,
+                self._s,
+                data,
+                (self._L, self._Ly),
+                (self._xlo, self._ylo),
+                bit_identical=bit_identical,
+            ),
         )
 
     def _begin_checkpoint_restart(self) -> None:

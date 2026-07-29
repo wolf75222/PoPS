@@ -4189,6 +4189,97 @@ void AmrSystem::rebuild_hierarchy(const std::vector<PatchBox>& boxes,
   p_->install_active_temporal_relations();
 }
 
+std::vector<int> AmrSystem::rematerialize_hierarchy_ownership(const std::vector<PatchBox>& boxes) {
+  p_->ensure_built();
+  int nlev = 1;
+  std::string request_contract;
+  std::exception_ptr local_failure;
+  try {
+    if (!p_->load_balance_authority_)
+      throw std::runtime_error(
+          "AmrSystem::rematerialize_hierarchy_ownership requires a prepared load-balance "
+          "authority");
+    ExactContractBuilder contract;
+    contract.text("pops.amr.restart-ownership-request")
+        .scalar(std::uint32_t{1})
+        .scalar(static_cast<std::uint64_t>(boxes.size()));
+    for (const PatchBox& box : boxes) {
+      if (box.level < 1)
+        throw std::runtime_error(
+            "AmrSystem::rematerialize_hierarchy_ownership accepts only fine-level patch boxes");
+      const Box2D value{{box.ilo, box.jlo}, {box.ihi, box.jhi}};
+      if (value.empty())
+        throw std::runtime_error(
+            "AmrSystem::rematerialize_hierarchy_ownership received an empty patch box");
+      nlev = std::max(nlev, box.level + 1);
+      contract.scalar(static_cast<std::int32_t>(box.level))
+          .scalar(static_cast<std::int32_t>(box.ilo))
+          .scalar(static_cast<std::int32_t>(box.jlo))
+          .scalar(static_cast<std::int32_t>(box.ihi))
+          .scalar(static_cast<std::int32_t>(box.jhi));
+    }
+    if (nlev > p_->runtime->max_levels())
+      throw std::runtime_error(
+          "AmrSystem::rematerialize_hierarchy_ownership exceeds the resolved hierarchy capacity");
+    request_contract = std::move(contract).release();
+  } catch (...) {
+    local_failure = std::current_exception();
+  }
+  const long failure_count = all_reduce_sum(local_failure ? 1L : 0L);
+  if (failure_count != 0) {
+    if (n_ranks() == 1 && local_failure)
+      std::rethrow_exception(local_failure);
+    throw std::runtime_error(
+        "AmrSystem::rematerialize_hierarchy_ownership validation failed collectively on " +
+        std::to_string(failure_count) + " rank(s)");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"pops.amr.restart-ownership-request", request_contract}}))
+    throw std::runtime_error(
+        "AmrSystem::rematerialize_hierarchy_ownership request differs across MPI ranks");
+  if (boxes.empty())
+    return {};
+
+  std::vector<std::vector<std::size_t>> indices(static_cast<std::size_t>(nlev));
+  std::vector<std::vector<Box2D>> level_boxes(static_cast<std::size_t>(nlev));
+  for (std::size_t index = 0; index < boxes.size(); ++index) {
+    const PatchBox& box = boxes[index];
+    const auto level = static_cast<std::size_t>(box.level);
+    const Box2D value{{box.ilo, box.jlo}, {box.ihi, box.jhi}};
+    indices[level].push_back(index);
+    level_boxes[level].push_back(value);
+  }
+
+  std::vector<int> owners(boxes.size(), -1);
+  for (int level = 1; level < nlev; ++level) {
+    const auto index = static_cast<std::size_t>(level);
+    if (level_boxes[index].empty())
+      throw std::runtime_error(
+          "AmrSystem::rematerialize_hierarchy_ownership requires contiguous active fine levels");
+    const BoxArray box_array(level_boxes[index]);
+    const DistributionMapping mapping =
+        p_->load_balance_authority_->distribute(box_array, n_ranks());
+    for (std::size_t patch = 0; patch < indices[index].size(); ++patch)
+      owners[indices[index][patch]] = mapping[static_cast<int>(patch)];
+  }
+  return owners;
+}
+
+std::vector<std::uint8_t> AmrSystem::rematerialize_program_accepted_state(
+    const std::vector<std::vector<std::uint8_t>>& source_states,
+    const std::vector<std::vector<int>>& source_level_owners,
+    const std::vector<std::vector<int>>& target_level_owners) {
+  p_->ensure_built();
+  runtime::program::AmrProgramRankOwnership source_ownership;
+  source_ownership.rank_count = static_cast<int>(source_states.size());
+  source_ownership.level_patch_owners = source_level_owners;
+  runtime::program::AmrProgramRankOwnership target_ownership;
+  target_ownership.rank_count = n_ranks();
+  target_ownership.level_patch_owners = target_level_owners;
+  return runtime::program::rematerialize_amr_program_accepted_state_bytes(
+      source_states, source_ownership, target_ownership, my_rank());
+}
+
 void AmrSystem::begin_restart_transaction() {
   p_->ensure_built();
   if (p_->restart_transaction_active_)

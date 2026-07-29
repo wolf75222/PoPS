@@ -1016,6 +1016,19 @@ class AmrSystem {
   /// R6/R7). The v3 restart calls this so restartable=True works under ACTIVE regridding.
   void rebuild_hierarchy(const std::vector<PatchBox>& boxes, const std::vector<int>& owner_ranks);
 
+  /// Re-evaluate ownership for the exact recorded fine-level boxes under the load-balance authority
+  /// prepared at bind. This is a collective, non-mutating restart seam: geometry and box ordering
+  /// stay unchanged while the returned owner list is aligned with @p boxes for the current
+  /// communicator size.
+  std::vector<int> rematerialize_hierarchy_ownership(const std::vector<PatchBox>& boxes);
+
+  /// Merge exact source-rank Program images and return this rank's image under the current
+  /// communicator ownership. Both ownership tables are indexed [level][global patch].
+  std::vector<std::uint8_t> rematerialize_program_accepted_state(
+      const std::vector<std::vector<std::uint8_t>>& source_states,
+      const std::vector<std::vector<int>>& source_level_owners,
+      const std::vector<std::vector<int>>& target_level_owners);
+
   /// Per-block per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
   /// layout AND the aux across blocks, so the per-level STATE is read/restored PER BLOCK (by NAME)
   /// while phi stays shared (level_potential above). @p name indexes the block (block_names()); @p k:
