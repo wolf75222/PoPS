@@ -34,6 +34,7 @@ class _System:
     _bound_snapshot: Any
     _last_run_manifest: Any
     _last_run_identity: Any
+    _restart_lineage_identity: Any
     _last_restart_identity: Any
     _temporal_restart_state: Any
     _execution_context: Any
