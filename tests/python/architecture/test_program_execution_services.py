@@ -14,9 +14,9 @@ SHARED_SIGNATURES = (
     "struct FieldStageOverride",
     "struct CouplingStateOverride",
     "enum class ScratchKind",
-    "struct LogicalEvaluationState",
+    "struct LogicalEvaluationInterval",
     "class LogicalEvaluationScope",
-    "[[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(",
+    "[[nodiscard]] auto logical_evaluation_scope(",
     "void evaluate_with_field_state_at(",
     "MultiFab rhs_scratch_like(",
     "MultiFab scratch_state_like(",
@@ -106,14 +106,19 @@ def test_clock_state_is_owned_only_by_the_shared_service():
         assert declaration not in _read(AMR)
 
 
-def test_contexts_expose_only_topology_provider_hooks_for_the_shared_surface():
+def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
     for path, context in ((UNIFORM, "ProgramContext"), (AMR, "AmrProgramContext")):
         source = _read(path)
         assert "friend class ProgramExecutionServices<%s>;" % context in source
         for hook in (
-            "program_execution_begin_logical_evaluation_",
+            "program_execution_logical_parent_dt_",
+            "program_execution_capture_logical_evaluation_",
+            "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
+            "program_execution_solve_fields_from_state_at_",
             "program_execution_scratch_",
+            "program_execution_validate_commit_aliases_",
+            "program_execution_commit_copy_",
             "program_execution_block_map_",
             "program_execution_block_count_",
             "program_execution_physical_time_",
@@ -127,8 +132,39 @@ def test_contexts_expose_only_topology_provider_hooks_for_the_shared_surface():
             "program_execution_active_level_",
         ):
             assert source.count(hook) == 1, (
-                "%s must provide exactly one storage/topology hook %s" % (context, hook)
+                "%s must provide exactly one explicit provider hook %s" % (context, hook)
             )
+
+
+def test_shared_service_uses_only_explicit_provider_hooks():
+    shared = _read(SHARED)
+    calls = re.findall(r"provider_\(\)\.(\w+)\(", shared)
+    assert calls
+    assert all(call.startswith("program_execution_") for call in calls), calls
+
+
+def test_shared_commit_many_owns_layout_and_alias_semantics():
+    shared = _read(SHARED)
+    amr = _read(AMR)
+    assert "target->dmap().ranks() != source->dmap().ranks()" in shared
+    assert "std::vector<MultiFab> aliased_sources;" in shared
+    assert "program_execution_validate_commit_aliases_(has_aliased_source)" in shared
+    assert "has_aliased_source && capturing()" in amr
+
+
+def test_logical_subdivision_is_shared_and_provider_rollback_is_opaque():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert "ClockWindow" not in shared
+    assert "LogicalEvaluationRollback" not in shared
+    assert uniform.count("struct LogicalEvaluationRollback") == 1
+    assert amr.count("struct LogicalEvaluationRollback") == 1
+    assert shared.count("parent_dt / static_cast<double>(count)") == 1
+    assert " / static_cast<double>(count)" not in uniform
+    assert " / static_cast<double>(count)" not in amr
+    assert "amr::Rational(iteration, count)" not in uniform
+    assert "amr::Rational(iteration, count)" not in amr
 
 
 def test_error_schedule_is_shared_not_an_amr_capability_deferral():
