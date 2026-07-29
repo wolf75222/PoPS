@@ -246,6 +246,11 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         endpoint_interfaces[1].canonical_identity()
     interface = endpoint_interfaces[0]
     assert interface.left.boundary.owner_path != interface.right.boundary.owner_path
+    assert interface.left.trace_provider == "limiter.none"
+    assert interface.right.trace_provider == "limiter.none"
+    assert interface.left.trace_operation.value == "cell_average"
+    assert interface.right.trace_operation.value == "cell_average"
+    assert interface.left.required_depth == interface.right.required_depth == 1
     for resolved_block, authored_block in zip(
             resolved.blocks, (core.tracer, right), strict=True):
         expected = core.case.resolve(core.inlet_x_param, block=authored_block)

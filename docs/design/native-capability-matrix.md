@@ -82,8 +82,15 @@ Supported native routes include:
   and opposite residual scattering. Endpoints must be co-located on one layout and their explicit
   default-flux RHS evaluations must be simultaneous and contiguous in one Program point.
   `MPI_COMM_WORLD` layouts may distribute the two face decompositions independently: native C++
-  collectives reconstruct both traces, require a finite bit-identical shared flux on every rank,
+  collectives assemble both traces, require a finite bit-identical shared flux on every rank,
   then scatter only into locally owned residual cells.
+  Each endpoint trace plan retains its projection Handle, authenticated reconstruction-provider
+  identity, operation and provider-derived stencil depth in the collective identity
+  `pops.multiblock.interface-plan.v2`. The current
+  type-erased scheduler executes the exact first-order cell-average operation. A MUSCL/WENO endpoint
+  retains its higher-order reconstructed-face requirement but fails before native installation
+  because no mapped-halo reconstruction provider is installed; it is never silently replaced by a
+  cell-average trace.
   A public serial `AMRRegrid.frozen()` hierarchy may contain one or two levels. A dynamic
   two-level hierarchy is also executable when both levels are already active at bind and every
   accepted regrid preserves that active depth. The scheduler rematerializes the authenticated
