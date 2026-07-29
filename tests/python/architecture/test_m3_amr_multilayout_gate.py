@@ -26,7 +26,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 36
+    assert len(data["check"]) == 37
 
 
 def test_m3_gate_pins_three_level_subcycled_reflux_proof():
@@ -49,6 +49,26 @@ def test_m3_gate_pins_three_level_subcycled_reflux_proof():
         "TEST(test_amr_history_ring, "
         "ThreeLevelProgramSynchronizesEachRecursiveCatchUp)"
     ) in source.read_text(encoding="utf-8")
+
+
+def test_m3_gate_pins_metric_weighted_composite_diagnostic_proof():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "positive",
+        "kind": "ctest",
+        "target": "test_mpi_amr_distributed_coarse",
+        "test_regex": "^test_mpi_amr_distributed_coarse_np2$",
+    } in data["check"]
+
+    source = (
+        ROOT
+        / "tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp"
+    ).read_text(encoding="utf-8")
+    assert "runtime::amr::composite_reduce_fields" in source
+    assert "std::fabs(integral - 1.25)" in source
 
 
 def test_m3_final_gate_has_no_deferred_requirement():
