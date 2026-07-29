@@ -9,10 +9,13 @@ history ring to be Dense because selective replay is a same-rank operation. Hist
 fallback formats are refused.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _VERSION
+
+_RestartPhaseT = TypeVar("_RestartPhaseT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -754,7 +757,11 @@ def _restart_topology_image(sim):
     return restart_topology_image(sim)
 
 
-def _restart_collective_phase(owner, phase, action):
+def _restart_collective_phase(
+    owner: Any,
+    phase: str,
+    action: Callable[[], _RestartPhaseT],
+) -> _RestartPhaseT:
     """Run one restart subphase and make every rank observe the same outcome.
 
     RegridOnRestart mixes local validation with native collectives.  A rank must never continue into
@@ -777,7 +784,7 @@ def _restart_collective_phase(owner, phase, action):
     )
     if any(row["value"] != rows[0]["value"] for row in rows[1:]):
         raise RuntimeError("AMR RegridOnRestart ranks returned divergent %s evidence" % phase)
-    return value
+    return cast(_RestartPhaseT, value)
 
 
 def _restart_composite_integrals(owner, sim, *, phase):
