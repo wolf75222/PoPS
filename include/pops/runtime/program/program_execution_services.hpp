@@ -269,6 +269,14 @@ class ProgramExecutionServices {
     provider_().program_execution_source_default_into_(sys_block(block), state, rhs);
   }
 
+  /// Project one candidate state through the exact authored block closure.
+  ///
+  /// Program-to-runtime block qualification is topology-independent. The provider owns only the
+  /// Uniform or level-qualified native projection call.
+  void apply_projection(int block, MultiFab& state) const {
+    provider_().program_execution_apply_projection_(sys_block(block), state);
+  }
+
   MultiFab rhs_scratch_like(const MultiFab& prototype) const {
     MultiFab scratch(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
                      prototype.n_grow());

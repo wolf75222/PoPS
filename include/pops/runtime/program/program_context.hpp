@@ -819,12 +819,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->rotate_histories(clock_identity);
   }
 
-  /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the
-  /// valid cells, the SAME Zhang-Shu / floor projection the native per-step path runs (ADC-177, spec
-  /// op 21). REUSES the block's own projection closure (set at add_block time); a block WITHOUT a
-  /// projection is rejected. Forwards to System::block_project -- it reimplements no positivity.
-  void apply_projection(int b, MultiFab& u) const { sys_->block_project(sys_block(b), u); }
-
  private:
   struct FieldSolveWorkspace {
     std::vector<int> program_to_system;
@@ -1236,6 +1230,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   void program_execution_source_default_into_(int runtime_block, MultiFab& state,
                                               MultiFab& rhs) const {
     sys_->block_source_into(runtime_block, state, rhs);
+  }
+  void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
+    sys_->block_project(runtime_block, state);
   }
 
   struct LogicalEvaluationRollback {
