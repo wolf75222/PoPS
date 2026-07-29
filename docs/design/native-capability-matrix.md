@@ -140,11 +140,6 @@ Explicit unsupported rows include:
   GPU Kokkos execution space before constructing `System`/`AmrSystem`; build-time availability is
   not launch authorization. The native providers do accept an explicit, authenticated
   `MPI_COMM_WORLD` context; custom communicators remain unavailable.
-- `amr:field_coupled_rhs_jacvec`: AMR level greater than zero is explicitly unavailable because the
-  provider ABI does not transport a level-qualified tangent field. The reported error identifies
-  the level-0 field-coupled route as the available route; a multi-level request must fail rather
-  than silently reuse the coarse provider.
-
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and
 future validators:
