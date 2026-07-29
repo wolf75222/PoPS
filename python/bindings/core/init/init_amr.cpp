@@ -824,6 +824,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // driver records a measured scalar into each cadence tick.
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
+      .def("_accepted_balance_terms", &AmrSystem::accepted_balance_terms, py::arg("route"))
       .def("_consume_step_projections", &AmrSystem::consume_step_projections)
       .def("record_program_diagnostic", &AmrSystem::record_program_diagnostic, py::arg("name"),
            py::arg("value"))

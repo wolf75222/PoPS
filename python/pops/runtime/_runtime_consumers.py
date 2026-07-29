@@ -2411,6 +2411,30 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 reductions = {
                     operation["reduction"] for operation in quantity.execution["operations"]
                 }
+                layout = layouts.get(quantity.layout_id)
+                if layout is None:
+                    raise KeyError("diagnostic selected unknown layout %s" % quantity.layout_id)
+                engine = self._owner._executor_for_block(block)
+                if "accepted_balance" in reductions and reductions != {"accepted_balance"}:
+                    raise ValueError(
+                        "accepted balance evidence cannot be mixed with field reductions"
+                    )
+                if reductions == {"accepted_balance"}:
+                    if len(quantity.execution["operations"]) != 1:
+                        raise ValueError("accepted balance requires exactly one native evidence route")
+                    if quantity.execution["role"] is not None:
+                        raise ValueError("accepted balance route cannot carry a component role")
+                    if not callable(getattr(engine, "_accepted_balance_terms", None)):
+                        raise NotImplementedError(
+                            "balance diagnostic requires native _accepted_balance_terms(route)"
+                        )
+                    configured_levels = tuple(level.index for level in layout.levels)
+                    if tuple(quantity.levels) != configured_levels:
+                        raise ValueError(
+                            "balance diagnostic must select the complete configured hierarchy; "
+                            "a subset cannot be reconciled with the accepted Program ledger"
+                        )
+                    continue
                 if reductions == {"step_change_l2"}:
                     if quantity.execution["role"] is not None:
                         raise ValueError("step-change norm is a whole-state diagnostic")
@@ -2422,10 +2446,6 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                         )
                 else:
                     self._diagnostic_component(names, roles, quantity.execution["role"])
-                layout = layouts.get(quantity.layout_id)
-                if layout is None:
-                    raise KeyError("diagnostic selected unknown layout %s" % quantity.layout_id)
-                engine = self._owner._executor_for_block(block)
                 if layout.adaptive:
                     if not callable(getattr(engine, "composite_reduce", None)):
                         raise NotImplementedError(
@@ -2524,6 +2544,33 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         kind = reduction + ("_all" if full_state else "")
         return float(cast(Any, native)(block, kind, component)), False
 
+    @staticmethod
+    def _native_balance_terms(engine: Any, route: str) -> Any:
+        """Read one current-attempt balance tuple from the native transaction mailbox."""
+        from pops.output.diagnostics import BalanceTerms
+
+        native = getattr(engine, "_accepted_balance_terms", None)
+        if not callable(native):
+            raise RuntimeError("installed runtime has no accepted balance evidence provider")
+        raw = native(route)
+        required = {
+            "storage_change",
+            "outward_boundary_flux",
+            "sources",
+            "reflux",
+            "projection",
+        }
+        if not isinstance(raw, Mapping) or set(raw) != required:
+            raise TypeError(
+                "native accepted balance provider must return exactly storage_change, "
+                "outward_boundary_flux, sources, reflux, and projection"
+            )
+        if any(type(raw[name]) is not float for name in required):
+            raise TypeError(
+                "native accepted balance provider terms must be exact floating-point scalars"
+            )
+        return BalanceTerms(**{name: raw[name] for name in sorted(required)})
+
     def _diagnostic_values(
         self,
         manifest: Any,
@@ -2550,6 +2597,30 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             variables, roles = _conservative_metadata(self._owner, block)
             execution = quantity.execution
             reductions = {operation["reduction"] for operation in execution["operations"]}
+            if reductions == {"accepted_balance"}:
+                if "accepted_balance" in skip_reductions:
+                    continue
+                operation, = execution["operations"]
+                balance = self._native_balance_terms(
+                    engine, operation["balance_route"])
+                terms = {
+                    "storage_change": balance.storage_change,
+                    "outward_boundary_flux": balance.outward_boundary_flux,
+                    "sources": balance.sources,
+                    "reflux": balance.reflux,
+                    "projection": balance.projection,
+                }
+                key = DiagnosticKey(
+                    quantity.handle,
+                    self._owner._component_manifests[block].manifest_digest,
+                    self._owner.layout_identity(quantity.layout_id),
+                    min(levels),
+                    quantity.identity.token,
+                    "discrete_balance",
+                )
+                values.append(DiagnosticPayload(
+                    key, balance.residual, "unspecified", terms))
+                continue
             if reductions == {"step_change_l2"}:
                 component, full_state = 0, True
             else:

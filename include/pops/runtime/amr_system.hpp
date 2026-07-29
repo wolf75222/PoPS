@@ -890,6 +890,9 @@ class AmrSystem {
   /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
   POPS_EXPORT double program_diagnostic(const std::string& name) const;
   POPS_EXPORT std::map<std::string, double> program_diagnostics() const;
+  /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
+  /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
+  POPS_EXPORT std::map<std::string, double> accepted_balance_terms(const std::string& route) const;
   POPS_EXPORT void begin_step_projection_report();
   POPS_EXPORT void note_step_projection(const std::string& name);
   POPS_EXPORT std::vector<std::string> consume_step_projections();

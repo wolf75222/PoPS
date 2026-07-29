@@ -1236,6 +1236,9 @@ class System {
   /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
   /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
+  /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
+  POPS_EXPORT std::map<std::string, Real> accepted_balance_terms(const std::string& route) const;
   POPS_EXPORT void begin_step_projection_report();
   POPS_EXPORT void note_step_projection(const std::string& name);
   POPS_EXPORT std::vector<std::string> consume_step_projections();

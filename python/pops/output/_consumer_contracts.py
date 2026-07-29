@@ -291,6 +291,7 @@ class ConsumerQuantity:
 
 _DIAGNOSTIC_REDUCTIONS = frozenset({
     "sum", "abs_sum", "sum_sq", "min", "max", "abs_max", "step_change_l2",
+    "accepted_balance",
 })
 _DIAGNOSTIC_TRANSFORMS = frozenset({"identity", "sqrt"})
 _DIAGNOSTIC_COLLECTIVES = {
@@ -301,6 +302,9 @@ _DIAGNOSTIC_COLLECTIVES = {
     "max": "global_max",
     "abs_max": "global_max",
     "step_change_l2": "global_sum",
+    # The five Program scalars were already reduced while executing the native
+    # accepted attempt. Reading its mailbox adds no second consumer collective.
+    "accepted_balance": None,
 }
 
 
@@ -320,11 +324,15 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
     normalized = []
     for index, operation in enumerate(operations):
         where = "DiagnosticQuantity.execution.operations[%d]" % index
-        if not isinstance(operation, Mapping) or set(operation) != {
-                "name", "reduction", "transform", "metric_weighted"}:
+        if not isinstance(operation, Mapping):
+            raise TypeError("%s has an unknown schema" % where)
+        reduction = operation.get("reduction")
+        expected = {"name", "reduction", "transform", "metric_weighted"}
+        if reduction == "accepted_balance":
+            expected.add("balance_route")
+        if set(operation) != expected:
             raise TypeError("%s has an unknown schema" % where)
         name = _text(operation["name"], "%s.name" % where)
-        reduction = operation["reduction"]
         if reduction not in _DIAGNOSTIC_REDUCTIONS:
             raise ValueError("%s.reduction is not a supported native reduction" % where)
         transform = operation["transform"]
@@ -335,17 +343,42 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
             raise TypeError("%s.metric_weighted must be an exact bool" % where)
         if weighted and reduction not in {"sum", "abs_sum", "sum_sq"}:
             raise ValueError("only additive diagnostic reductions may be metric-weighted")
-        normalized.append({
+        row = {
             "name": name,
             "reduction": reduction,
             "transform": transform,
             "metric_weighted": weighted,
-        })
+        }
+        if reduction == "accepted_balance":
+            if transform != "identity" or weighted:
+                raise ValueError(
+                    "accepted balance evidence cannot apply a scalar transform or metric weight"
+                )
+            route = Identity.from_token(operation["balance_route"])
+            if route.domain != "balance-ledger-route" or route.schema_version != 1:
+                raise ValueError(
+                    "accepted balance route must use the version-1 balance-ledger-route identity"
+                )
+            row["balance_route"] = route.token
+        normalized.append(row)
     if len({row["name"] for row in normalized}) != len(normalized):
         raise ValueError("DiagnosticQuantity execution operation names must be unique")
+    has_accepted_balance = any(
+        row["reduction"] == "accepted_balance" for row in normalized
+    )
+    if has_accepted_balance and len(normalized) != 1:
+        raise ValueError(
+            "accepted balance evidence must be the sole diagnostic execution operation"
+        )
+    if has_accepted_balance and role is not None:
+        raise ValueError("accepted balance evidence cannot select one component role")
     conservation = value["conservation"]
     normalized_conservation = None
     if conservation is not None:
+        if has_accepted_balance:
+            raise ValueError(
+                "accepted open-domain balance evidence cannot declare an invariant tolerance"
+            )
         if not isinstance(conservation, Mapping) or set(conservation) != {"tolerance"}:
             raise TypeError("DiagnosticQuantity.execution.conservation has an unknown schema")
         tolerance = _nonnegative_binary64_hex(
@@ -367,6 +400,7 @@ def diagnostic_collective_operations(execution: Any) -> tuple[str, ...]:
     return tuple(sorted({
         _DIAGNOSTIC_COLLECTIVES[operation["reduction"]]
         for operation in canonical["operations"]
+        if _DIAGNOSTIC_COLLECTIVES[operation["reduction"]] is not None
     }))
 
 

@@ -457,6 +457,7 @@ struct AmrSystem::Impl {
     double cadence_clock_restore_accepted_time = 0.0;
     int cadence_clock_restore_macro_step = 0;
     std::map<std::string, Real> program_diagnostics;
+    std::map<std::string, Real> step_balance_terms;
     pops::runtime::program::CacheManager cache;
     pops::runtime::program::HistoryManager history;
     pops::runtime::program::Profiler profiler;
@@ -501,6 +502,7 @@ struct AmrSystem::Impl {
       cadence_clock_restore_accepted_time = impl.program_.cadence_clock_restore_accepted_time_;
       cadence_clock_restore_macro_step = impl.program_.cadence_clock_restore_macro_step_;
       copy_value_map_into(program_diagnostics, impl.program_.diagnostics_);
+      copy_value_map_into(step_balance_terms, impl.program_.step_balance_terms_);
       // AMR currently owns its native cache/history rings inside AmrRuntime.  These two shared
       // ProgramRuntimeState containers are therefore empty on the AMR path, but retain their value
       // contract so a future target can populate them without weakening rollback semantics.
@@ -531,6 +533,7 @@ struct AmrSystem::Impl {
       impl.program_.cadence_clock_restore_accepted_time_ = cadence_clock_restore_accepted_time;
       impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       copy_value_map_into(impl.program_.diagnostics_, program_diagnostics);
+      copy_value_map_into(impl.program_.step_balance_terms_, step_balance_terms);
       impl.program_.cache_ = cache;
       impl.program_.hist_ = history;
       impl.program_.profiler_ = profiler;
@@ -3535,6 +3538,13 @@ double AmrSystem::program_diagnostic(const std::string& name) const {
 }
 std::map<std::string, double> AmrSystem::program_diagnostics() const {
   return p_->program_.diagnostics_;
+}
+std::map<std::string, double> AmrSystem::accepted_balance_terms(const std::string& route) const {
+  if (!p_->external_step_transaction_active_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "AmrSystem::_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  return p_->program_.accepted_balance_terms(route, "AmrSystem");
 }
 void AmrSystem::begin_step_projection_report() {
   p_->program_.begin_step_projection_report();

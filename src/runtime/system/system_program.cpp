@@ -417,6 +417,12 @@ Real System::program_diagnostic(const std::string& name) const {
 std::map<std::string, Real> System::program_diagnostics() const {
   return p_->program_.diagnostics();
 }
+std::map<std::string, Real> System::accepted_balance_terms(const std::string& route) const {
+  if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "System::_accepted_balance_terms requires an active uncommitted external step transaction");
+  return p_->program_.accepted_balance_terms(route, "System");
+}
 void System::begin_step_projection_report() {
   p_->program_.begin_step_projection_report();
 }

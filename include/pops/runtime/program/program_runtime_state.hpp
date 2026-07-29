@@ -36,6 +36,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -257,6 +258,11 @@ struct ProgramRuntimeState {
   /// COMPILED-PROGRAM SCALAR DIAGNOSTICS (ADC-414): name -> last value recorded via P.record_scalar.
   /// Lives here (not the .so) so it outlives the step closure and Python can read it. Used by BOTH.
   std::map<std::string, Real> diagnostics_;
+  /// Reserved balance records for the current native attempt only. Unlike diagnostics_, this
+  /// mailbox is cleared before every public step and is never checkpointed. Accepted balance
+  /// consumers read it while the facade's outer transaction still retains U^n, so a missing term
+  /// cannot silently reuse the preceding step.
+  std::map<std::string, Real> step_balance_terms_;
   /// Attempt-local identities of ProjectAndRecheck branches that actually executed. This report
   /// mailbox is cleared at attempt entry and consumed by the Python transaction coordinator before
   /// commit or rollback; it is deliberately not checkpoint or accepted scientific state.
@@ -672,9 +678,21 @@ struct ProgramRuntimeState {
           " set_clock cannot reuse an active stride window; restore its strict checkpoint image");
   }
 
-  /// Record a compiled-Program scalar diagnostic (ADC-414): the installed Program writes named scalars
-  /// via P.record_scalar; Python reads them after the step. Idempotent (last write wins).
-  void record_diagnostic(const std::string& name, Real value) { diagnostics_[name] = value; }
+  /// Record a compiled-Program scalar. Ordinary P.record_scalar names remain inspectable after the
+  /// step with last-write-wins semantics. The reserved balance prefix is attempt-local and additive.
+  void record_diagnostic(const std::string& name, Real value) {
+    // A Program cadence may invoke the compiled body several times inside one public macro-step.
+    // Balance records are signed, time-integrated increments and therefore accumulate across those
+    // invocations. Ordinary inspection diagnostics retain their historical last-write-wins contract.
+    static constexpr const char* kBalancePrefix = "pops.balance-term.v1:";
+    if (name.rfind(kBalancePrefix, 0) == 0) {
+      auto [entry, inserted] = step_balance_terms_.try_emplace(name, value);
+      if (!inserted)
+        entry->second += value;
+      return;
+    }
+    diagnostics_[name] = value;
+  }
 
   /// Read the named diagnostic, FAIL-LOUD if the Program never recorded it. @p runtime names the
   /// Program subsystem setter in the message (not a generic getter). @throws std::out_of_range.
@@ -690,7 +708,44 @@ struct ProgramRuntimeState {
   /// The whole name -> value diagnostics map (checkpoint / inspection). By value: inert copy.
   std::map<std::string, Real> diagnostics() const { return diagnostics_; }
 
-  void begin_step_projection_report() { step_projections_.clear(); }
+  void begin_step_projection_report() {
+    step_projections_.clear();
+    step_balance_terms_.clear();
+  }
+
+  /// Return exactly the five native Program scalars recorded for one typed balance route during the
+  /// current attempt. The facade separately proves that an external accepted-step transaction is
+  /// active. No zero, stale value, or array-derived Python fallback is permitted.
+  std::map<std::string, Real> accepted_balance_terms(const std::string& route,
+                                                     const std::string& runtime) const {
+    static constexpr const char* kRoutePrefix = "pops.balance-ledger-route.v1:sha256:";
+    static constexpr std::array<const char*, 5> kTerms{"storage_change", "outward_boundary_flux",
+                                                       "sources", "reflux", "projection"};
+    const std::string prefix{kRoutePrefix};
+    if (route.size() != prefix.size() + 64 || route.compare(0, prefix.size(), prefix) != 0 ||
+        !std::all_of(route.begin() + static_cast<std::ptrdiff_t>(prefix.size()), route.end(),
+                     [](unsigned char value) {
+                       return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+                     }))
+      throw std::invalid_argument(
+          runtime + "::_accepted_balance_terms requires a canonical balance-ledger-route identity");
+    std::map<std::string, Real> result;
+    for (const char* term : kTerms) {
+      const std::string record = "pops.balance-term.v1:" + route + ":" + term;
+      const auto found = step_balance_terms_.find(record);
+      if (found == step_balance_terms_.end())
+        throw std::runtime_error(
+            runtime + "::_accepted_balance_terms: current native attempt omitted term '" + term +
+            "'; Program.record_balance must publish all five terms");
+      if (!std::isfinite(static_cast<double>(found->second)))
+        throw std::runtime_error(
+            runtime +
+            "::_accepted_balance_terms: current native attempt produced non-finite term '" + term +
+            "'");
+      result.emplace(term, found->second);
+    }
+    return result;
+  }
 
   void note_step_projection(const std::string& name) {
     if (name.empty())
