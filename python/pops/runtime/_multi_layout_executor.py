@@ -319,6 +319,7 @@ class _MultiLayoutUniformExecutor:
         self._last_mapping_receipts = ()
         self._last_run_manifest = None
         self._last_run_identity = None
+        self._restart_lineage_identity = None
         self._last_restart_identity = None
         self._step_strategy = _common_exact(
             (engine._step_strategy for engine in self._engines.values()),
@@ -369,6 +370,7 @@ class _MultiLayoutUniformExecutor:
         restored = Identity.from_data(identity.to_data())
         self._last_run_manifest = None
         self._last_run_identity = restored
+        self._restart_lineage_identity = restored
         for engine in self._engines.values():
             engine._restore_checkpoint_run_identity(restored)
 
@@ -802,9 +804,12 @@ class _MultiLayoutUniformExecutor:
         hierarchy_mode: str = "restore_recorded_hierarchy",
         hierarchy_identity: str | None = None,
     ) -> _PreparedMultiLayoutRestart:
-        del hierarchy_identity
         if hierarchy_mode != "restore_recorded_hierarchy":
             raise NotImplementedError("multi-layout restart does not yet support RegridOnRestart")
+        if hierarchy_identity is not None:
+            raise ValueError(
+                "multi-layout restart hierarchy identity is only valid with RegridOnRestart"
+            )
         import numpy as np
         from pops.output._checkpoint_collective import (
             decode_checkpoint_bytes,

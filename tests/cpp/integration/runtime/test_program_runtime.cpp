@@ -142,6 +142,7 @@ TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
   EXPECT_TRUE(state.block_map_.empty());
   EXPECT_TRUE(state.block_params_.empty());
   EXPECT_FALSE(state.dt_bound_);
+  EXPECT_FALSE(state.restart_regrid_preflight_);
   EXPECT_FALSE(state.restart_regrid_);
   EXPECT_FALSE(state.restart_resync_);
   EXPECT_FALSE(state.authorizes_history_replay("gas.previous", 3))
@@ -152,10 +153,12 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   runtime::program::ProgramRuntimeState state;
   int old_steps = 0;
   int new_steps = 0;
+  int restart_preflights = 0;
   int restart_regrids = 0;
   int restart_resyncs = 0;
   state.install_unverified_step([&](double) { ++old_steps; });
-  state.install_restart_hooks([&] { ++restart_regrids; }, [&] { ++restart_resyncs; }, "test");
+  state.install_restart_hooks([&] { ++restart_preflights; }, [&] { ++restart_regrids; },
+                              [&] { ++restart_resyncs; }, "test");
   state.operator_authorities_ = {{{1, 2, 3, 4}}};
   state.history_replay_authorities_ = {{"gas.previous", 3}};
   state.installed_hash_ = "accepted-artifact";
@@ -181,8 +184,10 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   ASSERT_TRUE(state.dt_bound_);
   EXPECT_DOUBLE_EQ(state.dt_bound_(0.4), 0.2);
   EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+  EXPECT_NO_THROW(state.preflight_regrid_on_restart("test"));
   EXPECT_NO_THROW(state.regrid_on_restart("test"));
   EXPECT_NO_THROW(state.resync_after_restart_rollback("test"));
+  EXPECT_EQ(restart_preflights, 1);
   EXPECT_EQ(restart_regrids, 1);
   EXPECT_EQ(restart_resyncs, 1);
 

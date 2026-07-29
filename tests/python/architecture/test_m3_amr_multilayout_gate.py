@@ -26,7 +26,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 33
+    assert len(data["check"]) == 35
 
 
 def test_m3_final_gate_has_no_deferred_requirement():
@@ -82,6 +82,18 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
         ),
         "nproc": 2,
     }
+    assert {
+        "issue": "ADC-678",
+        "requirement": "restart_hierarchy_policy",
+        "polarity": "positive",
+        "kind": "mpi_python",
+        "target": "restart_hierarchy_policy",
+        "nodeid": (
+            "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::"
+            "test_regrid_on_restart_mpi_collective_rollback_and_lineage"
+        ),
+        "nproc": 2,
+    } in checks
     assert {
         "issue": "ADC-678",
         "requirement": "accepted_state",

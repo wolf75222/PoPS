@@ -446,6 +446,8 @@ def prepare_v3(
         )
     if hierarchy_mode not in {"restore_recorded_hierarchy", "regrid_on_restart"}:
         raise ValueError("restart: unsupported hierarchy policy %r" % hierarchy_mode)
+    if hierarchy_mode != "regrid_on_restart" and hierarchy_identity is not None:
+        raise ValueError("restart: hierarchy identity is only valid with RegridOnRestart")
     if hierarchy_mode == "regrid_on_restart":
         from pops.output.restart import RegridOnRestart
 
@@ -752,17 +754,58 @@ def _restart_topology_image(sim):
     return restart_topology_image(sim)
 
 
-def _restart_composite_integrals(sim):
+def _restart_collective_phase(owner, phase, action):
+    """Run one restart subphase and make every rank observe the same outcome.
+
+    RegridOnRestart mixes local validation with native collectives.  A rank must never continue into
+    the next native collective while a peer has already failed locally, so every such boundary is
+    closed by the checkpoint communicator before progress continues.
+    """
+    from pops.output._checkpoint_collective import checkpoint_topology, consensus
+
+    value = None
+    error = None
+    try:
+        value = action()
+    except BaseException as caught:
+        error = caught
+    rows = consensus(
+        checkpoint_topology(owner),
+        "AMR RegridOnRestart %s" % phase,
+        error=error,
+        value=value,
+    )
+    if any(row["value"] != rows[0]["value"] for row in rows[1:]):
+        raise RuntimeError("AMR RegridOnRestart ranks returned divergent %s evidence" % phase)
+    return value
+
+
+def _restart_composite_integrals(owner, sim, *, phase):
+    plan = _restart_collective_phase(
+        owner,
+        "%s integral plan" % phase,
+        lambda: [
+            [str(block), component]
+            for block in sim.block_names()
+            for component in range(int(sim.block_n_vars(block)))
+        ],
+    )
     rows = []
-    for block in sim.block_names():
-        for component in range(int(sim.block_n_vars(block))):
-            rows.append(
-                {
-                    "block": str(block),
-                    "component": component,
-                    "value": float(sim.composite_reduce(block, "sum", component)),
-                }
-            )
+    for index, (block, component) in enumerate(plan):
+        value = _restart_collective_phase(
+            owner,
+            "%s integral %d" % (phase, index),
+            lambda block=block, component=component: float(
+                sim.composite_reduce(block, "sum", component)
+            ),
+        )
+        rows.append(
+            {
+                "block": block,
+                "component": component,
+                "value": value,
+            }
+        )
     return rows
 
 
@@ -908,20 +951,45 @@ def apply_v3(owner, sim, prepared):
         accepted_time=float(d["t"]),
     )
     sim.set_clock(float(d["t"]), macro_step)
-    validate_restored_contract(sim, d)
+    if prepared.hierarchy_mode == "regrid_on_restart":
+        _restart_collective_phase(
+            owner,
+            "exact accepted-state validation",
+            lambda: validate_restored_contract(sim, d),
+        )
+    else:
+        validate_restored_contract(sim, d)
 
     owner._last_restart_regrid_receipt = None
     if prepared.hierarchy_mode == "regrid_on_restart":
-        before_topology = _restart_topology_image(sim)
-        before_integrals = _restart_composite_integrals(sim)
-        sim.regrid_on_restart()
-        after_topology = _restart_topology_image(sim)
-        after_integrals = _restart_composite_integrals(sim)
-        _require_restart_conservation(before_integrals, after_integrals)
+        before_topology = _restart_collective_phase(
+            owner,
+            "recorded topology image",
+            lambda: _restart_topology_image(sim),
+        )
+        before_integrals = _restart_composite_integrals(owner, sim, phase="recorded hierarchy")
+        _restart_collective_phase(
+            owner,
+            "native preflight",
+            sim.preflight_regrid_on_restart,
+        )
+        _restart_collective_phase(
+            owner,
+            "native transform",
+            sim.regrid_on_restart,
+        )
+        after_topology = _restart_collective_phase(
+            owner,
+            "transformed topology image",
+            lambda: _restart_topology_image(sim),
+        )
+        after_integrals = _restart_composite_integrals(owner, sim, phase="transformed hierarchy")
         receipt = {
             "schema_version": 1,
             "policy_identity": prepared.hierarchy_identity,
-            "changed": before_topology != after_topology,
+            "changed": (
+                before_topology["topology_identity"] != after_topology["topology_identity"]
+            ),
             "accepted_time": float(d["t"]),
             "accepted_macro_step": macro_step,
             "before": before_topology,
@@ -931,7 +999,16 @@ def apply_v3(owner, sim, prepared):
         }
         from pops.runtime._amr_checkpoint_contract import validate_regridded_contract
 
-        validate_regridded_contract(sim, d, receipt)
+        def validate_transformed_state():
+            _require_restart_conservation(before_integrals, after_integrals)
+            validate_regridded_contract(sim, d, receipt)
+            return receipt
+
+        receipt = _restart_collective_phase(
+            owner,
+            "conservation and transformed-state validation",
+            validate_transformed_state,
+        )
         owner._last_restart_regrid_receipt = receipt
     owner._temporal_restart_state = prepared.temporal_state
     owner._step_controller = None
