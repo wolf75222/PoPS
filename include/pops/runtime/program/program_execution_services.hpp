@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <initializer_list>
 #include <limits>
 #include <map>
@@ -140,6 +141,11 @@ class ProgramExecutionServices {
     std::uint64_t generation = 0;
     int levels = 1;
   };
+
+  /// Install one compiled macro-step through the execution provider's lifecycle authority.
+  void install(std::function<void(double)> step) const {
+    provider_().program_execution_install_(std::move(step));
+  }
 
   /// Field-solve operations are authored once for every Program execution topology.  Providers own
   /// only the storage/publication transaction and hierarchy semantics behind these hooks.
@@ -1326,6 +1332,14 @@ class ProgramExecutionServices {
 
   static std::runtime_error block_map_error_(std::string message) {
     return std::runtime_error(std::move(message));
+  }
+
+  static SolveReport consume_field_outcome_(SolveOutcome outcome) {
+    return outcome.consume(outcome.report().solved_value_available()
+                               ? SolveConsumption::kAccept
+                               : (outcome.report().action == SolveAction::kRejectAttempt
+                                      ? SolveConsumption::kRejectAttempt
+                                      : SolveConsumption::kFailRun));
   }
 
   RelativeCellMeasure relative_cell_measure_(int owner) const {
