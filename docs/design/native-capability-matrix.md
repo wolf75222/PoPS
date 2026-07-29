@@ -111,7 +111,8 @@ Supported native routes include:
   endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
   dynamic active-depth changes, non-finest dynamic replacements at depth greater than two,
-  historical shared-interface rates, and dynamic refined MPI rematerialization remain unavailable.
+  historical shared-interface rates, and rank-changing dynamic refined rematerialization remain
+  unavailable.
   Frozen refined interface publication uses the same exact `MPI_COMM_WORLD` trace consensus as the
   flat route; every rank evaluates the canonical shared flux and scatters only to its locally owned
   endpoint cells.
@@ -176,10 +177,13 @@ Explicit unsupported rows include:
   tagger/clustering regrid, history/flux topology is rebound, composite conservation is checked, and
   a global transform receipt derives a distinct run identity. Persistent tagging state is restored
   and rolled back with the accepted image, then advanced exactly once by a successful transform.
-  Serial shared-interface groups are rematerialized in the same transaction and execute
-  conservatively after rollback or commit. Uniform, multi-layout, elliptic-field, distributed
-  dynamic shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
-  `bit_identical=True` is incompatible with the policy.
+  Serial and exact-`MPI_COMM_WORLD` shared-interface groups are rematerialized at unchanged
+  cardinality in the same transaction and execute conservatively after rollback or commit. Uniform,
+  multi-layout, elliptic-field, rank-changing dynamic shared-interface, and
+  bootstrap-staggered/cache cases remain explicit refusals; `bit_identical=True` is incompatible
+  with the policy. Exact before/after dense-history fingerprints are gathered only on this cold
+  restart path; their memory and collective-communication cost scales with all retained slots and
+  active level-domain cells.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 - `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a

@@ -41,10 +41,13 @@ native tagger uses non-zero hysteresis; both source ranks must publish the same 
 payload, and the one-rank checkpoint after restore must retain those bytes exactly. A separate
 two-rank process injects a byte-level producer disagreement and proves collective refusal leaves no
 published or temporary checkpoint.
-The serial RegridOnRestart proof restores that accepted hysteresis image, executes exactly one
-scientific regrid, and requires its cycle to advance exactly once. A fault injected after the native
-topology/tagging mutation must roll back the complete pre-restart Program image; a second successful
-attempt must reproduce the same transformed tagging bytes before continuation.
+The serial and two-rank RegridOnRestart proofs restore that accepted hysteresis image, execute
+exactly one scientific regrid, and require its cycle to advance exactly once. At unchanged MPI
+cardinality, exact-`MPI_COMM_WORLD` shared-interface registries are preflighted before the transform,
+rematerialized against the detached candidate hierarchy, and authenticated again before commit. A
+fault or rank-divergent identity injected after the native topology/tagging mutation must roll back
+the complete pre-restart Program image; a second successful attempt must reproduce the same
+transformed tagging bytes before continuation.
 The source validator requires that exact pytest path to remain in the manifest's
 `mpi_orchestrators` category; removing or reclassifying it invalidates `--check-only`.
 All Python checks run with native and MPI requirements forced on; a missing capability cannot turn
