@@ -102,6 +102,38 @@ target = "solve"
 nodeid = "tests/python/unit/time/test_solve_outcome_contract.py::test_solve_outcome_refuses_implicit_invalid_and_double_consumption"
 
 [[check]]
+issue = "ADC-665"
+requirement = "fallible_nonlinear_evaluation"
+polarity = "positive"
+kind = "ctest"
+target = "test_newton_robustness"
+test_regex = "^NewtonRobustnessTest\\.fallible_analytic_jacobian_rejects_privately_and_success_keeps_legacy_result$"
+
+[[check]]
+issue = "ADC-665"
+requirement = "fallible_nonlinear_evaluation"
+polarity = "refusal"
+kind = "ctest"
+target = "test_newton_robustness"
+test_regex = "^NewtonRobustnessTest\\.fallible_source_propagates_retry_reject_fail_and_invalid_without_publication$"
+
+[[check]]
+issue = "ADC-665"
+requirement = "fallible_linear_evaluation"
+polarity = "positive"
+kind = "ctest"
+target = "test_coupled_fieldsolve"
+test_regex = "^test_coupled_fieldsolve\\.named_solve_honors_every_qualified_stage_without_live_mutation$"
+
+[[check]]
+issue = "ADC-665"
+requirement = "fallible_linear_evaluation"
+polarity = "refusal"
+kind = "ctest"
+target = "test_krylov_collective_contract"
+test_regex = "^test_krylov_collective_contract\\.RankLocalFailuresAreUniformBeforeScientificCollectives$"
+
+[[check]]
 issue = "ADC-668"
 requirement = "native_multiblock_implicit_phase"
 polarity = "positive"

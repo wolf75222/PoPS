@@ -24,7 +24,7 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 28
+    assert len(data["check"]) == 32
 
 
 def test_m2_final_gate_has_no_deferred_requirement():
@@ -34,6 +34,42 @@ def test_m2_final_gate_has_no_deferred_requirement():
     assert {row["issue"] for row in data["check"]} == {
         "ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666",
         "ADC-667", "ADC-668",
+    }
+
+
+def test_m2_fallible_solver_evaluations_use_exact_native_proofs():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    checks = {
+        (row["requirement"], row["polarity"]): (
+            row["target"], row.get("test_regex"),
+        )
+        for row in data["check"]
+        if row["requirement"] in {
+            "fallible_nonlinear_evaluation", "fallible_linear_evaluation",
+        }
+    }
+    assert checks == {
+        ("fallible_nonlinear_evaluation", "positive"): (
+            "test_newton_robustness",
+            r"^NewtonRobustnessTest\.fallible_analytic_jacobian_"
+            r"rejects_privately_and_success_keeps_legacy_result$",
+        ),
+        ("fallible_nonlinear_evaluation", "refusal"): (
+            "test_newton_robustness",
+            r"^NewtonRobustnessTest\.fallible_source_propagates_"
+            r"retry_reject_fail_and_invalid_without_publication$",
+        ),
+        ("fallible_linear_evaluation", "positive"): (
+            "test_coupled_fieldsolve",
+            r"^test_coupled_fieldsolve\."
+            r"named_solve_honors_every_qualified_stage_without_live_mutation$",
+        ),
+        ("fallible_linear_evaluation", "refusal"): (
+            "test_krylov_collective_contract",
+            r"^test_krylov_collective_contract\."
+            r"RankLocalFailuresAreUniformBeforeScientificCollectives$",
+        ),
     }
 
 
