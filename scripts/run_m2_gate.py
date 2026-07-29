@@ -24,6 +24,7 @@ EXPECTED_REQUIREMENTS = {
     "phase_pipeline", "program_graph", "schedules", "residual_operator",
     "solve_outcome", "fallible_nonlinear_evaluation", "fallible_linear_evaluation",
     "native_multiblock_implicit_phase",
+    "refined_hierarchy_native_ordering",
     "normalized_program_execution",
     "program_only_temporal_routes",
     "step_transaction", "restart", "temporal_restart",
