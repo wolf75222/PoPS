@@ -5,6 +5,8 @@
 // replicated-L0/distributed-L1 scenario proves the composite field-coupled residual JVP against an
 // independent finite difference. It also proves a level-local solved-field physical-boundary JVP
 // and pre-solve rejection when provider, evaluation point, or pack presence differs between ranks.
+// The deliberately unsupported distributed-L0 composite topology is rejected collectively before
+// RHS assembly, solve, publication, or mutation of already accepted field/provider state.
 
 #include <gtest/gtest.h>
 
@@ -917,6 +919,64 @@ long prove_exact_distributed_stage_pack() {
       if (my_rank() == 1)
         stages[1] = nullptr;
       require_collective_pre_solve_rejection(common_point, field, stages);
+    }
+
+    // CompositeFAC deliberately rejects a distributed coarse hierarchy. Prove the collective
+    // capability guard runs before any RHS, solve, publication, or transaction mutation by keeping
+    // this accepted level-local field as a witness on the exact same distributed L0/L1 runtime.
+    std::vector<MultiFab> live_a_before, live_b_before, provider_before;
+    for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level) {
+      live_a_before.emplace_back(runtime.level_state(0, provider_level));
+      live_b_before.emplace_back(runtime.level_state(1, provider_level));
+      provider_before.emplace_back(runtime.provider_potential_level(field, provider_level));
+    }
+    const int rejected_assemblies_before = rhs_assembly_calls;
+    const std::size_t fields_before = runtime.n_named_fields();
+    const std::vector<std::string> slots_before = runtime.provider_slots();
+    AmrFieldSolveConfig rejected_plan = plan;
+    rejected_plan.plan_identity = "tests.mpi.distributed-composite-rejected.plan@1";
+    rejected_plan.provider_identity = "tests.mpi.distributed-composite-rejected";
+    rejected_plan.output_key = "distributed_composite_rejected";
+    rejected_plan.hierarchy_policy = composite_hierarchy_policy();
+    rejected_plan.providers = {FieldProviderBinding{"tests.mpi.distributed-composite-rejected/rhs",
+                                                    "a", "distributed_composite_rejected",
+                                                    Real(1)}};
+
+    constexpr std::string_view expected =
+        "AMR field solver provider rejected request (code 14): composite hierarchy cannot "
+        "represent this coarse distribution or active region";
+    bool rejected = false;
+    bool exact_diagnostic = false;
+    try {
+      runtime.install_field_plan("distributed_composite_rejected", rejected_plan);
+    } catch (const std::invalid_argument& error) {
+      rejected = true;
+      exact_diagnostic = std::string_view(error.what()) == expected;
+    } catch (...) {
+    }
+    require(rejected, "distributed-L0 composite rejected on every rank");
+    require(exact_diagnostic, "distributed-L0 composite exact code-14 diagnostic");
+    require(rhs_assembly_calls == rejected_assemblies_before,
+            "distributed-L0 composite rejected before RHS assembly and solve");
+    require(!runtime.field_solve_transaction_active(),
+            "distributed-L0 composite leaves no field transaction");
+    require(runtime.n_named_fields() == fields_before,
+            "distributed-L0 composite publishes no field plan");
+    require(runtime.provider_slots() == slots_before,
+            "distributed-L0 composite preserves the provider registry");
+    require(!runtime.has_named_field("distributed_composite_rejected"),
+            "distributed-L0 composite provider slot remains absent");
+    for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level) {
+      const auto index = static_cast<std::size_t>(provider_level);
+      require(global_max_allocated_diff(runtime.level_state(0, provider_level),
+                                        live_a_before[index]) == Real(0),
+              "distributed-L0 composite preserves block a live state");
+      require(global_max_allocated_diff(runtime.level_state(1, provider_level),
+                                        live_b_before[index]) == Real(0),
+              "distributed-L0 composite preserves block b live state");
+      require(global_max_allocated_diff(runtime.provider_potential_level(field, provider_level),
+                                        provider_before[index]) == Real(0),
+              "distributed-L0 composite preserves accepted provider publication");
     }
   } catch (const std::exception& error) {
     if (my_rank() == 0)
