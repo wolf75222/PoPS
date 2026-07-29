@@ -98,6 +98,13 @@ Supported native routes include:
   interpolation are cell-centered on the supplied route. Derived fields use `elliptic_solve` and
   caches use `patch_topology`; unsupported provider contracts fail before artifact creation.
 - Finite-volume spatial discretisation on the 2D core.
+- One prepared, model-aware 2D transport-boundary plan shared by Uniform and AMR native/compiled
+  routes. The capability matrix marks this route `partial` and names its exact built-ins:
+  periodicity, extrapolation, constant or `RuntimeParam` fixed state, and typed-role slip wall.
+  Separate `unavailable` rows expose the missing characteristic no-inflow kernel, non-identity
+  representation conversion, device-side analytic `(x,t,params)` data, and post-Riemann flux
+  transformation. These requests fail during resolution or lowering; none silently degrades to
+  component-wise ghost filling.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.

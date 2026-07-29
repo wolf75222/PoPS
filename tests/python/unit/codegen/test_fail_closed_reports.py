@@ -74,6 +74,50 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert amr_implicit.layout == "amr"
 
 
+def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_kernels():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    prepared = routes["boundary:prepared_transport"]
+    assert prepared.status == "partial"
+    assert prepared.layout == "uniform|amr"
+    assert prepared.backend == "production"
+    assert prepared.mpi is True
+    assert prepared.gpu is False
+    assert "one prepared 2D model-aware plan" in prepared.limitation
+    assert "typed-role slip wall" in prepared.limitation
+    assert "corners explicitly not required" in prepared.limitation
+
+    expected_unavailable = {
+        "boundary:characteristic_no_inflow": (
+            "executable model eigenstructure",
+            "prepared characteristic kernel",
+        ),
+        "boundary:representation_conversion": (
+            "non-identity RepresentationFlow",
+            "representation-conversion provider",
+        ),
+        "boundary:analytic_xtp": (
+            "constants and RuntimeParams only",
+            "compiled ghost-boundary component",
+        ),
+        "boundary:post_riemann_flux": (
+            "no post-Riemann numerical-flux transformation port",
+            "NumericalFlux boundary component interface",
+        ),
+    }
+    for feature, (limitation, alternative) in expected_unavailable.items():
+        route = routes[feature]
+        assert route.status == "unavailable"
+        assert route.layout == "uniform|amr"
+        assert limitation in route.limitation
+        assert alternative in route.alternative
+        assert route.error_message
+
+
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):
     monkeypatch.setattr(defaults, "_native_extension", lambda: None)
     assert defaults.numerical_defaults_report()["source"] == "source-only"

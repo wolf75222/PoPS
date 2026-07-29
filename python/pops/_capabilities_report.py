@@ -375,6 +375,92 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
     gpu = bool(_flag_value(flags, "supports_gpu"))
     return [
         _row(
+            "boundary:prepared_transport",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "one prepared 2D model-aware plan serves Uniform/AMR native and compiled "
+                "transport boundaries; executable built-ins are periodic, extrapolation, "
+                "constant/RuntimeParam fixed state, and typed-role slip wall, with "
+                "double-physical corners explicitly not required by dimension-split FV stencils"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:characteristic_no_inflow",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "the prepared transport plan rejects characteristic closure until executable "
+                "model eigenstructure, incoming-mode data, and sonic/sign policies are installed"
+            ),
+            requested="characteristic no-inflow/outflow transport boundary",
+            available_route="explicit fixed-state inflow or extrapolated outflow",
+            alternative=(
+                "use the explicit built-in route or install a prepared characteristic kernel"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:representation_conversion",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "primitive/conservative boundary conversion has no built-in executable provider; "
+                "a non-identity RepresentationFlow is rejected before native installation"
+            ),
+            requested="transport boundary data in a non-state representation",
+            available_route="boundary data in the evolved state's representation",
+            alternative="install an authored compiled representation-conversion provider",
+            source=source,
+        ),
+        _row(
+            "boundary:analytic_xtp",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "the built-in inflow evaluator accepts constants and RuntimeParams only; "
+                "coordinate-, state-, field-, or time-dependent expressions are rejected"
+            ),
+            requested="device-side analytic boundary data depending on (x,t,params)",
+            available_route="constant or RuntimeParam fixed-state inflow",
+            alternative="install a compiled ghost-boundary component",
+            source=source,
+        ),
+        _row(
+            "boundary:post_riemann_flux",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "the prepared boundary component ABI has ghost, residual, and JVP operations "
+                "but no post-Riemann numerical-flux transformation port"
+            ),
+            requested="post-Riemann transport-boundary flux provider",
+            available_route="prepared ghost-state/exterior-state transport boundary",
+            alternative="add the typed NumericalFlux boundary component interface",
+            source=source,
+        ),
+        _row(
             "amr:field_coupled_rhs_jacvec",
             layout="amr",
             backend="none",
