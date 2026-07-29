@@ -33,6 +33,8 @@ SHARED_SIGNATURES = (
     "void rhs_group(",
     "void source_default_into(",
     "void apply_projection(",
+    "Real hmin(",
+    "Real max_wave_speed(",
     "MultiFab rhs_scratch_like(",
     "MultiFab scratch_state_like(",
     "MultiFab& rhs_scratch(",
@@ -215,6 +217,8 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_rhs_group_",
             "program_execution_source_default_into_",
             "program_execution_apply_projection_",
+            "program_execution_hmin_",
+            "program_execution_max_wave_speed_",
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
@@ -401,6 +405,28 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
             "}", 1
         )[0]
         assert "sys_block(" not in projection_hook
+
+
+def test_shared_cfl_dispatch_maps_the_program_block_once_and_leaves_topology_to_providers():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert "return provider_().program_execution_hmin_();" in shared
+    assert (
+        "program_execution_max_wave_speed_(sys_block(block), state)" in shared
+    )
+    assert "return sys_->cfl_min_dx();" in uniform
+    assert "return sys_->block_max_speed(runtime_block, state);" in uniform
+    assert "return eng_->level_hmin(level_);" in amr
+    assert (
+        "eng_->level_max_speed(static_cast<std::size_t>(runtime_block), level_, state)"
+        in amr
+    )
+    for provider in (uniform, amr):
+        wave_speed_hook = provider.split(
+            "program_execution_max_wave_speed_", 1
+        )[1].split("}", 1)[0]
+        assert "sys_block(" not in wave_speed_hook
 
 
 def test_shared_commit_many_owns_layout_and_alias_semantics():
