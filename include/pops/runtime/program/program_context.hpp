@@ -31,7 +31,6 @@
 #include <pops/mesh/storage/multifab.hpp>           // MultiFab
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
-#include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
@@ -73,12 +72,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
  public:
   explicit ProgramContext(System* sys) : sys_(sys) {}
 
-  /// Register the macro-step body. @p step advances ONE macro-step over dt (it owns solve_fields,
-  /// the RHS, the linear combine and the commit). An empty std::function is rejected.
-  void install(std::function<void(double)> step) const {
-    sys_->install_program_step(std::move(step));
-  }
-
   /// Start one generated Program body.  The native stepper supplies the accepted local dt; every
   /// boundary evaluation in the body derives its physical time from this exact value and the
   /// authored rational stage fraction.
@@ -92,7 +85,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_physical_time_offset_ = 0.0;
   }
 
-  SolveOutcome solve_fields() const {
+ private:
+  SolveOutcome program_execution_solve_fields_outcome_() const {
     // No count_kernel() here: System's private in-place default provider seam already counts it.
     // The from_state/from_blocks/named seams below do not, so those routes count explicitly.
     sys_->prepare_default_field_publication_storage_();
@@ -103,19 +97,16 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// Program's stage k reads phi solved from stage k's own state. Forwards to
   /// System::solve_fields_from_state. With b = 0 and u_stage = U^n (the first stage) it matches
   /// solve_fields(); the codegen lowers every solve_fields op to this, passing the stage's state var.
-  SolveOutcome solve_fields_from_state(int b, MultiFab& u_stage) const {
+  SolveOutcome program_execution_solve_fields_from_state_outcome_(int b, MultiFab& u_stage) const {
     count_kernel();
     sys_->prepare_default_field_publication_storage_();
     return run_field_solve_transaction_(
         [&]() { return sys_->solve_fields_from_state_in_place_(sys_block(b), u_stage); });
   }
-  SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                          const std::string& provider_slot, int b,
-                                          MultiFab& u_stage) const {
+  SolveOutcome program_execution_field_solve_from_state_at_outcome_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int b, MultiFab& u_stage) const {
     count_kernel();
-    if (provider_slot.empty())
-      throw std::invalid_argument(
-          "System::solve_fields_from_state_at requires an exact provider slot");
     sys_->prepare_named_field_publication_storage_(provider_slot);
     return run_field_solve_transaction_([&]() {
       return sys_->solve_fields_from_state_at_in_place_(point, provider_slot, sys_block(b),
@@ -128,7 +119,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// System::solve_fields_from_state(field, b, u_stage). The codegen lowers
   /// P.solve_fields(field=name, state=U) to this; a default (unnamed) solve_fields keeps the overload
   /// above, byte-identical.
-  SolveOutcome solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
+  SolveOutcome program_execution_solve_named_field_from_state_outcome_(const std::string& field,
+                                                                       int b,
+                                                                       MultiFab& u_stage) const {
     count_kernel();
     sys_->prepare_named_field_publication_storage_(field);
     return run_field_solve_transaction_(
@@ -142,7 +135,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// Manual callers may provide the historical pointer vector. Generated Programs use the exact-IR
   /// initializer-list overload below, which fills the same context-owned workspace without allocating
   /// a pointer vector in the step body. This is the multi-target counterpart of solve_fields_from_state.
-  SolveOutcome solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
+  SolveOutcome program_execution_solve_fields_from_blocks_outcome_(
+      const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
     // The codegen builds @p u_stages indexed BY PROGRAM block index (a stage state slotted at its own
     // Program index, the rest nullptr). The System solver expects it indexed by SYSTEM block index, so
@@ -172,8 +166,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
         [&]() { return solve_default_field_workspace_(workspace); });
   }
 
-  SolveOutcome solve_fields_from_blocks(const std::string& field,
-                                        const std::vector<const MultiFab*>& u_stages) const {
+  SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
+      const std::string& field, const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
     FieldSolveWorkspace& workspace = manual_named_field_solve_workspace_(field);
     fill_manual_field_stages_(workspace, u_stages, /*require_exact_size=*/true);
@@ -185,8 +179,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// Allocation-free generated route.  The exact IR identity owns one context-local pointer/snapshot
   /// workspace; @p field and the ordered Program block pack are authenticated on every replay.  The
   /// old vector overloads above remain available for manual C++ callers.
-  SolveOutcome solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
-                                        std::initializer_list<FieldStageOverride> overrides) const {
+  SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
+      std::int64_t value_id, std::string_view field,
+      std::initializer_list<FieldStageOverride> overrides) const {
     count_kernel();
     FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
     sys_->prepare_named_field_publication_storage_(workspace.generated_field_identity);
@@ -194,612 +189,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
     });
   }
-  /// Evaluate one authored rate at its exact, stable node identity.  There is deliberately no
-  /// sentinel/default identity: shared-interface assembly and boundary callbacks authenticate this
-  /// value as part of BoundaryEvaluationPoint, so an anonymous rate would be temporally ambiguous.
-  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
-    require_rate_identity_(rate_id);
-    count_kernel();
-    sys_->block_rhs_into_at(boundary_point_(rate_id), sys_block(b), u, r);
-  }
-  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage_id) const {
-    return boundary_point_(stage_id);
-  }
-  bool has_boundary_linearization(int b) const {
-    return sys_->block_has_boundary_linearization(sys_block(b));
-  }
-  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                        MultiFab& u, MultiFab& r, bool flux_only) const {
-    count_kernel();
-    sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only);
-  }
-  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                        MultiFab& u, MultiFab& r, bool flux_only,
-                        const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only, boundary);
-  }
-  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                                 MultiFab& u, MultiFab& c) const {
-    count_kernel();
-    sys_->block_boundary_residual_into_at(point, sys_block(b), u, c);
-  }
-  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                                 MultiFab& u, MultiFab& c,
-                                 const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    sys_->block_boundary_residual_into_at(point, sys_block(b), u, c, boundary);
-  }
-  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                            MultiFab& u, const MultiFab& v, MultiFab& j) const {
-    count_kernel();
-    sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j);
-  }
-  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                            MultiFab& u, const MultiFab& v, MultiFab& j,
-                            const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j, boundary);
-  }
-
-  struct RhsGroupRequest {
-    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
-                    int flux_only_value)
-        : block(block_value),
-          state(state_value),
-          rhs(rhs_value),
-          rate_id(rate_id_value),
-          flux_only(flux_only_value) {}
-
-    int block;
-    MultiFab* state;
-    MultiFab* rhs;
-    int rate_id;
-    int flux_only;
-  };
-
-  /// Simultaneous multi-block rate evaluation.  @p group_id is the exact authored identity of this
-  /// atomic evaluation and is deliberately distinct from every request's rate-node identity.  The
-  /// generated Program emits one group only for RHS nodes authenticated at the same exact StagePoint;
-  /// System then executes each installed interface once before any group result can be consumed.
-  void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
-    require_group_identity_(group_id);
-    if (requests.size() == 0)
-      throw std::invalid_argument("Program RHS group cannot be empty");
-    std::vector<int> rate_ids;
-    rate_ids.reserve(requests.size());
-    for (const auto& request : requests) {
-      require_rate_identity_(request.rate_id);
-      if (request.rate_id == group_id ||
-          std::find(rate_ids.begin(), rate_ids.end(), request.rate_id) != rate_ids.end())
-        throw std::invalid_argument(
-            "Program RHS group and member rate identities must be distinct");
-      if (request.state == nullptr || request.rhs == nullptr ||
-          (request.flux_only != 0 && request.flux_only != 1))
-        throw std::invalid_argument("Program RHS group contains an invalid request");
-      rate_ids.push_back(request.rate_id);
-    }
-    std::vector<int> blocks;
-    std::vector<MultiFab*> states;
-    std::vector<MultiFab*> rhs;
-    std::vector<int> flux_only;
-    blocks.reserve(requests.size());
-    states.reserve(requests.size());
-    rhs.reserve(requests.size());
-    flux_only.reserve(requests.size());
-    for (const auto& request : requests) {
-      count_kernel();
-      blocks.push_back(sys_block(request.block));
-      states.push_back(request.state);
-      rhs.push_back(request.rhs);
-      flux_only.push_back(request.flux_only);
-    }
-    sys_->block_rhs_group(boundary_point_(group_id), blocks, states, rhs, flux_only);
-  }
-
-  /// r <- -div F(u) for block @p b -- the SAME flux divergence as @ref rhs_into but WITHOUT the model's
-  /// default/composite source (Poisson frozen). Forwards to System::block_neg_div_flux_into (the block's
-  /// SourceFreeModel<Model> rhs path, bit-identical to rhs_into minus the source). The codegen lowers a
-  /// hyperbolic stage that excludes the default source (P.rhs(flux=True, sources without "default"),
-  /// incl. the empty list) to this, so a Lie/Strang split assembles "flux but no source" without the
-  /// default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). Header-inline forwarder,
-  /// like @ref rhs_into.
-  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
-    require_rate_identity_(rate_id);
-    count_kernel();
-    sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), sys_block(b), u, r);
-  }
-
-  /// r <- S(u, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
-  /// divergence (the exact MIRROR of @ref neg_div_flux_default_into). Forwards to
-  /// System::block_source_into (the block's SourceInto path, bit-identical to the source half of
-  /// rhs_into). The codegen lowers a SOURCE stage (P.rhs(flux=False, sources with "default")) to this, so
-  /// a Lie/Strang split assembles "the default source but no flux" without the -div F base leaking in
-  /// (epic ADC-399 / ADC-430, spec: rhs flux=False is source-only). Header-inline forwarder, like @ref
-  /// neg_div_flux_default_into.
-  void source_default_into(int b, MultiFab& u, MultiFab& r) const {
-    count_kernel();
-    sys_->block_source_into(sys_block(b), u, r);
-  }
-
-  /// Fail before a generated pointwise operator touches storage when an embedded boundary is active.
-  /// Default-source and transport residuals have native geometry-aware providers; arbitrary generated
-  /// expressions and local solves do not yet, and cannot be repaired by post-zeroing their outputs.
-  void require_cartesian_generated_operator(int b, const std::string& operation) const {
-    sys_->require_cartesian_generated_operator(sys_block(b), operation);
-  }
-
-  /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) -- the
-  /// SAME hmin the native CFL uses. Forwards to System::cfl_min_dx. A compiled time Program's dt bound
-  /// (epic ADC-399 / ADC-417, spec s18) reads it to express e.g. cfl * hmin / max_wave_speed.
-  Real hmin() const { return sys_->cfl_min_dx(); }
-
-  /// The maximum |wave speed| of block @p b on the state @p u: the SAME per-block reduction step_cfl
-  /// reads (BlockState::max_speed). Forwards to System::block_max_speed -- it REUSES the block's
-  /// wave-speed closure, it does not recompute the speed. @p u is the state the bound is evaluated on
-  /// (the block's current state for a CFL bound). The dt_bound expression uses it as the denominator of
-  /// cfl * hmin / max_wave_speed (epic ADC-399 / ADC-417, spec s18).
-  Real max_wave_speed(int b, const MultiFab& u) const {
-    return sys_->block_max_speed(sys_block(b), u);
-  }
-
-  /// Materialize one lane-private mesh authority for a prepared operator that is not attached to a
-  /// conservative block (for example, a scalar elliptic field).  This deliberately uses the
-  /// unqualified mesh BC and cannot borrow a block's native boundary components.
-  std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
-      const MultiFab&, const ExecutionLane& lane) const {
-    return std::make_shared<PreparedGridBoundarySession>(sys_->grid_context(), lane);
-  }
-
-  /// Materialize the exact boundary authority of one authenticated Program block.  The Program
-  /// index is resolved through the installed name map before any component state is prepared.
-  std::shared_ptr<PreparedGridBoundarySession> prepare_block_boundary_session(
-      int block, MultiFab& prototype, const runtime::multiblock::BoundaryEvaluationPoint& point,
-      const ExecutionLane& lane) const {
-    return std::make_shared<PreparedGridBoundarySession>(sys_->grid_context(sys_block(block)), lane,
-                                                         prototype, point);
-  }
-
-  /// The MultiFab a per-level coefficient / RHS assembly kernel should WRITE its field into (ADC-633).
-  /// On the uniform System the answer is always the passed field itself -- an IDENTITY hook, so a
-  /// templated assembly free function writes straight into the level-0-bound scratch the codegen
-  /// allocated, byte-for-byte as before. The opaque prepared field-slot identity is ignored here; it
-  /// exists so an AMR provider can redirect the write to its own per-level storage without extending
-  /// this context for every new operator envelope.
-  MultiFab& assembly_target(MultiFab& field, std::string_view field_slot_identity) const {
-    validate_prepared_field_slot(field_slot_identity, "ProgramContext::assembly_target");
-    return field;
-  }
-
-  /// The MultiFab a per-level reconstruction should READ its solved field from (ADC-633). Identity on
-  /// the uniform System (the field passed is the level-0 solution the emitted solve wrote); the AMR
-  /// ProgramContext redirects the READ to the current level's published composite field on a refined
-  /// hierarchy. Trivial + inline so the uniform .so is byte-for-byte unchanged.
-  MultiFab& assembly_source(MultiFab& field, std::string_view field_slot_identity) const {
-    validate_prepared_field_slot(field_slot_identity, "ProgramContext::assembly_source");
-    return field;
-  }
-  /// Uniform counterpart of AmrProgramContext::linear_solution: one grid has one solve field.
-  MultiFab& linear_solution(MultiFab& field) const { return field; }
-
-  /// Authenticate the exact operator evaluation point. Generated code supplies a canonical 256-bit
-  /// Program/operator authority plus the prepared field/resource identities; the context supplies the
-  /// monotonic evaluation revision and exact native clock values.
-  OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
-                                                          const MultiFab& prototype,
-                                                          OperatorFingerprint resources) const {
-    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
-      throw std::logic_error("operator snapshot requested outside a prepared Program step");
-    const GridContext gc = sys_->grid_context();
-    OperatorFingerprint topology =
-        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
-    if (sys_->program_is_polar())
-      ::pops::detail::fingerprint_geometry(topology, sys_->program_polar_geometry());
-    else
-      ::pops::detail::fingerprint_geometry(topology, gc.geom);
-    ::pops::detail::fingerprint_boundary(topology, gc.bc);
-    if (gc.boundary_plan) {
-      ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->identity());
-      ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->state_identity());
-      ::pops::detail::fingerprint_mix(
-          topology, static_cast<std::uint64_t>(gc.boundary_plan->required_depth()));
-    } else {
-      ::pops::detail::fingerprint_mix(topology, "legacy-bcrec-boundary");
-    }
-    if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
-      throw std::overflow_error("Program operator snapshot revision exhausted");
-    const std::uint64_t revision = ++operator_snapshot_revision_;
-    invalidate_active_operator_snapshot_();
-    OperatorEvaluationSnapshot snapshot =
-        operator_evaluation_snapshot_(authority, topology, resources, revision);
-    active_operator_snapshot_revision_ = revision;
-    return snapshot;
-  }
-
-  /// Recompute the current native identity without advancing the monotonic counter. A requested
-  /// revision is reproduced only while it is the context's active mint; logical-scope entry/exit
-  /// clears that authority, so an exactly restored outer clock still probes unequal until reminted.
-  /// The uniform mesh fingerprint remains reusable, keeping the Krylov probe free of layout walks.
-  OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
-                                                       OperatorFingerprint topology,
-                                                       OperatorFingerprint resources,
-                                                       std::uint64_t revision) const {
-    const std::uint64_t probe_revision =
-        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
-    return operator_evaluation_snapshot_(authority, topology, resources, probe_revision);
-  }
-
- private:
-  void invalidate_active_operator_snapshot_() const noexcept {
-    active_operator_snapshot_revision_ = 0;
-  }
-
-  OperatorEvaluationSnapshot operator_evaluation_snapshot_(OperatorFingerprint authority,
-                                                           OperatorFingerprint topology,
-                                                           OperatorFingerprint resources,
-                                                           std::uint64_t revision) const {
-    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
-      throw std::logic_error("operator snapshot requested outside a prepared Program step");
-    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
-    const double evaluation_time = static_cast<double>(physical_time()) +
-                                   logical_physical_time_offset_ +
-                                   stage_time_.value() * current_dt_;
-    return {authority,
-            revision,
-            static_cast<std::int64_t>(macro_step()),
-            evaluation_stage.numerator,
-            evaluation_stage.denominator,
-            std::bit_cast<std::uint64_t>(current_dt_),
-            std::bit_cast<std::uint64_t>(evaluation_time),
-            UINT64_C(1),
-            topology,
-            resources};
-  }
 
  public:
-  /// Capability for an operator body emitted inside this compiled Program artifact. Direct C++
-  /// extensions cannot construct the token and therefore remain on the verified apply path.
-  ::pops::detail::AuthenticatedProgramApplyToken authenticated_program_apply_token(
-      OperatorFingerprint authority) const {
-    if (sys_ == nullptr || !sys_->program_owns_operator_authority(authority))
-      throw std::invalid_argument(
-          "compiled Program requested an operator authority not owned by its installed artifact");
-    return ::pops::detail::AuthenticatedProgramApplyToken(authority);
-  }
-
-  /// Execute an already prepared affine problem with its bound persistent workspace. The raw callback,
-  /// integer method wire, lazy preconditioner path and per-call scratch allocations no longer exist.
-  SolveOutcome solve_prepared_linear(const PreparedAffineLinearProblem& problem,
-                                     KrylovWorkspace& workspace, MultiFab& sol, const MultiFab& rhs,
-                                     const KrylovControls& controls) const {
-    return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
-  }
-
-  /// Metric facts captured by generated kernels before entering device lambdas.  Cartesian and polar
-  /// Programs share one emitted body; only these geometry-level values select the coordinate metric.
-  bool is_polar_geometry() const { return sys_->program_is_polar(); }
-  Real radial_origin() const {
-    return sys_->program_is_polar() ? sys_->program_polar_geometry().r_min : Real(0);
-  }
-  Real radial_spacing() const {
-    return sys_->program_is_polar() ? sys_->program_polar_geometry().dr() : geom().dx();
-  }
-
-  /// out = Lap(in): fill @p in's ghosts (transport BC, periodic by default) then apply the SHARED
-  /// discrete 5-point Laplacian (pops::apply_laplacian, all optional coefficients null -> the bare
-  /// bit-identical Laplacian). @p in is non-const because the ghost fill WRITES its halos (the valid
-  /// cells are unchanged); this is the same matvec idiom the matrix-free Krylov test
-  /// (tests/test_generic_krylov.cpp) wraps in its ApplyFn. The compiled program forms an operator
-  /// A(in) = in - alpha*Lap(in) by combining this with ctx.lincomb.
-  void laplacian(MultiFab& out, MultiFab& in) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(in, gc.geom.domain, gc.bc);
-    if (sys_->program_is_polar()) {
-      if (!polar_unit_rr_) {
-        polar_unit_rr_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
-        polar_unit_tt_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
-        polar_unit_rr_->set_val(Real(1));
-        polar_unit_tt_->set_val(Real(1));
-      }
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, polar_unit_rr_.get(),
-                         polar_unit_tt_.get(), nullptr, nullptr);
-    } else {
-      apply_laplacian(in, gc.geom, out);  // all optional pointers null -> bare 5-point Laplacian
-    }
-  }
-
-  void laplacian(MultiFab& out, MultiFab& in, const ExecutionLane& lane) const {
-    if (sys_->program_is_polar())
-      throw std::logic_error(
-          "lane-isolated ProgramContext::laplacian requires a prepared polar operator session");
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(in, gc.geom.domain, gc.bc, lane);
-    apply_laplacian(in, gc.geom, out);
-  }
-
-  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary) const {
-    if (sys_->program_is_polar())
-      throw std::logic_error(
-          "prepared ProgramContext::laplacian requires a polar operator provider");
-    count_kernel();
-    boundary.fill(in);
-    apply_laplacian(in, boundary.context().geom, out);
-  }
-
-  void laplacian(MultiFab& out, MultiFab& in, const PreparedGridBoundarySession& boundary,
-                 const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    if (sys_->program_is_polar())
-      throw std::logic_error(
-          "prepared ProgramContext::laplacian requires a polar operator provider");
-    count_kernel();
-    boundary.fill(in, point);
-    apply_laplacian(in, boundary.context().geom, out);
-  }
-
-  /// Metric-aware tensor div(A grad(in)). The authored ApplyFn remains the sole mathematical
-  /// operator on Cartesian and polar meshes; solver dispatch never swaps it for a second loop with
-  /// different tolerances, preconditioning or residual semantics.
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_grid_ghosts(in, gc);
-    if (sys_->program_is_polar()) {
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
-    } else {
-      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-    }
-  }
-
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const ExecutionLane& lane) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_grid_ghosts(in, gc, lane);
-    if (sys_->program_is_polar()) {
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
-    } else {
-      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-    }
-  }
-
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(in);
-    const GridContext& gc = boundary.context();
-    if (sys_->program_is_polar()) {
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
-    } else {
-      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-    }
-  }
-
-  void tensor_laplacian(MultiFab& out, MultiFab& in, const MultiFab& a_xx, const MultiFab& a_yy,
-                        const MultiFab& a_xy, const MultiFab& a_yx,
-                        const PreparedGridBoundarySession& boundary,
-                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(in, point);
-    const GridContext& gc = boundary.context();
-    if (sys_->program_is_polar()) {
-      apply_polar_tensor(in, sys_->program_polar_geometry(), out, &a_xx, &a_yy, &a_xy, &a_yx);
-    } else {
-      apply_laplacian(in, gc.geom, out, nullptr, &a_xx, nullptr, &a_yy, &a_xy, &a_yx);
-    }
-  }
-
-  /// out = grad(@p phi) by centered differences: out(.,0) = d phi/dx, out(.,1) = d phi/dy (@p out
-  /// needs >= 2 components). Fills @p phi's ghosts then forwards to pops::field_postprocess with
-  /// store_phi=false (the gradient lands in components 0/1) and the centered factors cx = 1/(2 dx),
-  /// cy = 1/(2 dy) -- the same derivation the elliptic aux post-process uses (+grad sign).
-  void gradient(MultiFab& out, MultiFab& phi) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(phi, gc.geom.domain, gc.bc);
-    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
-    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-
-  void gradient(MultiFab& out, MultiFab& phi, const ExecutionLane& lane) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(phi, gc.geom.domain, gc.bc, lane);
-    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
-    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-
-  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(phi);
-    const GridContext& gc = boundary.context();
-    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
-    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-
-  void gradient(MultiFab& out, MultiFab& phi, const PreparedGridBoundarySession& boundary,
-                const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(phi, point);
-    const GridContext& gc = boundary.context();
-    const Real cx = Real(1) / (Real(2) * gc.geom.dx());
-    const Real cy = Real(1) / (Real(2) * gc.geom.dy());
-    field_postprocess(phi, out, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, false});
-  }
-
-  /// out = div(@p fx, @p fy) by centered differences: out = d fx/dx + d fy/dy (component 0). The x-flux
-  /// is read from component 0 of @p fx and the y-flux from component 1 of @p fy, the SAME layout
-  /// @ref gradient writes (d/dx in component 0, d/dy in component 1) -- so chaining ctx.gradient(g, phi)
-  /// then ctx.divergence(out, g, g) recovers the 5-point Laplacian. Fills the ghosts of @p fx and @p fy
-  /// (transport BC, periodic by default) then forwards to pops::apply_divergence -- the exact inverse
-  /// stencil of @ref gradient and the same centered FV divergence the coupled elliptic operator
-  /// modules assemble. @p fx and @p fy are non-const because the ghost fill WRITES their halos (the
-  /// valid cells are unchanged). A compiled Program forms a tensor flux operator
-  /// A(phi) = phi - alpha*div(grad phi) by chaining ctx.gradient then ctx.divergence inside a
-  /// matrix-free apply.
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(fx, gc.geom.domain, gc.bc);
-    if (&fy != &fx)
-      fill_ghosts(fy, gc.geom.domain, gc.bc);  // skip the redundant halo fill when fy aliases fx
-    apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
-  }
-
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
-    if (&fy != &fx)
-      fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
-    apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
-  }
-
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
-                  const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    boundary.fill(fx);
-    if (&fy != &fx)
-      boundary.fill(fy);
-    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
-  }
-
-  void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy,
-                  const PreparedGridBoundarySession& boundary,
-                  const runtime::multiblock::BoundaryEvaluationPoint& point) const {
-    count_kernel();
-    boundary.fill(fx, point);
-    if (&fy != &fx)
-      boundary.fill(fy, point);
-    apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
-  }
-
-  /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
-  /// d fy(.,c)/dy), centered FV, for every component c of @p r. @p fx and @p fy hold the n_cons x- and
-  /// y-flux fields a compiled Program's named-flux kernel wrote (component c = the flux of conservative
-  /// component c). REUSES pops::apply_divergence component-by-component (the SAME centered stencil as
-  /// @ref divergence, the inverse of @ref gradient -- no new differencing): the ghosts are filled once
-  /// per field, then each component's divergence lands in a 1-component scratch and is copied with a
-  /// sign flip into @p r. @p fx / @p fy are non-const because the ghost fill writes their halos (the
-  /// valid cells are unchanged). This semi-discrete -div F is LINEAR in the flux, so the -div of a SUM
-  /// of named fluxes equals the sum of their -div (the named-flux parity guarantee).
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, MultiFab& divc) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(fx, gc.geom.domain, gc.bc);
-    fill_ghosts(fy, gc.geom.domain, gc.bc);
-    if (!scratch_layout_matches_(divc, r, 1, 0))
-      throw std::invalid_argument(
-          "Program named-flux divergence scratch must match the RHS distributed layout");
-    for (int c = 0; c < r.ncomp(); ++c) {
-      apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);  // divc(.,0) = div(fx_c, fy_c)
-      for (int li = 0; li < r.local_size(); ++li) {
-        const ConstArray4 d = divc.fab(li).const_array();
-        Array4 rv = r.fab(li).array();
-        const int comp = c;
-        for_each_cell(r.box(li), [=] POPS_HD(int i, int j) { rv(i, j, comp) = -d(i, j, 0); });
-      }
-    }
-  }
-
-  /// Historical/manual C++ convenience overload. Generated Programs pass a context-owned persistent
-  /// divergence scratch through the overload above, so their per-step path performs no allocation.
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy) const {
-    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
-    neg_div_flux_into(r, fx, fy, divc);
-  }
-
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, MultiFab& divc,
-                         const ExecutionLane& lane) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
-    fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
-    if (!scratch_layout_matches_(divc, r, 1, 0))
-      throw std::invalid_argument(
-          "Program named-flux divergence scratch must match the RHS distributed layout");
-    for (int c = 0; c < r.ncomp(); ++c) {
-      apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);
-      for (int li = 0; li < r.local_size(); ++li) {
-        const ConstArray4 d = divc.fab(li).const_array();
-        Array4 rv = r.fab(li).array();
-        const int comp = c;
-        for_each_cell(r.box(li), [=] POPS_HD(int i, int j) { rv(i, j, comp) = -d(i, j, 0); });
-      }
-    }
-  }
-
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
-    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
-    neg_div_flux_into(r, fx, fy, divc, lane);
-  }
-
-  /// Register (idempotent) the history @p name with maximum lag @p lag, allocating the ring buffer
-  /// WITHOUT reading it. The codegen emits this ONCE in the artifact-install prelude for each
-  /// declared history, so a fresh restart sees the complete ring schema before the first step and
-  /// the depth is locked before the first store (the cold-start fill then broadcasts the first
-  /// stored value into every -- already allocated -- slot). @p ncomp is the slot component count:
-  /// the default -1 resolves to block 0's ncomp (the multistep ring, byte-identical), and an explicit
-  /// @p ncomp >= 1 sizes a narrower ring (ADC-427: a 1-component cross-step potential carry).
-  /// Forwards to System::register_history. A read-only counterpart of @ref history.
-  void register_history(const std::string& name, int lag, int ncomp = -1) const {
-    sys_->register_history(name, lag, ncomp);
-  }
-  void register_history(const std::string& name, int lag, int ncomp, int owner,
-                        const std::string& state_identity, const std::string& space_identity,
-                        const std::string& clock_identity,
-                        const std::string& interpolation_identity) const {
-    sys_->register_history(name, lag, ncomp, owner < 0 ? -1 : sys_block(owner), state_identity,
-                           space_identity, clock_identity, interpolation_identity);
-  }
-
-  /// The history slot @p lag macro-steps back (the SYSTEM-OWNED ring buffer, ADC-406a): lag 1 = the
-  /// previous step's stored value (e.g. R_{n-1} for Adams-Bashforth), lag 0 = the current slot. The
-  /// codegen emits ``ctx.history("<name>", <lag>)``; the read registers the ring on first use
-  /// (idempotent) and forwards to System::read_history, which throws if the history was never stored
-  /// (spec error 17). The register uses the DEFAULT ncomp (block 0's ncomp) so a bare read never
-  /// changes an already-declared ring's width; a narrower ring (ADC-427) is declared by the prelude
-  /// register_history(name, lag, ncomp) the codegen emits before any read. @p lag defaults to 1.
-  MultiFab& history(const std::string& name, int lag = 1) const {
-    // System::register_history requires a retained depth of at least one even though slot 0 is a
-    // valid read target. Register that minimum depth when the caller asks for the current slot.
-    sys_->register_history(name, lag == 0 ? 1 : lag);
-    return sys_->read_history(name, lag);
-  }
-  /// Owner-qualified mirror used by sources that also contain an AMR entry point.  @p owner is a
-  /// Program block index (never a component index); resolving it here preserves the same topology
-  /// guard as the AMR context before delegating to the System-owned whole-field ring.
-  MultiFab& history(const std::string& name, int lag, int owner) const {
-    (void)sys_block(owner);
-    return history(name, lag);
-  }
-
-  /// ZERO COLD-START history read (ADC-427): like @ref history, but a read BEFORE the first store
-  /// returns the zero-filled slot instead of failing loud. A read-first carry (the cross-step
-  /// potential: read the previous step's value at the TOP of the step, store the new one at the END)
-  /// has no store before its very first read; its declared step-0 value IS zero (the slots are
-  /// zero-initialized at registration), so the first read marks the ring initialized and reads it.
-  /// The multistep store-first pattern keeps the fail-loud @ref history read unchanged. @p ncomp
-  /// mirrors register_history (binds the slot width at the first register; -1 = block 0's ncomp).
-  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
-    sys_->register_history(name, lag, ncomp);  // idempotent; ncomp binds at the first register
-    if (!sys_->history_initialized(name))
-      sys_->set_history_initialized(name,
-                                    true);  // the zero-filled slots ARE the declared cold start
-    return sys_->read_history(name, lag);
-  }
-  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp, int owner) const {
-    (void)sys_block(owner);
-    return history_zero_start(name, lag, ncomp);
-  }
-
   /// Reconstruct one primary-clock retained state at an exact target-clock coordinate. The
   /// bracketing slots and every intervening accepted interval come from the native history ledger;
   /// no Python callback, current-state alias, or fixed-dt inference participates.
@@ -859,38 +250,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     const Real alpha = static_cast<Real>(timestamp_fraction);
     lincomb(out, Real(1) - alpha, older, alpha, newer);
   }
-
-  /// Store @p value into the CURRENT slot of history @p name (ADC-406a). Registers the ring on first
-  /// use (at least a current slot; the lag the program reads via @ref history sets the real depth) and
-  /// forwards to System::store_history (which fills every slot on the first store -- the cold start).
-  /// A generated logical scope publishes its active dt explicitly, so a child-clock ring records the
-  /// child interval. Hand-written contexts that did not call begin_step retain the legacy System-owned
-  /// macro-dt route. Uses the default ncomp on register (the width is fixed by the prelude register).
-  void store_history(const std::string& name, const MultiFab& value) const {
-    sys_->register_history(name, 1);  // idempotent: at least a current slot exists before the store
-    if (std::isfinite(current_dt_) && current_dt_ > 0.0)
-      sys_->store_history(name, value, current_dt_);
-    else
-      sys_->store_history(name, value);
-  }
-  void store_history(const std::string& name, const MultiFab& value, int owner) const {
-    (void)sys_block(owner);
-    store_history(name, value);
-  }
-
-  /// Shift every history ring one macro-step (slot k <- slot k-1). Forwards to
-  /// System::rotate_histories. The codegen emits ``ctx.rotate_histories()`` as the LAST statement of
-  /// the step body (after the commit), so the next step reads lag k as the value k stores ago.
-  void rotate_histories() const { sys_->rotate_histories(); }
-  void rotate_histories(const std::string& clock_identity) const {
-    sys_->rotate_histories(clock_identity);
-  }
-
-  /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the
-  /// valid cells, the SAME Zhang-Shu / floor projection the native per-step path runs (ADC-177, spec
-  /// op 21). REUSES the block's own projection closure (set at add_block time); a block WITHOUT a
-  /// projection is rejected. Forwards to System::block_project -- it reimplements no positivity.
-  void apply_projection(int b, MultiFab& u) const { sys_->block_project(sys_block(b), u); }
 
  private:
   struct FieldSolveWorkspace {
@@ -1082,7 +441,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
 
   void require_program_stage_layout_(int program_block, const MultiFab& stage) const {
     const MultiFab& live = sys_->block_state(sys_block(program_block));
-    if (!scratch_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
+    if (!field_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
       throw std::invalid_argument(
           "Program simultaneous field solve requires each stage state to match its block's exact "
           "distributed layout");
@@ -1205,13 +564,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
 
   SolveReport solve_named_field_workspace_(const std::string& field,
                                            FieldSolveWorkspace& workspace) const {
-    if (workspace.in_use)
-      throw std::logic_error("Program simultaneous field-solve workspace is already in use");
-    struct WorkspaceUse {
-      bool& flag;
-      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
-      ~WorkspaceUse() { flag = false; }
-    } use(workspace.in_use);
+    ExclusiveUseGuard use(workspace.in_use,
+                          "Program simultaneous field-solve workspace is already in use");
     std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
     bool has_override = false;
     for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
@@ -1245,13 +599,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     std::map<ScratchKey, MultiFab> fields;
   };
 
-  static bool scratch_layout_matches_(const MultiFab& field, const MultiFab& prototype, int n_comp,
-                                      int n_ghost) {
-    return field.box_array().boxes() == prototype.box_array().boxes() &&
-           field.dmap().ranks() == prototype.dmap().ranks() && field.ncomp() == n_comp &&
-           field.n_grow() == n_ghost;
-  }
-
   MultiFab& program_scratch_for_(ScratchKind kind, std::int64_t value_id, int subslot,
                                  const MultiFab& prototype, int n_comp, int n_ghost) const {
     if (value_id < 0 || subslot < 0)
@@ -1262,7 +609,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     const ScratchKey key{kind, value_id, subslot};
     auto [entry, inserted] = scratch_registry_->fields.try_emplace(key);
     MultiFab& field = entry->second;
-    if (inserted || !scratch_layout_matches_(field, prototype, n_comp, n_ghost)) {
+    if (inserted || !field_layout_matches_(field, prototype, n_comp, n_ghost)) {
       field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
       count_scratch(field);
     }
@@ -1286,14 +633,129 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                 stage_time_.value() * current_dt_};
   }
 
-  static SolveReport consume_field_outcome_(SolveOutcome outcome) {
-    return outcome.consume(outcome.report().solved_value_available()
-                               ? SolveConsumption::kAccept
-                               : (outcome.report().action == SolveAction::kRejectAttempt
-                                      ? SolveConsumption::kRejectAttempt
-                                      : SolveConsumption::kFailRun));
-  }
   friend class ProgramExecutionServices<ProgramContext>;
+
+  void program_execution_install_(std::function<void(double)> step) const {
+    sys_->install_program_step(std::move(step));
+  }
+
+  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
+      int stage_id) const {
+    return boundary_point_(stage_id);
+  }
+  void program_execution_rhs_into_(int /*program_block*/, int runtime_block, MultiFab& state,
+                                   MultiFab& rhs, int rate_id) const {
+    sys_->block_rhs_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+  }
+  bool program_execution_has_boundary_linearization_(int runtime_block) const {
+    return sys_->block_has_boundary_linearization(runtime_block);
+  }
+  void program_execution_require_cartesian_generated_operator_(int runtime_block,
+                                                               const std::string& operation) const {
+    sys_->require_cartesian_generated_operator(runtime_block, operation);
+  }
+  void program_execution_rhs_core_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      MultiFab& rhs, bool flux_only, const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      sys_->block_rhs_core_into_at(point, runtime_block, state, rhs, flux_only);
+    else
+      sys_->block_rhs_core_into_at(point, runtime_block, state, rhs, flux_only, *boundary);
+  }
+  void program_execution_boundary_residual_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      MultiFab& residual, const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      sys_->block_boundary_residual_into_at(point, runtime_block, state, residual);
+    else
+      sys_->block_boundary_residual_into_at(point, runtime_block, state, residual, *boundary);
+  }
+  void program_execution_boundary_jvp_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      const MultiFab& direction, MultiFab& result,
+      const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      sys_->block_boundary_jvp_into_at(point, runtime_block, state, direction, result);
+    else
+      sys_->block_boundary_jvp_into_at(point, runtime_block, state, direction, result, *boundary);
+  }
+  void program_execution_neg_div_flux_default_into_(int /*program_block*/, int runtime_block,
+                                                    MultiFab& state, MultiFab& rhs,
+                                                    int rate_id) const {
+    sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+  }
+  void program_execution_neg_div_named_flux_into_(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y,
+                                                  MultiFab& divergence_scratch,
+                                                  const ExecutionLane* lane) const {
+    const GridContext context = sys_->grid_context();
+    if (lane == nullptr) {
+      fill_ghosts(flux_x, context.geom.domain, context.bc);
+      fill_ghosts(flux_y, context.geom.domain, context.bc);
+    } else {
+      fill_ghosts(flux_x, context.geom.domain, context.bc, *lane);
+      fill_ghosts(flux_y, context.geom.domain, context.bc, *lane);
+    }
+    if (!field_layout_matches_(divergence_scratch, rhs, 1, 0))
+      throw std::invalid_argument(
+          "Program named-flux divergence scratch must match the RHS distributed layout");
+    for (int component = 0; component < rhs.ncomp(); ++component) {
+      apply_divergence(flux_x, flux_y, context.geom, divergence_scratch, component, component);
+      for (int local = 0; local < rhs.local_size(); ++local) {
+        const ConstArray4 divergence = divergence_scratch.fab(local).const_array();
+        Array4 result = rhs.fab(local).array();
+        const int output_component = component;
+        for_each_cell(rhs.box(local), [=] POPS_HD(int i, int j) {
+          result(i, j, output_component) = -divergence(i, j, 0);
+        });
+      }
+    }
+  }
+  void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
+    count_kernel(static_cast<std::int64_t>(batch.requests.size()));
+    sys_->block_rhs_group(boundary_point_(batch.group_id), batch.runtime_blocks, batch.states,
+                          batch.rhs, batch.flux_only);
+  }
+  void program_execution_source_default_into_(int runtime_block, MultiFab& state,
+                                              MultiFab& rhs) const {
+    sys_->block_source_into(runtime_block, state, rhs);
+  }
+  void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
+    sys_->block_project(runtime_block, state);
+  }
+  Real program_execution_hmin_() const { return sys_->cfl_min_dx(); }
+  Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
+    return sys_->block_max_speed(runtime_block, state);
+  }
+  bool program_execution_is_polar_geometry_() const { return sys_->program_is_polar(); }
+  Real program_execution_radial_origin_() const {
+    return sys_->program_is_polar() ? sys_->program_polar_geometry().r_min : Real(0);
+  }
+  Real program_execution_radial_spacing_() const {
+    return sys_->program_is_polar() ? sys_->program_polar_geometry().dr()
+                                    : sys_->grid_context().geom.dx();
+  }
+  void program_execution_apply_polar_tensor_(MultiFab& out, MultiFab& in, const MultiFab* a_xx,
+                                             const MultiFab* a_yy, const MultiFab* a_xy,
+                                             const MultiFab* a_yx) const {
+    if (!sys_->program_is_polar())
+      throw std::logic_error("Cartesian Program provider cannot execute a polar tensor stencil");
+    if (a_xx == nullptr) {
+      if (a_yy != nullptr || a_xy != nullptr || a_yx != nullptr)
+        throw std::logic_error("isotropic polar Program Laplacian received a partial tensor");
+      if (!polar_unit_rr_ || !field_layout_matches_(*polar_unit_rr_, in, 1, 1) || !polar_unit_tt_ ||
+          !field_layout_matches_(*polar_unit_tt_, in, 1, 1)) {
+        polar_unit_rr_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
+        polar_unit_tt_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
+        polar_unit_rr_->set_val(Real(1));
+        polar_unit_tt_->set_val(Real(1));
+      }
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, polar_unit_rr_.get(),
+                         polar_unit_tt_.get(), nullptr, nullptr);
+      return;
+    }
+    apply_polar_tensor(in, sys_->program_polar_geometry(), out, a_xx, a_yy, a_xy, a_yx);
+  }
+
   struct LogicalEvaluationRollback {
     double parent_dt = 0.0;
     amr::Rational stage{0, 1};
@@ -1306,6 +768,57 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   GridContext program_execution_block_grid_context_(int owner) const {
     return sys_->grid_context(sys_block(owner));
   }
+  bool program_execution_owns_operator_authority_(OperatorFingerprint authority) const {
+    return sys_ != nullptr && sys_->program_owns_operator_authority(authority);
+  }
+  OperatorFingerprint program_execution_operator_topology_(const MultiFab& prototype) const {
+    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
+      throw std::logic_error("operator snapshot requested outside a prepared Program step");
+    const GridContext context = sys_->grid_context();
+    OperatorFingerprint topology =
+        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
+    if (sys_->program_is_polar())
+      ::pops::detail::fingerprint_geometry(topology, sys_->program_polar_geometry());
+    else
+      ::pops::detail::fingerprint_geometry(topology, context.geom);
+    ::pops::detail::fingerprint_boundary(topology, context.bc);
+    if (context.boundary_plan) {
+      ::pops::detail::fingerprint_mix(topology, context.boundary_plan->identity());
+      ::pops::detail::fingerprint_mix(topology, context.boundary_plan->state_identity());
+      ::pops::detail::fingerprint_mix(
+          topology, static_cast<std::uint64_t>(context.boundary_plan->required_depth()));
+    } else {
+      ::pops::detail::fingerprint_mix(topology, "legacy-bcrec-boundary");
+    }
+    return topology;
+  }
+  OperatorEvaluationSnapshot program_execution_operator_evaluation_snapshot_(
+      OperatorFingerprint authority, OperatorFingerprint topology, OperatorFingerprint resources,
+      std::uint64_t revision) const {
+    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
+      throw std::logic_error("operator snapshot requested outside a prepared Program step");
+    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const double evaluation_time = static_cast<double>(physical_time()) +
+                                   logical_physical_time_offset_ +
+                                   stage_time_.value() * current_dt_;
+    return {authority,
+            revision,
+            static_cast<std::int64_t>(macro_step()),
+            evaluation_stage.numerator,
+            evaluation_stage.denominator,
+            std::bit_cast<std::uint64_t>(current_dt_),
+            std::bit_cast<std::uint64_t>(evaluation_time),
+            UINT64_C(1),
+            topology,
+            resources};
+  }
+  MultiFab& program_execution_assembly_target_(MultiFab& field, std::string_view) const {
+    return field;
+  }
+  MultiFab& program_execution_assembly_source_(MultiFab& field, std::string_view) const {
+    return field;
+  }
+  MultiFab& program_execution_linear_solution_(MultiFab& field) const { return field; }
   MultiFab& program_execution_state_(int runtime_block) const {
     return sys_->block_state(runtime_block);
   }
@@ -1316,11 +829,54 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       Real dt, const std::vector<MultiFab*>& runtime_states) const {
     return sys_->apply_coupling_operators(dt, runtime_states);
   }
+  void program_execution_register_history_storage_(const HistoryRegistration& registration) const {
+    sys_->register_history(registration.name, registration.lag, registration.ncomp,
+                           registration.qualified ? registration.runtime_owner : -1,
+                           registration.state_identity, registration.space_identity,
+                           registration.clock_identity, registration.interpolation_identity);
+  }
+  MultiFab& program_execution_read_history_storage_(const HistoryRegistration& registration,
+                                                    int lag, HistoryReadMode /*mode*/) const {
+    return sys_->read_history(registration.name, lag);
+  }
+  bool program_execution_history_initialized_storage_(
+      const HistoryRegistration& registration) const {
+    return sys_->history_initialized(registration.name);
+  }
+  void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
+                                                          bool initialized) const {
+    sys_->set_history_initialized(registration.name, initialized);
+  }
+  HistoryStorePlan program_execution_history_store_plan_(
+      const HistoryRegistration& /*registration*/) const {
+    if (std::isfinite(current_dt_) && current_dt_ > 0.0)
+      return {true, static_cast<Real>(current_dt_)};
+    return {true, std::nullopt};
+  }
+  void program_execution_store_history_storage_(const HistoryRegistration& registration,
+                                                const MultiFab& value,
+                                                const std::optional<Real>& outgoing_dt) const {
+    if (outgoing_dt)
+      sys_->store_history(registration.name, value, static_cast<double>(*outgoing_dt));
+    else
+      sys_->store_history(registration.name, value);
+  }
+  bool program_execution_history_supports_selective_rotation_() const noexcept { return true; }
+  HistoryRotationAction program_execution_history_rotation_action_() const noexcept {
+    return HistoryRotationAction::Rotate;
+  }
+  void program_execution_defer_history_rotation_() const noexcept {}
+  void program_execution_rotate_history_storage_(const std::string& clock_identity) const {
+    if (clock_identity.empty())
+      sys_->rotate_histories();
+    else
+      sys_->rotate_histories(clock_identity);
+  }
   CacheManager& program_execution_cache_(SchedulerCacheOperation /*operation*/) const {
     return sys_->program_cache();
   }
-  ProgramResourceTopology program_execution_resource_topology_() const noexcept {
-    return {0, 0, 1};
+  ProgramResourceTopology program_execution_resource_topology_() const {
+    return {0, 0, 1, sys_->n_blocks()};
   }
   int program_execution_resource_level_() const noexcept { return 0; }
   void program_execution_select_resource_level_(int /*level*/) const noexcept {}
@@ -1357,7 +913,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     const amr::Rational child_begin =
         logical_phase_begin_ + logical_phase_span_ * interval.child_begin;
 
-    invalidate_active_operator_snapshot_();
     current_dt_ = interval.child_dt;
     stage_time_ = amr::Rational(0, 1);
     logical_phase_begin_ = child_begin;
@@ -1371,7 +926,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_phase_begin_ = rollback.phase_begin;
     logical_phase_span_ = rollback.phase_span;
     logical_physical_time_offset_ = rollback.physical_time_offset;
-    invalidate_active_operator_snapshot_();
   }
   SolveReport program_execution_solve_fields_from_state_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
@@ -1383,19 +937,12 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
   }
   void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
-  void program_execution_commit_copy_(MultiFab& target, const MultiFab& source) const {
-    lincomb(target, Real(0), target, Real(1), source);
+  ProgramRuntimeState& program_execution_runtime_state_() const {
+    return sys_->program_runtime_state_();
   }
-  const std::vector<int>& program_execution_block_map_() const { return sys_->program_block_map(); }
-  int program_execution_block_count_() const { return sys_->n_blocks(); }
-  Real program_execution_physical_time_() const { return static_cast<Real>(sys_->time()); }
-  void program_execution_record_scalar_(const std::string& name, Real value) const {
-    sys_->record_program_diagnostic(name, value);
+  ProgramClockCoordinate program_execution_clock_coordinate_() const {
+    return {static_cast<Real>(sys_->time()), sys_->macro_step(), -1};
   }
-  void program_execution_note_step_projection_(const std::string& name) const {
-    sys_->note_step_projection(name);
-  }
-  RuntimeParams program_execution_params_(int block) const { return sys_->program_params(block); }
   void program_execution_set_field_timepoint_(const std::string& field,
                                               const FieldLogicalTimePoint& point) const {
     sys_->set_field_logical_timepoint(field, point);
@@ -1408,16 +955,10 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                            const CompiledFieldBoundaryKernel& kernel) const {
     sys_->set_field_boundary_kernel(field, kernel);
   }
-  Profiler& program_execution_profiler_() const { return sys_->profiler(); }
-  int program_execution_macro_step_() const { return sys_->macro_step(); }
-  int program_execution_active_level_() const { return -1; }
-
   mutable double current_dt_ = 0.0;
   mutable amr::Rational logical_phase_begin_{0, 1};
   mutable amr::Rational logical_phase_span_{1, 1};
   mutable double logical_physical_time_offset_ = 0.0;
-  mutable std::uint64_t operator_snapshot_revision_ = 0;
-  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never minted
   mutable std::shared_ptr<MultiFab> polar_unit_rr_;
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
