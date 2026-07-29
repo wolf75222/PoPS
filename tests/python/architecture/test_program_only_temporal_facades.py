@@ -33,6 +33,9 @@ AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
 AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
+PROGRAM_EXECUTION_SERVICES = (
+    ROOT / "include/pops/runtime/program/program_execution_services.hpp"
+)
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
@@ -414,17 +417,24 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
 
 
 def test_amr_pointwise_status_reduces_every_valid_level_cell():
-    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    services = PROGRAM_EXECUTION_SERVICES.read_text(encoding="utf-8")
 
     pointwise = _function_body(
-        context,
+        services,
         "  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const",
     )
-    assert "if (context.domain_mask == nullptr)" in pointwise
-    assert "return context.domain_mask;" in pointwise
+    assert "active_mask_from_context_(" in pointwise
+    assert "program_execution_block_grid_context_(block)" in pointwise
+
+    active_mask = _function_body(
+        services,
+        "  static const MultiFab* active_mask_from_context_(",
+    )
+    assert "if (context.domain_mask == nullptr)" in active_mask
+    assert "return context.domain_mask;" in active_mask
 
     status = _function_body(
-        context,
+        services,
         "  Real pointwise_status_max(int block, const MultiFab& status,",
     )
     assert "const MultiFab* expected = pointwise_active_mask(block, status)" in status
@@ -443,20 +453,22 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
             assert legacy_engine_primitive not in source
 
 
-def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step():
+def test_shared_program_service_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
     shared = (
         ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     ).read_text(encoding="utf-8")
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    for source in (uniform, amr):
-        assert "apply_coupling_operators(" in source
     assert shared.count("struct CouplingStateOverride") == 1
-    assert "complete candidate pack for every System block" in uniform
-    assert "complete candidate pack for every runtime block" in amr
-    assert "cannot alias accepted live states" in uniform
-    assert "cannot alias accepted live states" in amr
+    assert shared.count("void apply_coupling_operators(") == 1
+    assert "complete candidate pack for every runtime block" in shared
+    assert "cannot alias accepted live states" in shared
+    for source in (uniform, amr):
+        assert "void apply_coupling_operators(" not in source
+        assert source.count("program_execution_apply_coupling_(") == 1
+    assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
     assert "apply_coupling_operators_at_level(" in runtime
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime

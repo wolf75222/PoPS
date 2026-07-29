@@ -401,6 +401,19 @@ class RecoveryPublicationTransaction {
     recovery_detail::copy_vector<N>(accepted_value, value_snapshot_);
   }
 
+  RecoveryPublicationTransaction(const RecoveryPublicationTransaction&) = delete;
+  RecoveryPublicationTransaction& operator=(const RecoveryPublicationTransaction&) = delete;
+  RecoveryPublicationTransaction(RecoveryPublicationTransaction&&) = delete;
+  RecoveryPublicationTransaction& operator=(RecoveryPublicationTransaction&&) = delete;
+
+  /// A tentative publication is never allowed to escape merely because a caller returns early.
+  /// Device code has no exception unwinding contract to lean on, so scope exit itself is the final
+  /// fail-closed guard. Only an explicit commit makes the staged value and cache durable.
+  POPS_HD ~RecoveryPublicationTransaction() {
+    if (state_ == RecoveryPublicationState::kOpen || state_ == RecoveryPublicationState::kTentative)
+      (void)rollback();
+  }
+
   POPS_HD bool publish_tentative(const RecoveryOutcome<N>& outcome,
                                  std::uint64_t topology_generation,
                                  std::uint64_t state_generation) {

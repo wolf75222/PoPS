@@ -9,10 +9,51 @@ PROGRAM_DIR = ROOT / "include" / "pops" / "runtime" / "program"
 SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
+CODEGEN = ROOT / "python" / "pops" / "codegen"
+CODEGEN_CONTEXT_ROUTES = (
+    CODEGEN / "program_codegen.py",
+    CODEGEN / "program_emit_amr.py",
+    CODEGEN / "program_emit_field_boundaries.py",
+    CODEGEN / "program_emit_kernels.py",
+)
 
 SHARED_SIGNATURES = (
     "struct FieldStageOverride",
     "struct CouplingStateOverride",
+    "enum class ScratchKind",
+    "enum class SchedulerCacheOperation",
+    "struct ProgramResourceStorage",
+    "struct ProgramResourceTopology",
+    "struct LogicalEvaluationInterval",
+    "class LogicalEvaluationScope",
+    "[[nodiscard]] auto logical_evaluation_scope(",
+    "void evaluate_with_field_state_at(",
+    "MultiFab rhs_scratch_like(",
+    "MultiFab scratch_state_like(",
+    "MultiFab& rhs_scratch(",
+    "MultiFab& scratch_state(",
+    "MultiFab& scalar_scratch(",
+    "MultiFab& state(",
+    "MultiFab& aux(",
+    "GridContext grid_context(",
+    "Geometry geom(",
+    "MultiFab alloc_scalar_field(",
+    "ProgramResourceTopology program_resource_topology(",
+    "int level(",
+    "void set_level(",
+    "void with_program_resource_level(",
+    "void for_each_program_resource_level(",
+    "const PreparedVectorDistribution& program_resource_vector_distribution(",
+    "FieldDistribution program_resource_field_storage_distribution(",
+    "int program_resource_field_level(",
+    "void configure_program_resource_field_nullspace(",
+    "const MultiFab* pointwise_active_mask(",
+    "Real pointwise_status_max(",
+    "Real norm2(",
+    "Real norm_inf(",
+    "Real dot(",
+    "void commit_many(",
+    "void apply_coupling_operators(",
     "void set_stage_time(",
     "void configure_primary_clock(",
     "void declare_clock_relation(",
@@ -20,6 +61,13 @@ SHARED_SIGNATURES = (
     "bool schedule_is_due(",
     "bool schedule_at_start(",
     "bool schedule_decision(",
+    "bool cache_should_update(",
+    "void cache_store_aux(",
+    "void cache_restore_aux(",
+    "void cache_store_scratch(",
+    "void cache_restore_scratch(",
+    "void cache_accumulate_dt(",
+    "Real cache_effective_dt(",
     "ClockScheduleState::SubcycleScope subcycle_scope(",
     "void synchronize_sample_and_hold(",
     "int sys_block(",
@@ -37,7 +85,30 @@ SHARED_SIGNATURES = (
     "void count_scratch(",
     "int macro_step(",
     "[[noreturn]] void scheduler_error(",
+    "static void require_rate_identity_(",
+    "static void require_group_identity_(",
+    "static std::runtime_error block_map_error_(",
+    "RelativeCellMeasure relative_cell_measure_(",
+    "void require_unqualified_reduction_safe_(",
+    "const MultiFab* active_domain_mask_(",
+    "[[noreturn]] static void throw_field_solve_failure_(",
+    "static bool embedded_domain_enabled_(",
+    "static const MultiFab* active_mask_from_context_(",
 )
+
+SHARED_OVERLOAD_COUNTS = {
+    "void axpy(": 2,
+    "void lincomb(": 2,
+    "Real sum_component(": 2,
+    "Real max_component(": 2,
+    "Real min_component(": 2,
+    "Real abs_sum_component(": 2,
+    "Real sum(": 2,
+    "Real max(": 2,
+    "Real min(": 2,
+    "Real abs_sum(": 2,
+    "void fill_boundary(": 2,
+}
 
 
 def _read(path):
@@ -59,6 +130,31 @@ def test_uniform_and_amr_inherit_the_same_execution_service():
     )
 
 
+def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_dispatch():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert shared.count("struct ProgramExecutionProviderFor;") == 1
+    assert shared.count("make_program_execution_provider(") == 1
+    assert shared.count("make_program_execution_view(") == 1
+    assert "ProgramExecutionProviderFor<System>" in uniform
+    assert "ProgramExecutionProviderFor<AmrSystem>" in amr
+    assert "explicit ProgramContext(void*" not in uniform
+    assert "explicit AmrProgramContext(void*" not in amr
+
+    codegen = "\n".join(_read(path) for path in CODEGEN_CONTEXT_ROUTES)
+    for forbidden in (
+        "AmrProgramContext",
+        "ProgramContext& ctx",
+        "make_shared<pops::runtime::program::ProgramContext>",
+    ):
+        assert forbidden not in codegen
+    assert codegen.count("make_program_execution_provider(sys)") >= 3
+    assert codegen.count("make_program_execution_view(sys)") == 1
+    assert 'pops_install_program(pops::System* sys)' in codegen
+    assert 'pops_install_program_amr(pops::AmrSystem* sys)' in codegen
+
+
 def test_extracted_operations_have_one_source_definition():
     shared = _read(SHARED)
     context_headers = tuple(PROGRAM_DIR.glob("*program_context.hpp"))
@@ -66,6 +162,20 @@ def test_extracted_operations_have_one_source_definition():
     for signature in SHARED_SIGNATURES:
         assert shared.count(signature) == 1, (
             "%r must have one implementation in program_execution_services.hpp" % signature
+        )
+        offenders = [
+            path.relative_to(ROOT).as_posix()
+            for path in context_headers
+            if signature in _read(path)
+        ]
+        assert not offenders, "%r was reimplemented in a topology context: %s" % (
+            signature,
+            ", ".join(offenders),
+        )
+    for signature, expected_count in SHARED_OVERLOAD_COUNTS.items():
+        assert shared.count(signature) == expected_count, (
+            "%r must have %d overloads in program_execution_services.hpp"
+            % (signature, expected_count)
         )
         offenders = [
             path.relative_to(ROOT).as_posix()
@@ -91,11 +201,34 @@ def test_clock_state_is_owned_only_by_the_shared_service():
         assert declaration not in _read(AMR)
 
 
-def test_contexts_expose_only_topology_provider_hooks_for_the_shared_surface():
+def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
     for path, context in ((UNIFORM, "ProgramContext"), (AMR, "AmrProgramContext")):
         source = _read(path)
         assert "friend class ProgramExecutionServices<%s>;" % context in source
         for hook in (
+            "program_execution_logical_parent_dt_",
+            "program_execution_capture_logical_evaluation_",
+            "program_execution_apply_logical_evaluation_",
+            "program_execution_restore_logical_evaluation_",
+            "program_execution_solve_fields_from_state_at_",
+            "program_execution_scratch_",
+            "program_execution_default_grid_context_",
+            "program_execution_block_grid_context_",
+            "program_execution_state_",
+            "program_execution_alloc_scalar_field_",
+            "program_execution_apply_coupling_",
+            "program_execution_cache_",
+            "program_execution_resource_topology_",
+            "program_execution_resource_level_",
+            "program_execution_select_resource_level_",
+            "program_execution_resource_storage_",
+            "program_execution_resource_cell_measures_",
+            "program_execution_publish_axpy_",
+            "program_execution_publish_exact_axpy_",
+            "program_execution_publish_lincomb_",
+            "program_execution_publish_exact_lincomb_",
+            "program_execution_validate_commit_aliases_",
+            "program_execution_commit_copy_",
             "program_execution_block_map_",
             "program_execution_block_count_",
             "program_execution_physical_time_",
@@ -109,8 +242,175 @@ def test_contexts_expose_only_topology_provider_hooks_for_the_shared_surface():
             "program_execution_active_level_",
         ):
             assert source.count(hook) == 1, (
-                "%s must provide exactly one storage/topology hook %s" % (context, hook)
+                "%s must provide exactly one explicit provider hook %s" % (context, hook)
             )
+
+
+def test_shared_service_uses_only_explicit_provider_hooks():
+    shared = _read(SHARED)
+    calls = re.findall(r"provider_\(\)\.(\w+)\(", shared)
+    assert calls
+    assert all(call.startswith("program_execution_") for call in calls), calls
+
+
+def test_resource_topology_transaction_is_shared_while_raw_topology_and_scratch_stay_provider_owned():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    emitter = _read(ROOT / "python" / "pops" / "codegen" / "program_emit_amr.py")
+    for shared_authority in (
+        "struct ProgramResourceTopology",
+        "ProgramResourceTopology program_resource_topology()",
+        "void with_program_resource_level(",
+        "void for_each_program_resource_level(",
+        "Program resource topology requires at least one level",
+    ):
+        assert shared_authority in shared
+        assert shared_authority not in uniform
+        assert shared_authority not in amr
+    for provider_hook in (
+        "program_execution_resource_topology_",
+        "program_execution_resource_level_",
+        "program_execution_select_resource_level_",
+    ):
+        assert shared.count(provider_hook) >= 1
+        assert uniform.count(provider_hook) == 1
+        assert amr.count(provider_hook) == 1
+    for retired_direct_surface in (
+        "program_resource_topology_epoch",
+        "program_resource_topology_generation",
+    ):
+        assert retired_direct_surface not in shared
+        assert retired_direct_surface not in uniform
+        assert retired_direct_surface not in amr
+        assert retired_direct_surface not in emitter
+    for provider_owned_scratch in (
+        "program_scratch_topology_epoch_",
+        "program_scratch_materialization_generation_",
+    ):
+        assert provider_owned_scratch not in shared
+        assert provider_owned_scratch in amr
+    assert "ctx.for_each_program_resource_level(" in emitter
+    assert "ctx.with_program_resource_level(" in emitter
+    assert "ctx.set_level(" not in emitter
+    assert "const int saved_level" not in emitter
+    assert "topology_materialization_generation()" in amr
+
+
+def test_amr_resource_level_selection_keeps_the_active_clock_window_qualified():
+    amr = _read(AMR)
+    hook = re.search(
+        r"void program_execution_select_resource_level_\(int selected\) const noexcept \{"
+        r"(?P<body>.*?)"
+        r"\n  \}",
+        amr,
+        re.DOTALL,
+    )
+    assert hook is not None
+    body = hook.group("body")
+    assert "level_ = selected;" in body
+    assert "if (current_window_)" in body
+    assert "current_window_->begin.level = selected;" in body
+    assert "current_window_->end.level = selected;" in body
+    assert "void set_level(" not in amr
+
+
+def test_scheduler_cache_algorithm_is_shared_but_storage_lifecycle_is_provider_owned():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert shared.count('#include <pops/runtime/program/cache_manager.hpp>') == 1
+    assert '#include <pops/runtime/program/cache_manager.hpp>' not in uniform
+    assert "program_execution_cache_(SchedulerCacheOperation" in uniform
+    assert "return sys_->program_cache();" in uniform
+    assert "program_execution_cache_(SchedulerCacheOperation operation)" in amr
+    assert "has no AMR checkpoint/regrid storage provider" in amr
+    assert "CacheManager cache_" not in shared
+    for counter in ("cache_misses", "nodes_due", "cache_hits", "nodes_skipped"):
+        assert shared.count('count("%s")' % counter) == 1
+
+
+def test_history_ledger_clock_and_regrid_lifecycle_remain_provider_owned():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    for operation in (
+        "register_history(",
+        "history_zero_start(",
+        "store_history(",
+        "rotate_histories(",
+    ):
+        assert operation not in shared
+        assert operation in uniform
+        assert operation in amr
+    for amr_authority in (
+        "rotate_pending_",
+        "ring_clocks_",
+        "ring_identities_",
+        "rebind_history_flux_topology_",
+    ):
+        assert amr_authority not in shared
+        assert amr_authority in amr
+
+
+def test_shared_storage_facade_maps_blocks_once_and_owns_nullspace_assignment():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert "program_execution_state_(sys_block(block))" in shared
+    assert "program_execution_state_(int runtime_block)" in uniform
+    assert "program_execution_state_(int runtime_block)" in amr
+    assert "basis.cell_measure = cell_measures;" in shared
+    assert "basis.cell_measure =" not in uniform
+    assert "basis.cell_measure =" not in amr
+
+
+def test_shared_commit_many_owns_layout_and_alias_semantics():
+    shared = _read(SHARED)
+    amr = _read(AMR)
+    assert "target->dmap().ranks() != source->dmap().ranks()" in shared
+    assert "std::vector<MultiFab> aliased_sources;" in shared
+    assert "program_execution_validate_commit_aliases_(has_aliased_source)" in shared
+    assert "has_aliased_source && capturing()" in amr
+
+
+def test_shared_coupling_owns_workspace_mapping_layout_alias_and_reentrancy():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    for authority in (
+        "struct CouplingWorkspace",
+        "prepare_coupling_workspace_",
+        "coupling_workspace_",
+    ):
+        assert authority in shared
+        assert authority not in uniform
+        assert authority not in amr
+    for invariant in (
+        "Program coupling workspace is already in use",
+        "does not cover each runtime block exactly once",
+        "does not match its exact runtime layout",
+        "cannot alias accepted live states",
+    ):
+        assert invariant in shared
+    assert "program_execution_apply_coupling_(" in shared
+    assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
+
+
+def test_logical_subdivision_is_shared_and_provider_rollback_is_opaque():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert "ClockWindow" not in shared
+    assert "LogicalEvaluationRollback" not in shared
+    assert uniform.count("struct LogicalEvaluationRollback") == 1
+    assert amr.count("struct LogicalEvaluationRollback") == 1
+    assert shared.count("parent_dt / static_cast<double>(count)") == 1
+    assert " / static_cast<double>(count)" not in uniform
+    assert " / static_cast<double>(count)" not in amr
+    assert "amr::Rational(iteration, count)" not in uniform
+    assert "amr::Rational(iteration, count)" not in amr
 
 
 def test_error_schedule_is_shared_not_an_amr_capability_deferral():
