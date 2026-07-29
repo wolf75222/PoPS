@@ -53,6 +53,12 @@ struct TransferComponent {
   std::string restart() const { return "stateless"; }
 };
 
+struct RefluxComponent {
+  int stencil() const { return 1; }
+  std::string lower(Context&) const { return "integrated-interface-correction"; }
+  std::vector<std::string> effects() const { return {"local-correction"}; }
+};
+
 struct SolverComponent {
   pops::component::EvaluationOutcome<int> evaluate(Context&) const {
     return pops::component::EvaluationOutcome<int>::reject("non-converged");
@@ -89,6 +95,9 @@ static_assert(pops::component::Lowering<ClusteringComponent, Context>);
 static_assert(pops::component::Effects<ClusteringComponent>);
 static_assert(pops::component::Stencil<TransferComponent>);
 static_assert(pops::component::Restart<TransferComponent>);
+static_assert(pops::component::Stencil<RefluxComponent>);
+static_assert(pops::component::Lowering<RefluxComponent, Context>);
+static_assert(pops::component::Effects<RefluxComponent>);
 static_assert(pops::component::FallibleEvaluation<SolverComponent, Context&>);
 static_assert(pops::component::Restart<SolverComponent>);
 static_assert(pops::component::Format<WriterComponent, double>);
@@ -730,6 +739,78 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   wrong_transfer_shape.destination.extents[1] = 2;
   EXPECT_THROW(pops::component::apply_transfer(transfer_api, nullptr, wrong_transfer_shape, status),
                std::invalid_argument);
+
+  std::array<double, 2> coarse_integrated_flux{1.0, 2.0};
+  std::array<double, 2> fine_integrated_flux{3.0, 6.0};
+  std::array<double, 2> reflux_correction{};
+  PopsRefluxApiV1 reflux_api{
+      abi_header(sizeof(PopsRefluxApiV1), POPS_NATIVE_INTERFACE_REFLUX_V1),
+      +[](void*, const PopsRefluxRequestV1* request, PopsComponentStatusV1* result) {
+        for (std::size_t face_index = 0; face_index < request->face_count; ++face_index) {
+          const auto& face = request->faces[face_index];
+          const auto* coarse = static_cast<const double*>(face.coarse_integrated_flux.data);
+          const auto* fine = static_cast<const double*>(face.fine_integrated_flux.data);
+          auto* correction = static_cast<double*>(face.correction.data);
+          const std::size_t points =
+              pops::component::field_point_count(face.coarse_integrated_flux);
+          for (std::size_t point = 0; point < points; ++point)
+            correction[point] = static_cast<double>(face.side) * (fine[point] - coarse[point]) *
+                                face.inverse_coarse_cell_spacing;
+        }
+        *result = ok_status();
+        return 0;
+      }};
+  auto coarse_face = abi::const_field_view(coarse_integrated_flux.data(), 1, 2, 1, "parent::layout",
+                                           "parent::patch");
+  coarse_face.centering = POPS_FIELD_CENTERING_FACE_V1;
+  coarse_face.centering_axes = 1u;
+  auto fine_face =
+      abi::const_field_view(fine_integrated_flux.data(), 1, 2, 1, "child::layout", "child::patch");
+  fine_face.centering = POPS_FIELD_CENTERING_FACE_V1;
+  fine_face.centering_axes = 1u;
+  PopsRefluxFaceV1 reflux_face{
+      sizeof(PopsRefluxFaceV1),
+      "transition::0-to-1/x-low",
+      0,
+      POPS_REFLUX_FACE_LOW_V1,
+      2.0,
+      coarse_face,
+      fine_face,
+      abi::field_view(reflux_correction.data(), 1, 2, 1, "parent::layout", "parent::patch")};
+  PopsRefluxRequestV1 reflux_request{sizeof(PopsRefluxRequestV1),
+                                     "transition::0-to-1",
+                                     0,
+                                     1,
+                                     1,
+                                     &reflux_face,
+                                     abi::logical_time(),
+                                     abi::noncollective_host_execution_context()};
+  EXPECT_TRUE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_REFLUX_V1, &reflux_api, sizeof(reflux_api)));
+  EXPECT_EQ(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, reflux_request, status),
+      0);
+  EXPECT_EQ(reflux_correction, (std::array<double, 2>{-4.0, -8.0}));
+
+  auto incomplete_reflux_api = reflux_api;
+  incomplete_reflux_api.apply_interface_batch = nullptr;
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(
+      POPS_NATIVE_INTERFACE_REFLUX_V1, &incomplete_reflux_api, sizeof(incomplete_reflux_api)));
+  EXPECT_THROW(pops::component::apply_reflux_interface_batch(incomplete_reflux_api, nullptr,
+                                                             reflux_request, status),
+               std::runtime_error);
+  auto collective_reflux = reflux_request;
+  collective_reflux.execution = execution;
+  EXPECT_THROW(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, collective_reflux, status),
+      std::invalid_argument);
+  auto malformed_reflux = reflux_request;
+  auto malformed_face = reflux_face;
+  malformed_face.correction.layout_identity = "other::parent-layout";
+  malformed_reflux.faces = &malformed_face;
+  EXPECT_THROW(
+      pops::component::apply_reflux_interface_batch(reflux_api, nullptr, malformed_reflux, status),
+      std::invalid_argument);
 
   auto overflowing_ghosts = abi::const_field_view(tag_values.data(), 2, 2);
   overflowing_ghosts.ghost_lower[0] = std::numeric_limits<std::size_t>::max();

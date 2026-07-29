@@ -392,6 +392,9 @@ class LoadedComponent final {
       if ((header->prepare == nullptr) != (header->destroy == nullptr))
         throw std::runtime_error(
             "native component interface prepare/destroy callbacks must be paired");
+      if (!generated_native_interface_table_is_complete(row.interface_id, row.table,
+                                                        row.table_size))
+        throw std::runtime_error("native component interface table misses a required operation");
     }
     for (const auto& required : expected.interfaces) {
       bool found = false;
