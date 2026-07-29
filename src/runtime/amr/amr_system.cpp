@@ -3530,6 +3530,10 @@ pops::runtime::program::Profiler& AmrSystem::profiler_handle() {
 void AmrSystem::record_program_diagnostic(const std::string& name, double value) {
   p_->program_.record_diagnostic(name, value);  // shared subsystem (ADC-594)
 }
+void AmrSystem::record_program_balance_term(const std::string& route, const std::string& term,
+                                            double value) {
+  p_->program_.record_balance_term(route, term, value, "AmrSystem");
+}
 double AmrSystem::program_diagnostic(const std::string& name) const {
   // AMR keeps its historical LENIENT read (missing name -> 0.0), distinct from System's fail-loud
   // program_diagnostic; not routed through the struct's throwing diagnostic() helper.

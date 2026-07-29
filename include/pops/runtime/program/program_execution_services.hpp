@@ -644,6 +644,10 @@ class ProgramExecutionServices {
     provider_().program_execution_record_scalar_(name, value);
   }
 
+  void record_balance_term(const std::string& route, const std::string& term, Real value) const {
+    provider_().program_execution_record_balance_term_(route, term, value);
+  }
+
   void note_step_projection(const std::string& name) const {
     provider_().program_execution_note_step_projection_(name);
   }

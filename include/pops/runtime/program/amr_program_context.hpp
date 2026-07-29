@@ -3687,6 +3687,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void program_execution_record_scalar_(const std::string& name, Real value) const {
     facade_->record_program_diagnostic(name, value);
   }
+  void program_execution_record_balance_term_(const std::string& route, const std::string& term,
+                                              Real value) const {
+    facade_->record_program_balance_term(route, term, value);
+  }
   void program_execution_note_step_projection_(const std::string& name) const {
     facade_->note_step_projection(name);
   }

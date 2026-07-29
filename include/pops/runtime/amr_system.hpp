@@ -1085,6 +1085,10 @@ class AmrSystem {
 
  private:
   friend class runtime::program::AmrProgramContext;
+  /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
+  /// private to AmrProgramContext and is deliberately absent from Python bindings.
+  POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
+                                               double value);
   /// Read-only compiled-artifact capability check; artifact authority installation is private to
   /// AmrSystem::install_program and cannot be injected through the public facade.
   POPS_EXPORT bool program_owns_operator_authority(

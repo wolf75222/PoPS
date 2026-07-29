@@ -43,6 +43,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -678,20 +679,51 @@ struct ProgramRuntimeState {
           " set_clock cannot reuse an active stride window; restore its strict checkpoint image");
   }
 
+  static bool has_reserved_balance_namespace(const std::string& name) noexcept {
+    return name.rfind("pops.balance-term", 0) == 0;
+  }
+
+  static void require_balance_route(const std::string& route, const std::string& runtime) {
+    static constexpr std::string_view kRoutePrefix = "pops.balance-ledger-route.v1:sha256:";
+    if (route.size() != kRoutePrefix.size() + 64 ||
+        route.compare(0, kRoutePrefix.size(), kRoutePrefix.data(), kRoutePrefix.size()) != 0 ||
+        !std::all_of(route.begin() + static_cast<std::ptrdiff_t>(kRoutePrefix.size()), route.end(),
+                     [](unsigned char value) {
+                       return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+                     }))
+      throw std::invalid_argument(runtime + " requires a canonical balance-ledger-route identity");
+  }
+
+  static void require_balance_term(const std::string& term, const std::string& runtime) {
+    static constexpr std::array<std::string_view, 5> kTerms{
+        "storage_change", "outward_boundary_flux", "sources", "reflux", "projection"};
+    if (std::find(kTerms.begin(), kTerms.end(), std::string_view(term)) == kTerms.end())
+      throw std::invalid_argument(runtime + " requires one canonical five-term balance name");
+  }
+
   /// Record a compiled-Program scalar. Ordinary P.record_scalar names remain inspectable after the
-  /// step with last-write-wins semantics. The reserved balance prefix is attempt-local and additive.
+  /// step with last-write-wins semantics. The balance namespace has a separate typed sink.
   void record_diagnostic(const std::string& name, Real value) {
-    // A Program cadence may invoke the compiled body several times inside one public macro-step.
-    // Balance records are signed, time-integrated increments and therefore accumulate across those
-    // invocations. Ordinary inspection diagnostics retain their historical last-write-wins contract.
-    static constexpr const char* kBalancePrefix = "pops.balance-term.v1:";
-    if (name.rfind(kBalancePrefix, 0) == 0) {
-      auto [entry, inserted] = step_balance_terms_.try_emplace(name, value);
-      if (!inserted)
-        entry->second += value;
-      return;
-    }
+    if (has_reserved_balance_namespace(name))
+      throw std::invalid_argument(
+          "ProgramRuntimeState::record_diagnostic: pops.balance-term is a reserved namespace");
     diagnostics_[name] = value;
+  }
+
+  /// Record one validated Program.record_balance term. Not exposed through the Python runtime
+  /// facade: only generated ProgramContext code reaches this sink.
+  void record_balance_term(const std::string& route, const std::string& term, Real value,
+                           const std::string& runtime) {
+    require_balance_route(route, runtime + "::record_balance_term");
+    require_balance_term(term, runtime + "::record_balance_term");
+    if (!std::isfinite(static_cast<double>(value)))
+      throw std::invalid_argument(runtime + "::record_balance_term requires a finite value");
+    const std::string name = "pops.balance-term.v1:" + route + ":" + term;
+    // A Program cadence may invoke the compiled body several times inside one public macro-step.
+    // Terms are signed, time-integrated increments and therefore accumulate across invocations.
+    auto [entry, inserted] = step_balance_terms_.try_emplace(name, value);
+    if (!inserted)
+      entry->second += value;
   }
 
   /// Read the named diagnostic, FAIL-LOUD if the Program never recorded it. @p runtime names the
@@ -718,17 +750,9 @@ struct ProgramRuntimeState {
   /// active. No zero, stale value, or array-derived Python fallback is permitted.
   std::map<std::string, Real> accepted_balance_terms(const std::string& route,
                                                      const std::string& runtime) const {
-    static constexpr const char* kRoutePrefix = "pops.balance-ledger-route.v1:sha256:";
     static constexpr std::array<const char*, 5> kTerms{"storage_change", "outward_boundary_flux",
                                                        "sources", "reflux", "projection"};
-    const std::string prefix{kRoutePrefix};
-    if (route.size() != prefix.size() + 64 || route.compare(0, prefix.size(), prefix) != 0 ||
-        !std::all_of(route.begin() + static_cast<std::ptrdiff_t>(prefix.size()), route.end(),
-                     [](unsigned char value) {
-                       return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
-                     }))
-      throw std::invalid_argument(
-          runtime + "::_accepted_balance_terms requires a canonical balance-ledger-route identity");
+    require_balance_route(route, runtime + "::_accepted_balance_terms");
     std::map<std::string, Real> result;
     for (const char* term : kTerms) {
       const std::string record = "pops.balance-term.v1:" + route + ":" + term;
