@@ -394,16 +394,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
   }
 
-  /// Metric facts captured by generated kernels before entering device lambdas.  Cartesian and polar
-  /// Programs share one emitted body; only these geometry-level values select the coordinate metric.
-  bool is_polar_geometry() const { return sys_->program_is_polar(); }
-  Real radial_origin() const {
-    return sys_->program_is_polar() ? sys_->program_polar_geometry().r_min : Real(0);
-  }
-  Real radial_spacing() const {
-    return sys_->program_is_polar() ? sys_->program_polar_geometry().dr() : geom().dx();
-  }
-
   /// out = Lap(in): fill @p in's ghosts (transport BC, periodic by default) then apply the SHARED
   /// discrete 5-point Laplacian (pops::apply_laplacian, all optional coefficients null -> the bare
   /// bit-identical Laplacian). @p in is non-const because the ghost fill WRITES its halos (the valid
@@ -1223,6 +1213,14 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   Real program_execution_hmin_() const { return sys_->cfl_min_dx(); }
   Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
     return sys_->block_max_speed(runtime_block, state);
+  }
+  bool program_execution_is_polar_geometry_() const { return sys_->program_is_polar(); }
+  Real program_execution_radial_origin_() const {
+    return sys_->program_is_polar() ? sys_->program_polar_geometry().r_min : Real(0);
+  }
+  Real program_execution_radial_spacing_() const {
+    return sys_->program_is_polar() ? sys_->program_polar_geometry().dr()
+                                    : sys_->grid_context().geom.dx();
   }
 
   struct LogicalEvaluationRollback {

@@ -35,6 +35,9 @@ SHARED_SIGNATURES = (
     "void apply_projection(",
     "Real hmin(",
     "Real max_wave_speed(",
+    "bool is_polar_geometry(",
+    "Real radial_origin(",
+    "Real radial_spacing(",
     "MultiFab rhs_scratch_like(",
     "MultiFab scratch_state_like(",
     "MultiFab& rhs_scratch(",
@@ -219,6 +222,9 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_apply_projection_",
             "program_execution_hmin_",
             "program_execution_max_wave_speed_",
+            "program_execution_is_polar_geometry_",
+            "program_execution_radial_origin_",
+            "program_execution_radial_spacing_",
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
@@ -427,6 +433,27 @@ def test_shared_cfl_dispatch_maps_the_program_block_once_and_leaves_topology_to_
             "program_execution_max_wave_speed_", 1
         )[1].split("}", 1)[0]
         assert "sys_block(" not in wave_speed_hook
+
+
+def test_shared_geometry_queries_leave_only_terminal_metric_facts_in_providers():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    for query, hook in (
+        ("bool is_polar_geometry()", "program_execution_is_polar_geometry_"),
+        ("Real radial_origin()", "program_execution_radial_origin_"),
+        ("Real radial_spacing()", "program_execution_radial_spacing_"),
+    ):
+        assert shared.count(query) == 1
+        assert hook in shared
+        assert query not in uniform
+        assert query not in amr
+    assert "return sys_->program_is_polar();" in uniform
+    assert "sys_->program_polar_geometry().r_min" in uniform
+    assert "sys_->program_polar_geometry().dr()" in uniform
+    assert "program_execution_is_polar_geometry_() const noexcept { return false; }" in amr
+    assert "program_execution_radial_origin_() const noexcept { return Real(0); }" in amr
+    assert "return eng_->level_geom(level_).dx();" in amr
 
 
 def test_shared_commit_many_owns_layout_and_alias_semantics():
