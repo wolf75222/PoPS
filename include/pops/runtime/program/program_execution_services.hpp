@@ -13,6 +13,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -26,6 +27,7 @@
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
@@ -38,6 +40,7 @@
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
+#include <pops/runtime/program/wire_ids.hpp>
 
 namespace pops::runtime::program {
 
@@ -366,6 +369,54 @@ class ProgramExecutionServices {
   }
   GridContext grid_context() const { return provider_().program_execution_default_grid_context_(); }
   Geometry geom() const { return grid_context().geom; }
+
+  /// Materialize a lane-private mesh boundary authority with no block components.
+  std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
+      const MultiFab&, const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(
+        provider_().program_execution_default_grid_context_(), lane);
+  }
+
+  /// Materialize the exact boundary authority of one authenticated Program block.
+  std::shared_ptr<PreparedGridBoundarySession> prepare_block_boundary_session(
+      int block, MultiFab& prototype, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const ExecutionLane& lane) const {
+    return std::make_shared<PreparedGridBoundarySession>(
+        provider_().program_execution_block_grid_context_(block), lane, prototype, point);
+  }
+
+  /// Resolve storage for one generated prepared-operator assembly write.
+  MultiFab& assembly_target(MultiFab& field, std::string_view field_slot_identity) const {
+    validate_prepared_field_slot(field_slot_identity, "Program assembly_target");
+    return provider_().program_execution_assembly_target_(field, field_slot_identity);
+  }
+
+  /// Resolve storage for one generated prepared-operator reconstruction read.
+  MultiFab& assembly_source(MultiFab& field, std::string_view field_slot_identity) const {
+    validate_prepared_field_slot(field_slot_identity, "Program assembly_source");
+    return provider_().program_execution_assembly_source_(field, field_slot_identity);
+  }
+
+  /// Resolve the topology-qualified published value of one prepared linear solve.
+  MultiFab& linear_solution(MultiFab& field) const {
+    return provider_().program_execution_linear_solution_(field);
+  }
+
+  /// Mint the unverified prepared-apply capability only for an authority owned by this artifact.
+  ::pops::detail::AuthenticatedProgramApplyToken authenticated_program_apply_token(
+      OperatorFingerprint authority) const {
+    if (!provider_().program_execution_owns_operator_authority_(authority))
+      throw std::invalid_argument(
+          "compiled Program requested an operator authority not owned by its installed artifact");
+    return ::pops::detail::AuthenticatedProgramApplyToken(authority);
+  }
+
+  /// Execute one already prepared affine problem with its bound persistent workspace.
+  SolveOutcome solve_prepared_linear(const PreparedAffineLinearProblem& problem,
+                                     KrylovWorkspace& workspace, MultiFab& solution,
+                                     const MultiFab& rhs, const KrylovControls& controls) const {
+    return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
+  }
 
   /// Apply the topology-qualified scalar Laplacian.
   ///

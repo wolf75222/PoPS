@@ -9,10 +9,12 @@ PROGRAM_DIR = ROOT / "include" / "pops" / "runtime" / "program"
 SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
+PREPARED_AFFINE = (
+    ROOT / "include" / "pops" / "numerics" / "elliptic" / "linear" / "prepared_affine_problem.hpp"
+)
 CODEGEN = ROOT / "python" / "pops" / "codegen"
 HISTORY_CONTRACT = (
-    ROOT / "tests" / "python" / "integration" / "amr"
-    / "test_program_history_contract.py"
+    ROOT / "tests" / "python" / "integration" / "amr" / "test_program_history_contract.py"
 )
 CODEGEN_CONTEXT_ROUTES = (
     CODEGEN / "program_codegen.py",
@@ -55,6 +57,13 @@ SHARED_SIGNATURES = (
     "MultiFab& aux(",
     "GridContext grid_context(",
     "Geometry geom(",
+    "std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(",
+    "std::shared_ptr<PreparedGridBoundarySession> prepare_block_boundary_session(",
+    "MultiFab& assembly_target(",
+    "MultiFab& assembly_source(",
+    "MultiFab& linear_solution(",
+    "::pops::detail::AuthenticatedProgramApplyToken authenticated_program_apply_token(",
+    "SolveOutcome solve_prepared_linear(",
     "MultiFab alloc_scalar_field(",
     "ProgramResourceTopology program_resource_topology(",
     "int level(",
@@ -250,6 +259,10 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_scratch_",
             "program_execution_default_grid_context_",
             "program_execution_block_grid_context_",
+            "program_execution_owns_operator_authority_",
+            "program_execution_assembly_target_",
+            "program_execution_assembly_source_",
+            "program_execution_linear_solution_",
             "program_execution_state_",
             "program_execution_alloc_scalar_field_",
             "program_execution_apply_coupling_",
@@ -310,6 +323,34 @@ def test_shared_service_uses_only_explicit_provider_hooks():
     calls = re.findall(r"provider_\(\)\.(\w+)\(", shared)
     assert calls
     assert all(call.startswith("program_execution_") for call in calls), calls
+
+
+def test_prepared_operator_policy_is_shared_while_storage_stays_provider_owned():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    prepared = _read(PREPARED_AFFINE)
+
+    assert 'validate_prepared_field_slot(field_slot_identity, "Program assembly_target")' in shared
+    assert 'validate_prepared_field_slot(field_slot_identity, "Program assembly_source")' in shared
+    assert "program_execution_block_grid_context_(block)" in shared
+    assert "program_execution_owns_operator_authority_(authority)" in shared
+    assert "solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls)" in shared
+
+    assert "friend class ::pops::runtime::program::ProgramContext;" not in prepared
+    assert "friend class ::pops::runtime::program::AmrProgramContext;" not in prepared
+    assert "friend class ::pops::runtime::program::ProgramExecutionServices;" in prepared
+
+    for provider in (uniform, amr):
+        assert "validate_prepared_field_slot(" not in provider
+        assert "solve_prepared_affine_outcome(" not in provider
+
+    assert "return sys_ != nullptr && sys_->program_owns_operator_authority(authority);" in uniform
+    assert "return field;" in uniform
+    assert "hierarchy_tensor_assembly_field_slots_" in amr
+    assert "hierarchy_tensor_solution_field_slot_" in amr
+    assert "solver.assembly_target(field_slot_identity, level_)" in amr
+    assert "solver.solution(level_)" in amr
 
 
 def test_spatial_algorithms_are_shared_and_only_polar_stencil_is_provider_owned():
@@ -425,9 +466,7 @@ def test_history_program_algorithms_are_shared_and_contexts_expose_only_storage_
         "rotate_histories": 2,
     }
     for operation, count in operations.items():
-        definition = re.compile(
-            r"(?m)^\s{2}(?:void|MultiFab&)\s+%s\s*\(" % operation
-        )
+        definition = re.compile(r"(?m)^\s{2}(?:void|MultiFab&)\s+%s\s*\(" % operation)
         assert len(definition.findall(shared)) == count
         assert definition.search(uniform) is None
         assert definition.search(amr) is None
@@ -484,13 +523,12 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
     assert "program_execution_apply_projection_(sys_block(block), state)" in shared
     assert "sys_->block_project(runtime_block, state);" in uniform
     assert (
-        "eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);"
-        in amr
+        "eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);" in amr
     )
     for provider in (uniform, amr):
-        projection_hook = provider.split("program_execution_apply_projection_", 1)[1].split(
-            "}", 1
-        )[0]
+        projection_hook = provider.split("program_execution_apply_projection_", 1)[1].split("}", 1)[
+            0
+        ]
         assert "sys_block(" not in projection_hook
 
 
@@ -499,20 +537,13 @@ def test_shared_cfl_dispatch_maps_the_program_block_once_and_leaves_topology_to_
     uniform = _read(UNIFORM)
     amr = _read(AMR)
     assert "return provider_().program_execution_hmin_();" in shared
-    assert (
-        "program_execution_max_wave_speed_(sys_block(block), state)" in shared
-    )
+    assert "program_execution_max_wave_speed_(sys_block(block), state)" in shared
     assert "return sys_->cfl_min_dx();" in uniform
     assert "return sys_->block_max_speed(runtime_block, state);" in uniform
     assert "return eng_->level_hmin(level_);" in amr
-    assert (
-        "eng_->level_max_speed(static_cast<std::size_t>(runtime_block), level_, state)"
-        in amr
-    )
+    assert "eng_->level_max_speed(static_cast<std::size_t>(runtime_block), level_, state)" in amr
     for provider in (uniform, amr):
-        wave_speed_hook = provider.split(
-            "program_execution_max_wave_speed_", 1
-        )[1].split("}", 1)[0]
+        wave_speed_hook = provider.split("program_execution_max_wave_speed_", 1)[1].split("}", 1)[0]
         assert "sys_block(" not in wave_speed_hook
 
 

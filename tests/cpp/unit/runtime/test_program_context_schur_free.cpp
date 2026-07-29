@@ -84,6 +84,13 @@ class ExecutionServicesFixture
   bool history_initialized() const { return history_initialized_; }
   pops::Real history_outgoing_dt() const { return history_outgoing_dt_; }
   const std::string& history_rotation_clock() const { return history_rotation_clock_; }
+  int boundary_program_block() const { return boundary_program_block_; }
+  int assembly_target_count() const { return assembly_target_count_; }
+  int assembly_source_count() const { return assembly_source_count_; }
+  int linear_solution_count() const { return linear_solution_count_; }
+  int authority_check_count() const { return authority_check_count_; }
+  const std::string& assembly_target_slot() const { return assembly_target_slot_; }
+  const std::string& assembly_source_slot() const { return assembly_source_slot_; }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
@@ -133,6 +140,30 @@ class ExecutionServicesFixture
     context.geom =
         pops::Geometry{domain, pops::Real(0), pops::Real(1), pops::Real(0), pops::Real(1)};
     return context;
+  }
+  pops::GridContext program_execution_block_grid_context_(int block) const {
+    boundary_program_block_ = block;
+    return program_execution_default_grid_context_();
+  }
+  bool program_execution_owns_operator_authority_(pops::OperatorFingerprint authority) const {
+    ++authority_check_count_;
+    return authority == pops::OperatorFingerprint{1, 2, 3, 4};
+  }
+  pops::MultiFab& program_execution_assembly_target_(pops::MultiFab& field,
+                                                     std::string_view field_slot_identity) const {
+    ++assembly_target_count_;
+    assembly_target_slot_ = field_slot_identity;
+    return field;
+  }
+  pops::MultiFab& program_execution_assembly_source_(pops::MultiFab& field,
+                                                     std::string_view field_slot_identity) const {
+    ++assembly_source_count_;
+    assembly_source_slot_ = field_slot_identity;
+    return field;
+  }
+  pops::MultiFab& program_execution_linear_solution_(pops::MultiFab& field) const {
+    ++linear_solution_count_;
+    return field;
   }
   [[noreturn]] void program_execution_apply_polar_tensor_(pops::MultiFab&, pops::MultiFab&,
                                                           const pops::MultiFab*,
@@ -240,6 +271,13 @@ class ExecutionServicesFixture
   mutable int source_runtime_block_ = -1;
   mutable const pops::MultiFab* source_state_ = nullptr;
   mutable const pops::MultiFab* source_rhs_ = nullptr;
+  mutable int boundary_program_block_ = -1;
+  mutable int assembly_target_count_ = 0;
+  mutable int assembly_source_count_ = 0;
+  mutable int linear_solution_count_ = 0;
+  mutable int authority_check_count_ = 0;
+  mutable std::string assembly_target_slot_;
+  mutable std::string assembly_source_slot_;
 };
 
 template <class Context>
@@ -421,6 +459,52 @@ void expect_shared_spatial_services(Context& context) {
   EXPECT_NEAR(context.max_component(divergence, 0), pops::Real(0), 1e-12);
 }
 
+template <class Context>
+void expect_shared_prepared_operator_services(Context& context) {
+  const pops::Box2D domain = pops::Box2D::from_extents(4, 4);
+  const pops::BoxArray boxes(std::vector<pops::Box2D>{domain});
+  const pops::DistributionMapping mapping(std::vector<int>{0});
+  pops::MultiFab field(boxes, mapping, 1, 1);
+  const pops::ExecutionLane lane = pops::ExecutionLane::world();
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{};
+
+  const auto mesh_boundary = context.prepare_mesh_boundary_session(field, lane);
+  const auto block_boundary = context.prepare_block_boundary_session(0, field, point, lane);
+  EXPECT_NE(mesh_boundary, nullptr);
+  EXPECT_NE(block_boundary, nullptr);
+  EXPECT_EQ(context.boundary_program_block(), 0)
+      << "the shared service passes a Program block and leaves topology mapping to the provider";
+
+  EXPECT_EQ(&context.assembly_target(field, "pops.test.operator.target"), &field);
+  EXPECT_EQ(context.assembly_target_count(), 1);
+  EXPECT_EQ(context.assembly_target_slot(), "pops.test.operator.target");
+  EXPECT_THROW((void)context.assembly_target(field, ""), std::runtime_error);
+  EXPECT_EQ(context.assembly_target_count(), 1)
+      << "shared validation must reject an invalid slot before provider dispatch";
+
+  EXPECT_EQ(&context.assembly_source(field, "pops.test.operator.solution"), &field);
+  EXPECT_EQ(context.assembly_source_count(), 1);
+  EXPECT_EQ(context.assembly_source_slot(), "pops.test.operator.solution");
+  EXPECT_THROW((void)context.assembly_source(field, ""), std::runtime_error);
+  EXPECT_EQ(context.assembly_source_count(), 1)
+      << "shared validation must reject an invalid slot before provider dispatch";
+
+  EXPECT_EQ(&context.linear_solution(field), &field);
+  EXPECT_EQ(context.linear_solution_count(), 1);
+
+  EXPECT_NO_THROW((void)context.authenticated_program_apply_token({1, 2, 3, 4}));
+  EXPECT_THROW((void)context.authenticated_program_apply_token({4, 3, 2, 1}),
+               std::invalid_argument);
+  EXPECT_EQ(context.authority_check_count(), 2);
+
+  using SolveMethod = pops::SolveOutcome (Context::*)(
+      const pops::PreparedAffineLinearProblem&, pops::KrylovWorkspace&, pops::MultiFab&,
+      const pops::MultiFab&, const pops::KrylovControls&) const;
+  const auto solve_method = static_cast<SolveMethod>(&Context::solve_prepared_linear);
+  EXPECT_NE(solve_method, nullptr)
+      << "the shared prepared Krylov route remains part of both provider facades";
+}
+
 }  // namespace
 
 TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameContractFixture) {
@@ -435,4 +519,11 @@ TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameSpatialFixture) {
   ExecutionServicesFixture<true> amr(1);
   expect_shared_spatial_services(uniform);
   expect_shared_spatial_services(amr);
+}
+
+TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSamePreparedOperatorFixture) {
+  ExecutionServicesFixture<false> uniform(-1);
+  ExecutionServicesFixture<true> amr(1);
+  expect_shared_prepared_operator_services(uniform);
+  expect_shared_prepared_operator_services(amr);
 }
