@@ -122,11 +122,13 @@ Supported native routes include:
   physical-face locality, provider sensitivity and restoration after every perturbation. The same
   core field-coupled JVP has a two-rank L0/L1 oracle over genuinely distributed state and provider
   storage, including centered-difference parity, frozen-provider sensitivity and collective
-  restoration of both the provider and its residual carrier. Partially refined FAC patches carrying
-  a dynamic physical boundary must remain strictly interior; a patch touching a non-periodic domain
-  face fails closed. A selected solve with a field dependency also fails closed until its complete
-  dependency closure can share one transaction. Simultaneous multi-block stage solves use one exact
-  hierarchy-qualified multi-state request carrying the same
+  restoration of both the provider and its residual carrier. A second two-rank L0/L1 oracle drives
+  that solved field through an x-low physical-face residual split across both ranks, proving that its
+  JVP contribution is non-trivial, face-local, provider-sensitive and collectively restored.
+  Partially refined FAC patches carrying a dynamic physical boundary must remain strictly interior;
+  a patch touching a non-periodic domain face fails closed. A selected solve with a field dependency
+  also fails closed until its complete dependency closure can share one transaction. Simultaneous
+  multi-block stage solves use one exact hierarchy-qualified multi-state request carrying the same
   `BoundaryEvaluationPoint`, provider slot and active level; every provisional conservative state is
   restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
