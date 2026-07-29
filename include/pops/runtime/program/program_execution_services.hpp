@@ -160,35 +160,41 @@ class ProgramExecutionServices {
   template <class Rollback>
   class LogicalEvaluationScope {
    public:
-    LogicalEvaluationScope(const Provider& owner, double child_dt, Rollback rollback)
-        : owner_(&owner), child_dt_(child_dt), rollback_(std::move(rollback)) {
+    LogicalEvaluationScope(const ProgramExecutionServices& services, double child_dt,
+                           Rollback rollback)
+        : services_(&services), child_dt_(child_dt), rollback_(std::move(rollback)) {
       static_assert(std::is_nothrow_move_constructible_v<Rollback>,
                     "Program logical-evaluation rollback tokens must be nothrow movable");
     }
     LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
     LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
     LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
-        : owner_(std::exchange(other.owner_, nullptr)),
+        : services_(std::exchange(other.services_, nullptr)),
           child_dt_(other.child_dt_),
           rollback_(std::move(other.rollback_)) {}
     LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
     ~LogicalEvaluationScope() noexcept { restore_(); }
 
     Real dt() const {
-      if (owner_ == nullptr)
+      if (services_ == nullptr)
         throw std::logic_error("Program logical evaluation scope is no longer active");
       return static_cast<Real>(child_dt_);
     }
 
    private:
     void restore_() noexcept {
-      if (owner_ == nullptr)
+      if (services_ == nullptr)
         return;
-      owner_->program_execution_restore_logical_evaluation_(rollback_);
-      owner_ = nullptr;
+      static_assert(
+          noexcept(std::declval<const Provider&>().program_execution_restore_logical_evaluation_(
+              std::declval<const Rollback&>())),
+          "Program logical-evaluation rollback must be noexcept");
+      services_->provider_().program_execution_restore_logical_evaluation_(rollback_);
+      services_->invalidate_active_operator_snapshot_();
+      services_ = nullptr;
     }
 
-    const Provider* owner_ = nullptr;
+    const ProgramExecutionServices* services_ = nullptr;
     double child_dt_ = 0.0;
     Rollback rollback_;
   };
@@ -216,7 +222,8 @@ class ProgramExecutionServices {
     // projection throws after any partial mutation, the local scope restores the exact parent state.
     auto rollback = provider_().program_execution_capture_logical_evaluation_();
     using Rollback = decltype(rollback);
-    LogicalEvaluationScope<Rollback> scope(provider_(), child_dt, std::move(rollback));
+    LogicalEvaluationScope<Rollback> scope(*this, child_dt, std::move(rollback));
+    invalidate_active_operator_snapshot_();
     provider_().program_execution_apply_logical_evaluation_(interval);
     return scope;
   }
@@ -487,6 +494,40 @@ class ProgramExecutionServices {
                                      KrylovWorkspace& workspace, MultiFab& solution,
                                      const MultiFab& rhs, const KrylovControls& controls) const {
     return pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls);
+  }
+
+  /// Mint one exact operator-evaluation identity.
+  ///
+  /// Monotonic revisions and active-mint invalidation are Program semantics. Providers contribute
+  /// only the topology fingerprint and the exact Uniform or active-level temporal identity.
+  OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
+                                                          const MultiFab& prototype,
+                                                          OperatorFingerprint resources) const {
+    const OperatorFingerprint topology =
+        provider_().program_execution_operator_topology_(prototype);
+    if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("Program operator snapshot revision exhausted");
+    const std::uint64_t revision = ++operator_snapshot_revision_;
+    invalidate_active_operator_snapshot_();
+    OperatorEvaluationSnapshot snapshot =
+        provider_().program_execution_operator_evaluation_snapshot_(authority, topology, resources,
+                                                                    revision);
+    active_operator_snapshot_revision_ = revision;
+    return snapshot;
+  }
+
+  /// Probe the current native identity without issuing a new revision.
+  ///
+  /// A prior mint remains reproducible only while no logical-scope transition or newer mint has
+  /// invalidated it. Provider topology and clock revisions remain part of the returned identity.
+  OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
+                                                       OperatorFingerprint topology,
+                                                       OperatorFingerprint resources,
+                                                       std::uint64_t revision) const {
+    const std::uint64_t probe_revision =
+        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
+    return provider_().program_execution_operator_evaluation_snapshot_(authority, topology,
+                                                                       resources, probe_revision);
   }
 
   /// Apply the topology-qualified scalar Laplacian.
@@ -1273,6 +1314,9 @@ class ProgramExecutionServices {
 
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
 
+  void invalidate_active_operator_snapshot_() const noexcept {
+    active_operator_snapshot_revision_ = 0;
+  }
   void require_lane_or_prepared_laplacian_() const {
     if (provider_().program_execution_is_polar_geometry_())
       throw std::logic_error(
@@ -1483,6 +1527,8 @@ class ProgramExecutionServices {
 
   mutable CouplingWorkspace coupling_workspace_;
   mutable std::map<std::string, HistoryBinding> history_bindings_;
+  mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never a minted revision
 };
 
 /// Compile-time association between a public runtime facade and its topology/storage provider.
