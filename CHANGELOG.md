@@ -32,20 +32,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   rematerialization. MPI capture now validates common accepted-state bytes on every producer before
   sealing, so a divergent tagging payload fails collectively without a partial file; external
   Tagger components remain fail-closed for non-zero hysteresis.
-- Internal frozen two-level serial AMR shared-interface transactions now retain endpoint-qualified
+- Internal frozen two-level AMR shared-interface transactions now retain endpoint-qualified
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
   reflux source. `AMRRegrid.frozen()` exposes the materialize-once public hierarchy policy, and the
-  the installed shared-interface route covers one or two frozen levels, plus a serial dynamic
+  installed shared-interface route covers one or two frozen levels, plus a serial dynamic
   two-level hierarchy whose complete depth is active at bind, with exact SSPRK2/subcycling
   evaluation when both endpoint hierarchies provide matching full-face fine coverage. A
   depth-preserving regrid transaction now rematerializes face cells, ownership, scratch and
   collective layout identity before the next Program stage; a missing face or active-depth change
-  fails closed and restores the accepted interface registry.
+  fails closed and restores the accepted interface registry. Frozen refined `MPI_COMM_WORLD`
+  publication now authenticates the publication identity and ledger transaction coordinates
+  collectively before every rank appends the same canonical shared-flux fragment; a rank-local
+  append failure reaches consensus before either endpoint residual is scattered.
   Level-zero interface ownership is authenticated before AMR bootstrap, so proper-nesting may cross
   only the exact physical faces deliberately omitted from their paired boundary plans.
-  One-sided tag propagation, deeper hierarchies, dynamic active-depth changes, refined MPI,
-  implicit JVP and historical-rate paths remain fail-closed.
+  One-sided tag propagation, deeper hierarchies, dynamic active-depth changes, dynamic refined MPI
+  rematerialization, implicit JVP and historical-rate paths remain fail-closed.
 - Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the
   held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
   hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay

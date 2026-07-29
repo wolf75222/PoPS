@@ -358,17 +358,20 @@ class InterfaceFluxScheduler {
     finish_collective_preflight_(collective_world, point_failure, "evaluation-point preflight");
     std::exception_ptr publication_failure;
     try {
-      if (publication != nullptr) {
-        if (collective_world)
-          throw std::runtime_error(
-              "AMR interface-flux fragment publication does not yet support distributed MPI");
+      if (publication != nullptr)
         validate_fragment_publication_(point, *publication);
-      }
     } catch (...) {
       publication_failure = std::current_exception();
     }
     finish_collective_preflight_(collective_world, publication_failure,
                                  "interface-fragment publication preflight");
+    if (collective_world) {
+      const long minimum_publication = all_reduce_min(publication != nullptr ? 1L : 0L);
+      const long maximum_publication = all_reduce_max(publication != nullptr ? 1L : 0L);
+      if (minimum_publication != maximum_publication)
+        throw std::runtime_error(
+            "multi-block interface fragment publication presence differs across MPI ranks");
+    }
     if (collective_world && !registry_agrees_across_ranks_())
       throw std::runtime_error("multi-block interface prepared registry differs across MPI ranks");
     const std::string point_identity = collective_point_identity_(point);
@@ -376,6 +379,14 @@ class InterfaceFluxScheduler {
                                 {{std::string_view("point"), std::string_view(point_identity)}}))
       throw std::runtime_error(
           "multi-block interface BoundaryEvaluationPoint differs across MPI ranks");
+    if (collective_world && publication != nullptr) {
+      const std::string publication_identity =
+          collective_fragment_publication_identity_(*publication);
+      if (!all_ranks_agree_exact_ordered_byte_pairs(
+              {{std::string_view("publication"), std::string_view(publication_identity)}}))
+        throw std::runtime_error(
+            "multi-block interface fragment publication differs across MPI ranks");
+    }
 
     for (PreparedInterface& prepared : interfaces_) {
       if (prepared.route.level != point.level)
@@ -415,9 +426,6 @@ class InterfaceFluxScheduler {
       }
       if (!active)
         continue;  // sparse RHS group unrelated to this installed interface on every rank
-      if (publication != nullptr && prepared.distributed)
-        throw std::runtime_error(
-            "AMR interface-flux fragment publication does not yet support distributed MPI");
       apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs, publication);
     }
   }
@@ -801,6 +809,40 @@ class InterfaceFluxScheduler {
     return bytes;
   }
 
+  static void append_identity_clock_(std::string& bytes, const ::pops::amr::ClockStamp& clock) {
+    append_identity_scalar_(bytes, clock.level);
+    append_identity_scalar_(bytes, clock.macro_step);
+    append_identity_scalar_(bytes, clock.phase.numerator);
+    append_identity_scalar_(bytes, clock.phase.denominator);
+    append_identity_scalar_(bytes, clock.physical_time);
+  }
+
+  static std::string collective_fragment_publication_identity_(
+      const InterfaceFluxFragmentPublication& publication) {
+    // Do not serialize the complete ledger on every stage.  Exact publication/flux consensus and
+    // collective accumulation make replicated entry equality inductive; these coordinates prove
+    // that every rank appends at the same position in the same transaction.
+    std::string bytes;
+    append_identity_text_(bytes, "pops.multiblock.interface-fragment-publication.v1");
+    append_identity_scalar_(bytes, publication.topology_epoch);
+    append_identity_scalar_(bytes, publication.coarse_level);
+    append_identity_scalar_(bytes, publication.fine_level);
+    append_identity_clock_(bytes, publication.clock);
+    append_identity_text_(bytes, publication.stage_identity);
+    append_identity_clock_(bytes, publication.interval.begin);
+    append_identity_clock_(bytes, publication.interval.end);
+    append_identity_scalar_(bytes, publication.stage_weight.numerator);
+    append_identity_scalar_(bytes, publication.stage_weight.denominator);
+    append_identity_scalar_(bytes, static_cast<std::uint8_t>(publication.stage_weight_resolved));
+    append_identity_scalar_(bytes, publication.ledger->topology_epoch());
+    append_identity_scalar_(bytes,
+                            static_cast<std::uint64_t>(publication.ledger->transaction_depth()));
+    append_identity_scalar_(bytes, static_cast<std::uint64_t>(publication.ledger->pending_size()));
+    append_identity_scalar_(bytes,
+                            static_cast<std::uint64_t>(publication.ledger->published_size()));
+    return bytes;
+  }
+
   bool registry_agrees_across_ranks_() const {
     std::vector<std::pair<std::string_view, std::string_view>> identities;
     identities.reserve(interfaces_.size());
@@ -1071,8 +1113,16 @@ class InterfaceFluxScheduler {
     } else if (!finite_flux) {
       throw std::runtime_error("multi-block interface evaluator returned a non-finite flux");
     }
-    if (publication != nullptr)
-      publish_fragment_(prepared, point, *publication);
+    if (publication != nullptr) {
+      std::exception_ptr publication_failure;
+      try {
+        publish_fragment_(prepared, point, *publication);
+      } catch (...) {
+        publication_failure = std::current_exception();
+      }
+      finish_collective_preflight_(prepared.distributed, publication_failure,
+                                   "interface-fragment accumulation");
+    }
     ++prepared.evaluation_count;
 
     for (int face = 0; face < prepared.face_count; ++face) {

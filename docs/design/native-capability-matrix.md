@@ -98,7 +98,10 @@ Supported native routes include:
   endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
   three-or-more-level public AMR interfaces, dynamic active-depth changes, historical
-  shared-interface rates, and refined MPI publication remain unavailable.
+  shared-interface rates, and dynamic refined MPI rematerialization remain unavailable. Frozen
+  refined interface publication uses the same exact `MPI_COMM_WORLD` trace consensus as the flat
+  route; every rank evaluates the canonical shared flux and scatters only to its locally owned
+  endpoint cells.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes
