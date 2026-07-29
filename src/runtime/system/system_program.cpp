@@ -10,6 +10,10 @@
 
 namespace pops {
 
+runtime::program::ProgramRuntimeState& System::program_runtime_state_() {
+  return p_->program_;
+}
+
 namespace {
 void require_cartesian_boundary_linearization(bool embedded_boundary_set, GeometryMode mode) {
   if (embedded_boundary_set && mode != GeometryMode::None)

@@ -3243,6 +3243,12 @@ void AmrSystem::install_program_step(std::function<void(double)> step) {
 void AmrSystem::install_program_hierarchy_refresh(std::function<void()> refresh) {
   p_->program_.install_hierarchy_refresh(std::move(refresh), "AmrSystem");
 }
+void AmrSystem::install_program_restart_hooks(std::function<void()> preflight,
+                                              std::function<void()> regrid,
+                                              std::function<void()> resync) {
+  p_->program_.install_restart_hooks(std::move(preflight), std::move(regrid), std::move(resync),
+                                     "AmrSystem");
+}
 // GLOBAL macro-step cadence around the installed program closure (parity System::set_program_cadence,
 // ADC-411). Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void AmrSystem::set_program_cadence(int substeps, int stride) {
@@ -3534,6 +3540,9 @@ bool AmrSystem::uses_runtime_engine() const {
 // The facade-owned Profiler (parity System), forwarded to by the AmrProgramContext's profiling seam.
 pops::runtime::program::Profiler& AmrSystem::profiler_handle() {
   return p_->program_.profiler_;
+}
+runtime::program::ProgramRuntimeState& AmrSystem::program_runtime_state_() {
+  return p_->program_;
 }
 // Record / read a Program runtime diagnostic (parity System::record_program_diagnostic). Pure side
 // effect; lives on the Impl (not the .so) so a later checkpoint can reach it.
@@ -3843,6 +3852,11 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
       throw std::runtime_error(
           "AmrSystem::install_program: artifact installer did not install its accepted-state "
           "hierarchy refresh hook");
+    if (!p_->program_.restart_regrid_preflight_ || !p_->program_.restart_regrid_ ||
+        !p_->program_.restart_resync_)
+      throw std::runtime_error(
+          "AmrSystem::install_program: artifact installer did not install its restart "
+          "preflight/regrid/resync hooks");
 
     p_->program_.block_map_ = std::move(program_block_map);
     for (const auto& [block, defaults] : program_param_defaults)
@@ -4241,6 +4255,27 @@ void AmrSystem::rollback_restart_transaction() {
   p_->restart_transaction_active_ = false;
   p_->runtime->end_step_rollback_scope();
   p_->restart_snapshot_.restore(*p_);
+  p_->program_.resync_after_restart_rollback("AmrSystem::rollback_restart_transaction:");
+}
+
+void AmrSystem::preflight_regrid_on_restart() {
+  p_->ensure_built();
+  if (!p_->restart_transaction_active_)
+    throw std::runtime_error(
+        "AmrSystem::preflight_regrid_on_restart requires an active restart transaction");
+  if (p_->has_active_step_transaction_())
+    throw std::runtime_error(
+        "AmrSystem::preflight_regrid_on_restart cannot overlap a step transaction");
+  p_->program_.preflight_regrid_on_restart("AmrSystem::preflight_regrid_on_restart:");
+}
+
+void AmrSystem::regrid_on_restart() {
+  p_->ensure_built();
+  if (!p_->restart_transaction_active_)
+    throw std::runtime_error("AmrSystem::regrid_on_restart requires an active restart transaction");
+  if (p_->has_active_step_transaction_())
+    throw std::runtime_error("AmrSystem::regrid_on_restart cannot overlap a step transaction");
+  p_->program_.regrid_on_restart("AmrSystem::regrid_on_restart:");
 }
 
 int AmrSystem::checkpoint_regrid_count() const {

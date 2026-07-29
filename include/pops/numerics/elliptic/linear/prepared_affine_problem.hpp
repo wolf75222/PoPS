@@ -39,6 +39,8 @@ class PreparedAffineLinearProblem;
 namespace runtime::program {
 class ProgramContext;
 class AmrProgramContext;
+template <class Provider>
+class ProgramExecutionServices;
 }  // namespace runtime::program
 namespace detail {
 struct PreparedProblemAccess;
@@ -1287,8 +1289,8 @@ class AuthenticatedProgramApplyToken {
       throw std::invalid_argument("authenticated Program operator authority must be non-zero");
   }
 
-  friend class ::pops::runtime::program::ProgramContext;
-  friend class ::pops::runtime::program::AmrProgramContext;
+  template <class Provider>
+  friend class ::pops::runtime::program::ProgramExecutionServices;
   friend class ::pops::PreparedAffineLinearProblem;
 
   OperatorFingerprint authority_{};

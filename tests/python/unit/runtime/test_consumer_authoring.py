@@ -108,7 +108,7 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
         "guarantee": "accepted_state_with_recorded_hierarchy",
     }
     assert checkpoint.operation_data["guarantee"] == "bit_identical_accepted_state"
-    assert checkpoint.operation_data["supports_regrid_on_restart"] is False
+    assert checkpoint.operation_data["supports_regrid_on_restart"] is True
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
 
 
@@ -154,10 +154,10 @@ def test_checkpoint_hierarchy_policies_have_distinct_exact_identities_and_guaran
     assert operation["hierarchy"] == regrid.to_data()
     assert operation["hierarchy_identity"] == regrid.identity.token
     assert operation["guarantee"] == "accepted_state_after_regrid"
-    assert operation["supports_regrid_on_restart"] is False
+    assert operation["supports_regrid_on_restart"] is True
 
 
-def test_regrid_on_restart_refuses_bit_identity_and_unsupported_builtin_provider():
+def test_regrid_on_restart_refuses_bit_identity_uniform_and_multilayout_before_artifact():
     case, _, _ = _case()
     schedule = every(10, clock=Clock("macro", owner=case.owner_path))
     with pytest.raises(ValueError, match="bit_identical=True with RegridOnRestart"):
@@ -184,10 +184,29 @@ def test_regrid_on_restart_refuses_bit_identity_and_unsupported_builtin_provider
         handle_resolver=case.resolve,
     )
     with pytest.raises(
-        NotImplementedError,
-        match=r"accepted-state-v5 does not implement RegridOnRestart",
+        ValueError,
+        match="requires exactly one AMR layout.*before artifact creation",
     ):
         graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    builder = LayoutPlanBuilder(
+        case.owner_path.canonical(),
+        handle_resolver=case.resolve,
+    )
+    primary = builder.layout("primary", Uniform(cartesian_grid(n=8)))
+    builder.layout("unused", Uniform(cartesian_grid(n=8)))
+    for block in subjects.blocks:
+        builder.assign_block(block, primary)
+    for state in subjects.states:
+        builder.assign_state(state, primary)
+    multi_layout = builder.resolve(
+        blocks=subjects.blocks,
+        states=subjects.states,
+    )
+    with pytest.raises(
+        ValueError,
+        match="requires exactly one AMR layout.*before artifact creation",
+    ):
+        graph.resolve(case.resolve, multi_layout, owner=case.owner_path.canonical())
 
 
 def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():

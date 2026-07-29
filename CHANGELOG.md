@@ -26,9 +26,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   scalars. Sparse Balance cadences elide off-cadence reductions, publish an exact zero ledger for
   held Program strides, and replay accepted state without reopening the native mailbox.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
-  non-bit-identical rank-count rematerialization with Dense persisted histories, and state explicitly
-  that `RegridOnRestart()` remains unsupported. The M3 gate now executes the persisted two-rank to
-  one-rank restart proof.
+  non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
+  executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
+  policy restores and authenticates the recorded accepted state before one artifact-owned
+  scientific regrid, emits a global before/after receipt, and derives a distinct continuation run
+  identity. This first operational slice is one AMR layout, unchanged MPI cardinality, and refuses
+  fields, shared interfaces, and bootstrap staggered caches.
 - Add an explicit offline-only migration for the byte-exact frozen Uniform-v2 checkpoint fixture.
   Migration requires a complete authenticated current-v5 authority plus a reviewed mapping that pins
   both artifacts, all lifecycle/ABI/Program identities, every block/component/history
