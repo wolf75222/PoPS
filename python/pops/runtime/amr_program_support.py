@@ -90,7 +90,8 @@ DEFERRED_GROUPS: dict = {
     },
     "coupled_solve": {
         "issue": None,
-        "op_source": "program_emit_kernels._AUX_OUTPUT_OPS['solve_fields_from_blocks']",
+        "op_source": "Program IR solve_fields_from_blocks -> program_emit_ops "
+                     "ctx.solve_fields_from_blocks_at",
         "ir_ops": frozenset({"solve_fields_from_blocks"}),
         "header_methods": frozenset(),
     },

@@ -281,10 +281,22 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             raise ValueError("solve_fields_from_blocks node has no exact field identity")
         field, _ = resolved_field_route(field_ref, field_plans)
         lines += field_point_cpp(program, v, field)
+        boundary_point = "field_boundary_point_%d" % v.id
+        lines.append(
+            "const auto %s = ctx.boundary_evaluation_point(%d);"
+            % (boundary_point, v.id)
+        )
         report = "field_report_%d" % v.id
         lines.append(
-            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks(%d, %s, {%s});"
-            % (report, int(v.id), json.dumps(field), ", ".join(overrides)))
+            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks_at(%s, %d, %s, {%s});"
+            % (
+                report,
+                boundary_point,
+                int(v.id),
+                json.dumps(field),
+                ", ".join(overrides),
+            )
+        )
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
         # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any

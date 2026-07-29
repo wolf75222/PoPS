@@ -3769,6 +3769,158 @@ class AmrRuntime {
     }
   }
 
+  /// Re-evaluate one exact named-field provider from simultaneous stage states on one exact
+  /// hierarchy level. @p stage_states is indexed by runtime block; nullptr keeps that block's
+  /// accepted live state. Every live state is restored before the returned outcome can be consumed,
+  /// while the provider candidate remains private until collective Accept.
+  SolveOutcome solve_named_fields_from_states_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      const std::vector<const MultiFab*>& stage_states) {
+    std::string request_contract;
+    std::exception_ptr validation_error;
+    long validation_failed_local = 0;
+    try {
+      if (provider_slot.empty())
+        throw std::invalid_argument(
+            "AmrRuntime::solve_named_fields_from_states_at requires an exact provider slot");
+      if (point.clock.empty() || point.tick < 0 || point.stage < 0 || point.substep < 0 ||
+          !std::isfinite(point.dt) || point.dt <= 0.0 || !std::isfinite(point.physical_time))
+        throw std::invalid_argument(
+            "AmrRuntime::solve_named_fields_from_states_at requires a complete evaluation point");
+      if (point.level < 0 || point.level >= nlev_)
+        throw std::out_of_range(
+            "AmrRuntime::solve_named_fields_from_states_at level is out of range");
+      if (stage_states.size() != blocks_.size())
+        throw std::invalid_argument(
+            "AmrRuntime::solve_named_fields_from_states_at stage pack size mismatch");
+
+      bool has_override = false;
+      for (std::size_t block = 0; block < stage_states.size(); ++block) {
+        const MultiFab* stage = stage_states[block];
+        if (stage == nullptr)
+          continue;
+        has_override = true;
+        MultiFab& live = (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U;
+        if (!same_exact_multifab_layout_(live, *stage))
+          throw std::invalid_argument(
+              "AmrRuntime::solve_named_fields_from_states_at stage state does not match its "
+              "exact block/level layout");
+        for (std::size_t other = 0; other < blocks_.size(); ++other) {
+          if (other != block &&
+              stage == &(*blocks_[other].levels)[static_cast<std::size_t>(point.level)].U)
+            throw std::invalid_argument(
+                "AmrRuntime::solve_named_fields_from_states_at cannot borrow another block's "
+                "live state");
+          if (other < block && stage_states[other] == stage)
+            throw std::invalid_argument(
+                "AmrRuntime::solve_named_fields_from_states_at contains a duplicate stage "
+                "state");
+        }
+      }
+      if (!has_override)
+        throw std::invalid_argument(
+            "AmrRuntime::solve_named_fields_from_states_at requires at least one stage override");
+
+      ExactContractBuilder request;
+      request.text("pops.amr.named-field-stage-pack")
+          .scalar(std::uint32_t{1})
+          .text(provider_slot)
+          .text(point.clock)
+          .scalar(point.tick)
+          .scalar(static_cast<std::int32_t>(point.level))
+          .scalar(static_cast<std::int32_t>(point.substep))
+          .scalar(static_cast<std::int32_t>(point.stage))
+          .scalar(point.stage_fraction.numerator)
+          .scalar(point.stage_fraction.denominator)
+          .scalar(point.dt)
+          .scalar(point.physical_time)
+          .scalar(static_cast<std::uint64_t>(stage_states.size()));
+      for (std::size_t block = 0; block < stage_states.size(); ++block) {
+        const MultiFab* stage = stage_states[block];
+        request.scalar(static_cast<std::uint64_t>(block)).presence(stage != nullptr);
+        if (stage != nullptr)
+          detail::append_elliptic_field_layout_contract(
+              request, "stage", stage->box_array(), stage->dmap(), stage->ncomp(), stage->n_grow(),
+              point.level == 0 && replicated_coarse_ ? FieldDistribution::Replicated
+                                                     : FieldDistribution::Distributed);
+      }
+      request_contract = std::move(request).release();
+    } catch (...) {
+      validation_error = std::current_exception();
+      validation_failed_local = 1;
+    }
+    if (all_reduce_max(validation_failed_local) != 0) {
+      if (n_ranks() == 1 && validation_error != nullptr)
+        std::rethrow_exception(validation_error);
+      throw std::runtime_error(
+          "AmrRuntime::solve_named_fields_from_states_at validation failed on at least one MPI "
+          "rank");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-named-field-stage-pack", std::string_view(request_contract)}}))
+      throw std::invalid_argument(
+          "AmrRuntime::solve_named_fields_from_states_at request differs between MPI ranks");
+    if (all_reduce_max(named_field_stage_pack_in_use_ ? 1L : 0L) != 0)
+      throw std::logic_error(
+          "AmrRuntime::solve_named_fields_from_states_at workspace is already in use");
+
+    struct WorkspaceUse {
+      bool& flag;
+      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
+      ~WorkspaceUse() { flag = false; }
+    } use(named_field_stage_pack_in_use_);
+
+    std::exception_ptr materialization_error;
+    long materialization_failed_local = 0;
+    try {
+      named_field_stage_restore_scratch_.clear();
+      named_field_stage_restore_scratch_.reserve(stage_states.size());
+      for (std::size_t block = 0; block < stage_states.size(); ++block) {
+        if (stage_states[block] == nullptr)
+          continue;
+        MultiFab& live = (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U;
+        const std::pair<std::size_t, int> scratch_key{block, point.level};
+        auto insertion = named_field_stage_state_scratch_.try_emplace(
+            scratch_key, live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+        MultiFab& accepted = insertion.first->second;
+        if (!same_exact_multifab_layout_(accepted, live))
+          accepted = MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+        named_field_stage_restore_scratch_.push_back({&live, &accepted});
+      }
+    } catch (...) {
+      materialization_error = std::current_exception();
+      materialization_failed_local = 1;
+    }
+    if (all_reduce_max(materialization_failed_local) != 0) {
+      named_field_stage_restore_scratch_.clear();
+      if (n_ranks() == 1 && materialization_error != nullptr)
+        std::rethrow_exception(materialization_error);
+      throw std::runtime_error(
+          "AmrRuntime::solve_named_fields_from_states_at workspace materialization failed on at "
+          "least one MPI rank");
+    }
+
+    for (const auto& [live, accepted] : named_field_stage_restore_scratch_)
+      PureFieldAlgebra::copy_allocated(*accepted, *live);
+    const auto restore = [&]() {
+      for (const auto& [live, accepted] : named_field_stage_restore_scratch_)
+        PureFieldAlgebra::copy_allocated(*live, *accepted);
+    };
+    try {
+      for (std::size_t block = 0; block < stage_states.size(); ++block)
+        if (stage_states[block] != nullptr)
+          PureFieldAlgebra::copy_allocated(
+              (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U,
+              *stage_states[block]);
+      SolveOutcome outcome = solve_named_fields(&provider_slot);
+      restore();
+      return outcome;
+    } catch (...) {
+      restore();
+      throw;
+    }
+  }
+
   [[nodiscard]] bool field_solve_transaction_active() const noexcept {
     return field_solve_transaction_active_;
   }
@@ -6089,6 +6241,8 @@ class AmrRuntime {
   // stage state. Compatibility is rechecked on every use, so regrid/restart cannot retain stale
   // storage while steady-state replays allocate nothing.
   std::map<std::pair<std::size_t, int>, MultiFab> named_field_stage_state_scratch_;
+  std::vector<std::pair<MultiFab*, MultiFab*>> named_field_stage_restore_scratch_;
+  bool named_field_stage_pack_in_use_ = false;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
   // TYPED coupling operator inspect metadata (ADC-595, parity with System::Impl::coupled_operators_):

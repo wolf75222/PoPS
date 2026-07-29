@@ -121,8 +121,9 @@ Supported native routes include:
   patches carrying a dynamic physical boundary must remain strictly interior; a patch touching a
   non-periodic domain face fails closed. A selected solve with a field dependency also fails closed
   until its complete dependency closure can share one transaction. Simultaneous multi-block stage
-  solves still use a coarse-authority publication reused by fine Program levels; replacing that last
-  reuse branch with one exact hierarchy-qualified multi-state request remains outstanding.
+  solves use one exact hierarchy-qualified multi-state request carrying the same
+  `BoundaryEvaluationPoint`, provider slot and active level; every provisional conservative state is
+  restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
 - Runtime accepted-state checkpoint v5 for Uniform and AMR. The single-file MPI route captures

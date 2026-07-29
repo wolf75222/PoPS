@@ -488,6 +488,36 @@ static std::pair<Real, Real> fine_difference_linearity_error(const MultiFab& ful
   return {error, response};
 }
 
+static std::pair<Real, Real> multi_state_superposition_error(const MultiFab& both,
+                                                             const MultiFab& only_a,
+                                                             const MultiFab& only_b,
+                                                             const MultiFab& base) {
+  if (both.box_array().boxes() != only_a.box_array().boxes() ||
+      both.box_array().boxes() != only_b.box_array().boxes() ||
+      both.box_array().boxes() != base.box_array().boxes() ||
+      both.dmap().ranks() != only_a.dmap().ranks() ||
+      both.dmap().ranks() != only_b.dmap().ranks() || both.dmap().ranks() != base.dmap().ranks())
+    throw std::invalid_argument("multi-state superposition oracle requires identical layouts");
+  device_fence();
+  Real error = Real(0);
+  Real response = Real(0);
+  for (int li = 0; li < both.local_size(); ++li) {
+    const ConstArray4 simultaneous = both.fab(li).const_array();
+    const ConstArray4 a = only_a.fab(li).const_array();
+    const ConstArray4 b = only_b.fab(li).const_array();
+    const ConstArray4 origin = base.fab(li).const_array();
+    const Box2D valid = both.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        const Real simultaneous_response = simultaneous(i, j) - origin(i, j);
+        const Real separate_response = (a(i, j) - origin(i, j)) + (b(i, j) - origin(i, j));
+        error = std::max(error, std::fabs(simultaneous_response - separate_response));
+        response = std::max(response, std::fabs(simultaneous_response));
+      }
+  }
+  return {error, response};
+}
+
 static Real max_abs_component_diff(const MultiFab& lhs, const MultiFab& rhs, int component) {
   device_fence();
   Real result = Real(0);
@@ -1459,6 +1489,134 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   EXPECT_EQ(ghosts.error, Real(0))
       << "coarse/fine ghosts must come from the freshly published coarse solution through the "
          "configured spatial authority";
+}
+
+TEST(test_amr_named_field, ExactMultiStateStagePackRunsOnEveryMaterializedLevel) {
+  constexpr int n = 16;
+  constexpr int phi_component = kAuxNamedBase;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(1.0, 1.0), "minmod", "rusanov", layout,
+                                              "a", blob(n, 0.35),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(1.0, 1.0), "minmod", "rusanov", layout,
+                                              "b", blob(n, 0.65),
+                                              /*has_density=*/true, 1.4, 1, false));
+  for (AmrRuntimeBlock& block : blocks)
+    block.aux_ncomp = phi_component + 1;
+
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+  AmrFieldSolveConfig plan;
+  plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  plan.plan_identity = "test:a/coupled_screened:plan:v1";
+  plan.provider_identity = "test:a/coupled_screened";
+  plan.topology_provider_kind = "structured";
+  plan.topology_provenance = "test:periodic-cartesian";
+  plan.topology_digest = "test:periodic-cartesian:v1";
+  plan.output_owner_identity = "test:a";
+  plan.output_block = "a";
+  plan.output_key = "coupled_screened";
+  plan.hierarchy_policy = composite_hierarchy_policy();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
+  plan.has_reaction = true;
+  plan.reaction = Real(2);
+  plan.providers.push_back(
+      FieldProviderBinding{"test:a/coupled_screened/rhs", "a", "coupled_screened", Real(1)});
+  plan.providers.push_back(
+      FieldProviderBinding{"test:b/coupled_screened/rhs", "b", "coupled_screened", Real(1)});
+  runtime.install_field_plan("coupled_screened", plan);
+  runtime.register_named_field("a", "coupled_screened", phi_component,
+                               /*gx=*/-1, /*gy=*/-1, /*gradient_sign=*/1);
+  runtime.set_block_named_elliptic_rhs(
+      0, "coupled_screened",
+      [](const MultiFab& state, MultiFab& rhs) { add_scaled_component(state, Real(1), 0, rhs); });
+  runtime.set_block_named_elliptic_rhs(
+      1, "coupled_screened",
+      [](const MultiFab& state, MultiFab& rhs) { add_scaled_component(state, Real(1), 0, rhs); });
+
+  const std::string field = "coupled_screened";
+  ASSERT_TRUE(consume_expected_solved(runtime.solve_named_fields(&field)).solved());
+  ASSERT_EQ(runtime.nlev(), 2);
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    const MultiFab base_phi = runtime.provider_potential_level(field, level);
+    const MultiFab accepted_a = runtime.level_state(0, level);
+    const MultiFab accepted_b = runtime.level_state(1, level);
+    MultiFab stage_a = accepted_a;
+    MultiFab stage_b = accepted_b;
+    add_valid_constant(stage_a, Real(0.05));
+    add_valid_constant(stage_b, Real(0.08));
+    const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
+        "main",
+        11,
+        level,
+        level,
+        23,
+        ::pops::amr::Rational(1, 2),
+        0.01 / static_cast<double>(1 << level),
+        0.205};
+
+    std::vector<const MultiFab*> stages(2, nullptr);
+    stages[0] = &stage_a;
+    if (level == 0) {
+      auto incomplete_point = point;
+      incomplete_point.clock.clear();
+      EXPECT_THROW((void)runtime.solve_named_fields_from_states_at(incomplete_point, field, stages),
+                   std::invalid_argument)
+          << "the native stage-pack route must retain its complete BoundaryEvaluationPoint";
+    }
+    SolveOutcome only_a_pending = runtime.solve_named_fields_from_states_at(point, field, stages);
+    EXPECT_EQ(max_abs_diff(runtime.level_state(0, level), accepted_a), Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.level_state(1, level), accepted_b), Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.provider_potential_level(field, level), base_phi), Real(0))
+        << "the level-qualified multi-state candidate must remain private before Accept";
+    ASSERT_TRUE(consume_expected_solved(std::move(only_a_pending)).solved());
+    const MultiFab only_a = runtime.provider_potential_level(field, level);
+
+    stages[0] = nullptr;
+    stages[1] = &stage_b;
+    ASSERT_TRUE(
+        consume_expected_solved(runtime.solve_named_fields_from_states_at(point, field, stages))
+            .solved());
+    const MultiFab only_b = runtime.provider_potential_level(field, level);
+
+    stages[0] = &stage_a;
+    stages[1] = &stage_b;
+    ASSERT_TRUE(
+        consume_expected_solved(runtime.solve_named_fields_from_states_at(point, field, stages))
+            .solved());
+    const MultiFab both = runtime.provider_potential_level(field, level);
+    const auto [superposition_error, response] =
+        multi_state_superposition_error(both, only_a, only_b, base_phi);
+    EXPECT_GT(response, Real(1e-6))
+        << "both stage overrides must contribute on materialized level " << level;
+    EXPECT_LT(superposition_error, Real(5e-4) * response + Real(1e-10))
+        << "the exact multi-state request must assemble both level-qualified stage states";
+    EXPECT_EQ(max_abs_diff(runtime.level_state(0, level), accepted_a), Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.level_state(1, level), accepted_b), Real(0));
+
+    stages[0] = &accepted_a;
+    stages[1] = &accepted_b;
+    ASSERT_TRUE(
+        consume_expected_solved(runtime.solve_named_fields_from_states_at(point, field, stages))
+            .solved());
+    EXPECT_LT(max_valid_scalar_diff(runtime.provider_potential_level(field, level), base_phi),
+              Real(1e-8))
+        << "the accepted hierarchy state must restore the level-qualified field";
+  }
 }
 
 TEST(test_amr_named_field, CoarseAuthoritativeAuxUsesPreparedTransferAndComponentBcOnFineBoundary) {

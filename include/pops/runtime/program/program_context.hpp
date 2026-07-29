@@ -195,6 +195,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                           const std::string& provider_slot, int b,
                                           MultiFab& u_stage) const {
     count_kernel();
+    require_field_evaluation_point_(point, 0, "Program single-state field solve");
     if (provider_slot.empty())
       throw std::invalid_argument(
           "System::solve_fields_from_state_at requires an exact provider slot");
@@ -293,13 +294,15 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// Allocation-free generated route.  The exact IR identity owns one context-local pointer/snapshot
   /// workspace; @p field and the ordered Program block pack are authenticated on every replay.  The
   /// old vector overloads above remain available for manual C++ callers.
-  SolveOutcome solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
-                                        std::initializer_list<FieldStageOverride> overrides) const {
+  SolveOutcome solve_fields_from_blocks_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
+      std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
     count_kernel();
+    require_field_evaluation_point_(point, 0, "Program simultaneous field solve");
     FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
     sys_->prepare_named_field_publication_storage_(workspace.generated_field_identity);
     return run_field_solve_transaction_([&]() {
-      return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
+      return solve_named_field_workspace_at_(point, workspace.generated_field_identity, workspace);
     });
   }
   MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
@@ -1746,6 +1749,34 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->solve_fields_from_blocks_in_place_(field, workspace.system_stages);
   }
 
+  SolveReport solve_named_field_workspace_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+      FieldSolveWorkspace& workspace) const {
+    if (point.level != 0)
+      throw std::invalid_argument(
+          "Program simultaneous field solve requires BoundaryEvaluationPoint.level == 0");
+    if (workspace.in_use)
+      throw std::logic_error("Program simultaneous field-solve workspace is already in use");
+    struct WorkspaceUse {
+      bool& flag;
+      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
+      ~WorkspaceUse() { flag = false; }
+    } use(workspace.in_use);
+    std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
+    bool has_override = false;
+    for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
+      if (workspace.program_stages[p] == nullptr)
+        continue;
+      workspace.system_stages[static_cast<std::size_t>(workspace.program_to_system[p])] =
+          workspace.program_stages[p];
+      has_override = true;
+    }
+    if (!has_override)
+      throw std::runtime_error(
+          "ProgramContext::solve_fields_from_blocks_at: no stage override was supplied");
+    return sys_->solve_fields_from_blocks_at_in_place_(point, field, workspace.system_stages);
+  }
+
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
 
   struct ScratchKey {
@@ -1838,6 +1869,17 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     if (group_id < 0)
       throw std::invalid_argument(
           "Program RHS group requires a non-negative authored group identity");
+  }
+
+  static void require_field_evaluation_point_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int expected_level,
+      const char* route) {
+    if (point.clock.empty() || point.tick < 0 || point.level != expected_level ||
+        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
+        !std::isfinite(point.physical_time) || point.stage_fraction < amr::Rational(0, 1) ||
+        amr::Rational(1, 1) < point.stage_fraction)
+      throw std::invalid_argument(std::string(route) +
+                                  " requires a complete exact BoundaryEvaluationPoint");
   }
 
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {

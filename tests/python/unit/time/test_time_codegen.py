@@ -6,7 +6,8 @@ POPS_ABI_KEY_LITERAL preprocessor literal -- never the interposable inline -- pl
 pops_program_hash / pops_install_program), the Forward-Euler body, and that a multi-stage scheme
 (SSPRK2) now lowers (a scratch state + a second rhs + a lincomb commit). Multi-block (ADC-426) now
 lowers too -- N P.state / N P.commit, each op routed to its block index; the SIMULTANEOUS multi-target
-solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks (Spec 3 crit 24, ADC-457). Constructs
+solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks_at (Spec 3 crit 24, ADC-457/ADC-759).
+Constructs
 the codegen still cannot lower -- named sources beyond 'default', a commit of an undeclared block --
 must be REFUSED with a clear error, never silently mis-lowered. Pure Python (no compile); skips if pops
 is unavailable.
@@ -217,8 +218,9 @@ def test_multiblock_lowers(t):
     assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
     assert "ctx.state(1)" in src, "block b should bind ctx.state(1)"
     assert "ctx.rhs_group(" in src, "sibling residuals should execute as one native round"
-    assert 'ctx.solve_fields_from_blocks(' in src, \
-        "coupled blocks should publish one simultaneous field solve"
+    assert "const auto field_boundary_point_" in src
+    assert "ctx.solve_fields_from_blocks_at(field_boundary_point_" in src, \
+        "coupled blocks should publish one point-qualified simultaneous field solve"
 
 
 def test_unknown_block_commit_refused(t):
@@ -258,7 +260,7 @@ def test_solve_fields_from_blocks_lowers(t):
         "b1", Ub + P.dt * P.rhs(state=Ub, terms=[Flux(), DefaultSource()]),
         at=endpoint_b.point))
     src = _emit(P)
-    assert "ctx.solve_fields_from_blocks(" in src
+    assert "ctx.solve_fields_from_blocks_at(" in src
     assert "std::vector<const pops::MultiFab*>" not in src
     assert "{0, &" in src and "{1, &" in src
 

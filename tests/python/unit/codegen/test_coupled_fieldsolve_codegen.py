@@ -5,9 +5,10 @@ Calling one exact ``FieldHandle`` with ``(U0, U1, ...)`` and consuming its outco
 coupled Poisson where EVERY listed block contributes its own stage state at once. Its IR already builds
 (ADC-426); this test exercises
 the LOWERING ADC-457 adds: ``_check_lowerable`` no longer refuses it, and ``emit_cpp_program``
-produces one exact-IR ``ctx.solve_fields_from_blocks`` request with each listed block slotted by
-index. The context owns and reuses the native pointer/snapshot workspace, so the generated step does
-not allocate a host vector while the runtime still sees every coupled stage in one shared phi/aux.
+produces one exact-IR ``ctx.solve_fields_from_blocks_at`` request with each listed block slotted by
+index. The context reuses the native pointer workspace and the runtime owns the exact state
+snapshots, so the generated step does not allocate a host vector while the runtime still sees every
+coupled stage in one shared phi/aux.
 
 Pure-Python codegen check (always runs when pops.time imports; skips cleanly if _pops is absent). The
 .so that runs the coupled solve is validated on ROMEO (Kokkos-only AOT, not buildable host-only)."""
@@ -106,8 +107,14 @@ def main():
 
     # (2) emit_cpp_program lowers through the context-owned exact-IR workspace seam.
     src = _emit(P)
-    chk("ctx.solve_fields_from_blocks(" in src,
-        "emit contains the coupled multi-block solve call")
+    chk("ctx.solve_fields_from_blocks_at(field_boundary_point_" in src,
+        "emit contains the point/provider-qualified coupled multi-block solve call")
+    chk("const auto field_boundary_point_" in src,
+        "emit materializes the exact multi-block BoundaryEvaluationPoint")
+    chk("ctx.set_field_logical_timepoint(" in src and
+        src.index("ctx.set_field_logical_timepoint(") <
+        src.index("ctx.solve_fields_from_blocks_at("),
+        "the exact provider timepoint is installed before the multi-block solve")
     chk("std::vector<const pops::MultiFab*>" not in src,
         "the generated step does not allocate a MultiFab pointer vector")
 
@@ -121,13 +128,13 @@ def main():
         pos for token in ("ctx.rhs_into(", "ctx.rhs_group(")
         if (pos := src.find(token)) >= 0
     ]
-    chk(bool(rhs_positions) and src.index("ctx.solve_fields_from_blocks(") < min(rhs_positions),
+    chk(bool(rhs_positions) and src.index("ctx.solve_fields_from_blocks_at(") < min(rhs_positions),
         "the coupled field solve is emitted before the RHS reads the shared aux")
 
     # (4) a 2-block coupled solve also lowers (parity with the per-block solve_fields path).
     P2 = coupled_program(t, "coupled_two", ("a", "b"))
     src2 = _emit(P2)
-    chk("ctx.solve_fields_from_blocks(" in src2 and
+    chk("ctx.solve_fields_from_blocks_at(" in src2 and
         sum(src2.count("{%d, &" % k) for k in range(2)) >= 2,
         "a 2-block coupled solve lowers with both blocks slotted")
 
