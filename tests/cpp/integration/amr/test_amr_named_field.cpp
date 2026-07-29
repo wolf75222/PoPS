@@ -1535,6 +1535,7 @@ TEST(test_amr_named_field, FieldCoupledRhsJacvecMatchesCenteredDifferenceOnEvery
   blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
                                               "plasma", blob(n, 0.5),
                                               /*has_density=*/true, 1.4, 1, false));
+  blocks[0].state_identity = "test://amr-named-field/jacvec/state/U";
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 1);
@@ -1567,21 +1568,22 @@ TEST(test_amr_named_field, FieldCoupledRhsJacvecMatchesCenteredDifferenceOnEvery
     add_scaled_component(state, Real(charge), 0, rhs);
   });
 
-  ASSERT_EQ(runtime.nlev(), 2);
-  std::vector<Real> forward_errors(2, Real(0));
-  std::vector<Real> coupled_responses(2, Real(0));
-  std::vector<Real> stale_provider_gaps(2, Real(0));
-  std::vector<Real> restore_errors(2, Real(0));
+  const std::string field = "jacvec";
+  const auto prove_field_coupled_jvp = [&](int tick_base, std::string_view phase) {
+    ASSERT_EQ(runtime.nlev(), 2) << phase;
+    std::vector<Real> forward_errors(static_cast<std::size_t>(runtime.nlev()), Real(0));
+    std::vector<Real> coupled_responses(static_cast<std::size_t>(runtime.nlev()), Real(0));
+    std::vector<Real> stale_provider_gaps(static_cast<std::size_t>(runtime.nlev()), Real(0));
+    std::vector<Real> restore_errors(static_cast<std::size_t>(runtime.nlev()), Real(0));
 
-  {
     for (int level = 0; level < runtime.nlev(); ++level) {
       const runtime::multiblock::BoundaryEvaluationPoint point{
-          "main", 40 + level, level, 0, 3, ::pops::amr::Rational(1, 2), 0.01, 0.005};
+          "main", tick_base + level, level, 0, 3, ::pops::amr::Rational(1, 2), 0.01, 0.005};
+      const MultiFab live_before = runtime.level_state(0, level);
       MultiFab iterate = runtime.level_state(0, level);
       MultiFab direction = iterate;
       scale(direction, Real(0.75));
 
-      const std::string field = "jacvec";
       const SolveReport base_report = consume_expected_solved(
           runtime.solve_named_fields_from_state_at(point, field, 0, iterate));
       if (!base_report.solved())
@@ -1640,22 +1642,64 @@ TEST(test_amr_named_field, FieldCoupledRhsJacvecMatchesCenteredDifferenceOnEvery
       stale_provider_gaps[static_cast<std::size_t>(level)] = max_valid_scalar_diff(stale, centered);
       restore_errors[static_cast<std::size_t>(level)] =
           max_valid_scalar_diff(runtime.provider_potential_level(field, level), base_phi);
+      EXPECT_EQ(max_abs_diff(runtime.level_state(0, level), live_before), Real(0))
+          << phase << ": stage-state evaluation must restore live state on level " << level;
     }
-  }
 
-  for (int level = 0; level < runtime.nlev(); ++level) {
-    const std::size_t k = static_cast<std::size_t>(level);
-    EXPECT_GT(coupled_responses[k], Real(1e-7))
-        << "the field-coupled residual derivative must be observable on level " << level;
-    EXPECT_LT(forward_errors[k], Real(2e-2) * coupled_responses[k] + Real(2e-7))
-        << "the emitted one-sided field-coupled JVP contract must match an independent centered "
-           "finite difference on level "
-        << level;
-    EXPECT_GT(stale_provider_gaps[k], Real(1e-7))
-        << "freezing the provider must produce a measurably different JVP on level " << level;
-    EXPECT_LT(restore_errors[k], Real(1e-8))
-        << "every perturbed evaluation must restore the frozen provider on level " << level;
-  }
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      const std::size_t k = static_cast<std::size_t>(level);
+      EXPECT_GT(coupled_responses[k], Real(1e-7))
+          << phase << ": the field-coupled residual derivative must be observable on level "
+          << level;
+      EXPECT_LT(forward_errors[k], Real(2e-2) * coupled_responses[k] + Real(2e-7))
+          << phase
+          << ": the emitted one-sided field-coupled JVP contract must match an independent "
+             "centered finite difference on level "
+          << level;
+      EXPECT_GT(stale_provider_gaps[k], Real(1e-7))
+          << phase << ": freezing the provider must produce a measurably different JVP on level "
+          << level;
+      EXPECT_LT(restore_errors[k], Real(1e-8))
+          << phase << ": every perturbed evaluation must restore the frozen provider on level "
+          << level;
+    }
+    EXPECT_FALSE(runtime.field_solve_transaction_active())
+        << phase << ": the accepted JVP sequence must leave no field transaction";
+  };
+
+  prove_field_coupled_jvp(/*tick_base=*/40, "before regrid");
+  const std::vector<PatchBox> layout_before = runtime.output_geometry_boxes();
+  const auto provider_layout_before = runtime.field_topology_patches(field);
+  ASSERT_TRUE(provider_layout_before.has_value());
+  EXPECT_EQ(*provider_layout_before, layout_before);
+  const std::uint64_t epoch_before = runtime.topology_epoch();
+  const std::uint64_t generation_before = runtime.topology_materialization_generation();
+
+  // Replace the bootstrap patch with a smaller central L1 layout while retaining uncovered active
+  // L0 cells. The provider and its stage-state scratch must not retain any box, mapping, or pointer
+  // from the retired hierarchy.
+  runtime.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.2)}});
+  runtime.regrid();
+  ASSERT_EQ(runtime.nlev(), 2);
+  EXPECT_GT(runtime.topology_epoch(), epoch_before);
+  EXPECT_GT(runtime.topology_materialization_generation(), generation_before);
+  const std::vector<PatchBox> layout_after = runtime.output_geometry_boxes();
+  EXPECT_NE(layout_after, layout_before) << "the oracle requires a real L1 layout replacement";
+  const auto provider_layout_after_regrid = runtime.field_topology_patches(field);
+  ASSERT_TRUE(provider_layout_after_regrid.has_value());
+  EXPECT_EQ(*provider_layout_after_regrid, layout_after)
+      << "the regrid transaction must rematerialize the provider before publication";
+  EXPECT_NE(*provider_layout_after_regrid, *provider_layout_before);
+
+  // Both (block, level) stage-state scratch keys were populated above on the retired layouts.
+  // Reusing them here must replace their MultiFabs before the first post-regrid perturbation.
+  prove_field_coupled_jvp(/*tick_base=*/80, "after regrid");
+  const auto provider_layout_after = runtime.field_topology_patches(field);
+  ASSERT_TRUE(provider_layout_after.has_value());
+  EXPECT_EQ(*provider_layout_after, layout_after)
+      << "the JVP must rematerialize its provider on the exact replacement hierarchy";
+  EXPECT_EQ(*provider_layout_after, *provider_layout_after_regrid);
 }
 
 TEST(test_amr_named_field,
