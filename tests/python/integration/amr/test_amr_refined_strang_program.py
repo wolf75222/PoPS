@@ -314,15 +314,17 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
     assert simulation.n_levels() == 2
     assert simulation.patch_boxes()
     assert np.isfinite(evolved).all()
+    coarse_actual = evolved[:, ~coarse_covered]
     np.testing.assert_allclose(
-        evolved[:, ~coarse_covered],
-        coarse_expected[:, None],
+        coarse_actual,
+        np.broadcast_to(coarse_expected[:, None], coarse_actual.shape),
         rtol=0.0,
         atol=2.0e-13,
     )
+    covered_actual = evolved[:, coarse_covered]
     np.testing.assert_allclose(
-        evolved[:, coarse_covered],
-        fine_expected[:, None],
+        covered_actual,
+        np.broadcast_to(fine_expected[:, None], covered_actual.shape),
         rtol=0.0,
         atol=2.0e-13,
     )
@@ -332,9 +334,10 @@ def test_generated_strang_runs_only_through_program_on_refined_amr(
         dtype=np.float64,
     ).reshape(2, 2 * N, 2 * N)
     assert np.isfinite(fine[:, fine_valid]).all()
+    fine_actual = fine[:, fine_valid]
     np.testing.assert_allclose(
-        fine[:, fine_valid],
-        fine_expected[:, None],
+        fine_actual,
+        np.broadcast_to(fine_expected[:, None], fine_actual.shape),
         rtol=0.0,
         atol=2.0e-13,
     )
