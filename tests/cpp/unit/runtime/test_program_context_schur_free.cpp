@@ -299,7 +299,9 @@ class ExecutionServicesFixture
     return program_runtime_state_;
   }
   int program_execution_block_count_() const { return 2; }
-  pops::Real program_execution_physical_time_() const { return pops::Real(3.5); }
+  typename SharedServices::ProgramClockCoordinate program_execution_clock_coordinate_() const {
+    return {pops::Real(3.5), 4, active_level_};
+  }
   void program_execution_set_field_timepoint_(const std::string&,
                                               const pops::FieldLogicalTimePoint&) const {
     ++field_update_count_;
@@ -351,8 +353,6 @@ class ExecutionServicesFixture
     ++history_rotate_count_;
     history_rotation_clock_ = clock_identity;
   }
-  int program_execution_macro_step_() const { return 4; }
-  int program_execution_active_level_() const { return active_level_; }
   typename SharedServices::ProgramResourceTopology program_execution_resource_topology_()
       const noexcept {
     return {11, 17, Amr ? 3 : 1};
