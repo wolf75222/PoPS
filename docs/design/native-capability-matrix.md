@@ -116,12 +116,14 @@ Supported native routes include:
   fields and the exact stage/local time under both `LevelByLevelSolve` and
   `CompositeHierarchySolve`; the composite FAC provider requires one exact dependency carrier per
   materialized level before entering a solve. The generated resolve/source contract covers the
-  field-dependent transport-boundary JVP route; an end-to-end native L0/L1 finite-difference oracle
-  for that combined route remains outstanding. Partially refined FAC
-  patches carrying a dynamic physical boundary must remain strictly interior; a patch touching a
-  non-periodic domain face fails closed. A selected solve with a field dependency also fails closed
-  until its complete dependency closure can share one transaction. Simultaneous multi-block stage
-  solves use one exact hierarchy-qualified multi-state request carrying the same
+  field-dependent transport-boundary JVP route. A native L0/L1 level-local oracle now places that
+  dependency on a physical face of a fully refined domain and checks the complete core-plus-boundary
+  `rhs_jacvec(field_coupled=True)` against an independent centered finite difference; it also proves
+  physical-face locality, provider sensitivity and restoration after every perturbation. Partially
+  refined FAC patches carrying a dynamic physical boundary must remain strictly interior; a patch
+  touching a non-periodic domain face fails closed. A selected solve with a field dependency also
+  fails closed until its complete dependency closure can share one transaction. Simultaneous
+  multi-block stage solves use one exact hierarchy-qualified multi-state request carrying the same
   `BoundaryEvaluationPoint`, provider slot and active level; every provisional conservative state is
   restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
