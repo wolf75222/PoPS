@@ -1491,6 +1491,148 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
          "configured spatial authority";
 }
 
+TEST(test_amr_named_field, FieldCoupledRhsJacvecMatchesCenteredDifferenceOnEveryLevel) {
+  constexpr int n = 16;
+  constexpr Real reaction = Real(2);
+  constexpr Real c_dt = Real(0.01);
+  constexpr Real h = Real(2e-4);
+  constexpr double charge = -1.0;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.5),
+                                              /*has_density=*/true, 1.4, 1, false));
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+  AmrFieldSolveConfig plan;
+  plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  plan.plan_identity = "test:plasma/jacvec:plan:v1";
+  plan.provider_identity = "test:plasma/jacvec";
+  plan.topology_provider_kind = "structured";
+  plan.topology_provenance = "test:periodic-cartesian";
+  plan.topology_digest = "test:periodic-cartesian:v1";
+  plan.output_owner_identity = "test:plasma";
+  plan.output_block = "plasma";
+  plan.output_key = "jacvec";
+  plan.hierarchy_policy = composite_hierarchy_policy();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
+  plan.has_reaction = true;
+  plan.reaction = reaction;
+  plan.providers.push_back(
+      FieldProviderBinding{"test:plasma/jacvec/rhs", "plasma", "jacvec", Real(1)});
+  runtime.install_field_plan("jacvec", plan);
+  // The ExB residual reads the canonical (phi, grad_x, grad_y) auxiliary components 0..2.
+  // Publishing this named provider there makes the elliptic response part of the residual whose
+  // Jacobian-vector product is checked below; a provider-only test would miss this coupling.
+  runtime.register_named_field("plasma", "jacvec", 0, 1, 2, /*gradient_sign=*/-1);
+  runtime.set_block_named_elliptic_rhs(0, "jacvec", [charge](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(charge), 0, rhs);
+  });
+
+  ASSERT_EQ(runtime.nlev(), 2);
+  std::vector<Real> forward_errors(2, Real(0));
+  std::vector<Real> coupled_responses(2, Real(0));
+  std::vector<Real> stale_provider_gaps(2, Real(0));
+  std::vector<Real> restore_errors(2, Real(0));
+
+  {
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      const runtime::multiblock::BoundaryEvaluationPoint point{
+          "main", 40 + level, level, 0, 3, ::pops::amr::Rational(1, 2), 0.01, 0.005};
+      MultiFab iterate = runtime.level_state(0, level);
+      MultiFab direction = iterate;
+      scale(direction, Real(0.75));
+
+      const std::string field = "jacvec";
+      const SolveReport base_report = consume_expected_solved(
+          runtime.solve_named_fields_from_state_at(point, field, 0, iterate));
+      if (!base_report.solved())
+        throw std::runtime_error("field-coupled JVP oracle could not prepare its base provider");
+      const MultiFab base_phi = runtime.provider_potential_level(field, level);
+
+      MultiFab r0(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+      r0.set_val(Real(0));
+      runtime.level_rhs_core_into_at(0, level, point, iterate, r0, /*flux_only=*/false);
+
+      const auto residual_at = [&](Real shift, bool coupled) {
+        MultiFab state = iterate;
+        saxpy(state, shift, direction);
+        MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+        residual.set_val(Real(0));
+        if (coupled) {
+          const SolveReport perturbed = consume_expected_solved(
+              runtime.solve_named_fields_from_state_at(point, field, 0, state));
+          if (!perturbed.solved())
+            throw std::runtime_error("field-coupled JVP oracle could not solve its perturbation");
+          runtime.level_rhs_core_into_at(0, level, point, state, residual, /*flux_only=*/false);
+          const SolveReport restored = consume_expected_solved(
+              runtime.solve_named_fields_from_state_at(point, field, 0, iterate));
+          if (!restored.solved())
+            throw std::runtime_error(
+                "field-coupled JVP oracle could not restore its base provider");
+        } else {
+          runtime.level_rhs_core_into_at(0, level, point, state, residual, /*flux_only=*/false);
+        }
+        return residual;
+      };
+
+      const MultiFab plus = residual_at(h, /*coupled=*/true);
+      const MultiFab minus = residual_at(-h, /*coupled=*/true);
+      const MultiFab plus_with_stale_provider = residual_at(h, /*coupled=*/false);
+
+      // This is the exact forward-difference algebra emitted for
+      // rhs_jacvec(field_coupled=True): Jv = v - c_dt (R(U+h v)-R(U))/h.
+      MultiFab generated = direction;
+      saxpy(generated, -c_dt / h, plus);
+      saxpy(generated, c_dt / h, r0);
+
+      // A separately assembled centered finite difference is the numerical reference.  It catches
+      // using a coarse/cached provider for either perturbed residual, while remaining independent of
+      // the one-sided production formula.
+      MultiFab centered = direction;
+      saxpy(centered, -c_dt / (Real(2) * h), plus);
+      saxpy(centered, c_dt / (Real(2) * h), minus);
+      forward_errors[static_cast<std::size_t>(level)] = max_valid_scalar_diff(generated, centered);
+      coupled_responses[static_cast<std::size_t>(level)] =
+          max_valid_scalar_diff(centered, direction);
+
+      MultiFab stale = direction;
+      saxpy(stale, -c_dt / h, plus_with_stale_provider);
+      saxpy(stale, c_dt / h, r0);
+      stale_provider_gaps[static_cast<std::size_t>(level)] = max_valid_scalar_diff(stale, centered);
+      restore_errors[static_cast<std::size_t>(level)] =
+          max_valid_scalar_diff(runtime.provider_potential_level(field, level), base_phi);
+    }
+  }
+
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    const std::size_t k = static_cast<std::size_t>(level);
+    EXPECT_GT(coupled_responses[k], Real(1e-7))
+        << "the field-coupled residual derivative must be observable on level " << level;
+    EXPECT_LT(forward_errors[k], Real(2e-2) * coupled_responses[k] + Real(2e-7))
+        << "the emitted one-sided field-coupled JVP contract must match an independent centered "
+           "finite difference on level "
+        << level;
+    EXPECT_GT(stale_provider_gaps[k], Real(1e-7))
+        << "freezing the provider must produce a measurably different JVP on level " << level;
+    EXPECT_LT(restore_errors[k], Real(1e-8))
+        << "every perturbed evaluation must restore the frozen provider on level " << level;
+  }
+}
+
 TEST(test_amr_named_field, ExactMultiStateStagePackRunsOnEveryMaterializedLevel) {
   constexpr int n = 16;
   constexpr int phi_component = kAuxNamedBase;
