@@ -3359,9 +3359,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           "AmrProgramContext::commit_many aliased target/source requires a flat hierarchy; "
           "materialize an explicit provisional state before a conservative multi-level commit");
   }
-  void program_execution_commit_copy_(MultiFab& target, const MultiFab& source) const {
-    lincomb(target, Real(0), target, Real(1), source);
-  }
   const std::vector<int>& program_execution_block_map_() const {
     return facade_->program_block_map();
   }

@@ -937,9 +937,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
   }
   void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
-  void program_execution_commit_copy_(MultiFab& target, const MultiFab& source) const {
-    lincomb(target, Real(0), target, Real(1), source);
-  }
   const std::vector<int>& program_execution_block_map_() const { return sys_->program_block_map(); }
   int program_execution_block_count_() const { return sys_->n_blocks(); }
   Real program_execution_physical_time_() const { return static_cast<Real>(sys_->time()); }

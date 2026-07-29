@@ -340,7 +340,6 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_publish_lincomb_",
             "program_execution_publish_exact_lincomb_",
             "program_execution_validate_commit_aliases_",
-            "program_execution_commit_copy_",
             "program_execution_block_map_",
             "program_execution_block_count_",
             "program_execution_physical_time_",
@@ -653,10 +652,15 @@ def test_shared_geometry_queries_leave_only_terminal_metric_facts_in_providers()
 
 def test_shared_commit_many_owns_layout_and_alias_semantics():
     shared = _read(SHARED)
+    uniform = _read(UNIFORM)
     amr = _read(AMR)
     assert "target->dmap().ranks() != source->dmap().ranks()" in shared
     assert "std::vector<MultiFab> aliased_sources;" in shared
     assert "program_execution_validate_commit_aliases_(has_aliased_source)" in shared
+    assert shared.count("lincomb(*target, Real(0), *target, Real(1), *source);") == 2
+    assert "program_execution_commit_copy_" not in shared
+    assert "program_execution_commit_copy_" not in uniform
+    assert "program_execution_commit_copy_" not in amr
     assert "has_aliased_source && capturing()" in amr
 
 
