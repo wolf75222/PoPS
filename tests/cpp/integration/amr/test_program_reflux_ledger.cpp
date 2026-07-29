@@ -171,6 +171,65 @@ static EdgeFlux fine_flux(Real F, int nc = 1) {
   return ef;
 }
 
+static EdgeStrip ranked_strip(int patch, Real value) {
+  EdgeStrip strip = make_strip(2 + 4 * patch, 5 + 4 * patch, 2, 5, 1);
+  strip.cL.assign(strip.cL.size(), value);
+  strip.cR.assign(strip.cR.size(), value);
+  strip.cB.assign(strip.cB.size(), value);
+  strip.cT.assign(strip.cT.size(), value);
+  strip.fL.assign(strip.fL.size(), value);
+  strip.fR.assign(strip.fR.size(), value);
+  strip.fB.assign(strip.fB.size(), value);
+  strip.fT.assign(strip.fT.size(), value);
+  return strip;
+}
+
+static runtime::program::AmrProgramAcceptedState ranked_accepted_state(
+    int rank, const runtime::program::AmrProgramRankOwnership& ownership) {
+  runtime::program::AmrProgramAcceptedState state;
+  state.level_clocks = {{0, 7, amr::Rational(0, 1), 0.7}, {1, 7, amr::Rational(0, 1), 0.7}};
+  state.logical_clock_ticks = {{"clock.macro", 7}, {"clock.fine", 14}};
+  state.history_owners["rhs"] = 0;
+  state.history_states["rhs"] = "fluid.U";
+  state.history_spaces["rhs"] = "cell.conservative";
+  state.history_clocks["rhs"] = "clock.macro";
+  state.history_interpolations["rhs"] = "dense.linear";
+  state.ring_clocks["rhs"] = {{{0, 7, amr::Rational(0, 1), 0.7}, {1, 7, amr::Rational(0, 1), 0.7}}};
+  state.ring_identities["rhs"].resize(1, std::vector<std::optional<amr::HistoryIdentity>>(2));
+  for (int level = 0; level < 2; ++level) {
+    const amr::ClockStamp clock = state.ring_clocks["rhs"][0][static_cast<std::size_t>(level)];
+    state.ring_identities["rhs"][0][static_cast<std::size_t>(level)] =
+        amr::HistoryIdentity{"program.block.0", "fluid.U", "cell.conservative", level, clock};
+  }
+  state.ring_flux["rhs"].resize(1);
+  state.ring_flux["rhs"][0].resize(2);
+  state.ring_flux_contributions["rhs"].resize(1);
+  state.ring_flux_contributions["rhs"][0].resize(2);
+  state.ring_flux_initialized["rhs"] = {1, 1};
+
+  const std::vector<int>& fine_owners = ownership.level_patch_owners[1];
+  EdgeFlux& coarse_role = state.ring_flux["rhs"][0][0];
+  EdgeFlux& fine_role = state.ring_flux["rhs"][0][1];
+  coarse_role.coarse.resize(fine_owners.size());
+  fine_role.fine.resize(fine_owners.size());
+  auto& contributions = state.ring_flux_contributions["rhs"][0][1];
+  contributions.push_back(
+      {23, amr::Rational(2, 3), 1, 0.05, {1, 7, amr::Rational(1, 2), 0.675}, {}});
+  contributions[0].payload.fine.resize(fine_owners.size());
+  for (std::size_t patch = 0; patch < fine_owners.size(); ++patch)
+    if (fine_owners[patch] == rank) {
+      coarse_role.coarse[patch] = ranked_strip(static_cast<int>(patch), Real(10 + patch));
+      fine_role.fine[patch] = ranked_strip(static_cast<int>(patch), Real(20 + patch));
+      contributions[0].payload.fine[patch] =
+          ranked_strip(static_cast<int>(patch), Real(30 + patch));
+    }
+  state.accepted_flux_ledger.push_back(
+      {{"fluid", "U", "transport", "physical_flux", 1, {1, 7, amr::Rational(1, 2), 0.675}},
+       {amr::Rational(2, 3), amr::FluxOrientation::XPlus, 0.25, 0.05}});
+  state.accepted_sync.push_back({0, 1, 0, 1, {0, 7, amr::Rational(1, 1), 0.7}});
+  return state;
+}
+
 TEST(test_program_reflux_ledger, ssprk2_effective_flux) {
   // SSPRK2 (design 2b): the terminal commit strip must hold dt*(1/2 F0 + 1/2 F1).
   // Emulate the codegen lowering:
@@ -522,4 +581,105 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_refuses_corruption) {
   encoded.pop_back();
   EXPECT_THROW(runtime::program::deserialize_amr_program_accepted_state(encoded),
                std::runtime_error);
+}
+
+TEST(test_program_reflux_ledger,
+     accepted_checkpoint_state_rematerializes_payloads_by_explicit_ownership) {
+  const runtime::program::AmrProgramRankOwnership source_ownership{2, {{0, 1}, {0, 1, 0}}};
+  const runtime::program::AmrProgramRankOwnership target_ownership{3, {{2, 0}, {2, 2, 0}}};
+  std::vector<runtime::program::AmrProgramAcceptedState> source_states;
+  source_states.push_back(ranked_accepted_state(0, source_ownership));
+  source_states.push_back(ranked_accepted_state(1, source_ownership));
+
+  const auto target_states = runtime::program::rematerialize_amr_program_accepted_states(
+      source_states, source_ownership, target_ownership);
+  ASSERT_EQ(target_states.size(), 3u);
+  for (const auto& state : target_states) {
+    EXPECT_EQ(state.level_clocks, source_states[0].level_clocks);
+    EXPECT_EQ(state.logical_clock_ticks, source_states[0].logical_clock_ticks);
+    ASSERT_EQ(state.ring_flux.at("rhs")[0][0].coarse.size(), 3u);
+    ASSERT_EQ(state.ring_flux.at("rhs")[0][1].fine.size(), 3u);
+    ASSERT_EQ(state.ring_flux_contributions.at("rhs")[0][1].size(), 1u);
+    EXPECT_EQ(state.ring_flux_contributions.at("rhs")[0][1][0].rate_id, 23);
+    EXPECT_EQ(state.ring_flux_contributions.at("rhs")[0][1][0].duration, 0.05);
+  }
+
+  const auto active = [](const EdgeStrip& strip) { return detail::edge_strip_has_storage(strip); };
+  const auto& rank_zero_flux = target_states[0].ring_flux.at("rhs")[0][1].fine;
+  const auto& rank_one_flux = target_states[1].ring_flux.at("rhs")[0][1].fine;
+  const auto& rank_two_flux = target_states[2].ring_flux.at("rhs")[0][1].fine;
+  EXPECT_FALSE(active(rank_zero_flux[0]));
+  EXPECT_FALSE(active(rank_zero_flux[1]));
+  EXPECT_TRUE(active(rank_zero_flux[2]));
+  EXPECT_FALSE(active(rank_one_flux[0]));
+  EXPECT_FALSE(active(rank_one_flux[1]));
+  EXPECT_FALSE(active(rank_one_flux[2]));
+  EXPECT_TRUE(active(rank_two_flux[0]));
+  EXPECT_TRUE(active(rank_two_flux[1]));
+  EXPECT_FALSE(active(rank_two_flux[2]));
+  EXPECT_EQ(rank_two_flux[0].fL[0], Real(20));
+  EXPECT_EQ(rank_two_flux[1].fL[0], Real(21));
+  EXPECT_EQ(rank_zero_flux[2].fL[0], Real(22));
+
+  const auto& rank_two_coarse = target_states[2].ring_flux.at("rhs")[0][0].coarse;
+  EXPECT_EQ(rank_two_coarse[0].cL[0], Real(10));
+  EXPECT_EQ(rank_two_coarse[1].cL[0], Real(11));
+  const auto& rank_zero_contribution =
+      target_states[0].ring_flux_contributions.at("rhs")[0][1][0].payload.fine;
+  EXPECT_EQ(rank_zero_contribution[2].fL[0], Real(32));
+  const auto& rank_two_contribution =
+      target_states[2].ring_flux_contributions.at("rhs")[0][1][0].payload.fine;
+  EXPECT_EQ(rank_two_contribution[0].fL[0], Real(30));
+  EXPECT_EQ(rank_two_contribution[1].fL[0], Real(31));
+
+  for (const auto& state : target_states) {
+    const auto bytes = runtime::program::serialize_amr_program_accepted_state(state);
+    EXPECT_EQ(runtime::program::serialize_amr_program_accepted_state(
+                  runtime::program::deserialize_amr_program_accepted_state(bytes)),
+              bytes);
+  }
+  const std::vector<std::vector<std::uint8_t>> source_payloads = {
+      runtime::program::serialize_amr_program_accepted_state(source_states[0]),
+      runtime::program::serialize_amr_program_accepted_state(source_states[1])};
+  EXPECT_EQ(runtime::program::rematerialize_amr_program_accepted_state_bytes(
+                source_payloads, source_ownership, target_ownership, 2),
+            runtime::program::serialize_amr_program_accepted_state(target_states[2]));
+}
+
+TEST(test_program_reflux_ledger,
+     accepted_checkpoint_state_rematerialization_refuses_metadata_disagreement) {
+  const runtime::program::AmrProgramRankOwnership ownership{2, {{0, 1}, {0, 1, 0}}};
+  std::vector<runtime::program::AmrProgramAcceptedState> states;
+  states.push_back(ranked_accepted_state(0, ownership));
+  states.push_back(ranked_accepted_state(1, ownership));
+  states[1].ring_flux_contributions["rhs"][0][1][0].duration = 0.075;
+
+  EXPECT_THROW(
+      runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
+      std::runtime_error);
+}
+
+TEST(test_program_reflux_ledger,
+     accepted_checkpoint_state_rematerialization_refuses_duplicate_nonowner_or_axis_conflict) {
+  const runtime::program::AmrProgramRankOwnership ownership{2, {{0, 1}, {0, 1, 0}}};
+  std::vector<runtime::program::AmrProgramAcceptedState> states;
+  states.push_back(ranked_accepted_state(0, ownership));
+  states.push_back(ranked_accepted_state(1, ownership));
+  states[1].ring_flux["rhs"][0][1].fine[0] = ranked_strip(0, Real(99));
+  EXPECT_THROW(
+      runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
+      std::runtime_error);
+
+  states[0].ring_flux["rhs"][0][1].fine[0] = EdgeStrip{};
+  EXPECT_THROW(
+      runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
+      std::runtime_error);
+
+  states.clear();
+  states.push_back(ranked_accepted_state(0, ownership));
+  states.push_back(ranked_accepted_state(1, ownership));
+  states[1].ring_flux["rhs"][0][1].fine.clear();
+  EXPECT_THROW(
+      runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
+      std::runtime_error);
 }
