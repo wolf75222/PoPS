@@ -3438,6 +3438,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         deferred_op("refined_shared_block_interfaces",
                     "shared block interface-fragment publication currently requires exactly two "
                     "fixed hierarchy levels");
+      if (has_interfaces)
+        register_interface_flux_group_(batch.group_id, batch.runtime_blocks, batch.rate_ids);
       const auto group_point = boundary_point_(batch.group_id);
       eng_->with_boundary_stage_states(group_point, batch.runtime_blocks, batch.states, [&] {
         for (std::size_t index = 0; index < batch.states.size(); ++index) {
