@@ -14,6 +14,7 @@ SHARED_SIGNATURES = (
     "struct FieldStageOverride",
     "struct CouplingStateOverride",
     "enum class ScratchKind",
+    "struct ProgramResourceStorage",
     "struct LogicalEvaluationInterval",
     "class LogicalEvaluationScope",
     "[[nodiscard]] auto logical_evaluation_scope(",
@@ -23,6 +24,15 @@ SHARED_SIGNATURES = (
     "MultiFab& rhs_scratch(",
     "MultiFab& scratch_state(",
     "MultiFab& scalar_scratch(",
+    "MultiFab& state(",
+    "MultiFab& aux(",
+    "GridContext grid_context(",
+    "Geometry geom(",
+    "MultiFab alloc_scalar_field(",
+    "const PreparedVectorDistribution& program_resource_vector_distribution(",
+    "FieldDistribution program_resource_field_storage_distribution(",
+    "int program_resource_field_level(",
+    "void configure_program_resource_field_nullspace(",
     "const MultiFab* pointwise_active_mask(",
     "Real pointwise_status_max(",
     "Real norm2(",
@@ -157,6 +167,10 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_scratch_",
             "program_execution_default_grid_context_",
             "program_execution_block_grid_context_",
+            "program_execution_state_",
+            "program_execution_alloc_scalar_field_",
+            "program_execution_resource_storage_",
+            "program_execution_resource_cell_measures_",
             "program_execution_publish_axpy_",
             "program_execution_publish_exact_axpy_",
             "program_execution_publish_lincomb_",
@@ -185,6 +199,32 @@ def test_shared_service_uses_only_explicit_provider_hooks():
     calls = re.findall(r"provider_\(\)\.(\w+)\(", shared)
     assert calls
     assert all(call.startswith("program_execution_") for call in calls), calls
+
+
+def test_amr_topology_generation_and_scratch_lifecycle_remain_provider_owned():
+    shared = _read(SHARED)
+    amr = _read(AMR)
+    for topology_authority in (
+        "program_resource_topology_epoch",
+        "program_resource_topology_generation",
+        "program_scratch_topology_epoch_",
+        "program_scratch_materialization_generation_",
+    ):
+        assert topology_authority not in shared
+        assert topology_authority in amr
+    assert "topology_materialization_generation()" in amr
+
+
+def test_shared_storage_facade_maps_blocks_once_and_owns_nullspace_assignment():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert "program_execution_state_(sys_block(block))" in shared
+    assert "program_execution_state_(int runtime_block)" in uniform
+    assert "program_execution_state_(int runtime_block)" in amr
+    assert "basis.cell_measure = cell_measures;" in shared
+    assert "basis.cell_measure =" not in uniform
+    assert "basis.cell_measure =" not in amr
 
 
 def test_shared_commit_many_owns_layout_and_alias_semantics():

@@ -197,7 +197,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
     });
   }
-  MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
   /// Evaluate one authored rate at its exact, stable node identity.  There is deliberately no
   /// sentinel/default identity: shared-interface assembly and boundary callbacks authenticate this
   /// value as part of BoundaryEvaluationPoint, so an anonymous rate would be temporally ambiguous.
@@ -347,19 +346,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->block_max_speed(sys_block(b), u);
   }
 
-  /// The System aux MultiFab (phi=0, grad_x=1, grad_y=2, B_z=3, T_e=4, named fields from
-  /// kAuxNamedBase). NOT owned by the context: it is the live System aux (stable address), the same
-  /// channel solve_fields() fills. A generated local-linear-solve kernel reads the operator
-  /// coefficients (e.g. B_z) from it. Forwards to System::grid_context().aux.
-  MultiFab& aux() const { return *sys_->grid_context().aux; }
-
-  /// The System grid context (transport BC + mesh geometry + the live aux pointer). BY VALUE:
-  /// grid_context() returns a temporary. A generic seam accessor forwarding to
-  /// System::grid_context(), used by out-of-line runtime operators (the coupled elliptic operator
-  /// modules) that assemble coefficient / flux halos from the transport BC without reaching into
-  /// System::Impl -- the SAME channel geom() / aux() expose, bundled.
-  GridContext grid_context() const { return sys_->grid_context(); }
-
   /// Materialize one lane-private mesh authority for a prepared operator that is not attached to a
   /// conservative block (for example, a scalar elliptic field).  This deliberately uses the
   /// unqualified mesh BC and cannot borrow a block's native boundary components.
@@ -492,39 +478,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return pops::solve_prepared_affine_outcome(problem, workspace, sol, rhs, controls);
   }
 
-  /// Physical ownership of fields allocated for one generated Program resource bundle. A uniform
-  /// System partitions its one mesh across communicator ranks; exposing the descriptor through the
-  /// same context protocol as AMR keeps generic codegen independent from the runtime target.
-  const PreparedVectorDistribution& program_resource_vector_distribution() const noexcept {
-    return PreparedVectorDistribution::Distributed;
-  }
-  FieldDistribution program_resource_field_storage_distribution() const noexcept {
-    return FieldDistribution::Distributed;
-  }
-  int program_resource_field_level() const noexcept { return 0; }
-  /// Resolve the topology-dependent part of an authored field-nullspace plan at the same boundary
-  /// that allocates its persistent Program resource. Generic codegen supplies only the mathematical
-  /// basis/gauge; the context owns layout scope, physical measure and communicator ownership.
-  void configure_program_resource_field_nullspace(FieldNullspacePlan& plan) const {
-    const GridContext gc = grid_context();
-    const Real measure = gc.geom.dx() * gc.geom.dy();
-    for (FieldNullspaceBasis& basis : plan.bases)
-      basis.cell_measure = {measure};
-  }
-
-  /// A fresh scalar field co-distributed with the System mesh (block 0's box array / distribution),
-  /// @p n_comp components, @p n_ghost ghost layers, zero-initialized. Forwards to
-  /// System::alloc_scalar_field. The scratch fields (residual, search direction, solution) a
-  /// matrix-free Krylov solve allocates -- a 1-component field is distinct from the n_cons block state,
-  /// but shares its (ba, dm) so laplacian / gradient pair it with the state and aux by local fab index.
-  MultiFab alloc_scalar_field(int n_comp = 1, int n_ghost = 1) const {
-    return sys_->alloc_scalar_field(n_comp, n_ghost);
-  }
-
-  /// The System mesh geometry (index domain + physical bounds, dx/dy). BY VALUE: grid_context()
-  /// returns a temporary, so a reference to its @c geom member would dangle. The metric the matrix-free
-  /// Laplacian / gradient read.
-  Geometry geom() const { return sys_->grid_context().geom; }
   /// Metric facts captured by generated kernels before entering device lambdas.  Cartesian and polar
   /// Programs share one emitted body; only these geometry-level values select the coordinate metric.
   bool is_polar_geometry() const { return sys_->program_is_polar(); }
@@ -1492,6 +1445,19 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   GridContext program_execution_block_grid_context_(int owner) const {
     return sys_->grid_context(sys_block(owner));
   }
+  MultiFab& program_execution_state_(int runtime_block) const {
+    return sys_->block_state(runtime_block);
+  }
+  MultiFab program_execution_alloc_scalar_field_(int n_comp, int n_ghost) const {
+    return sys_->alloc_scalar_field(n_comp, n_ghost);
+  }
+  ProgramResourceStorage program_execution_resource_storage_() const noexcept {
+    return {PreparedVectorDistribution::Distributed, FieldDistribution::Distributed, 0};
+  }
+  std::vector<Real> program_execution_resource_cell_measures_() const {
+    const Geometry geometry = sys_->grid_context().geom;
+    return {geometry.dx() * geometry.dy()};
+  }
   void program_execution_publish_axpy_(MultiFab&, Real, const MultiFab&) const noexcept {}
   void program_execution_publish_exact_axpy_(
       MultiFab&, Real, const MultiFab&, Real,
@@ -1537,8 +1503,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   SolveReport program_execution_solve_fields_from_state_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int block, MultiFab& state) const {
-    return consume_field_outcome_(
-        solve_fields_from_state_at(point, provider_slot, block, state));
+    return consume_field_outcome_(solve_fields_from_state_at(point, provider_slot, block, state));
   }
   MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
                                        const MultiFab& prototype, int n_comp, int n_ghost) const {
