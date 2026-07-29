@@ -87,6 +87,9 @@ class _TemporalOwner:
     def _native_step_target(self):
         return self.raw
 
+    def _consume_step_projections(self):
+        return ()
+
     def time(self):
         return self.raw.time()
 
