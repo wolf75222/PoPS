@@ -453,10 +453,13 @@ accepted step therefore cannot retain a stale coarse-only clock axis.  Multi-blo
 layouts use this same authenticated route. `RestoreRecordedHierarchy()` preserves the recorded patch
 geometry. With `bit_identical=True` it also requires the recorded rank count and owner map; the
 default non-bit-identical route may rematerialize ownership only when every persisted history ring is
-Dense. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity; the
-builtin accepted-state-v5 provider currently refuses that weaker policy during resolution because it
-has no complete hierarchy/history/field remap implementation. PoPS never silently changes patch
-geometry under `RestoreRecordedHierarchy()`.
+Dense. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity. The
+builtin accepted-state-v5 provider first restores and validates the recorded accepted hierarchy,
+state, histories, counters and clock, then requests one artifact-owned scientific regrid at that
+accepted coordinate. It verifies composite conservation, publishes a rank-consensus before/after
+topology receipt and derives a new continuation run identity. The bounded route requires one AMR
+layout, unchanged MPI cardinality and no elliptic provider, shared-interface flux group, or bootstrap
+staggered cache. PoPS never silently changes patch geometry under `RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
 `assemble_rhs` (limited reconstruction then numerical flux -> $R = -\mathrm{div} F + S$).
