@@ -200,6 +200,47 @@ test_regex = "^test_amr_history_ring\\.RejectedAb2RegridRestoresTopologyHistoryF
 
 [[check]]
 issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "mpi_python"
+target = "accepted_state"
+nodeid = "tests/python/integration/mpi/test_amr_history_mpi.py::test_amr_history_mpi_in_window_regrid_public_restart_and_distribution_parity"
+nproc = 2
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/runtime/test_multi_layout_runtime.py::test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_amr_twoblock_parity"
+test_regex = "^test_mpi_amr_twoblock_parity_np2$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "positive"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_checkpoint_hierarchy_policies_have_distinct_exact_identities_and_guarantees"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "refusal"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_regrid_on_restart_refuses_bit_identity_and_unsupported_builtin_provider"
+
+[[check]]
+issue = "ADC-678"
 requirement = "lowering_coverage"
 polarity = "positive"
 kind = "pytest"
