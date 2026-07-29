@@ -186,9 +186,26 @@ def test_mpi_halo_and_oriented_periodic_are_canonical_plan_data():
         linearization_contributions=plan.linearization_contributions)
     assert reversed_plan.canonical_id == plan.canonical_id
 
-    executable = replace(plan, execution_authority=_ExecutableBoundaryAuthority())
-    with pytest.raises(NotImplementedError, match="signed/permuted periodic"):
-        executable.compile_boundary_data()
+    # This assertion targets periodic lowering only. The fixture's synthetic implicit operators
+    # deliberately have no installed FieldBoundaryClosure component and are proved separately
+    # above, so do not make them an unrelated prerequisite of this executable-boundary check.
+    executable = replace(
+        plan,
+        execution_authority=_ExecutableBoundaryAuthority(),
+        residual_contributions=(),
+        linearization_contributions=(),
+    )
+    compiled = executable.compile_boundary_data()
+    assert compiled["periodic_identifications"] == [{
+        "source": plan.topology.periodic[0].source.canonical_identity(),
+        "target": plan.topology.periodic[0].target.canonical_identity(),
+        "source_face": 0,
+        "target_face": 1,
+        "permutation": [0, 1],
+        "signs": [1, -1],
+    }]
+    assert executable.runtime_boundary_data({})["periodic_identifications"] \
+        == compiled["periodic_identifications"]
 
 
 def test_producer_dependencies_are_a_total_acyclic_graph():

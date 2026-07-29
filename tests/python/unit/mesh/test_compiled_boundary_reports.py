@@ -101,6 +101,24 @@ def test_compiled_plan_reports_exact_implicit_residual_and_linearization_terms()
     assert runtime["linearization_report"] == linearization.to_dict()
 
 
+def test_compiled_plan_preserves_signed_periodic_identification_through_bind():
+    data = _compile_data()
+    data["faces"][0]["type"] = "periodic"
+    data["faces"][1]["type"] = "periodic"
+    data["periodic_identifications"] = [{
+        "source": {"qualified_id": "case::xlo"},
+        "target": {"qualified_id": "case::xhi"},
+        "source_face": 0,
+        "target_face": 1,
+        "permutation": [0, 1],
+        "signs": [1, -1],
+    }]
+
+    runtime = CompiledBoundaryPlan(data).runtime_boundary_data({})
+
+    assert runtime["periodic_identifications"] == data["periodic_identifications"]
+
+
 @pytest.mark.parametrize(("table", "operation"), (
     ("residual_contributions", "residual"),
     ("linearization_contributions", "jvp"),

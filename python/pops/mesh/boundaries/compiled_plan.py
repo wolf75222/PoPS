@@ -266,6 +266,7 @@ class CompiledBoundaryPlan:
             "interface_endpoints": data.get("interface_endpoints", []),
             "interface_component_bindings": data.get("interface_component_bindings", []),
             "omitted_interface_faces": list(data.get("omitted_interface_faces", [])),
+            "periodic_identifications": list(data.get("periodic_identifications", [])),
             "ghost_plan_identity": self.canonical_id,
             "producer_order": list(data["producer_order"]),
             "component_regions": component_regions,
