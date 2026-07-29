@@ -67,8 +67,8 @@ campaign.
 
 The job fails closed unless:
 
-- Kokkos reports a real device execution space (`Cuda`, `HIP`, or `SYCL`) and the scheduler node
-  exposes at least one recorded device per MPI rank;
+- Kokkos reports a real device execution space (`Cuda`, `HIP`, or `SYCL`), every MPI rank sees
+  exactly one scheduler-assigned device, and all recorded device UUIDs are distinct;
 - every baseline/candidate run validates a genuinely refined hierarchy and conserved state;
 - the final numerical signatures agree within the declared tolerance;
 - the median paired candidate/pre-cutover throughput ratio is at least `0.98`.

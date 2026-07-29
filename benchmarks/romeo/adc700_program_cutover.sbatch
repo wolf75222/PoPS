@@ -73,7 +73,25 @@ RAW="${WORK_ROOT}/measurements.jsonl"
 INVENTORY="${WORK_ROOT}/device-inventory.txt"
 REPORT="${WORK_ROOT}/report.json"
 : > "${RAW}"
-nvidia-smi --query-gpu=name,uuid,driver_version --format=csv,noheader > "${INVENTORY}"
+# shellcheck disable=SC2016 # Expanded deliberately by each rank-local bash.
+srun --kill-on-bad-exit=1 --ntasks="${SLURM_NTASKS}" --gpus-per-task=1 \
+  bash -c '
+    set -euo pipefail
+    device_selector="${CUDA_VISIBLE_DEVICES:?Slurm did not assign a GPU to this rank}"
+    if [[ "${device_selector}" == *,* ]]; then
+      echo "rank ${SLURM_PROCID:?} sees more than one CUDA device: ${device_selector}" >&2
+      exit 4
+    fi
+    mapfile -t device_uuids < <(
+      nvidia-smi --id="${device_selector}" --query-gpu=uuid --format=csv,noheader |
+        sed "s/^[[:space:]]*//;s/[[:space:]]*$//"
+    )
+    if [[ "${#device_uuids[@]}" -ne 1 || -z "${device_uuids[0]}" ]]; then
+      echo "rank ${SLURM_PROCID:?} does not see exactly one assigned GPU" >&2
+      exit 4
+    fi
+    printf "%s\t%s\n" "${SLURM_PROCID}" "${device_uuids[0]}"
+  ' | sort -n -k1,1 > "${INVENTORY}"
 
 run_one() {
   local label="$1"
