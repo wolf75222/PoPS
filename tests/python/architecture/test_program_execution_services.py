@@ -13,6 +13,17 @@ AMR = PROGRAM_DIR / "amr_program_context.hpp"
 SHARED_SIGNATURES = (
     "struct FieldStageOverride",
     "struct CouplingStateOverride",
+    "enum class ScratchKind",
+    "struct LogicalEvaluationState",
+    "class LogicalEvaluationScope",
+    "[[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(",
+    "void evaluate_with_field_state_at(",
+    "MultiFab rhs_scratch_like(",
+    "MultiFab scratch_state_like(",
+    "MultiFab& rhs_scratch(",
+    "MultiFab& scratch_state(",
+    "MultiFab& scalar_scratch(",
+    "void commit_many(",
     "void set_stage_time(",
     "void configure_primary_clock(",
     "void declare_clock_relation(",
@@ -37,6 +48,10 @@ SHARED_SIGNATURES = (
     "void count_scratch(",
     "int macro_step(",
     "[[noreturn]] void scheduler_error(",
+    "static void require_rate_identity_(",
+    "static void require_group_identity_(",
+    "static std::runtime_error block_map_error_(",
+    "[[noreturn]] static void throw_field_solve_failure_(",
 )
 
 
@@ -96,6 +111,9 @@ def test_contexts_expose_only_topology_provider_hooks_for_the_shared_surface():
         source = _read(path)
         assert "friend class ProgramExecutionServices<%s>;" % context in source
         for hook in (
+            "program_execution_begin_logical_evaluation_",
+            "program_execution_restore_logical_evaluation_",
+            "program_execution_scratch_",
             "program_execution_block_map_",
             "program_execution_block_count_",
             "program_execution_physical_time_",
