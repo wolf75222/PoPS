@@ -18,7 +18,10 @@ from pops.runtime._amr_checkpoint_v3 import (
     _live_amr_level_envelope,
     _require_exact_field_provider_depth,
 )
-from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
+from pops.runtime._amr_checkpoint_topology import (
+    owner_ranks_for_boxes,
+    recorded_rank_topology,
+)
 
 
 class _Payload(dict):
@@ -257,3 +260,42 @@ def test_topology_owner_alignment_is_level_local_and_strict():
         owner_ranks_for_boxes(payload, boxes + [(2, 6, 6, 7, 7)], 3)
     with pytest.raises(ValueError, match="lacks owner-rank map"):
         owner_ranks_for_boxes({}, boxes[:1], 3)
+
+
+def _rank_topology_payload():
+    return {
+        "program_accepted_state_rank_0": np.array([1, 2], dtype=np.uint8),
+        "program_accepted_state_rank_1": np.array([3, 4], dtype=np.uint8),
+        "dmap_rank_0_level_0": np.array([0], dtype=np.int64),
+        "dmap_rank_0_level_1": np.array([0, 1], dtype=np.int64),
+        "dmap_rank_1_level_0": np.array([0], dtype=np.int64),
+        "dmap_rank_1_level_1": np.array([0, 1], dtype=np.int64),
+    }
+
+
+def test_recorded_rank_topology_keeps_all_program_shards_and_one_exact_owner_map():
+    topology = recorded_rank_topology(_rank_topology_payload(), 2, 2)
+    assert topology.program_states == (b"\x01\x02", b"\x03\x04")
+    assert topology.level_owner_ranks == ((0,), (0, 1))
+
+
+def test_recorded_rank_topology_refuses_rank_local_owner_map_disagreement():
+    payload = _rank_topology_payload()
+    payload["dmap_rank_1_level_1"] = np.array([1, 0], dtype=np.int64)
+    with pytest.raises(ValueError, match="owner maps disagree"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_recorded_rank_topology_refuses_out_of_range_recorded_ownership():
+    payload = _rank_topology_payload()
+    payload["dmap_rank_0_level_1"] = np.array([0, 2], dtype=np.int64)
+    payload["dmap_rank_1_level_1"] = np.array([0, 2], dtype=np.int64)
+    with pytest.raises(ValueError, match=r"outside \[0, 2\)"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_recorded_rank_topology_refuses_mixed_program_presence():
+    payload = _rank_topology_payload()
+    payload["program_accepted_state_rank_1"] = np.array([], dtype=np.uint8)
+    with pytest.raises(ValueError, match="disagree on whether a compiled Program image is present"):
+        recorded_rank_topology(payload, 2, 2)
