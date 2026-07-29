@@ -1,16 +1,13 @@
 """ADC-700: fail closed until every temporal route has an explicit Program primitive.
 
 The ordinary explicit runtime tests may install the small Programs from
-``tests.python.support.explicit_program``.  The remaining semantic implicit and polar tests below
-must not use that bridge: forward Euler cannot stand in for backward Euler, partial IMEX,
-ARS(2,2,2), Newton diagnostics, or a missing point-qualified polar RHS.
+``tests.python.support.explicit_program``.  Semantic implicit tests must use
+typed Program primitives: forward Euler cannot stand in for backward Euler,
+partial IMEX, ARS(2,2,2), or nonlinear local solves.
 
-This source-only gate records the current blockers deliberately.  Once typed Program primitives for
-one family land, its semantic test must be migrated to that real primitive and removed from
-``SEMANTIC_BLOCKERS`` in the same change. Coupled sources now execute through an explicit
-candidate-state Program primitive, so their tests install a real SSPRK2 transport + split-source
-Program instead of borrowing the retired facade stepper. Polar transport likewise has a genuine
-point-qualified residual and its spatial tests use explicitly authored SSPRK2/SSPRK3 Programs.
+The blocker ledger is intentionally empty.  Coupled sources, polar transport,
+linear IMEX and nonlinear local IMEX now execute through ordinary Programs;
+none borrows a spatial-runtime time integrator.
 """
 
 from __future__ import annotations
@@ -22,12 +19,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SYSTEM_CPP = ROOT / "src/runtime/system/system.cpp"
+SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
+SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
+STATIC_SYSTEM_ASSEMBLER = ROOT / "include/pops/coupling/system/system_coupler.hpp"
+REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
+REFERENCE_TIME_SCHEDULER = ROOT / "tests/cpp/support/reference_time_scheduler.hpp"
+LEGACY_PUBLIC_TIME_SCHEDULER = (
+    ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
+)
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
 AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
+PROGRAM_EXECUTION_SERVICES = (
+    ROOT / "include/pops/runtime/program/program_execution_services.hpp"
+)
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
@@ -36,41 +44,18 @@ SYSTEM_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/block_seam.hpp"
 SYSTEM_BLOCK_STORE = ROOT / "include/pops/runtime/system/system_block_store.hpp"
 GRID_CONTEXT = ROOT / "include/pops/runtime/context/grid_context.hpp"
 NUMERICAL_DEFAULTS = ROOT / "include/pops/runtime/numerical_defaults.hpp"
+IMPLICIT_STEPPER = ROOT / "include/pops/numerics/time/integrators/implicit_stepper.hpp"
 SYSTEM_IMPL = ROOT / "src/runtime/system/system_impl.hpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
 BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
-MANIFEST = ROOT / "tests/test_manifest.toml"
+HEADERS_MANIFEST = ROOT / "include/pops_headers.manifest"
+PUBLIC_COUPLING_ROOT = ROOT / "include/pops/coupling"
 
-EXPLICIT_TEST_BRIDGE = "tests.python.support.explicit_program"
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
-MIXED_SEMANTIC_BLOCKERS = {
-    "tests/python/unit/runtime/test_v3_features.py": (
-        "expect_imex_program_required",
-    ),
-}
-
-# These remain executable semantic tests in the normal manifest.  They are blockers, not candidates
-# for an explicit-Euler compatibility rewrite.
-SEMANTIC_BLOCKERS = {
-    "tests/python/integration/amr/test_amr_newton_full.py": (
-        "engine.IMEX(",
-        "expect_native_rejection(",
-    ),
-    "tests/python/unit/runtime/test_implicit_vars.py": (
-        "implicit_vars=",
-        ".advance(",
-    ),
-    "tests/python/unit/runtime/test_v3_features.py": (
-        "engine.IMEX(",
-        "expect_amr_newton_rejection(",
-    ),
-    "tests/python/unit/time/test_imexrk.py": (
-        "engine.IMEXRK(",
-        ".step(",
-    ),
-}
+NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
+V3_FEATURES_TEST = ROOT / "tests/python/unit/runtime/test_v3_features.py"
 
 
 def _function_body(source: str, signature: str) -> str:
@@ -89,6 +74,7 @@ def _function_body(source: str, signature: str) -> str:
 
 
 def _python_function_source(source: str, name: str) -> str:
+    """Extract one Python function without matching unrelated compatibility tests."""
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
@@ -98,13 +84,17 @@ def _python_function_source(source: str, name: str) -> str:
     raise AssertionError("missing Python function %r" % name)
 
 
+def _cpp_without_comments(source: str) -> str:
+    """Remove C++ comments before matching executable temporal syntax."""
+    return re.sub(r"//[^\n]*|/\*.*?\*/", "", source, flags=re.DOTALL)
+
+
 def test_system_temporal_facades_dispatch_only_through_an_installed_program():
     source = SYSTEM_CPP.read_text(encoding="utf-8")
     for signature in (
         "void System::step(double dt)",
         "void System::advance(double dt, int nsteps)",
         "double System::step_cfl(",
-        "double System::step_adaptive(double cfl)",
     ):
         body = _function_body(source, signature)
         assert "require_step_installed(" in body
@@ -113,8 +103,120 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
 
     assert "program_driver_.step(dt)" in _function_body(source, "void System::step(double dt)")
     assert "program_driver_.step_cfl(" in _function_body(source, "double System::step_cfl(")
-    adaptive = _function_body(source, "double System::step_adaptive(double cfl)")
-    assert "has no ProgramGraph lowering" in adaptive
+    assert "step_adaptive" not in source
+    assert "step_adaptive" not in SYSTEM_HEADER.read_text(encoding="utf-8")
+    assert "step_adaptive" not in SYSTEM_BINDING.read_text(encoding="utf-8")
+
+
+def test_static_system_temporal_driver_is_test_only():
+    """The coupling header may assemble operators, never select a time scheme or cadence."""
+    production_sources = (
+        tuple((ROOT / "include/pops").rglob("*.hpp"))
+        + tuple((ROOT / "src").rglob("*.cpp"))
+        + tuple((ROOT / "python/bindings").rglob("*.cpp"))
+        + tuple((ROOT / "python/pops").rglob("*.py"))
+    )
+    retired_identity = re.compile(r"\b(?:SystemDriver|SystemCoupler|make_system_coupler)\b")
+    violations = {
+        path.relative_to(ROOT).as_posix()
+        for path in production_sources
+        if retired_identity.search(path.read_text(encoding="utf-8"))
+    }
+    assert violations == set()
+    assert (
+        "test-only pops/coupling/system/system_coupler.hpp"
+        in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    )
+
+    assembler = STATIC_SYSTEM_ASSEMBLER.read_text(encoding="utf-8")
+    assert "class SystemAssembler" in assembler
+    assert "block_residual(" in assembler
+    for temporal_authority in (
+        "advance_subcycled(",
+        "step_adaptive(",
+        "step_cfl(",
+        "SSPRK2Step",
+        "ImplicitSourceStepper",
+    ):
+        assert temporal_authority not in assembler
+
+    reference = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
+    assert "class ReferenceSystemDriver" in reference
+    assert "Real step_adaptive(" in reference
+    assert REFERENCE_SYSTEM_DRIVER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
+
+
+def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
+    """The old TimePolicy scheduler remains only as a test oracle."""
+    assert not LEGACY_PUBLIC_TIME_SCHEDULER.exists()
+    assert (
+        "pops/numerics/time/schemes/scheduler.hpp"
+        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    )
+
+    public_sources = tuple((ROOT / "include/pops").rglob("*.hpp"))
+    violations = {
+        path.relative_to(ROOT).as_posix()
+        for path in public_sources
+        if "advance_subcycled(" in _cpp_without_comments(path.read_text(encoding="utf-8"))
+    }
+    assert violations == set()
+
+    reference_scheduler = REFERENCE_TIME_SCHEDULER.read_text(encoding="utf-8")
+    reference_driver = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
+    assert "namespace pops::test_support" in reference_scheduler
+    assert "void advance_subcycled(" in reference_scheduler
+    assert '#include "reference_time_scheduler.hpp"' in reference_driver
+    assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith(
+        "tests/cpp/support/"
+    )
+
+
+def test_public_coupling_headers_are_spatial_only():
+    """Public coupling services may prepare fields/residuals, never select a time method."""
+    public_headers = []
+    for row in HEADERS_MANIFEST.read_text(encoding="utf-8").splitlines():
+        if not row or row.startswith("#"):
+            continue
+        surface, relative = row.split(maxsplit=1)
+        if surface == "api" and relative.startswith("pops/coupling/"):
+            public_headers.append(ROOT / "include" / relative)
+
+    assert public_headers
+    assert all(path.is_relative_to(PUBLIC_COUPLING_ROOT) for path in public_headers)
+
+    forbidden = {
+        "temporal driver call or method": re.compile(
+            r"\b(?:advance(?:_[A-Za-z0-9_]+)?|step(?:_cfl|_adaptive)?)\s*\("
+        ),
+        "time integrator include": re.compile(
+            r"#include\s+<pops/numerics/time/(?:integrators|schemes)/"
+        ),
+        "native stepper invocation": re.compile(r"\b(?:take_step|run_explicit_substeps)\s*\("),
+        "native time-policy selector": re.compile(
+            r"\b(?:TimePolicyTraits|PerStageCoupling|OncePerStepCoupling)\b"
+        ),
+    }
+    violations = set()
+    for path in public_headers:
+        source = _cpp_without_comments(path.read_text(encoding="utf-8"))
+        violations.update(
+            (path.relative_to(ROOT).as_posix(), label)
+            for label, pattern in forbidden.items()
+            if pattern.search(source)
+        )
+    assert violations == set()
+
+    single = (PUBLIC_COUPLING_ROOT / "single/coupler.hpp").read_text(encoding="utf-8")
+    assert "void solve_fields(const MultiFab& U)" in single
+    assert "void assemble_residual(MultiFab& state, MultiFab& residual)" in single
+
+
+def test_local_implicit_solve_has_one_typed_options_route():
+    source = IMPLICIT_STEPPER.read_text(encoding="utf-8")
+    assert "const NewtonOptions& options" in source
+    assert "int iters = 2" not in source
+    assert "Legacy signature with a bare iteration budget" not in source
 
 
 def test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine():
@@ -294,24 +396,49 @@ def test_prepared_amr_program_reflux_plan_is_spatial_only():
         assert retired_attempt_state not in source
 
 
-def test_unlowerable_semantic_tests_remain_real_manifest_tests_without_fe_bridge():
-    manifest = MANIFEST.read_text(encoding="utf-8")
-    for relative, markers in SEMANTIC_BLOCKERS.items():
-        source = (ROOT / relative).read_text(encoding="utf-8")
-        assert 'path = "%s"' % Path(relative).parent.as_posix() in manifest
-        blocker_functions = MIXED_SEMANTIC_BLOCKERS.get(relative)
-        if blocker_functions is None:
-            assert EXPLICIT_TEST_BRIDGE not in source
-        else:
-            # A mixed integration file may use authored FE/SSPRK Programs for genuinely explicit
-            # sections. Its still-unlowerable semantic helpers must remain fail-closed.
-            for function_name in blocker_functions:
-                blocker_source = _python_function_source(source, function_name)
-                assert "install_forward_euler_program" not in blocker_source
-                assert "install_ssprk2_program" not in blocker_source
-                assert "installed whole-system Program" in blocker_source
-        for marker in markers:
-            assert marker in source, "%s lost semantic marker %r" % (relative, marker)
+def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
+    nonlinear = NONLINEAR_AMR_TEST.read_text(encoding="utf-8")
+    v3 = V3_FEATURES_TEST.read_text(encoding="utf-8")
+    assert "IMEX(" in nonlinear
+    assert "LocalNewton(" in nonlinear
+    assert 'getattr(node, "op", None) == "solve_outcome"' in nonlinear
+    assert "program.to_graph()" in nonlinear
+    assert "program._values" not in nonlinear
+    assert "max_iterations=1" in nonlinear
+    assert "action=fail_run" in nonlinear
+    assert "covered_poison" in nonlinear
+    assert "invalid_evaluation" in nonlinear
+    assert "engine.IMEX(" not in nonlinear
+    assert "expect_native_rejection" not in nonlinear
+    assert "expect_amr_newton_rejection" not in v3
+    d2_guard = _python_function_source(v3, "expect_imex_program_required")
+    assert "engine.IMEX(" in d2_guard
+    assert "installed whole-system Program" in d2_guard
+
+
+def test_amr_pointwise_status_reduces_every_valid_level_cell():
+    services = PROGRAM_EXECUTION_SERVICES.read_text(encoding="utf-8")
+
+    pointwise = _function_body(
+        services,
+        "  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const",
+    )
+    assert "active_mask_from_context_(" in pointwise
+    assert "program_execution_block_grid_context_(block)" in pointwise
+
+    active_mask = _function_body(
+        services,
+        "  static const MultiFab* active_mask_from_context_(",
+    )
+    assert "if (context.domain_mask == nullptr)" in active_mask
+    assert "return context.domain_mask;" in active_mask
+
+    status = _function_body(
+        services,
+        "  Real pointwise_status_max(int block, const MultiFab& status,",
+    )
+    assert "const MultiFab* expected = pointwise_active_mask(block, status)" in status
+    assert "pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr})" in status
 
 
 def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives():
@@ -326,20 +453,22 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
             assert legacy_engine_primitive not in source
 
 
-def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step():
+def test_shared_program_service_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
     shared = (
         ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     ).read_text(encoding="utf-8")
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    for source in (uniform, amr):
-        assert "apply_coupling_operators(" in source
     assert shared.count("struct CouplingStateOverride") == 1
-    assert "complete candidate pack for every System block" in uniform
-    assert "complete candidate pack for every runtime block" in amr
-    assert "cannot alias accepted live states" in uniform
-    assert "cannot alias accepted live states" in amr
+    assert shared.count("void apply_coupling_operators(") == 1
+    assert "complete candidate pack for every runtime block" in shared
+    assert "cannot alias accepted live states" in shared
+    for source in (uniform, amr):
+        assert "void apply_coupling_operators(" not in source
+        assert source.count("program_execution_apply_coupling_(") == 1
+    assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
     assert "apply_coupling_operators_at_level(" in runtime
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime

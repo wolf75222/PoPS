@@ -8,7 +8,6 @@
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/system/amr_system_coupler.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>

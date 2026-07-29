@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/validation/numerics/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -288,7 +288,9 @@ static void expect_zero_probe_forcing_scale(const BCRec& bc) {
   EXPECT_TRUE(warm_report.solved());
   EXPECT_NEAR(warm_report.rel_residual, expected_relative, Real(1e-14));
 
-  EXPECT_EQ(warm_start.solve_robust(warm_tolerance, /*max_cycles=*/4), 0);
+  EXPECT_EQ(validation::GeometricMGValidationAccess::solve_robust(warm_start, warm_tolerance,
+                                                                  /*max_cycles=*/4),
+            0);
   const SolveReport& robust_report = warm_start.last_solve_report();
   EXPECT_TRUE(robust_report.solved());
   EXPECT_NEAR(robust_report.rel_residual, expected_relative, Real(1e-14));
@@ -456,12 +458,15 @@ TEST(GeometricMgTest, zero_forcing_requires_exact_zero_without_absolute_toleranc
   EXPECT_NEAR(mg.last_solve_report().rel_residual, reset_residual, Real(1e-14));
 
   mg.phi().set_val(Real(1e-6));
-  EXPECT_NE(mg.solve_robust(Real(1), /*max_cycles=*/1, /*abs_tol=*/Real(0)), 0);
+  EXPECT_NE(validation::GeometricMGValidationAccess::solve_robust(mg, Real(1), /*max_cycles=*/1,
+                                                                  /*abs_tol=*/Real(0)),
+            0);
   mg.phi().set_val(Real(1e-6));
   const Real robust_residual = mg.current_residual();
-  EXPECT_EQ(mg.solve_robust(Real(1e-8), /*max_cycles=*/1,
-                            /*abs_tol=*/Real(2) * robust_residual),
-            0);
+  EXPECT_EQ(
+      validation::GeometricMGValidationAccess::solve_robust(mg, Real(1e-8), /*max_cycles=*/1,
+                                                            /*abs_tol=*/Real(2) * robust_residual),
+      0);
   EXPECT_TRUE(mg.last_solve_report().solved());
   EXPECT_NEAR(mg.last_solve_report().rel_residual, robust_residual, Real(1e-14));
 }
@@ -504,7 +509,9 @@ TEST(GeometricMgTest, nonfinite_rhs_and_residual_are_invalid_evaluations) {
     EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
     EXPECT_EQ(report.action, SolveAction::kRejectAttempt);
     EXPECT_FALSE(report.solved());
-    EXPECT_TRUE(std::isinf(static_cast<double>(report.rel_residual)));
+    EXPECT_TRUE(std::isfinite(static_cast<double>(report.rel_residual)));
+    EXPECT_EQ(report.rel_residual, std::numeric_limits<Real>::max());
+    EXPECT_TRUE(solve_report_is_publishable(report, /*maximum_iterations=*/4));
   }
 
   GeometricMG invalid_iterate(geometry, boxes, BCRec{});
@@ -516,8 +523,15 @@ TEST(GeometricMgTest, nonfinite_rhs_and_residual_are_invalid_evaluations) {
 
   GeometricMG invalid_robust(geometry, boxes, BCRec{});
   invalid_robust.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
-  EXPECT_EQ(invalid_robust.solve_robust(Real(1e-8), /*max_cycles=*/4), 0);
+  EXPECT_EQ(validation::GeometricMGValidationAccess::solve_robust(invalid_robust, Real(1e-8),
+                                                                  /*max_cycles=*/4),
+            0);
   EXPECT_EQ(invalid_robust.last_solve_report().status, SolveStatus::kInvalidEvaluation);
+
+  GeometricMG invalid_legacy(geometry, boxes, BCRec{});
+  invalid_legacy.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_THROW(invalid_legacy.solve(), std::runtime_error);
+  EXPECT_EQ(invalid_legacy.last_solve_report().status, SolveStatus::kInvalidEvaluation);
 }
 
 TEST(GeometricMgTest, rejects_nonfinite_or_out_of_domain_controls) {
@@ -528,7 +542,8 @@ TEST(GeometricMgTest, rejects_nonfinite_or_out_of_domain_controls) {
   EXPECT_THROW((void)mg.solve(nan, 4), std::invalid_argument);
   EXPECT_THROW((void)mg.solve(Real(1e-8), 0), std::invalid_argument);
   EXPECT_THROW((void)mg.solve(Real(1e-8), 4, nan), std::invalid_argument);
-  EXPECT_THROW((void)mg.solve_robust(nan, 4), std::invalid_argument);
+  EXPECT_THROW((void)validation::GeometricMGValidationAccess::solve_robust(mg, nan, 4),
+               std::invalid_argument);
   EXPECT_THROW(mg.set_abs_tol(nan), std::invalid_argument);
 
   FieldNewtonOptions newton;

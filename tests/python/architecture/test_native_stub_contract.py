@@ -123,13 +123,14 @@ def test_step_attempt_rejection_is_a_structured_runtime_error_contract():
     assert _annotated_fields(rejection) == {
         "status": (
             "Literal['solved', 'singular', 'breakdown', 'iteration_limit', "
-            "'invalid_evaluation', 'capability_failure', 'invalid_input', "
-            "'incompatible_rhs']"
+            "'invalid_evaluation', 'inadmissible_candidate', 'safeguard_failure', "
+            "'capability_failure', 'invalid_input', 'incompatible_rhs']"
         ),
         "phase": "str",
         "detail": "str",
         "disposition": "Literal['retry', 'reject']",
         "reason_code": "int",
+        "failed_rank": "int",
     }
 
     source = BINDINGS.read_text(encoding="utf-8")

@@ -84,9 +84,12 @@ Supported native routes include:
   `MPI_COMM_WORLD` layouts may distribute the two face decompositions independently: native C++
   collectives reconstruct both traces, require a finite bit-identical shared flux on every rank,
   then scatter only into locally owned residual cells.
-  Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP, and
-  refined or dynamically regridded AMR interfaces are unavailable; AMR accepts only one frozen
-  level.
+  Internal serial two-level work retains endpoint-qualified canonical fragments with exact Program
+  weights and authoritative local substep duration. Those fragments authenticate the paired RHS
+  update; they are not injected again into reflux because that would duplicate the same face flux.
+  Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
+  refined or dynamically regridded public AMR interfaces, historical shared-interface rates, and
+  refined MPI publication remain unavailable; the public AMR route accepts only one frozen level.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes
@@ -128,12 +131,18 @@ Explicit unsupported rows include:
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use accepted-state v5.
 - `checkpoint:amr_dynamic_regrid` is available through the strict v5 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
-  per native rank, so AMR restart currently requires the same rank count; rank redistribution is never
-  inferred from opaque local publications.
+  per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
+  non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and
+  the rank-owned accepted Program image onto a different MPI rank count only when every persisted
+  history ring is Dense. Selective history replay remains same-rank. Recorded patch boxes and
+  refinement topology are not regridded or inferred from opaque local publications.
 - `checkpoint:regrid_on_restart` has an explicit typed `RegridOnRestart()` identity and the weaker
-  `accepted_state_after_regrid` guarantee, but the builtin accepted-state-v5 provider refuses it before
-  artifact creation. No complete hierarchy/history/field remap route currently implements that
-  guarantee, and `bit_identical=True` is incompatible with the policy.
+  `accepted_state_after_regrid` guarantee. The builtin accepted-state-v5 provider supports one
+  artifact-backed AMR layout at unchanged MPI cardinality: exact accepted replay precedes one real
+  tagger/clustering regrid, history/flux topology is rebound, composite conservation is checked, and
+  a global transform receipt derives a distinct run identity. Uniform, multi-layout, elliptic-field,
+  shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
+  `bit_identical=True` is incompatible with the policy.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 - `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a
@@ -200,4 +209,10 @@ unsupported route: requested solver=FFT() with layout=AMR; available route: Geom
 Unknown values are not treated as false and are never repaired by a compatibility default. A public
 artifact must carry the current authenticated manifest and required route facts; missing, unknown, or
 incompatible evidence is refused before bind. Historical artifacts may only be converted by an
-explicit offline migration tool that emits a complete current artifact.
+explicit offline migration tool that emits a complete current artifact. The one implemented
+checkpoint route accepts only the exact frozen Uniform-v2 schema through
+`pops.codegen.checkpoint_migration`: it requires a complete authenticated v5 authority and an
+exhaustive reviewed mapping, preserves no runtime alias, and publishes atomically only after current
+integrity and restart preflight succeed. Its supported envelope is same-grid/same-clock, Dense
+store-all history, with no field-provider slots, scheduled caches, or ConsumerGraph state; every
+other historical checkpoint remains a fail-closed refusal in the runtime.

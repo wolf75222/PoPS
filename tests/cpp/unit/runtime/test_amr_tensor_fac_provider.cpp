@@ -39,6 +39,7 @@ class DistinctHierarchyPrepared final : public PreparedHierarchyTensorSolver {
   HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
     return HierarchyTensorSolverExecutionPath::PreparedKrylovFallback;
   }
+  int level_count() const noexcept override { return 0; }
   pops::MultiFab& assembly_target(std::string_view, int) override {
     throw std::logic_error("test provider has no materialized build request");
   }
@@ -119,6 +120,7 @@ class ReportOnlyHierarchyPrepared final : public PreparedHierarchyTensorSolver {
   HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
     return HierarchyTensorSolverExecutionPath::DirectProvider;
   }
+  int level_count() const noexcept override { return 0; }
   pops::MultiFab& assembly_target(std::string_view, int) override {
     throw std::logic_error("report-only provider has no field storage");
   }
@@ -153,6 +155,7 @@ class FlatIdentityPrepared final : public PreparedHierarchyTensorSolver {
   HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
     return HierarchyTensorSolverExecutionPath::DirectProvider;
   }
+  int level_count() const noexcept override { return 1; }
   pops::MultiFab& assembly_target(std::string_view slot, int level) override {
     if (slot != "pops.test.identity.rhs" || level != 0)
       throw std::invalid_argument("flat identity provider received an unknown field slot");
@@ -364,9 +367,47 @@ TEST(HierarchyTensorSolverProviderContract,
       registry, "pops.test.hierarchy.flat-identity", request);
   ASSERT_EQ(prepared->execution_path(), HierarchyTensorSolverExecutionPath::DirectProvider);
   prepared->assembly_target("pops.test.identity.rhs", 0).set_val(Real(3.25));
-  const pops::SolveReport report = prepared->solve({Real(1.0e-12), Real(0), 1});
+  prepared->solution(0).set_val(Real(-7));
+  pops::SolveOutcome outcome = pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+      *prepared, {Real(1.0e-12), Real(0), 1});
+  ASSERT_TRUE(outcome.report().solved()) << outcome.report().reason;
+  EXPECT_EQ(pops::norm_inf(prepared->solution(0)), Real(7))
+      << "the provider solution must remain physically unchanged before Accept";
+  const pops::SolveReport report = outcome.consume(pops::SolveConsumption::kAccept);
   ASSERT_TRUE(report.solved()) << report.reason;
   EXPECT_EQ(pops::norm_inf(prepared->solution(0)), Real(3.25));
+}
+
+TEST(HierarchyTensorSolverProviderContract,
+     DelayedAcceptRejectsDestinationLayoutDriftBeforePublication) {
+  pops::runtime::program::HierarchyTensorSolverProviderRegistry registry;
+  registry.add(std::make_shared<FlatIdentityProvider>());
+  HierarchyTensorSolverBuildRequest request;
+  request.components = 1;
+  request.levels = 1;
+  request.level_populated = {true};
+  request.level_distributions = {pops::FieldDistribution::Distributed};
+  request.plan_identity = "pops.test.flat-direct-layout-drift@1";
+  request.operator_contract_identity = "pops.test.operator.identity@1";
+  request.assembly_field_slots = {"pops.test.identity.rhs"};
+  request.solution_field_slot = "pops.test.identity.solution";
+  request.options = FlatIdentityProvider().default_options();
+
+  auto prepared = pops::runtime::program::prepare_hierarchy_tensor_solver_collectively(
+      registry, "pops.test.hierarchy.flat-identity", request);
+  prepared->assembly_target("pops.test.identity.rhs", 0).set_val(Real(4.5));
+  pops::SolveOutcome outcome = pops::runtime::program::solve_prepared_hierarchy_tensor_collectively(
+      *prepared, {Real(1.0e-12), Real(0), 1});
+  ASSERT_TRUE(outcome.report().solved()) << outcome.report().reason;
+
+  const pops::BoxArray boxes = prepared->solution(0).box_array();
+  const pops::DistributionMapping mapping = prepared->solution(0).dmap();
+  prepared->solution(0) = pops::MultiFab(boxes, mapping, 1, 1);
+  EXPECT_THROW((void)outcome.consume(pops::SolveConsumption::kAccept), std::logic_error);
+
+  prepared->solution(0) = pops::MultiFab(boxes, mapping, 1, 0);
+  EXPECT_TRUE(outcome.consume(pops::SolveConsumption::kAccept).solved());
+  EXPECT_EQ(pops::norm_inf(prepared->solution(0)), Real(4.5));
 }
 
 TEST(HierarchyTensorSolverProviderContract,

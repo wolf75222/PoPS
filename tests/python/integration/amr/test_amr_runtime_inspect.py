@@ -19,6 +19,7 @@ import sys
 import numpy as np
 import pytest
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 pops = pytest.importorskip("pops")
 import pops.runtime._engine_descriptors as engine  # noqa: E402
@@ -59,7 +60,7 @@ def _built_amr(regrid_every=2, n=32):
         "ni", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
     )
     sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.set_refinement(threshold=0.5)
+    install_prepared_threshold_union(sim, (("ne", "n", 0.5), ("ni", "n", 0.5)))
     ne = np.ones((n, n))
     ne[n // 3 : 2 * n // 3, n // 3 : 2 * n // 3] = 5.0
     sim.set_density("ne", ne)
@@ -231,7 +232,8 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
     assert rep.restartable is True and rep.violations == []
-    assert "bit-identical v5" in str(rep)
+    assert "authenticated accepted-state v5" in str(rep)
+    assert "bit-identical v5" not in str(rep)
 
 
 def test_explain_checkpoint_supports_dynamic_regrid():
@@ -240,6 +242,12 @@ def test_explain_checkpoint_supports_dynamic_regrid():
     rep = sim.amr.explain_checkpoint()
     assert rep.restartable is True and rep.violations == []
     assert any("active regridding is supported" in n for n in rep.notes)
+    assert any("different rank count" in n for n in rep.notes)
+    assert any("history ring is Dense" in n for n in rep.notes)
+    assert any("selective history replay remains same-rank" in n for n in rep.notes)
+    assert any("explicit weaker continuation" in n for n in rep.notes)
+    assert any("unchanged MPI cardinality" in n for n in rep.notes)
+    assert any("shared-interface flux groups" in n for n in rep.notes)
 
 
 # --- inspect() (ADC-589/555 criterion #34: the unified hierarchy/patch/regrid/limitations view) --

@@ -20,7 +20,7 @@ requirement = "ghost_plan"
 polarity = "refusal"
 kind = "pytest"
 target = "ghost_plan"
-nodeid = "tests/python/unit/mesh/test_ghost_producer_plan.py::test_missing_overlap_and_extra_producers_fail_without_order_priority"
+nodeid = "tests/python/unit/mesh/test_ghost_producer_plan.py::test_global_missing_and_overlapping_producers_fail_before_compile_lowering"
 
 [[check]]
 issue = "ADC-672"
@@ -185,6 +185,38 @@ nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_prefli
 [[check]]
 issue = "ADC-678"
 requirement = "accepted_state"
+polarity = "refusal"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "refusal"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/amr/test_public_amr_resolution.py::test_tagging_resolution_refuses_unimplemented_persistent_hysteresis"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_native_loader"
+test_regex = "^test_amr_native_loader\\.PreparedAmrProvidersExecuteExactTablesAndProvenance$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"
@@ -197,6 +229,80 @@ polarity = "refusal"
 kind = "ctest"
 target = "test_amr_history_ring"
 test_regex = "^test_amr_history_ring\\.RejectedAb2RegridRestoresTopologyHistoryFluxAndStateExactly$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "mpi_python"
+target = "accepted_state"
+nodeid = "tests/python/integration/mpi/test_amr_history_mpi.py::test_amr_history_mpi_in_window_regrid_public_restart_and_distribution_parity"
+nproc = 2
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/runtime/test_multi_layout_runtime.py::test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/mpi/test_amr_rank_change_restart.py::test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_amr_twoblock_parity"
+test_regex = "^test_mpi_amr_twoblock_parity_np2$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_amr_distributed_coarse"
+test_regex = "^test_mpi_amr_distributed_coarse_np2$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "positive"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_checkpoint_hierarchy_policies_have_distinct_exact_identities_and_guarantees"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "refusal"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/unit/runtime/test_consumer_authoring.py::test_regrid_on_restart_refuses_bit_identity_uniform_and_multilayout_before_artifact"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "positive"
+kind = "pytest"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/integration/amr/test_amr_regrid_on_restart.py::test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault"
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "positive"
+kind = "mpi_python"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::test_regrid_on_restart_mpi_collective_rollback_and_lineage"
+nproc = 2
 
 [[check]]
 issue = "ADC-678"

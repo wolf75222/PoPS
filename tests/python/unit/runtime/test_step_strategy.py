@@ -87,6 +87,9 @@ class _TemporalOwner:
     def _native_step_target(self):
         return self.raw
 
+    def _consume_step_projections(self):
+        return ()
+
     def time(self):
         return self.raw.time()
 
@@ -166,6 +169,22 @@ def test_all_four_controllers_execute_real_native_attempts():
     assert grid_native.calls == [("step", 0.125)]
 
 
+def test_fixed_dt_merges_a_roundoff_equivalent_final_landing():
+    native = _Native()
+    for _ in range(13):
+        native.step(0.01)
+    assert native.time() < 0.14
+    remaining = 0.14 - native.time()
+
+    report = run_step_attempt(
+        _Engine(), native, FixedDt(0.01), t_end=0.14
+    )
+
+    assert report.attempts == 1
+    assert native.time() == 0.14
+    assert native.calls[-1] == ("step", remaining)
+
+
 def test_error_controlled_exhaustion_preserves_rejection_and_exact_attempt_count():
     native = _Native(reject=4)
     engine = _Engine()
@@ -242,8 +261,10 @@ def test_error_controller_restores_the_exact_next_proposal_after_restart():
     temporal = TemporalRestartState(
         strategy=run_control_payload(strategy),
         controller_state={"last_accepted_dt": (0.1).hex()},
-        _restored_pending=True,
     )
+    temporal.queue_error_controlled_proposal(
+        dt=0.1 * strategy.growth, time=0.0, macro_step=0)
+    temporal._restored_pending = True
     engine = SimpleNamespace(
         _step_controller=None,
         _temporal_restart_state=temporal,
@@ -256,6 +277,130 @@ def test_error_controller_restores_the_exact_next_proposal_after_restart():
     native = _Native()
     run_step_attempt(engine, native, strategy, t_end=1.0)
     assert native.calls == [("step", pytest.approx(0.15))]
+
+
+class _RecordingTemporalState(TemporalRestartState):
+    def __init__(self):
+        super().__init__()
+        self.replaced_heads = []
+        self.attempted_events = []
+        self.accept_queue_lengths = []
+
+    def queue_error_controlled_proposal(self, *, dt, time, macro_step, replace=False):
+        if replace:
+            self.replaced_heads.append(dict(self.event_queue[0]))
+        return super().queue_error_controlled_proposal(
+            dt=dt,
+            time=time,
+            macro_step=macro_step,
+            replace=replace,
+        )
+
+    def before_queued_attempt(self, event, *, time, macro_step):
+        self.attempted_events.append(dict(event))
+        super().before_queued_attempt(event, time=time, macro_step=macro_step)
+
+    def accept(self, **kwargs):
+        before = len(self.event_queue)
+        super().accept(**kwargs)
+        self.accept_queue_lengths.append((before, len(self.event_queue)))
+
+
+def test_error_controller_step_zero_checkpoint_has_a_restorable_initial_event():
+    strategy = _error_strategy()
+    temporal = TemporalRestartState()
+    temporal.begin_run(
+        run_control_payload(strategy), time=0.0, macro_step=0)
+
+    payload = temporal.checkpoint_json(time=0.0, macro_step=0)
+    restored = TemporalRestartState.from_json(
+        payload, time=0.0, macro_step=0)
+
+    assert restored.event_queue == [{
+        "kind": "error_controlled_dt.proposal",
+        "time": strategy.dt_init.hex(),
+        "cursor": 1,
+        "payload": {"dt": strategy.dt_init.hex()},
+    }]
+
+
+def test_error_controller_queue_head_drives_attempt_replacement_and_next_decision():
+    strategy = _error_strategy()
+    temporal = _RecordingTemporalState()
+    temporal.begin_run(
+        run_control_payload(strategy), time=0.0, macro_step=0)
+    engine = SimpleNamespace(
+        _step_controller=None,
+        _temporal_restart_state=temporal,
+        _step_transaction_plan=None,
+        _last_step_transaction_report=None,
+    )
+    native = _Native(reject=1)
+
+    report = run_step_attempt(engine, native, strategy, t_end=1.0)
+
+    assert report.attempts == 2
+    assert native.calls == [("step", 0.2), ("step", 0.1)]
+    assert [row["payload"]["dt"] for row in temporal.replaced_heads] == [
+        strategy.dt_init.hex(),
+    ], "the rejected attempt must leave the old queue head for typed replacement"
+    assert temporal.accept_queue_lengths == [(1, 0)]
+    assert temporal.transaction_stats == {
+        "accepted": 1, "rejected": 1, "failed": 0,
+    }
+    next_dt = 0.1 * strategy.growth
+    assert temporal.event_queue == [{
+        "kind": "error_controlled_dt.proposal",
+        "time": (0.1 + next_dt).hex(),
+        "cursor": 2,
+        "payload": {"dt": next_dt.hex()},
+    }]
+    payload = temporal.checkpoint_json(
+        time=native.time(), macro_step=native.macro_step())
+    forged = json.loads(payload)
+    forged["event_queue"][0]["payload"]["dt"] = (next_dt * 0.5).hex()
+    with pytest.raises(ValueError, match="proposal time disagrees|queued proposal differs"):
+        TemporalRestartState.from_json(
+            json.dumps(forged),
+            time=native.time(),
+            macro_step=native.macro_step(),
+        )
+    restored = TemporalRestartState.from_json(
+        payload, time=native.time(), macro_step=native.macro_step())
+    restored_engine = SimpleNamespace(
+        _step_controller=None,
+        _temporal_restart_state=restored,
+        _step_transaction_plan=None,
+        _last_step_transaction_report=None,
+    )
+    resumed = _Native()
+    resumed.t = native.time()
+    resumed.cursor = native.macro_step()
+    run_step_attempt(restored_engine, resumed, strategy, t_end=1.0)
+    assert resumed.calls == [("step", next_dt)]
+
+
+def test_error_controller_clips_the_queue_head_explicitly_at_the_run_deadline():
+    strategy = _error_strategy()
+    temporal = _RecordingTemporalState()
+    temporal.begin_run(
+        run_control_payload(strategy), time=0.0, macro_step=0)
+    engine = SimpleNamespace(
+        _step_controller=None,
+        _temporal_restart_state=temporal,
+        _step_transaction_plan=None,
+        _last_step_transaction_report=None,
+    )
+    native = _Native()
+
+    run_step_attempt(engine, native, strategy, t_end=0.05)
+
+    assert temporal.replaced_heads[0]["payload"]["dt"] == strategy.dt_init.hex()
+    assert temporal.attempted_events[0]["payload"]["dt"] == (0.05).hex()
+    assert native.calls == [("step", 0.05)]
+    assert temporal.accept_queue_lengths == [(1, 0)]
+    assert temporal.event_queue[0]["payload"]["dt"] \
+        == (0.05 * strategy.growth).hex()
 
 
 def test_registered_strategy_and_controller_own_extension_and_restart_protocols():

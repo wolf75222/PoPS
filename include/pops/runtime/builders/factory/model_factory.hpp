@@ -295,7 +295,7 @@ inline POPS_COLD_FN std::vector<int> resolve_implicit_components(
 /// component 0 -- the whole point of letting a model put its refinement variable off component 0). Empty
 /// name AND empty role -> -1, the caller keeps its default (component 0, historical density criterion,
 /// bit-identical). At most one of name/role may be set. @p origin labels the error (e.g.
-/// "AmrSystem::set_refinement").
+/// the prepared AMRTagging authority).
 inline POPS_COLD_FN int resolve_selected_component(const std::string& origin,
                                                    const std::string& block,
                                                    const VariableSet& cons, const std::string& name,

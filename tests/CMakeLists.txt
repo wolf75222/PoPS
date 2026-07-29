@@ -493,6 +493,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_pure_field_algebra_extreme_dot
   test_scaled_scalar
   test_flux_interfaces
+  test_interface_flux_fragment_ledger
   test_fallback_diagnostics
   test_structured_solver_diagnostics
   test_public_validation_errors

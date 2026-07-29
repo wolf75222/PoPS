@@ -37,6 +37,7 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 
 _native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
@@ -197,7 +198,8 @@ def _build(program_factory, regrid_every):
     amr.add_equation("bg", bg_cm,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="ssprk2"))
-    amr.set_refinement(1.2)  # tags the blk blob only -> real 2-level layouts at the cadence
+    install_prepared_threshold_union(
+        amr, (("blk", "rho", 1.2), ("bg", "rho", 1.2)))
     initials = {"blk": _blob(), "bg": np.full((N, N), 0.5)}
     amr.set_density("blk", initials["blk"])
     amr.set_density("bg", initials["bg"])  # smooth and below threshold throughout the run

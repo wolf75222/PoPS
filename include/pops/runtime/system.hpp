@@ -9,7 +9,9 @@
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (options of the IMEX source Newton)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/mesh/boundary/periodicity.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>        // CoupledSourceProgram (facade POD, ADC-214)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (native package seam)
@@ -216,17 +218,14 @@ class System {
   ///                 "momentum_x", "energy", ...) instead of the name (cf. variable_roles). Union with
   ///                 implicit_vars. A role absent from the block raises an EXPLICIT error.
   /// @param newton IMEX only: options of the local Newton of the implicit source (backward-Euler),
-  ///                 grouped in a POD (ADC-214; cf. NewtonOptions). max_iters (default 2 = historical
-  ///                 constant), rel_tol / abs_tol (PER-CELL stopping criterion
-  ///                 ||F||_inf <= abs_tol + rel_tol*||F0||_inf, 0/0 = disabled -> historical fixed
-  ///                 iterations), fd_eps (step of the finite-difference Jacobian, default 1e-7),
-  ///                 damping (damping W -= damping*delta in (0, 1], 1 = full Newton),
-  ///                 fail_policy (kFailNone / kFailWarn / kFailThrow: reaction to failed cells).
-  ///                 Default {} = historical constants, bit-identical.
+  ///                 grouped in a POD (ADC-214; cf. NewtonOptions). max_iters is a hard budget;
+  ///                 rel_tol / abs_tol define the mandatory per-cell stopping criterion
+  ///                 ||F||inf <= abs_tol + rel_tol*||F0||inf; fd_eps controls the finite-difference
+  ///                 Jacobian and damping controls W -= damping*delta in (0, 1].
   /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
   ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
   ///                 aggregated over the substeps of each advance and available via newton_report(name).
-  ///                 OPT-IN: false (default) = historical path with no extra cost. Stays
+  ///                 OPT-IN: false (default) omits the retained diagnostic summary. Stays
   ///                 flat (a separate bool, outside the homogeneous family of convergence options).
   /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
   ///                 every exact reconstructed face-trace pair, then reuses that interval from both
@@ -331,14 +330,25 @@ class System {
                                          const std::vector<int>& omitted_interface_faces = {},
                                          const std::string& state_identity = {},
                                          PreparedBoundaryReadDependencies read_dependencies = {});
+  /// Exact-topology overload. Physical laws and component transforms remain model-aware; the
+  /// additional table only identifies periodic face pairs whose coordinate map is not the
+  /// axis-aligned translation represented by Periodicity.
+  POPS_EXPORT void install_boundary_plan(
+      const std::string& name, const std::string& identity, int required_depth,
+      const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+      const std::vector<std::string>& face_identities,
+      const std::vector<std::string>& component_roles,
+      const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+      PreparedBoundaryReadDependencies read_dependencies,
+      std::vector<PeriodicIdentification2D> periodic_identifications);
   /// Register the exact state Handle owned by a materialized block.  This registry is independent
   /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
   /// dependency of another block's boundary component.
   POPS_EXPORT void install_block_state_route(const std::string& name,
                                              const std::string& state_identity);
   /// Bind one exact solved-field Handle identity to its authenticated provider storage slot.
-  POPS_EXPORT void install_boundary_field_route(const std::string& field_identity,
-                                                const std::string& provider_slot);
+  POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
+                                               const std::string& provider_slot);
   /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
   POPS_EXPORT void discard_boundary_plans();
   /// Attach one explicitly qualified native boundary operation to an already installed block plan.
@@ -720,10 +730,9 @@ class System {
   POPS_EXPORT std::size_t apply_coupling_operators(Real dt,
                                                    const std::vector<MultiFab*>& candidate_states);
 
-  POPS_EXPORT SolveReport
-  solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
-                   ///< so a compiled program .so resolves it via ProgramContext
-                   ///< (the other seam accessors below are likewise POPS_EXPORT)
+  /// Solve Poisson then derive aux = (phi, grad phi). The candidate potential and aux remain
+  /// physically private until the returned one-shot outcome is consumed with Accept.
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields();
   /// Per-stage field solve (ADC-409): SAME elliptic solve + aux derivation as solve_fields(), but
   /// block @p block_idx assembles its Poisson RHS from @p U_stage instead of its live state (the
   /// other blocks keep theirs). This re-fills the SHARED aux with phi(U_stage) so a field-coupled
@@ -732,10 +741,11 @@ class System {
   /// before the next stage overwrites the aux. With block_idx 0 and U_stage = U^n (the first stage)
   /// it is identical to solve_fields(). POPS_EXPORT: resolved by a compiled program .so (ProgramContext)
   /// across the dlopen boundary. @throws std::out_of_range if @p block_idx is not a valid block.
-  POPS_EXPORT SolveReport solve_fields_from_state(int block_idx, const MultiFab& U_stage);
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state(int block_idx,
+                                                                 const MultiFab& U_stage);
   /// Point-qualified stage solve used by generated implicit operators.  System has one mesh level,
   /// but the exact point remains part of the cross-target contract and is never reconstructed.
-  POPS_EXPORT SolveReport solve_fields_from_state_at(
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int block_idx, const MultiFab& U_stage);
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): SAME elliptic solve + aux
@@ -748,7 +758,8 @@ class System {
   /// species field-coupled step uses (the IR commit_many guarantee: no operator observes a partially
   /// committed group). POPS_EXPORT: resolved by a compiled program .so (ProgramContext) across the
   /// dlopen boundary. @throws std::invalid_argument if @p U_stages is not sized to n_blocks().
-  POPS_EXPORT SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages);
+  [[nodiscard]] POPS_EXPORT SolveOutcome
+  solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages);
   /// @name Named multi-elliptic fields (ADC-428)
   /// A SECOND elliptic solve (beyond the default Poisson) for a user-named field
   /// (m.elliptic_field("phi2", rhs=..., aux=[...])). The named field owns its RHS (a per-block brick,
@@ -761,14 +772,15 @@ class System {
   /// its solved phi (+ centered gradient) into the field's own aux components. The codegen lowers
   /// P.solve_fields(field=name, state=U) to this. @throws if @p field is unregistered, the block index
   /// is invalid, or the geometry is polar (cartesian only for now).
-  POPS_EXPORT SolveReport solve_fields_from_state(const std::string& field, int block_idx,
-                                                  const MultiFab& U_stage);
+  [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields_from_state(const std::string& field,
+                                                                 int block_idx,
+                                                                 const MultiFab& U_stage);
   /// Solve named @p field from the exact simultaneous stage states of all contributing blocks.
   /// @p U_stages is indexed by System block; nullptr keeps that block at its accepted live state.
   /// Unlike the historical ProgramContext route, this contract never selects or mutates a
   /// representative block.
-  POPS_EXPORT SolveReport solve_fields_from_blocks(
-      const std::string& field, const std::vector<const MultiFab*>& U_stages);
+  [[nodiscard]] POPS_EXPORT SolveOutcome
+  solve_fields_from_blocks(const std::string& field, const std::vector<const MultiFab*>& U_stages);
   /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
   /// equal -1 => only phi is written; @p gradient_sign is exactly -1 or +1 and scales both derivatives.
@@ -801,11 +813,6 @@ class System {
   /// CFL bound of the block -- to locate a realizability erosion / a collapsing dt.
   /// On demand, off the hot path (step/step_cfl unchanged).
   std::array<double, 3> dt_hotspot(const std::string& name);
-
-  /// Reserved multirate entry point. The historical native scheduler has been retired from the
-  /// facade; this currently throws even with a Program installed until multirate subcycling has an
-  /// explicit ProgramGraph lowering.
-  double step_adaptive(double cfl);
 
   /// @name Profiling (Spec 3 section 29-30, ADC-459)
   /// Per-phase / per-brick wall-clock timing of the step. Disabled by default (no hot-path cost
@@ -868,9 +875,9 @@ class System {
   /// -- it composes these primitives (solve_fields(); ProgramContext::rhs_into(b, U, R, rate_id);
   /// saxpy(U, dt, R)). The authored rate identity is mandatory at the native boundary.
   /// @{
-  /// Install the mandatory macro-step body. System::step, advance, step_cfl and step_adaptive reject
-  /// before mutation while it is absent. An empty std::function is rejected: there is no public
-  /// temporal route that silently clears the whole-system Program.
+  /// Install the mandatory macro-step body. System::step, advance and step_cfl reject before
+  /// mutation while it is absent. An empty std::function is rejected: there is no public temporal
+  /// route that silently clears the whole-system Program.
   /// POPS_EXPORT: a generated problem.so resolves these across the dlopen boundary from the globally
   /// promoted host; without default visibility the .so could not find them (_pops is built with
   /// hidden visibility). The generated package itself remains RTLD_LOCAL.
@@ -1056,6 +1063,12 @@ class System {
   /// caller is responsible for layout compatibility: the ring slots share the block's (ba, dm, ncomp),
   /// so a value built from the same block matches (lincomb is a valid-cell copy, no layout check).
   POPS_EXPORT void store_history(const std::string& name, const MultiFab& value);
+  /// Qualified generated-Program route: identical to the overload above, but records the exact
+  /// outgoing interval of the active logical clock. A child-clock subcycle therefore owns child
+  /// timestamps rather than inheriting the enclosing macro dt. @p outgoing_dt must be finite and
+  /// non-negative; generated Program scopes always provide a strictly positive value.
+  POPS_EXPORT void store_history(const std::string& name, const MultiFab& value,
+                                 double outgoing_dt);
   /// Shift every history ring buffer one step (slot k <- slot k-1, for k = depth-1 .. 1), called ONCE
   /// at the end of each macro-step (the generated step body emits ctx.rotate_histories() last). The
   /// current slot [0] is recycled (it gets the oldest buffer; the next store overwrites it before any
@@ -1133,10 +1146,10 @@ class System {
   /// @}
   /// Load a generated problem.so and install its compiled time Program. dlopens @p so_path, checks
   /// its ABI key against this module (fail-loud on mismatch), and calls its pops_install_program(this),
-  /// which wraps the System in a ProgramContext and installs the macro-step closure. The .so resolves
-  /// the seam accessors above from the globally promoted host, while the package itself stays local
-  /// so independent semantic artifacts cannot interpose. Mirrors add_native_block; the .so stays
-  /// loaded for the process lifetime.
+  /// whose shared facade factory selects the Program execution provider and installs the macro-step
+  /// closure. The .so resolves the seam accessors above from the globally promoted host, while the
+  /// package itself stays local so independent semantic artifacts cannot interpose. Mirrors
+  /// add_native_block; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash),
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
@@ -1228,6 +1241,9 @@ class System {
   /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
   /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  POPS_EXPORT void begin_step_projection_report();
+  POPS_EXPORT void note_step_projection(const std::string& name);
+  POPS_EXPORT std::vector<std::string> consume_step_projections();
   /// @}
   /// @name Compiled-Program RUNTIME parameters (epic ADC-479 / ADC-510, Spec 5 C5)
   /// A compiled time Program whose physics reads a dsl.Param(..., kind="runtime") carries the value
@@ -1349,6 +1365,31 @@ class System {
  private:
   friend class runtime::program::ProgramContext;
   friend class PreparedSystemLayoutTransfer;
+  /// Immediate provider calls are an exported implementation seam for generated ProgramContext
+  /// code, never a public publication route. Every public field solve and every Program solve wraps
+  /// these methods in the same physical accepted/candidate transaction.
+  POPS_EXPORT SolveReport solve_fields_in_place_();
+  POPS_EXPORT SolveReport solve_fields_from_state_in_place_(int block_idx, const MultiFab& U_stage);
+  POPS_EXPORT SolveReport solve_fields_from_state_at_in_place_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int block_idx, const MultiFab& U_stage);
+  POPS_EXPORT SolveReport
+  solve_fields_from_blocks_in_place_(const std::vector<const MultiFab*>& U_stages);
+  POPS_EXPORT SolveReport solve_fields_from_state_in_place_(const std::string& field, int block_idx,
+                                                            const MultiFab& U_stage);
+  POPS_EXPORT SolveReport solve_fields_from_blocks_in_place_(
+      const std::string& field, const std::vector<const MultiFab*>& U_stages);
+  POPS_EXPORT void prepare_default_field_publication_storage_();
+  POPS_EXPORT void prepare_named_field_publication_storage_(const std::string& field);
+  POPS_EXPORT void begin_field_publication_transaction();
+  POPS_EXPORT void stage_field_publication_candidate();
+  POPS_EXPORT void validate_field_publication_candidate();
+  POPS_EXPORT void accept_field_publication_candidate() noexcept;
+  POPS_EXPORT void rollback_field_publication_transaction();
+  [[nodiscard]] POPS_EXPORT bool field_publication_transaction_active_() const noexcept;
+  POPS_EXPORT void begin_field_publication_outcome_();
+  POPS_EXPORT SolveOutcome stage_field_publication_outcome_(SolveReport report);
+  SolveOutcome run_field_publication_outcome_(const std::function<SolveReport()>& solve);
   /// Read-only compiled-artifact capability check.  Kept private so only ProgramContext can issue
   /// an authenticated apply token; installation writes Impl directly and no public setter exists.
   POPS_EXPORT bool program_owns_operator_authority(

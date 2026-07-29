@@ -6,6 +6,7 @@
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 
+#include <array>
 #include <limits>
 #include <string_view>
 
@@ -184,8 +185,8 @@ pops::runtime::amr::PreparedClusteringSpec amr_clustering_spec_from_python(
 // Assembly seams: per-block composition, native block, and refinement tagging.
 void bind_amr_assembly(py::class_<AmrSystem>& cls) {
   cls.def(py::init<const AmrSystemConfig&>())
-      // ADC-214: Python surface UNCHANGED (same flat newton_* kwargs, same defaults). The lambda
-      // assembles the NewtonOptions POD before the C++ call (parity with System.add_block).
+      // The lambda assembles the flat preparation controls into NewtonOptions before the C++ call.
+      // Failure policy is intentionally absent: every local nonlinear failure is fail-closed.
       .def(
           "add_block",
           [](AmrSystem& s, const std::string& name, const ModelSpec& model,
@@ -194,16 +195,14 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& implicit_vars,
              const std::vector<std::string>& implicit_roles, int newton_max_iters,
              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-             double newton_damping, const std::string& newton_fail_policy, bool newton_diagnostics,
-             double positivity_floor, double weno_epsilon, bool wave_speed_cache) {
+             double newton_damping, bool newton_diagnostics, double positivity_floor,
+             double weno_epsilon, bool wave_speed_cache) {
             NewtonOptions newton;
             newton.max_iters = newton_max_iters;
             newton.rel_tol = static_cast<Real>(newton_rel_tol);
             newton.abs_tol = static_cast<Real>(newton_abs_tol);
             newton.fd_eps = static_cast<Real>(newton_fd_eps);
             newton.damping = static_cast<Real>(newton_damping);
-            newton.fail_policy =
-                newton_fail_policy_from_string(newton_fail_policy, "AmrSystem::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, stride, implicit_vars,
                         implicit_roles, newton, newton_diagnostics, positivity_floor, weno_epsilon,
                         wave_speed_cache);
@@ -217,15 +216,14 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // metadata only; they do not enable a hidden backward-Euler step.
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // The flat newton_* kwargs likewise remain for Python-surface compatibility. Every
-          // non-default option and newton_diagnostics=true fails closed until an executable typed
+          // Every non-default Newton control and newton_diagnostics=true fails closed until a typed
           // AMR local nonlinear/Newton Program primitive owns both the solve and its report.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_fail_policy") = "none", py::arg("newton_diagnostics") = false,
+          py::arg("newton_diagnostics") = false,
           // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
           // by the AmrSystem.add_block / add_equation Python facade.
@@ -239,22 +237,26 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<double>& face_values,
              const std::vector<std::string>& face_identities,
              const std::vector<std::string>& component_roles,
-             const std::vector<int>& omitted_interface_faces, const std::string& state_identity) {
-            system.install_boundary_plan(name, identity, required_depth, face_types, face_values,
-                                         face_identities, component_roles, omitted_interface_faces,
-                                         state_identity, PreparedBoundaryReadDependencies{});
+             const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+             const std::vector<std::array<int, 6>>& periodic_identifications) {
+            system.install_boundary_plan(
+                name, identity, required_depth, face_types, face_values, face_identities,
+                component_roles, omitted_interface_faces, state_identity,
+                PreparedBoundaryReadDependencies{},
+                decode_periodic_identification_rows(periodic_identifications));
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
+          py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
           "Install one resolved per-block ghost-production plan before lazy AMR construction.")
       .def("_install_block_state_route", &AmrSystem::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
            "Bind one exact state Handle identity to native AMR block storage.")
-      .def("_install_boundary_field_route", &AmrSystem::install_boundary_field_route,
+      .def("_install_field_storage_route", &AmrSystem::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
-           "Bind one exact boundary field Handle to native provider storage.")
+           "Bind one exact solved-field Handle to native provider storage.")
       .def("_discard_boundary_plans", &AmrSystem::discard_boundary_plans,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
@@ -355,23 +357,13 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("expected_naux"), py::arg("expected_model_identity"),
            py::arg("positivity_floor") = 0.0,
            py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
-      // Regrid criterion: refine where the SELECTED variable exceeds threshold. Default = component 0
-      // (historical density), bit-identical 1e30 no-op. ADC-296: select it PER BLOCK by NAME (variable=)
-      // or physical ROLE (role=); a block lacking it raises at build (no silent comp-0 fallback).
-      // Native and compiled runtime blocks carry the same exact VariableSet descriptor.
-      .def("set_refinement", &AmrSystem::set_refinement, py::arg("threshold"),
-           py::arg("variable") = "", py::arg("role") = "",
-           "Refine where the selected conserved variable exceeds threshold. variable=/role= pick "
-           "it per "
-           "block by name or physical role (default: component 0, the historical density). "
-           "Selecting by "
-           "name and role at once, or a name/role absent from a block, raises.")
-      .def("_set_bootstrap_refinement", &AmrSystem::set_bootstrap_refinement, py::arg("block"),
-           py::arg("variable"), py::arg("threshold"), py::arg("provider_identity"))
       .def(
           "_set_bootstrap_tagging",
-          [](AmrSystem& system, const std::vector<std::string>& leaf_blocks,
-             const std::vector<std::string>& leaf_variables, const std::vector<int>& leaf_ops,
+          [](AmrSystem& system, const std::vector<std::string>& leaf_subject_kinds,
+             const std::vector<std::string>& leaf_subject_identities,
+             const std::vector<std::string>& leaf_blocks,
+             const std::vector<std::string>& leaf_variables,
+             const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
              const std::vector<double>& leaf_thresholds,
              const std::vector<int>& leaf_stencil_indices, const py::list& stencil_rows,
              const std::vector<std::int32_t>& refine_ops,
@@ -384,19 +376,18 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             stencils.reserve(stencil_rows.size());
             for (const py::handle row : stencil_rows)
               stencils.push_back(amr_tagging_stencil_from_python(py::cast<py::dict>(row)));
-            system.set_bootstrap_tagging(leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds,
-                                         leaf_stencil_indices, stencils, refine_ops, refine_args,
-                                         coarsen_ops, coarsen_args, min_cycles, equality_policy,
-                                         conflict_policy, clock_identity, provider_identity);
+            system.set_bootstrap_tagging(
+                leaf_subject_kinds, leaf_subject_identities, leaf_blocks, leaf_variables,
+                leaf_field_component_indices, leaf_ops, leaf_thresholds, leaf_stencil_indices,
+                stencils, refine_ops, refine_args, coarsen_ops, coarsen_args, min_cycles,
+                equality_policy, conflict_policy, clock_identity, provider_identity);
           },
-          py::arg("leaf_blocks"), py::arg("leaf_variables"), py::arg("leaf_ops"),
+          py::arg("leaf_subject_kinds"), py::arg("leaf_subject_identities"), py::arg("leaf_blocks"),
+          py::arg("leaf_variables"), py::arg("leaf_field_component_indices"), py::arg("leaf_ops"),
           py::arg("leaf_thresholds"), py::arg("leaf_stencil_indices"), py::arg("stencils"),
           py::arg("refine_ops"), py::arg("refine_args"), py::arg("coarsen_ops"),
           py::arg("coarsen_args"), py::arg("min_cycles"), py::arg("equality_policy"),
           py::arg("conflict_policy"), py::arg("clock_identity"), py::arg("provider_identity"))
-      // Shared-potential gradient leaf appended to the prepared regrid graph. It uses the same
-      // native Kokkos/MPI Tagger route as model-state criteria; <= 0 keeps the leaf absent.
-      .def("set_phi_refinement", &AmrSystem::set_phi_refinement, py::arg("grad_threshold"))
       .def(
           "set_poisson",
           [](AmrSystem& system, const std::string& rhs, const std::string& solver,
@@ -835,6 +826,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // driver records a measured scalar into each cadence tick.
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
+      .def("_consume_step_projections", &AmrSystem::consume_step_projections)
       .def("record_program_diagnostic", &AmrSystem::record_program_diagnostic, py::arg("name"),
            py::arg("value"))
       // ADC-542: the level-composite collective reduction over a named block the AMR diagnostics
@@ -1071,9 +1063,44 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
             s.rebuild_hierarchy(bx, owner_ranks);
           },
           py::arg("boxes"), py::arg("owner_ranks"))
+      .def(
+          "rematerialize_hierarchy_ownership",
+          [](AmrSystem& s, const std::vector<std::tuple<int, int, int, int, int>>& boxes) {
+            std::vector<pops::PatchBox> bx;
+            bx.reserve(boxes.size());
+            for (const auto& b : boxes)
+              bx.push_back(pops::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
+                                          std::get<3>(b), std::get<4>(b)});
+            py::gil_scoped_release release;
+            return s.rematerialize_hierarchy_ownership(bx);
+          },
+          py::arg("boxes"),
+          "Collectively rematerialize exact recorded patch ownership for this communicator.")
+      .def(
+          "rematerialize_program_accepted_state",
+          [](AmrSystem& s, const std::vector<py::bytes>& source_states,
+             const std::vector<std::vector<int>>& source_level_owners,
+             const std::vector<std::vector<int>>& target_level_owners) {
+            std::vector<std::vector<std::uint8_t>> bytes;
+            bytes.reserve(source_states.size());
+            for (const py::bytes& source : source_states) {
+              const std::string value = source;
+              bytes.emplace_back(value.begin(), value.end());
+            }
+            const auto rematerialized = s.rematerialize_program_accepted_state(
+                bytes, source_level_owners, target_level_owners);
+            if (rematerialized.empty())
+              return py::bytes();
+            return py::bytes(reinterpret_cast<const char*>(rematerialized.data()),
+                             rematerialized.size());
+          },
+          py::arg("source_states"), py::arg("source_level_owners"), py::arg("target_level_owners"),
+          "Merge exact source-rank Program images and return this rank's current-ownership image.")
       .def("begin_restart_transaction", &AmrSystem::begin_restart_transaction)
       .def("commit_restart_transaction", &AmrSystem::commit_restart_transaction)
       .def("rollback_restart_transaction", &AmrSystem::rollback_restart_transaction)
+      .def("preflight_regrid_on_restart", &AmrSystem::preflight_regrid_on_restart)
+      .def("regrid_on_restart", &AmrSystem::regrid_on_restart)
       .def("checkpoint_regrid_count", &AmrSystem::checkpoint_regrid_count)
       .def("checkpoint_topology_epoch", &AmrSystem::checkpoint_topology_epoch)
       .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,

@@ -44,8 +44,8 @@ from pops.codegen.program_emit_control import (
     _emit_while,
 )
 from pops.codegen.program_emit_solve import (
-    _SOLVE_STATUS_CPP,
     _consumed_solve_action,
+    _append_solve_report_guard,
     _emit_matrix_free_operator,
     _emit_solve_linear,
 )
@@ -72,26 +72,150 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
     return index
 
 
-def _append_solve_report_guard(
-        program: Any, solve: Any, report: str, lines: list[str], *, label: str) -> None:
-    """Consume a native SolveReport with the exact action authored for ``solve``."""
+def _canonical_metadata_int(value: Any, *, where: str) -> int:
+    """Decode one graph-canonical integer without accepting an approximate numeric cast."""
+    if isinstance(value, bool):
+        raise TypeError("%s must be an exact integer" % where)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Mapping) and set(value) == {"scalar"}:
+        scalar = value["scalar"]
+        if isinstance(scalar, Mapping) and scalar.get("kind") == "integer" \
+                and isinstance(scalar.get("value"), str):
+            try:
+                return int(scalar["value"])
+            except ValueError:
+                pass
+    raise TypeError("%s must be an exact graph-canonical integer" % where)
+
+
+def _append_pointwise_solve_report(
+        program: Any, solve: Any, status: str, lines: list[str], *,
+        label: str, stem: str, active_mask: str | None = None,
+        block: int | None = None) -> None:
+    """Reduce typed per-cell status and consume one collective ``SolveReport``.
+
+    Pointwise kernels own the report they create, so they author its failure disposition before
+    constructing the outcome. Prepared/provider solves retain their native action authority.
+    """
     action_kind, action_statuses = _consumed_solve_action(program, solve)
-    lines.append("if (!%s.solved_value_available()) {" % report)
-    if action_kind == "reject_attempt":
-        selected = " || ".join(
-            "%s.status == %s" % (report, _SOLVE_STATUS_CPP[status])
-            for status in action_statuses)
-        lines.append("  if (%s) {" % selected)
-        lines.append(
-            "    throw pops::runtime::program::StepAttemptRejected("
-            "%s.status, %s, std::string(%s) + %s.status_name());"
-            % (report, json.dumps(label), json.dumps(label + " failed: "), report))
-        lines.append("  }")
+
+    def failure_action(status_name: str) -> str:
+        if action_kind == "reject_attempt" and status_name in action_statuses:
+            return "pops::SolveAction::kRejectAttempt"
+        return "pops::SolveAction::kFailRun"
+
+    code = "%s_code_%d" % (stem, solve.id)
+    report = "%s_report_%d" % (stem, solve.id)
+    if active_mask is None:
+        reduction = "pops::reduce_max(%s, 0)" % status
+    else:
+        if block is None:
+            raise ValueError("pointwise masked solve reduction requires a runtime block index")
+        reduction = "ctx.pointwise_status_max(%d, %s, %s)" % (
+            block, status, active_mask)
+    lines.append("const int %s = static_cast<int>(%s);" % (code, reduction))
+    lines.append("pops::SolveReport %s;" % report)
+    lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
     lines.append(
-        "  throw std::runtime_error(std::string(%s) + %s.status_name() + "
-        "\" action=fail_run\");"
-        % (json.dumps(label + " failed: "), report))
-    lines.append("}")
+        "else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit, %s);"
+        % (code, report, failure_action("iteration_limit")))
+    lines.append(
+        "else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular, %s);"
+        % (code, report, failure_action("singular")))
+    lines.append(
+        "else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation, %s);"
+        % (report, failure_action("invalid_evaluation")))
+    outcome = "%s_outcome_%d" % (stem, solve.id)
+    lines.append(
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
+        % (outcome, report))
+    _append_solve_report_guard(program, solve, outcome, lines, label=label)
+
+
+def _append_local_nonlinear_report(
+    program: Any, solve: Any, status: str, report: str, lines: list[str]
+) -> str:
+    """Reduce one prepared local solve and return its collective ``SolveOutcome`` token."""
+    action_kind, _ = _consumed_solve_action(program, solve)
+    failure_action = (
+        "pops::SolveAction::kRejectAttempt"
+        if action_kind == "reject_attempt"
+        else "pops::SolveAction::kFailRun"
+    )
+    priority = "%s_priority" % report
+    lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 10));" % (priority, status))
+    reduced = {
+        "status": "%s_status" % report,
+    }
+    lines.append(
+        "const int %s = pops::local_nonlinear_status_code("
+        "pops::local_nonlinear_status_from_priority(%s));" % (reduced["status"], priority)
+    )
+    fields = (
+        ("iterations", 1, "int"),
+        ("evaluations", 2, "int"),
+        ("reference_residual", 3, "real"),
+        ("residual", 4, "real"),
+        ("step", 5, "real"),
+        ("condition", 6, "real"),
+        ("safeguard_steps", 7, "int"),
+    )
+    for suffix, component, kind in fields:
+        token = "%s_%s" % (report, suffix)
+        reduced[suffix] = token
+        expression = "pops::reduce_max(%s, %d)" % (status, component)
+        if kind == "int":
+            lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
+        else:
+            lines.append("const pops::Real %s = %s;" % (token, expression))
+    encoded = "%s_failure_location" % report
+    failed_count = "%s_failed_count" % report
+    failed_i = "%s_failed_i" % report
+    failed_j = "%s_failed_j" % report
+    failed_component = "%s_failed_component" % report
+    encoded_priority = "%s_encoded_priority" % report
+    lines += [
+        "const pops::Real %s = pops::reduce_max(%s, 8);" % (encoded, status),
+        "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
+        "int %s = 0;" % encoded_priority,
+        "int %s = -1;" % failed_i,
+        "int %s = -1;" % failed_j,
+        "int %s = -1;" % failed_component,
+        "if (%s > pops::Real(0))" % failed_count,
+        "  pops::detail::decode_ranked_local_nonlinear_failure("
+        "%s, %s, %s, %s, %s);" % (encoded, encoded_priority, failed_i, failed_j, failed_component),
+        "if (%s > pops::Real(0) && %s != %s)" % (failed_count, encoded_priority, priority),
+        "  throw std::runtime_error("
+        '"local nonlinear collective status/location precedence mismatch");',
+    ]
+    lines.append(
+        "pops::SolveReport %s = pops::local_nonlinear_solve_report("
+        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+        % (
+            report,
+            reduced["status"],
+            reduced["iterations"],
+            reduced["evaluations"],
+            reduced["reference_residual"],
+            reduced["residual"],
+            reduced["step"],
+            reduced["condition"],
+            reduced["safeguard_steps"],
+            failed_i,
+            failed_j,
+            failed_component,
+            failure_action,
+        )
+    )
+    outcome = report.replace("_report_", "_outcome_", 1)
+    if outcome == report:
+        outcome = "%s_outcome" % report
+    lines.append(
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_world(std::move(%s));"
+        % (outcome, report)
+    )
+    return outcome
 
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
@@ -127,16 +251,73 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from pops.time._schedule.synchronization import SampleAndHold, relation_data
 
         expected = relation_data(SampleAndHold())
-        if relation != expected:
+        point = v.point.time if hasattr(v.point, "time") else v.point
+        if relation == expected:
+            lines.append(
+                "ctx.synchronize_sample_and_hold(%s, %s, %d, %s);"
+                % (json.dumps(source.clock.qualified_id), json.dumps(v.clock.qualified_id),
+                   int(point.step), scalar_cpp(point.offset)))
+            var[v.id] = var[source.id]
+        elif isinstance(relation, Mapping) \
+                and relation.get("kind") == "history_interpolation":
+            capability = relation.get("interpolation")
+            if not isinstance(capability, Mapping) or set(capability) != {
+                    "kind", "schema_version", "minimum_samples"} \
+                    or capability.get("kind") != "linear" \
+                    or _canonical_metadata_int(
+                        capability["schema_version"],
+                        where="LinearInterpolation schema_version",
+                    ) != 1 \
+                    or _canonical_metadata_int(
+                        capability["minimum_samples"],
+                        where="LinearInterpolation minimum_samples",
+                    ) != 2:
+                raise NotImplementedError(
+                    "history synchronization capability %r has no native lowering; "
+                    "supported capability: LinearInterpolation()" % capability)
+            if target != "system":
+                raise NotImplementedError(
+                    "LinearInterpolation native lowering is Uniform-only; AMR retained-history "
+                    "timestamps require the complete hierarchy restart contract")
+            if source.op != "history":
+                raise ValueError(
+                    "LinearInterpolation native lowering requires one retained history value")
+            contract = relation["provider"]["contract"]
+            depth = _canonical_metadata_int(
+                contract["depth"], where="LinearInterpolation history depth")
+            temporal = program.temporal_manifest()
+            ticks = {
+                row["id"]: int(row["ticks_per_macro"]) for row in temporal["clocks"]
+            }
+            coordinate = (
+                (Fraction(point.step) + Fraction(point.offset.to_python()))
+                * Fraction(ticks[source.clock.qualified_id], ticks[v.clock.qualified_id])
+            )
+            if coordinate < -depth or coordinate > 0:
+                raise ValueError(
+                    "LinearInterpolation target %s lies outside retained history [-%d, 0]"
+                    % (coordinate, depth))
+            var[v.id] = "u%d" % v.id
+            lines.append(
+                "pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
+                % (var[v.id], int(v.id), var[source.id]))
+            lines.append(
+                "ctx.interpolate_history_linear(%s, %s, %d, %d, %s, %s, %d, %s);"
+                % (
+                    var[v.id],
+                    json.dumps(source.attrs["history"]),
+                    depth,
+                    bidx,
+                    json.dumps(source.clock.qualified_id),
+                    json.dumps(v.clock.qualified_id),
+                    int(point.step),
+                    scalar_cpp(point.offset),
+                )
+            )
+        else:
             raise NotImplementedError(
                 "synchronization provider %r has no native lowering; supported provider: "
-                "SampleAndHold()" % relation)
-        point = v.point.time if hasattr(v.point, "time") else v.point
-        lines.append(
-            "ctx.synchronize_sample_and_hold(%s, %s, %d, %s);"
-            % (json.dumps(source.clock.qualified_id), json.dumps(v.clock.qualified_id),
-               int(point.step), scalar_cpp(point.offset)))
-        var[v.id] = var[source.id]
+                "SampleAndHold() or Uniform LinearInterpolation()" % relation)
     elif v.op == "solve_fields":
         # Per-stage field solve: the callable Case field operator re-solves phi from THIS
         # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the
@@ -151,7 +332,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         field, _ = resolved_field_route(field_ref, field_plans)
         lines += field_point_cpp(program, v, field)
         report = "field_report_%d" % v.id
-        solve_stmt = ('const pops::SolveReport %s = '
+        solve_stmt = ('pops::SolveOutcome %s = '
                       'ctx.solve_fields_from_state(%s, %d, %s);'
                       % (report, json.dumps(field), bidx, var[state_in.id]))
         lines.append(solve_stmt)
@@ -180,7 +361,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines += field_point_cpp(program, v, field)
         report = "field_report_%d" % v.id
         lines.append(
-            "const pops::SolveReport %s = ctx.solve_fields_from_blocks(%d, %s, {%s});"
+            "pops::SolveOutcome %s = ctx.solve_fields_from_blocks(%d, %s, {%s});"
             % (report, int(v.id), json.dumps(field), ", ".join(overrides)))
         _append_solve_report_guard(program, v, report, lines, label="field_solve")
         # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
@@ -240,23 +421,15 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         status = "ci_status_%d" % v.id
         prototype_block = next(iter(components))
         prototype = var[by_block[prototype_block].id]
-        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 11, 0);"
                      % (status, int(v.id), prototype))
         lines += _emit_solve_coupled_implicit_kernel(
             components, by_block, var, scratch, status,
-            tol=v.attrs["tol"], max_iter=int(v.attrs["max_iter"]),
-            fd_eps=v.attrs["fd_eps"], coefficient=v.attrs["coefficient"])
-        code = "ci_code_%d" % v.id
+            controls=v.attrs, coefficient=v.attrs["coefficient"])
         report = "ci_report_%d" % v.id
-        lines.append("const int %s = static_cast<int>(pops::reduce_max(%s, 0));" % (code, status))
-        lines.append("pops::SolveReport %s;" % report)
-        lines.append("if (%s == 0) %s.mark_solved();" % (code, report))
-        lines.append("else if (%s == 1) %s.mark_failed(pops::SolveStatus::kIterationLimit);"
-                     % (code, report))
-        lines.append("else if (%s == 2) %s.mark_failed(pops::SolveStatus::kSingular);"
-                     % (code, report))
-        lines.append("else %s.mark_failed(pops::SolveStatus::kInvalidEvaluation);" % report)
-        _append_solve_report_guard(program, v, report, lines, label="coupled_implicit")
+        outcome = _append_local_nonlinear_report(program, v, status, report, lines)
+        _append_solve_report_guard(
+            program, v, outcome, lines, label="coupled_implicit")
         var.update({("coupled_solution", v.id, block): token
                     for block, token in scratch.items()})
         var[v.id] = scratch[next(iter(scratch))]
@@ -309,7 +482,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # aliases the input state. Forwards to ctx.apply_projection(idx, state) (ADC-426: the op's
         # own block, so each block runs its own projection).
         (state_in,) = v.inputs
+        step_projection = v.attrs.get("step_projection")
+        if step_projection is not None:
+            if not isinstance(step_projection, str) or not step_projection:
+                raise TypeError("project step_projection must be a non-empty string")
         lines.append("ctx.apply_projection(%d, %s);" % (bidx, var[state_in.id]))
+        if step_projection is not None:
+            lines.append("ctx.note_step_projection(%s);" % json.dumps(step_projection))
         var[v.id] = var[state_in.id]
     elif v.op == "local_transform":
         if prelude is None:
@@ -481,28 +660,44 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
+        status = "local_solve_status_%d" % v.id
         if target == "system":
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_linear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 0, %s, 1, 0);"
+                     % (status, int(v.id), var[v.id]))
         lines += _emit_solve_local_linear_kernel(
-            node_model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id], bidx)
+            node_model, v.attrs["linear_source"], v.attrs["a_coeff"],
+            var[rhs_in.id], var[v.id], status, bidx)
+        _append_pointwise_solve_report(
+            program, v, status, lines, label="local_linear", stem="local_solve")
     elif v.op == "solve_local_nonlinear":
-        # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
-        # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
-        # uses. The output is a fresh scratch state; the guess input seeds the iterate.
+        # Generated code supplies the residual and controls; the single prepared provider owns the
+        # nonlinear algorithm and keeps the candidate private until the report is consumed.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
+        status = "ln_status_%d" % v.id
         if target == "system":
             lines.append(
                 "ctx.require_cartesian_generated_operator(%d, %s);"
                 % (bidx, json.dumps("solve_local_nonlinear")))
         lines.append("pops::MultiFab& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[base.id]))
+        lines.append("pops::MultiFab& %s = ctx.scalar_scratch(%d, 1, %s, 11, 0);"
+                     % (status, int(v.id), var[base.id]))
+        active_mask = "local_solve_active_mask_%d" % v.id
+        lines.append(
+            "const pops::MultiFab* %s = ctx.pointwise_active_mask(%d, %s);"
+            % (active_mask, bidx, status))
         lines += _emit_solve_local_nonlinear_kernel(
-            node_model, v, var[guess_in.id], var[v.id], bidx)
+            node_model, v, var[guess_in.id], var[v.id], status, active_mask, bidx)
+        report = "ln_report_%d" % v.id
+        outcome = _append_local_nonlinear_report(program, v, status, report, lines)
+        _append_solve_report_guard(
+            program, v, outcome, lines, label="local_nonlinear")
     elif v.op == "scalar_field":
         # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
         # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
@@ -560,8 +755,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
     elif v.op in ("solve_outcome", "solve_outcome_component"):
         # Python graph/authoring requires an explicit consumed outcome before a solve result can feed
-        # effects. Runtime lowering keeps the existing Krylov call as the value-producing operation;
-        # these nodes are zero-cost aliases that preserve that explicit contract in the IR.
+        # effects. The solve-producing operation has already constructed and guarded its native
+        # SolveReport using the exact action attached to this outcome. These projections are therefore
+        # zero-cost aliases of a scratch that is reachable only after the guard accepted it.
         (source,) = v.inputs
         if v.op == "solve_outcome_component" and "out_block" in v.attrs:
             solve = source.inputs[0]

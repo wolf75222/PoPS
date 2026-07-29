@@ -1,4 +1,4 @@
-// Multirate PLEINEMENT ADAPTATIF (sec.8.2 C) : SystemDriver::step_adaptive(cfl). Le pas macro
+// Multirate PLEINEMENT ADAPTATIF (sec.8.2 C), conserve comme oracle numerique de test. Le pas macro
 // est fixe par l'espece la plus rapide (CFL) ; le `stride` de chaque espece est derive AU
 // RUNTIME du ratio w_max/w_s. Une espece 4x plus lente avance donc 1 fois sur 4, par un pas
 // 4x plus grand (= son dt stable), en une seule resolution.
@@ -9,9 +9,10 @@
 
 #include <gtest/gtest.h>
 
+#include "reference_system_driver.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -60,7 +61,7 @@ TEST(AdaptiveMultirate, MacroDtFromFastestSpecies) {
   Blk fast{"fast", AdvectProduce{Real(4), Real(1)}, Uf, bc};
   Blk slow{"slow", AdvectProduce{Real(1), Real(1)}, Us, bc};
   CoupledSystem system{fast, slow};
-  auto sim = make_system_coupler(system, geom, ba, bc, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, bc, ZeroSystemRhs{});
 
   const Real cfl = Real(0.4);
   const Real h = std::min(geom.dx(), geom.dy());

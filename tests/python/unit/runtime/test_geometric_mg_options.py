@@ -137,24 +137,22 @@ def test_override_visible_in_effective_report():
 
 
 def test_override_changes_the_v_cycle_count():
-    """A tighter tolerance / higher cap actually reaches the native solver: it drives more cycles.
+    """A one-cycle cap reaches the native solver and is reported as a rejected attempt.
 
-    The default 1e-8 stop converges in a few cycles; capping max_cycles at 1 forces exactly one, a
-    directly observable effect proving the knob is consumed (not merely reported)."""
+    The default 1e-8 stop converges in a few cycles; capping max_cycles at 1 cannot satisfy that
+    tolerance. The fallible solve contract must expose that iteration limit instead of publishing
+    the unconverged candidate."""
     import numpy as np
 
-    def _run(**poisson):
-        sim = _sim(**poisson)
-        rho = np.zeros((16, 16))
-        rho[8, 8] = 1.0
-        rho[4, 4] = -1.0
-        sim.set_density("ion", rho)
+    sim = _sim(max_cycles=1)
+    rho = np.zeros((16, 16))
+    rho[8, 8] = 1.0
+    rho[4, 4] = -1.0
+    sim.set_density("ion", rho)
+    configured = sim.inspect().to_dict()
+    assert configured["options"]["poisson"]["max_cycles"] == 1
+    with pytest.raises(RuntimeError, match=r"status=iteration_limit.*action=reject_attempt"):
         sim.solve_fields()
-        return sim.inspect().to_dict()
-
-    capped = _run(max_cycles=1)
-    # The effective report still reflects the cap; the profiler counter (if present) is <= the cap.
-    assert capped["options"]["poisson"]["max_cycles"] == 1
 
 
 def test_coarse_threshold_changes_the_hierarchy():
@@ -167,7 +165,7 @@ def test_coarse_threshold_changes_the_hierarchy():
     import numpy as np
 
     def _levels(**poisson):
-        sim = _sim(max_cycles=1, **poisson)
+        sim = _sim(max_cycles=50, **poisson)
         rho = np.zeros((16, 16))
         rho[8, 8] = 1.0
         rho[4, 4] = -1.0

@@ -22,6 +22,8 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
+
+#include "amr_tagging_test_authority.hpp"
 #include <pops/parallel/comm.hpp>
 
 #include <Kokkos_Core.hpp>
@@ -60,7 +62,7 @@ static void install_forward_euler_program(AmrSystem& system) {
   context->install([context](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context](double level_dt) {
       context->set_stage_time(0, 1);
-      (void)context->solve_fields();
+      (void)consume_solve_outcome(context->solve_fields());
 
       std::vector<MultiFab*> states;
       std::vector<MultiFab*> residuals;
@@ -141,7 +143,7 @@ static int run_bz_program_probe(int n) {
         system, "magnetic",
         MagneticModel{Euler{Real(1.4)}, MagneticLorentzForce{Real(1)}, ZeroElliptic{}}, "none",
         "rusanov", "conservative", "euler", /*gamma=*/1.4);
-    system.set_refinement(1.2);
+    test::install_prepared_threshold_union(system, {{"magnetic", "rho", 1.2}});
     system.set_conservative_state("magnetic", state);
     system.set_magnetic_field(field);
     install_forward_euler_program(system);
@@ -221,7 +223,7 @@ static int run_mode(int n, bool distribute, const char* tag) {
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
                      "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
-  sys.set_refinement(1.2);
+  test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
   sys.set_density("gas", rho);
   install_forward_euler_program(sys);
 

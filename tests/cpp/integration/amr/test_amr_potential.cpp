@@ -71,7 +71,6 @@ TEST(test_amr_potential, Runs) {
   AmrSystem amr(cfg);
   amr.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
   amr.set_poisson("charge_density", "geometric_mg", "auto");
-  amr.set_refinement(1e30);  // jamais : un seul niveau (base couvre tout le domaine)
   amr.set_density("phi_test", rho);
   test::install_forward_euler_program(amr);
 
@@ -105,7 +104,7 @@ TEST(test_amr_potential, Runs) {
   sys.add_block("phi_test", exb_background(n0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.set_poisson("charge_density", "geometric_mg", "auto");
   sys.set_density("phi_test", rho);
-  sys.solve_fields();
+  (void)pops::consume_solve_outcome(sys.solve_fields());
   const std::vector<double> ps = sys.potential();
   EXPECT_EQ(ps.size(), pa.size()) << "System.potential() meme taille qu'AmrSystem.potential()";
 

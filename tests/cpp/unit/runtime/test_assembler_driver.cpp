@@ -1,16 +1,16 @@
-// Scission Assembleur / Driver (retour tuteur sec.8.2 B). Un SystemAssembler ASSEMBLE les
-// champs (Poisson de systeme + aux + residu de bloc) SANS avancer ; un SystemDriver AVANCE
-// (et possede un assembleur). "advance un coupleur" devient "advance un driver".
+// Scission Assembleur / oracle temporel. SystemAssembler ASSEMBLE les champs (Poisson de systeme +
+// aux + residu de bloc) SANS avancer. ReferenceSystemDriver reste dans tests/cpp/support uniquement
+// pour verifier les formules numeriques historiques.
 
 #include <gtest/gtest.h>
 
 #include "load_balance_test_authority.hpp"
+#include "reference_system_driver.hpp"
 
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/amr/amr_coupler_mp.hpp>
 #include <pops/coupling/single/coupler.hpp>
-#include <pops/coupling/system/system_coupler.hpp>  // SystemAssembler, SystemDriver, SystemCoupler
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -166,10 +166,6 @@ static_assert(!std::constructible_from<FactoryOnlyElliptic, const Geometry&, con
 
 }  // namespace
 
-// SystemCoupler reste un alias du Driver (compat).
-static_assert(std::is_same_v<SystemCoupler<CoupledSystem<Blk, Blk>, ChargeDensityRhs>,
-                             SystemDriver<CoupledSystem<Blk, Blk>, ChargeDensityRhs>>);
-
 TEST(AssemblerDriver, SplitAssemblerSolvesFieldsAndDriverAdvances) {
   const int n = 16;
   const Box2D dom = Box2D::from_extents(n, n);
@@ -204,13 +200,13 @@ TEST(AssemblerDriver, SplitAssemblerSolvesFieldsAndDriverAdvances) {
                                                  /*recompute_aux=*/false);
   EXPECT_TRUE(norm_inf(R) < Real(1e-14)) << "assembler_block_residual_zero";
 
-  // --- DRIVER : avance (et possede un assembleur). ---
+  // --- ORACLE TEST-ONLY : avance en reutilisant l'assembleur spatial. ---
   MultiFab V0(ba, dm, 1, 2), V1(ba, dm, 1, 2);
   V0.set_val(Real(1));
   V1.set_val(Real(1));
   Blk d0{"a", Scalar{}, V0, bc}, d1{"b", Scalar{}, V1, bc};
   CoupledSystem dsys{d0, d1};
-  SystemDriver driver(dsys, geom, ba, bc, charge);
+  test_support::ReferenceSystemDriver driver(dsys, geom, ba, bc, charge);
   driver.step(Real(0.1));  // blocs explicites, flux/source nuls -> etat inchange, mais tourne
   EXPECT_TRUE(std::fabs(sum(V0, 0) - Real(1) * n * n) < Real(1e-12)) << "driver_step_runs";
   EXPECT_TRUE(norm_inf(driver.phi()) < Real(1e-9)) << "driver_phi_zero_for_neutral_balance";
@@ -258,7 +254,7 @@ TEST(AssemblerDriver, UniformCouplersUseDistributionAwareCustomFactory) {
   V1.set_val(Real(0));
   Blk d0{"a", Scalar{}, V0, bc}, d1{"b", Scalar{}, V1, bc};
   FactoryProbe driver_probe;
-  SystemDriver<System, ChargeDensityRhs, FactoryOnlyElliptic> driver(
+  test_support::ReferenceSystemDriver<System, ChargeDensityRhs, FactoryOnlyElliptic> driver(
       System{d0, d1}, geom, ba, bc, charge, {}, ScalarFieldProvider2D{},
       FactoryOnlyEllipticBuilder{&driver_probe});
   driver.solve_fields();

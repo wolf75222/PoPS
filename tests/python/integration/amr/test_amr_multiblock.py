@@ -20,6 +20,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 from tests.python.support.explicit_program import install_forward_euler_program
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 
 def _bump(n, amp):
@@ -33,7 +34,7 @@ def _scalar_charge(q, B0=1.0):
     return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
 
 
-def _build(n=32, regrid_every=0):
+def _build(n=32, regrid_every=0, *, tagging=()):
     sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=regrid_every)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("ions", _scalar_charge(+1.0),
@@ -43,6 +44,8 @@ def _build(n=32, regrid_every=0):
     sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
+    if tagging:
+        install_prepared_threshold_union(sim, tagging)
     install_forward_euler_program(sim)
     return sim
 
@@ -106,8 +109,11 @@ def main():
     # tous les blocs. On verifie que le build paresseux + l'avance NE LEVENT PLUS et que la hierarchie
     # reste valide (au moins un patch fin). Le mouvement effectif de la grille est verrouille en C++
     # (test_amr_multiblock_regrid_union) ; ici on assure la non-regression de la facade Python.
-    s = _build(n=n, regrid_every=2)  # regrid_every > 0 en multi-blocs : DESORMAIS supporte
-    s.set_refinement(1.05)  # seuil bas -> l'union des tags des deux bumps raffine effectivement
+    s = _build(
+        n=n,
+        regrid_every=2,
+        tagging=(("ions", "n", 1.05), ("electrons", "n", 1.05)),
+    )  # regrid_every > 0 en multi-blocs : DESORMAIS supporte
     s.advance(0.001, 6)     # declenche le build paresseux + plusieurs regrids
     assert s.n_patches() >= 1, "hierarchie sans patch fin apres regrid d'union"
     assert np.isfinite(np.asarray(s.density("ions"))).all(), "etat ions non fini apres regrid"

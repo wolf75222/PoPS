@@ -584,7 +584,7 @@ inline PointQualifiedResidualClosures make_geometry_residual_closures(
 /// exposes residual, boundary, projection and diagnostic primitives only; it carries no Euler,
 /// SSPRK or IMEX advance closure.
 struct BlockClosures {
-  std::function<void(MultiFab&, MultiFab&)> rhs_into;    ///< R <- -div F + S (Poisson frozen)
+  std::function<void(MultiFab&, MultiFab&)> rhs_into;  ///< R <- -div F + S (Poisson frozen)
   /// FLUX-ONLY residual R <- -div F(U) (NO default/composite source), Poisson frozen (ADC-425). The
   /// SAME transport assembly as @ref rhs_into evaluated on SourceFreeModel<Model> (zero source), so the
   /// flux / ghost / geometry handling is bit-identical -- only the source is dropped. A compiled time

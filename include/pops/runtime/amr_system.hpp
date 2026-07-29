@@ -149,11 +149,11 @@ struct AmrSystemConfig {
 };
 
 /// Frozen parameters passed to the deferred build of the compiled path (add_compiled_model). Materialized
-/// by AmrSystem at ensure_built time: the geometry + the refine/poisson/density choices known
+/// by AmrSystem at ensure_built time: the geometry, Poisson and initial-state choices known
 /// at that moment. The amr_dsl_block header consumes them to instantiate AmrCouplerMP<Model>.
 ///
 /// STRUCTURE (ADC-610). Settings are grouped into NAMED sub-structs by ownership/role
-/// (mesh, regrid, poisson, initial data, named aux) instead of one flat
+/// (mesh, poisson, initial data, named aux) instead of one flat
 /// append-only bag. A new setting goes INTO its semantic group -- the historical "add at the tail so an
 /// older .so loader falls back silently" idiom is RETIRED because it no longer describes how this struct
 /// evolves. The ABI story is now the VERSIONED KEY, not tail-only placement: this struct crosses the
@@ -182,11 +182,6 @@ struct AmrBuildParams {
     [[nodiscard]] double length_x() const noexcept { return L; }
     [[nodiscard]] double length_y() const noexcept { return Ly == 0.0 ? L : Ly; }
   } mesh;
-  /// Refinement criterion frozen at build.
-  struct Regrid {
-    double threshold =
-        static_cast<double>(kAmrRefinementDisabledThreshold);  ///< no refinement (sentinel)
-  } regrid;
   /// Coarse Poisson boundary condition + conductive wall (resolved by set_poisson).
   struct Poisson {
     BCRec bc;                     ///< coarse Poisson BC
@@ -242,8 +237,6 @@ using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
 /// ne.transport = "exb"; ne.source = "none"; ne.elliptic = "charge";
 /// amr.add_block("ne", ne, "minmod", "rusanov", "conservative", "explicit");
 /// amr.set_poisson("charge_density", "geometric_mg");
-/// amr.set_refinement(0.1);                 // refine where any block's field exceeds the threshold
-///
 /// amr.set_density("ne", rho0);             // rho0: initial density on the base level
 /// amr.step_cfl(0.4);                       // conservative refluxed step + composite FAC Poisson
 /// @endcode
@@ -362,13 +355,24 @@ class AmrSystem {
                                          const std::vector<int>& omitted_interface_faces = {},
                                          const std::string& state_identity = {},
                                          PreparedBoundaryReadDependencies read_dependencies = {});
+  /// Exact-topology overload. Periodic endpoint maps remain topology metadata beside the sole
+  /// model-aware physical-law plan; they never restore component-wise BCRec transport semantics.
+  POPS_EXPORT void install_boundary_plan(
+      const std::string& name, const std::string& identity, int required_depth,
+      const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+      const std::vector<std::string>& face_identities,
+      const std::vector<std::string>& component_roles,
+      const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+      PreparedBoundaryReadDependencies read_dependencies,
+      std::vector<PeriodicIdentification2D> periodic_identifications);
   /// Register the exact state Handle independently from physical-boundary ownership.
   POPS_EXPORT void install_block_state_route(const std::string& name,
                                              const std::string& state_identity);
   /// Bind one exact solved-field Handle identity to its authenticated provider storage slot.
-  POPS_EXPORT void install_boundary_field_route(const std::string& field_identity,
-                                                const std::string& provider_slot);
-  /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
+  /// Boundary components and AMR tagging consume this common prepared route.
+  POPS_EXPORT void install_field_storage_route(const std::string& field_identity,
+                                               const std::string& provider_slot);
+  /// Roll back a failed pre-build runtime-authority transaction.  Internal bind seam only.
   POPS_EXPORT void discard_boundary_plans();
   POPS_EXPORT void install_ghost_boundary_component(
       const std::string& name, PreparedBoundaryComponentSpec spec,
@@ -449,26 +453,15 @@ class AmrSystem {
                                   double positivity_floor = 0.0,
                                   double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
-  /// Refines the cells where the SELECTED conserved variable exceeds @p threshold. By default the
-  /// variable is component 0 (historically the density), preserving the bit-identical @c 1e30 no-op.
-  /// Optionally the variable is selected PER BLOCK by NAME (@p variable, e.g. "E") or by physical ROLE
-  /// (@p role, e.g. "energy"): each block resolves it against its OWN conservative VariableSet, so a
-  /// model whose refinement variable is NOT at component 0 refines correctly (ADC-296). Resolution is
-  /// STRICT -- a block lacking the requested name/role raises an explicit error at build, never a silent
-  /// fallback to component 0 (mirror of add_coupled_source). At most one of @p variable / @p role may be
-  /// set. The AmrRuntime carries the selection as leaves in one prepared graph for native/compiled
-  /// and one/many-block layouts. @param threshold refinement threshold (@c 1e30 default elsewhere =>
-  /// no refinement, frozen).
-  /// @param variable conserved-variable NAME to threshold; empty (default) => component 0.
-  /// @param role conserved-variable physical ROLE to threshold; empty (default) => component 0.
-  void set_refinement(double threshold, const std::string& variable = std::string(),
-                      const std::string& role = std::string());
-  void set_bootstrap_refinement(const std::string& block, const std::string& variable,
-                                double threshold, const std::string& provider_identity);
+  /// Install the exact prepared AMRTagging program resolved from the layout authority.
+  /// This is the only tagging installation seam: the runtime never synthesizes a scalar
+  /// threshold, component-zero default, or shared-potential fallback.
   void set_bootstrap_tagging(
+      const std::vector<std::string>& leaf_subject_kinds,
+      const std::vector<std::string>& leaf_subject_identities,
       const std::vector<std::string>& leaf_blocks, const std::vector<std::string>& leaf_variables,
-      const std::vector<int>& leaf_ops, const std::vector<double>& leaf_thresholds,
-      const std::vector<int>& leaf_stencil_indices,
+      const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
+      const std::vector<double>& leaf_thresholds, const std::vector<int>& leaf_stencil_indices,
       const std::vector<runtime::amr::PreparedTaggingProgram::Stencil>& stencils,
       const std::vector<std::int32_t>& refine_ops, const std::vector<std::int32_t>& refine_args,
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
@@ -479,15 +472,6 @@ class AmrSystem {
   void set_temporal_relations(const std::vector<std::int64_t>& numerators,
                               const std::vector<std::int64_t>& denominators,
                               const std::vector<std::string>& remainder_policies);
-
-  /// Adds a shared-potential |grad phi| leaf to the prepared tagging graph. The leaf samples the
-  /// qualified shared aux potential with a resolved centered stencil and executes through the same
-  /// Kokkos/MPI Tagger as state leaves. It is OR-composed with the set_refinement graph for one or
-  /// many blocks; there is no phi-specific runtime predicate or host fallback.
-  /// @param grad_threshold threshold of |grad phi|. <= 0 (DEFAULT) -> the phi tag is DISABLED (phi does not
-  ///        contribute to the union; bit-identical to before this call). Without regrid_every > 0, no
-  ///        effect (the regrid is never called). To be called BEFORE the first step.
-  void set_phi_refinement(double grad_threshold);
 
   /// Configures the default coarse elliptic field. This convenience uses the same provider registry
   /// and exact option contract as resolved named fields; it is not a second solver path. The
@@ -696,6 +680,10 @@ class AmrSystem {
   void begin_restart_transaction();
   void commit_restart_transaction();
   void rollback_restart_transaction();
+  /// Force exactly one artifact-owned scientific regrid inside an active restart transaction.
+  /// The exact recorded accepted state must already have been restored and authenticated.
+  void preflight_regrid_on_restart();
+  void regrid_on_restart();
   int checkpoint_regrid_count() const;
   std::uint64_t checkpoint_topology_epoch() const;
   void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch);
@@ -786,6 +774,11 @@ class AmrSystem {
   /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
   /// low-level steps may omit it because they have no authenticated checkpoint context.
   POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
+  /// Install the artifact-owned restart preflight, transform and forced rollback-resynchronization
+  /// hooks.
+  POPS_EXPORT void install_program_restart_hooks(std::function<void()> preflight,
+                                                 std::function<void()> regrid,
+                                                 std::function<void()> resync);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
@@ -823,9 +816,9 @@ class AmrSystem {
   /// @p so_path, checks its ABI key against this module (fail-loud on mismatch), runs the section-24
   /// install-time requirement validation (aux / solver / block instance, verbatim spec messages), binds
   /// the Program's blocks to the AMR blocks BY NAME, seeds each block's RuntimeParams from the .so
-  /// pops_program_param_* metadata, then calls the .so's pops_install_program_amr(this), which wraps the
-  /// AmrSystem in an AmrProgramContext and installs the macro-step closure. Mirrors add_native_block and
-  /// System::install_program; the .so stays loaded for the process lifetime.
+  /// pops_program_param_* metadata, then calls the .so's pops_install_program_amr(this), whose shared
+  /// facade factory selects the hierarchy provider and installs the macro-step closure. Mirrors
+  /// add_native_block and System::install_program; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).
@@ -911,6 +904,9 @@ class AmrSystem {
   /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
   POPS_EXPORT double program_diagnostic(const std::string& name) const;
   POPS_EXPORT std::map<std::string, double> program_diagnostics() const;
+  POPS_EXPORT void begin_step_projection_report();
+  POPS_EXPORT void note_step_projection(const std::string& name);
+  POPS_EXPORT std::vector<std::string> consume_step_projections();
   /// LEVEL-COMPOSITE collective reduction over a named block, the AMR counterpart of
   /// System::reduce_component the diagnostics driver drives (ADC-542). @p kind is per-component
   /// "sum" / "min" / "max" / "abs_sum" / "sum_sq" / "abs_max", or the full-state "*_all" variants.
@@ -1017,6 +1013,19 @@ class AmrSystem {
   /// aligned with @p boxes. Routes to AmrRuntime::rebuild_hierarchy (all levels rebuilt, reusing regrid
   /// R6/R7). The v3 restart calls this so restartable=True works under ACTIVE regridding.
   void rebuild_hierarchy(const std::vector<PatchBox>& boxes, const std::vector<int>& owner_ranks);
+
+  /// Re-evaluate ownership for the exact recorded fine-level boxes under the load-balance authority
+  /// prepared at bind. This is a collective, non-mutating restart seam: geometry and box ordering
+  /// stay unchanged while the returned owner list is aligned with @p boxes for the current
+  /// communicator size.
+  std::vector<int> rematerialize_hierarchy_ownership(const std::vector<PatchBox>& boxes);
+
+  /// Merge exact source-rank Program images and return this rank's image under the current
+  /// communicator ownership. Both ownership tables are indexed [level][global patch].
+  std::vector<std::uint8_t> rematerialize_program_accepted_state(
+      const std::vector<std::vector<std::uint8_t>>& source_states,
+      const std::vector<std::vector<int>>& source_level_owners,
+      const std::vector<std::vector<int>>& target_level_owners);
 
   /// Per-block per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
   /// layout AND the aux across blocks, so the per-level STATE is read/restored PER BLOCK (by NAME)

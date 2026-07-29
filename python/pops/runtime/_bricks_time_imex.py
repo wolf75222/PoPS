@@ -17,7 +17,6 @@ from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
-    NEWTON_DEFAULT_FAIL_POLICY,
     NEWTON_DEFAULT_FD_EPS,
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
@@ -40,22 +39,20 @@ def _newton_controls(
     fd_eps: Any,
     diagnostics: Any,
     damping: Any,
-    fail_policy: Any,
 ) -> tuple[Any, ...]:
-    if not isinstance(fail_policy, str) or fail_policy not in ("none", "warn", "throw"):
-        raise ValueError(
-            "%s.newton_fail_policy must be 'none'|'warn'|'throw' (got %r)" % (label, fail_policy)
-        )
+    rel = exact_real(rel_tol, where=label + ".newton_rel_tol", minimum=0)
+    abs_ = exact_real(abs_tol, where=label + ".newton_abs_tol", minimum=0)
+    if rel == 0 and abs_ == 0:
+        raise ValueError("%s requires newton_rel_tol > 0 or newton_abs_tol > 0" % label)
     return (
         positive_int(max_iters, where=label + ".newton_max_iters"),
-        exact_real(rel_tol, where=label + ".newton_rel_tol", minimum=0),
-        exact_real(abs_tol, where=label + ".newton_abs_tol", minimum=0),
+        rel,
+        abs_,
         exact_real(fd_eps, where=label + ".newton_fd_eps", minimum=0, minimum_open=True),
         strict_bool(diagnostics, where=label + ".newton_diagnostics"),
         exact_real(
             damping, where=label + ".newton_damping", minimum=0, minimum_open=True, maximum=1
         ),
-        fail_policy,
     )
 
 
@@ -129,9 +126,9 @@ class IMEX:
     - ``implicit_roles``: same mask but by physical ROLE ("density", "momentum_x", "energy", ...)
       instead of the name (cf. System.variable_roles). Union with implicit_vars. E.g.
       ``IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"])``.
-    - ``newton_max_iters``: iteration budget of the local Newton (default 2 = historical constant).
+    - ``newton_max_iters``: hard iteration budget of the local Newton.
     - ``newton_rel_tol`` / ``newton_abs_tol``: per-cell stopping criterion
-      ||F||_inf <= abs_tol + rel_tol*||F0||_inf (0/0 = disabled, bit-identical historical loop).
+      ||F||_inf <= abs_tol + rel_tol*||F0||_inf. At least one tolerance must be positive.
     - ``newton_fd_eps``: step of the finite-difference Jacobian (default 1e-7 = historical).
     - ``newton_diagnostics``: requests a Newton report from the typed implicit Program primitive.
       A target that cannot produce that report rejects the request.
@@ -154,7 +151,6 @@ class IMEX:
         newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
         newton_diagnostics: bool = False,
         newton_damping: Any = NEWTON_DEFAULT_DAMPING,
-        newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY,
     ) -> None:
         self.substeps, self.stride = _cadence("IMEX", substeps, stride)
         self.implicit_vars, self.implicit_roles = _norm_implicit(
@@ -167,7 +163,6 @@ class IMEX:
             self.newton_fd_eps,
             self.newton_diagnostics,
             self.newton_damping,
-            self.newton_fail_policy,
         ) = _newton_controls(
             "IMEX",
             newton_max_iters,
@@ -176,7 +171,6 @@ class IMEX:
             newton_fd_eps,
             newton_diagnostics,
             newton_damping,
-            newton_fail_policy,
         )
 
 
@@ -223,7 +217,6 @@ class SourceImplicit:
         newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
         newton_diagnostics: bool = False,
         newton_damping: Any = NEWTON_DEFAULT_DAMPING,
-        newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY,
     ) -> None:
         self.substeps, self.stride = _cadence("SourceImplicit", substeps, stride)
         self.implicit_vars, self.implicit_roles = _norm_implicit(
@@ -236,7 +229,6 @@ class SourceImplicit:
             self.newton_fd_eps,
             self.newton_diagnostics,
             self.newton_damping,
-            self.newton_fail_policy,
         ) = _newton_controls(
             "SourceImplicit",
             newton_max_iters,
@@ -245,7 +237,6 @@ class SourceImplicit:
             newton_fd_eps,
             newton_diagnostics,
             newton_damping,
-            newton_fail_policy,
         )
 
 
@@ -277,9 +268,8 @@ class IMEXRK:
     - ``substeps=N``: substeps per macro-step (cf. the private explicit engine policy). Default 1.
     - ``stride=M``: block cadence, hold-then-catch-up semantics. Default 1.
     - ``newton_*``: same options as the private ``IMEX`` policy
-      (max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy/
-      diagnostics) -- they parametrize BOTH implicit stage solves of the scheme. Defaults =
-      historical constants (max_iters=2, fd_eps=1e-7), without extra cost.
+      (max_iters/rel_tol/abs_tol/fd_eps/damping/diagnostics) -- they parametrize BOTH implicit
+      stage solves of the scheme.
 
     FULLY IMPLICIT SOURCE: unlike the private ``IMEX`` policy, ``IMEXRK`` does not expose implicit_vars /
     implicit_roles (the ARS(2,2,2) stage-consistency relation assumes a homogeneous solve). A partial
@@ -300,7 +290,6 @@ class IMEXRK:
         newton_fd_eps: Any = NEWTON_DEFAULT_FD_EPS,
         newton_diagnostics: bool = False,
         newton_damping: Any = NEWTON_DEFAULT_DAMPING,
-        newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY,
     ) -> None:
         if not isinstance(scheme, str) or scheme != "ars222":
             raise ValueError(
@@ -315,7 +304,6 @@ class IMEXRK:
             self.newton_fd_eps,
             self.newton_diagnostics,
             self.newton_damping,
-            self.newton_fail_policy,
         ) = _newton_controls(
             "IMEXRK",
             newton_max_iters,
@@ -324,7 +312,6 @@ class IMEXRK:
             newton_fd_eps,
             newton_diagnostics,
             newton_damping,
-            newton_fail_policy,
         )
 
 

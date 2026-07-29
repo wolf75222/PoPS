@@ -27,6 +27,7 @@ from tests.python.support.explicit_program import (  # noqa: E402
     install_ssprk2_program,
     install_ssprk3_program,
 )
+from tests.python.support.amr_tagging import install_prepared_threshold_union  # noqa: E402
 
 
 def _scalar_charge(q, B0=1.0):
@@ -62,7 +63,9 @@ def _run_amr_explicit_family(time_brick, *, multi, n=32):
             time=time_brick,
         )
     sim.set_poisson(bc=Periodic())
-    sim.set_refinement(1.05)  # low threshold -> the bump tags + refines (live fine patches)
+    blocks = ("ions", "electrons") if multi else ("ions",)
+    install_prepared_threshold_union(
+        sim, ((block, "n", 1.05) for block in blocks))
     sim.set_density("ions", _bump(n, 0.40))
     if multi:
         sim.set_density("electrons", _bump(n, 0.20))

@@ -7,7 +7,7 @@ name, boolean flags, hidden defaults, or a preset-specific runtime route.
 """
 
 from .euler import FORWARD_EULER_TABLEAU, ForwardEuler
-from .imex import IMEX, IMEX_EULER_TABLEAU
+from .imex import IMEX, IMEX_ARS222_TABLEAU, IMEX_EULER_TABLEAU
 from .multistep import AdamsBashforth, BDF
 from .predictor_corrector import PredictorCorrector
 from .rk import ButcherTableau, RK4, RK4_TABLEAU, RungeKutta, SSPRK2_TABLEAU
@@ -28,6 +28,7 @@ __all__ = [
     "FORWARD_EULER_TABLEAU",
     "ForwardEuler",
     "IMEX",
+    "IMEX_ARS222_TABLEAU",
     "IMEX_EULER_TABLEAU",
     "Lie",
     "PredictorCorrector",

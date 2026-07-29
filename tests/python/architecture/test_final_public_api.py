@@ -134,9 +134,9 @@ def test_program_and_time_library_expose_only_final_authoring_spelling() -> None
     assert tuple(signature(pops.Program.state).parameters) == ("self", "state", "clock")
     assert tuple(libtime.__all__) == (
         "AdamsBashforth", "BDF", "ButcherTableau", "FORWARD_EULER_TABLEAU",
-        "ForwardEuler", "IMEX", "IMEX_EULER_TABLEAU", "Lie", "PredictorCorrector",
-        "RK4", "RK4_TABLEAU", "RungeKutta", "SSPRK2", "SSPRK2_TABLEAU", "SSPRK3",
-        "SSPRK3_TABLEAU", "Strang",
+        "ForwardEuler", "IMEX", "IMEX_ARS222_TABLEAU", "IMEX_EULER_TABLEAU", "Lie",
+        "PredictorCorrector", "RK4", "RK4_TABLEAU", "RungeKutta", "SSPRK2",
+        "SSPRK2_TABLEAU", "SSPRK3", "SSPRK3_TABLEAU", "Strang",
     )
     for removed in (
         "forward_euler", "ssprk2", "ssprk3", "rk4", "rk", "explicit_rk", "strang",

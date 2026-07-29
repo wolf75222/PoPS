@@ -86,9 +86,9 @@ def test_checkpoint_payload_version_requires_an_exact_integer_scalar():
             assert (
                 require_exact_payload_version(
                     {key: exact},
-                    key,
-                    expected,
-                    runtime=runtime,
+                    key=key,
+                    expected=expected,
+                    runtime_kind=runtime,
                 )
                 == expected
             )
@@ -96,9 +96,9 @@ def test_checkpoint_payload_version_requires_an_exact_integer_scalar():
         with pytest.raises(ValueError, match="historical checkpoints require offline migration"):
             require_exact_payload_version(
                 {key: np.int64(expected - 1)},
-                key,
-                expected,
-                runtime=runtime,
+                key=key,
+                expected=expected,
+                runtime_kind=runtime,
             )
 
         for malformed in (
@@ -110,9 +110,9 @@ def test_checkpoint_payload_version_requires_an_exact_integer_scalar():
             with pytest.raises(TypeError, match="exact integer scalar"):
                 require_exact_payload_version(
                     {key: malformed},
-                    key,
-                    expected,
-                    runtime=runtime,
+                    key=key,
+                    expected=expected,
+                    runtime_kind=runtime,
                 )
 
 
@@ -173,6 +173,11 @@ def _authorize_identity_runtime(sim, compiled):
     sim._execution_context = context
     sim._step_strategy = authored._step_strategy
     sim._step_transaction_plan = authored.transaction_plan()
+    sim._temporal_restart_state.configure_program(
+        authored.temporal_manifest(),
+        time=sim.time(),
+        macro_step=sim.macro_step(),
+    )
     snapshot = BoundSnapshot(
         semantic_identity=compiled.semantic_identity,
         artifact_identity=compiled.artifact_identity,

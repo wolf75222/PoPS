@@ -29,6 +29,8 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 
+#include "amr_tagging_test_authority.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -96,7 +98,7 @@ Result run(int n, int nsteps, double dt, bool distribute) {
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
                      "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   sys.set_poisson("charge_density", "geometric_mg");
-  sys.set_refinement(1.2);
+  test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
   sys.set_density("gas", rho);
   test::install_forward_euler_program(sys);
 
@@ -154,7 +156,7 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
                      Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}}, "minmod",
                      "rusanov", "conservative", "explicit", /*gamma=*/1.4);
   probe.set_poisson("charge_density", "geometric_mg");
-  probe.set_refinement(1.2);
+  test::install_prepared_threshold_union(probe, {{"gas", "rho", 1.2}});
   probe.set_density("gas", four_bubbles(n));
   test::install_forward_euler_program(probe);
   const double dt_cfl = probe.step_cfl(0.4);

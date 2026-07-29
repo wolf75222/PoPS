@@ -143,6 +143,21 @@ def test_topology_serializes_explicit_periodic_identification_and_physical_parti
     assert json.loads(json.dumps(topology.inspect())) == topology.inspect()
 
 
+def test_topology_serializes_axis_permuted_xlo_to_yhi_identification():
+    x_min, x_max, y_min, y_max = _boundaries()
+    periodic = PeriodicIdentification(
+        x_min, y_max, PeriodicOrientation((1, 0), (1, 1)))
+    topology = BoundaryTopology(
+        OwnerPath.case("main"), (x_min, x_max, y_min, y_max),
+        (periodic,), (x_max, y_min))
+
+    row = topology.canonical_identity()["periodic"][0]
+    assert row["source"]["orientation"]["axis"] == 0
+    assert row["target"]["orientation"]["axis"] == 1
+    assert row["orientation"] == {
+        "schema_version": 1, "permutation": [1, 0], "signs": [1, 1]}
+
+
 def test_topology_fails_loud_on_missing_double_extra_and_periodic_physical():
     x_min, x_max, y_min, y_max = _boundaries()
     periodic = PeriodicIdentification(
@@ -164,6 +179,9 @@ def test_topology_fails_loud_on_missing_double_extra_and_periodic_physical():
     with pytest.raises(ValueError, match="axis mapping"):
         PeriodicIdentification(
             x_min, y_max, PeriodicOrientation((0, 1), (1, 1)))
+    with pytest.raises(ValueError, match="normal sign"):
+        PeriodicIdentification(
+            x_min, x_max, PeriodicOrientation((0, 1), (-1, 1)))
 
 
 def test_ports_are_typed_owner_qualified_and_representation_explicit():

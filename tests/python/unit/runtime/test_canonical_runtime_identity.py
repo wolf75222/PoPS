@@ -20,6 +20,7 @@ from pops.runtime._checkpoint_manifest import (
     IDENTITY_KEY,
     MANIFEST_KEY,
     authenticate_checkpoint_payload,
+    inspect_checkpoint_payload_integrity,
     seal_checkpoint_payload,
 )
 from pops.runtime._run_manifest import RunManifest
@@ -270,6 +271,45 @@ def test_run_identity_changes_only_with_effective_controls():
     assert first.run_identity != changed.run_identity
 
 
+def test_run_identity_authenticates_restart_continuation_lineage():
+    bind = _bound_snapshot().bind_identity
+    controls = {
+        "t_end": 1.0,
+        "step_transaction": _run_control(0.4),
+        "max_steps": 10,
+        "output_mode": "current-directory",
+    }
+    recorded = make_identity("run", {"continuation": "recorded"})
+    regridded = make_identity("run", {"continuation": "regridded"})
+
+    exact = RunManifest(
+        bind_identity=bind,
+        continuation_identity=recorded,
+        start_time=0.5,
+        start_macro_step=5,
+        controls=controls,
+    )
+    transformed = RunManifest(
+        bind_identity=bind,
+        continuation_identity=regridded,
+        start_time=0.5,
+        start_macro_step=5,
+        controls=controls,
+    )
+
+    assert exact.run_identity != transformed.run_identity
+    assert exact.to_dict()["payload"]["continuation_identity"] == recorded.token
+    assert RunManifest.from_dict(exact.to_dict()).to_dict() == exact.to_dict()
+    with pytest.raises(TypeError, match="continuation_identity"):
+        RunManifest(
+            bind_identity=bind,
+            continuation_identity=make_identity("restart", {}),
+            start_time=0.5,
+            start_macro_step=5,
+            controls=controls,
+        )
+
+
 def test_run_manifest_strict_round_trip_and_no_numeric_coercion():
     bind = _bound_snapshot().bind_identity
     manifest = RunManifest(
@@ -360,6 +400,12 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
         def __contains__(self, key):
             return key in payload
 
+    inspected_manifest, inspected_restart = inspect_checkpoint_payload_integrity(
+        PayloadView(),
+        runtime_kind="uniform",
+    )
+    assert inspected_restart == restart
+    assert inspected_manifest["runtime_kind"] == "uniform"
     assert authenticate_checkpoint_payload(owner, PayloadView(), runtime_kind="uniform") == restart
     assert str(payload[IDENTITY_KEY]) == restart.token
     manifest = json.loads(payload[MANIFEST_KEY])

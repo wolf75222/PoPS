@@ -204,6 +204,14 @@ static void install_history_state_authorities(AmrSystem& sim) {
   }
 }
 
+static void install_history_threshold_union(AmrSystem& sim, double threshold) {
+  test::install_prepared_threshold_union(
+      sim, {{"a", "n", threshold, test::PreparedThresholdRelation::Above,
+             "test://amr-history/block/a/state/U"},
+            {"b", "n", threshold, test::PreparedThresholdRelation::Above,
+             "test://amr-history/block/b/state/U"}});
+}
+
 static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio = kAmrRefRatio) {
   AmrBuildParams bp;
   bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
@@ -237,7 +245,7 @@ static AmrRuntime* configure_native_ab2_regrid_system(AmrSystem& sim, int n,
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.2);
+  install_history_threshold_union(sim, 1.2);
   const auto neutral_density = blob(n, 0.35, 0.5, 0.5, 1.0, 0.12);
   sim.set_density("a", neutral_density);
   sim.set_density("b", neutral_density);
@@ -258,7 +266,10 @@ static void install_native_ab2_program(AmrSystem& system,
   context.install([&context, after_level = std::move(after_level)](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&context, &after_level](double level_dt) {
       context.set_stage_time(0, 1);
-      (void)context.solve_fields();
+      {
+        auto outcome = context.solve_fields();
+        (void)outcome.consume(SolveConsumption::kAccept);
+      }
       MultiFab& state = context.state(0);
       MultiFab rate = context.rhs_scratch_like(state);
       context.rhs_into(0, state, rate, 17);
@@ -294,7 +305,7 @@ static void install_transaction_probe_program(AmrSystem& system,
                    after_hierarchy = std::move(after_hierarchy)](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&context](double level_dt) {
       context.set_stage_time(0, 1);
-      (void)context.solve_fields();
+      (void)consume_solve_outcome(context.solve_fields());
       std::vector<MultiFab*> states;
       std::vector<MultiFab*> rates;
       states.reserve(static_cast<std::size_t>(context.n_blocks()));
@@ -398,6 +409,83 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
   detail::AmrHistoryOps::rotate_histories(rt);
   EXPECT_EQ(detail::AmrHistoryOps::fill_count(rt, "R"), 2)
       << "the conservative per-level count reaches full depth together";
+}
+
+TEST(test_amr_history_ring, CommitManySnapshotsSourcesThatAreAlsoTargetsOnAFlatHierarchy) {
+  constexpr int n = 16;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  cfg.level_count = 2;
+  cfg.explicit_bootstrap = true;
+  AmrSystem sim(cfg);
+  install_history_state_authorities(sim);
+  sim.set_temporal_relations({1}, {1}, {"integral_only"});
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  const auto neutral_density = blob(n, 0.35, 0.5, 0.5, 1.0, 0.12);
+  sim.set_density("a", neutral_density);
+  sim.set_density("b", neutral_density);
+  sim.set_program_block_map({0, 1});
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* rt = sim.engine();
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 1);
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.set_level(0);
+  ASSERT_FALSE(context.capturing());
+  MultiFab first = rt->level_state(0, 0);
+  MultiFab second = rt->level_state(1, 0);
+  first.set_val(Real(5));
+  second.set_val(Real(11));
+
+  context.commit_many({{&first, &second}, {&second, &first}});
+
+  ASSERT_GT(first.local_size(), 0);
+  ASSERT_GT(second.local_size(), 0);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(11));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(5));
+
+  MultiFab different_ghost_width(first.box_array(), first.dmap(), first.ncomp(),
+                                 first.n_grow() + 1);
+  different_ghost_width.set_val(Real(17));
+  context.commit_many({{&first, &different_ghost_width}});
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(17));
+
+  MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
+  EXPECT_THROW(context.commit_many({{&first, &wrong_components}}), std::invalid_argument);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(17));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(5));
+}
+
+TEST(test_amr_history_ring, CommitManyRejectsAliasedSourcesBeforeMultilevelPublication) {
+  constexpr int n = 8;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 2);
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.set_level(0);
+  ASSERT_TRUE(context.capturing());
+
+  MultiFab first = rt->level_state(0, 0);
+  MultiFab second = rt->level_state(1, 0);
+  first.set_val(Real(19));
+  second.set_val(Real(23));
+  EXPECT_THROW(context.commit_many({{&first, &second}, {&second, &first}}), std::invalid_argument);
+
+  ASSERT_GT(first.local_size(), 0);
+  ASSERT_GT(second.local_size(), 0);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(19));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(23));
 }
 
 TEST(test_amr_history_ring, CheckpointRoundTrip) {
@@ -701,6 +789,44 @@ TEST(test_amr_history_ring, BootstrapRefreshFailureRollsBackAcceptedStateAndCanR
   EXPECT_EQ(sim.program_accepted_state_revision(), revision_before + 1);
 }
 
+TEST(test_amr_history_ring, FineFieldReuseWaitsForCoarseOutcomeConsumption) {
+  constexpr int n = 8;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* runtime = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
+  ASSERT_NE(runtime, nullptr);
+  ASSERT_EQ(runtime->nlev(), 2);
+
+  runtime::program::AmrProgramContext context(runtime, &sim);
+  context.configure_primary_clock("clock.macro");
+  context.set_level(0);
+  SolveOutcome coarse = context.solve_fields();
+  ASSERT_TRUE(coarse.report().solved_value_available()) << coarse.report().reason;
+
+  context.set_level(1);
+  EXPECT_THROW((void)context.solve_fields(), std::logic_error)
+      << "a cached report must not expose the private coarse candidate before Accept";
+
+  MultiFab& destination = runtime->phi();
+  const BoxArray boxes = destination.box_array();
+  const DistributionMapping mapping = destination.dmap();
+  const int components = destination.ncomp();
+  const int ghosts = destination.n_grow();
+  destination = MultiFab(boxes, mapping, components, ghosts + 1);
+  context.set_level(0);
+  EXPECT_THROW((void)coarse.consume(SolveConsumption::kAccept), std::logic_error)
+      << "delayed Accept must validate the outer AMR field publication layout";
+  destination = MultiFab(boxes, mapping, components, ghosts);
+  EXPECT_TRUE(coarse.consume(SolveConsumption::kAccept).solved_value_available());
+  context.set_level(1);
+  SolveOutcome fine = context.solve_fields();
+  EXPECT_TRUE(fine.consume(SolveConsumption::kAccept).solved_value_available());
+}
+
 TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace) {
   constexpr int n = 8;
   constexpr double dt = 1.0e-4;
@@ -749,7 +875,10 @@ TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace)
   bool measured_coarse_capture = false;
   context.advance_hierarchy(dt, [&](double level_dt) {
     context.set_stage_time(0, 1);
-    (void)context.solve_fields();
+    {
+      auto outcome = context.solve_fields();
+      (void)outcome.consume(SolveConsumption::kAccept);
+    }
     MultiFab& state = context.state(0);
     MultiFab& rate = context.rhs_scratch(17, 0, state);
     Real* const rate_storage = rate.local_size() > 0 ? rate.fab(0).array().p : nullptr;
@@ -1001,7 +1130,7 @@ TEST(test_amr_history_ring, LaggedFluxTopologyTracksActiveDepthWithinResolvedCap
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "dirichlet");
-  sim.set_refinement(1.2);
+  install_history_threshold_union(sim, 1.2);
   const auto neutral_density = blob(n, 0.5, 0.5, 0.5, 1.0, 0.12);
   sim.set_density("a", neutral_density);
   sim.set_density("b", neutral_density);
@@ -1106,7 +1235,7 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.2);
+  install_history_threshold_union(sim, 1.2);
   sim.set_density("a", blob(n, 0.35, 0.5, 0.5, 1.0, 0.12));
   sim.set_density("b", blob(n, 0.65, 0.5, 0.5, 1.0, 0.12));
   sim.set_program_block_map({0, 1});
@@ -1134,7 +1263,10 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
         [&context, &initial_patches, &lagged_rate_before_regrid, &lagged_rate_spread_after_regrid,
          &nonflux_carry_kept_old_fine_overlap, rt, n](double level_dt) {
           context.set_stage_time(0, 1);
-          (void)context.solve_fields();
+          {
+            auto outcome = context.solve_fields();
+            (void)outcome.consume(SolveConsumption::kAccept);
+          }
           MultiFab& state = context.state(0);
           if (context.level() == 1 && context.history_flux_topology_rebind_count() == 1) {
             const std::vector<double> carry =
@@ -1414,7 +1546,7 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.2);
+  install_history_threshold_union(sim, 1.2);
   sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
   sim.set_density("b", blob(n, 0.75, 0.5, 1.0, 1.0, 0.06));
   sim.set_program_block_map({0, 1});
@@ -1494,7 +1626,7 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.2);
+  install_history_threshold_union(sim, 1.2);
   sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
   sim.set_density("b", blob(n, 0.75, 0.5, 1.0, 1.0, 0.06));
   sim.set_program_block_map({0, 1});
@@ -1568,7 +1700,7 @@ TEST(test_amr_history_ring, FineNonFiniteAfterCoarseSuccessRestoresCompleteAccep
                          quadratic_growth_block_builder(), "quadratic");
   sim.set_density("quadratic", std::vector<double>(static_cast<std::size_t>(n) * n, 1.0));
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
-  sim.set_refinement(1.0e29);
+  test::install_prepared_threshold_union(sim, {{"quadratic", "u", 1.0e29}});
   sim.set_temporal_relations({2}, {1}, {"integral_only"});
   sim.set_program_block_map({0});
   sim.install_program_step([](double) {});
@@ -1599,7 +1731,7 @@ TEST(test_amr_history_ring, FineNonFiniteAfterCoarseSuccessRestoresCompleteAccep
   context.install([&](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&](double level_dt) {
       context.set_stage_time(0, 1);
-      const SolveReport field_report = context.solve_fields();
+      const SolveReport field_report = consume_solve_outcome(context.solve_fields());
       if (!field_report.solved())
         throw std::runtime_error("quadratic rollback fixture field solve did not succeed");
       if (context.level() == 0)

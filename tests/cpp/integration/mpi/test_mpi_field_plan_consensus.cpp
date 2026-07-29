@@ -6,7 +6,9 @@
 
 #include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/runtime/amr_system.hpp>
@@ -137,14 +139,29 @@ enum class SolveReportFault {
   None,
   OutcomeOnRankOne,
   ReasonBytesOnRankOne,
+  EvaluationsOnRankOne,
+  SafeguardStepsOnRankOne,
+  StepNormOnRankOne,
+  ConditionEvidenceOnRankOne,
+  FailedIOnRankOne,
+  FailedJOnRankOne,
+  FailedComponentOnRankOne,
+  ThrowWithStaleReject,
 };
 
 SolveReport make_consensus_report(SolveReportFault fault) {
   SolveReport report;
   report.iters = 1;
+  report.evaluations = 2;
+  report.safeguard_steps = 3;
   report.rel_residual = Real(0.125);
   report.reference_residual_norm = Real(8);
   report.residual_norm = Real(1);
+  report.step_norm = Real(0.5);
+  report.condition_evidence = Real(4);
+  report.failed_i = -1;
+  report.failed_j = -1;
+  report.failed_component = -1;
   if (fault == SolveReportFault::OutcomeOnRankOne && my_rank() == 1) {
     report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt,
                        "rank-one-failed");
@@ -155,7 +172,81 @@ SolveReport make_consensus_report(SolveReportFault fault) {
   } else {
     report.mark_solved("collective-solved");
   }
+  if (my_rank() == 1) {
+    switch (fault) {
+      case SolveReportFault::EvaluationsOnRankOne:
+        ++report.evaluations;
+        break;
+      case SolveReportFault::SafeguardStepsOnRankOne:
+        ++report.safeguard_steps;
+        break;
+      case SolveReportFault::StepNormOnRankOne:
+        report.step_norm *= Real(2);
+        break;
+      case SolveReportFault::ConditionEvidenceOnRankOne:
+        report.condition_evidence *= Real(2);
+        break;
+      case SolveReportFault::FailedIOnRankOne:
+        report.failed_i = 0;
+        break;
+      case SolveReportFault::FailedJOnRankOne:
+        report.failed_j = 0;
+        break;
+      case SolveReportFault::FailedComponentOnRankOne:
+        report.failed_component = 0;
+        break;
+      case SolveReportFault::None:
+      case SolveReportFault::OutcomeOnRankOne:
+      case SolveReportFault::ReasonBytesOnRankOne:
+      case SolveReportFault::ThrowWithStaleReject:
+        break;
+    }
+  }
   return report;
+}
+
+struct RankLocalFallibleSource {
+  using State = StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  ImplicitEvaluationStatus rank_one_status = ImplicitEvaluationStatus::kOk;
+  std::uint32_t reason = 0;
+
+  POPS_HD State source(const State& state, const Aux&) const { return State{-state[0]}; }
+
+  POPS_HD ImplicitEvaluationResult evaluate_source(const State& state, const Aux& aux,
+                                                   State& output) const {
+    output = State{-state[0]};
+    if (aux.phi <= Real(0.5))
+      return ImplicitEvaluationResult::ok();
+    switch (rank_one_status) {
+      case ImplicitEvaluationStatus::kOk:
+        return ImplicitEvaluationResult::ok();
+      case ImplicitEvaluationStatus::kRetry:
+        return ImplicitEvaluationResult::retry(reason);
+      case ImplicitEvaluationStatus::kReject:
+        return ImplicitEvaluationResult::reject(reason);
+      case ImplicitEvaluationStatus::kFailed:
+        return ImplicitEvaluationResult::failed(reason);
+      case ImplicitEvaluationStatus::kInvalid:
+        return ImplicitEvaluationResult::invalid(reason);
+    }
+    return ImplicitEvaluationResult::invalid(reason);
+  }
+};
+
+bool local_field_equals(const MultiFab& field, Real expected) {
+  for (int local_index = 0; local_index < field.local_size(); ++local_index) {
+    const ConstArray4 values = field.fab(local_index).const_array();
+    const Box2D box = field.box(local_index);
+    for (int component = 0; component < field.ncomp(); ++component)
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+          if (values(i, j, component) != expected)
+            return false;
+  }
+  return true;
 }
 
 class ConsensusHierarchyPrepared final : public runtime::program::PreparedHierarchyTensorSolver {
@@ -172,6 +263,7 @@ class ConsensusHierarchyPrepared final : public runtime::program::PreparedHierar
   runtime::program::HierarchyTensorSolverExecutionPath execution_path() const noexcept override {
     return runtime::program::HierarchyTensorSolverExecutionPath::DirectProvider;
   }
+  int level_count() const noexcept override { return 0; }
   MultiFab& assembly_target(std::string_view, int) override {
     throw std::logic_error("report-only MPI provider has no field storage");
   }
@@ -190,7 +282,18 @@ class ConsensusHierarchyPrepared final : public runtime::program::PreparedHierar
 
 class ConsensusAmrFieldPrepared final : public AmrPreparedFieldSolver {
  public:
-  explicit ConsensusAmrFieldPrepared(SolveReportFault fault) : fault_(fault) {}
+  explicit ConsensusAmrFieldPrepared(SolveReportFault fault)
+      : fault_(fault),
+        boxes_(BoxArray::from_domain(Box2D::from_extents(4, 4), 2)),
+        mapping_(boxes_.size(), n_ranks()),
+        rhs_(boxes_, mapping_, 1, 0),
+        phi_(boxes_, mapping_, 1, 0) {
+    rhs_.set_val(Real(0));
+    phi_.set_val(Real(0));
+    if (fault_ == SolveReportFault::ThrowWithStaleReject)
+      report_.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt,
+                          "stale-prior-reject");
+  }
 
   std::string_view provider_identity() const noexcept override {
     return "pops.test.mpi-consensus-amr-field";
@@ -203,14 +306,13 @@ class ConsensusAmrFieldPrepared final : public AmrPreparedFieldSolver {
   FieldDistribution level_distribution(int) const override {
     return FieldDistribution::Distributed;
   }
-  MultiFab& rhs_level(int) override {
-    throw std::logic_error("report-only AMR field provider has no field storage");
-  }
-  MultiFab& phi_level(int) override {
-    throw std::logic_error("report-only AMR field provider has no field storage");
-  }
+  MultiFab& rhs_level(int) override { return rhs_; }
+  MultiFab& phi_level(int) override { return phi_; }
+  void set_phi_layout_drift(bool drift) { phi_ = MultiFab(boxes_, mapping_, 1, drift ? 1 : 0); }
   void set_boundary_context(const FieldBoundaryExecutionContext&) override {}
   SolveReport solve() override {
+    if (fault_ == SolveReportFault::ThrowWithStaleReject)
+      throw std::runtime_error("unknown failure after a prior rejected attempt");
     report_ = make_consensus_report(fault_);
     return report_;
   }
@@ -218,7 +320,28 @@ class ConsensusAmrFieldPrepared final : public AmrPreparedFieldSolver {
 
  private:
   SolveReportFault fault_;
+  BoxArray boxes_;
+  DistributionMapping mapping_;
+  MultiFab rhs_;
+  MultiFab phi_;
   SolveReport report_{};
+};
+
+struct RankLocalPublication {
+  bool layout_valid = true;
+  bool accepted = false;
+  bool rejected = false;
+
+  static void validate(void* context) {
+    if (!static_cast<RankLocalPublication*>(context)->layout_valid)
+      throw std::logic_error("rank-local destination layout drift");
+  }
+  static void accept(void* context) noexcept {
+    static_cast<RankLocalPublication*>(context)->accepted = true;
+  }
+  static void reject(void* context) {
+    static_cast<RankLocalPublication*>(context)->rejected = true;
+  }
 };
 
 bool elliptic_request_rejected(
@@ -365,8 +488,9 @@ int run_field_plan_consensus(int argc, char** argv) {
   {
     ConsensusHierarchyPrepared solver(SolveReportFault::None);
     try {
-      const SolveReport report = runtime::program::solve_prepared_hierarchy_tensor_collectively(
+      SolveOutcome outcome = runtime::program::solve_prepared_hierarchy_tensor_collectively(
           solver, {Real(1.0e-8), Real(0), 4});
+      const SolveReport report = outcome.consume(SolveConsumption::kAccept);
       require(report.solved());
       require(report.reason == "collective-solved");
     } catch (...) {
@@ -374,7 +498,11 @@ int run_field_plan_consensus(int argc, char** argv) {
     }
   }
   for (const SolveReportFault fault :
-       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne}) {
+       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne,
+        SolveReportFault::EvaluationsOnRankOne, SolveReportFault::SafeguardStepsOnRankOne,
+        SolveReportFault::StepNormOnRankOne, SolveReportFault::ConditionEvidenceOnRankOne,
+        SolveReportFault::FailedIOnRankOne, SolveReportFault::FailedJOnRankOne,
+        SolveReportFault::FailedComponentOnRankOne}) {
     ConsensusHierarchyPrepared solver(fault);
     bool rejected = false;
     bool exact_error = false;
@@ -396,7 +524,8 @@ int run_field_plan_consensus(int argc, char** argv) {
   {
     ConsensusAmrFieldPrepared solver(SolveReportFault::None);
     try {
-      const SolveReport report = solve_prepared_amr_field_solver_collectively(solver);
+      SolveOutcome outcome = solve_prepared_amr_field_solver_collectively(solver);
+      const SolveReport report = outcome.consume(SolveConsumption::kAccept);
       require(report.solved());
       require(report.reason == "collective-solved");
     } catch (...) {
@@ -404,7 +533,11 @@ int run_field_plan_consensus(int argc, char** argv) {
     }
   }
   for (const SolveReportFault fault :
-       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne}) {
+       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne,
+        SolveReportFault::EvaluationsOnRankOne, SolveReportFault::SafeguardStepsOnRankOne,
+        SolveReportFault::StepNormOnRankOne, SolveReportFault::ConditionEvidenceOnRankOne,
+        SolveReportFault::FailedIOnRankOne, SolveReportFault::FailedJOnRankOne,
+        SolveReportFault::FailedComponentOnRankOne}) {
     ConsensusAmrFieldPrepared solver(fault);
     bool rejected = false;
     bool exact_error = false;
@@ -418,6 +551,184 @@ int run_field_plan_consensus(int argc, char** argv) {
     }
     require(rejected);
     require(exact_error);
+  }
+  {
+    ConsensusAmrFieldPrepared solver(SolveReportFault::ThrowWithStaleReject);
+    bool rejected = false;
+    bool exact_error = false;
+    try {
+      (void)solve_prepared_amr_field_solver_collectively(solver);
+    } catch (const std::runtime_error& error) {
+      rejected = true;
+      exact_error = std::string_view(error.what()) ==
+                    "AMR field-solver provider failed on at least one MPI rank";
+    } catch (...) {
+    }
+    require(rejected);
+    require(exact_error);
+  }
+
+  // A rank-local cell failure must become one communicator-wide nonlinear decision before any
+  // locally converged candidate or diagnostics can be published. Rank zero converges each case;
+  // rank one asks for retry, reject, or fail through the device-safe source-evaluation contract.
+  {
+    const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(4, 2), 2);
+    const DistributionMapping mapping(boxes.size(), ranks);
+    struct FailureCase {
+      ImplicitEvaluationStatus status;
+      SolveAction action;
+      SolveConsumption consumption;
+      std::string_view reason_fragment;
+    };
+    const FailureCase cases[] = {
+        {ImplicitEvaluationStatus::kRetry, SolveAction::kRejectAttempt,
+         SolveConsumption::kRejectAttempt, "evaluation_retry"},
+        {ImplicitEvaluationStatus::kReject, SolveAction::kRejectAttempt,
+         SolveConsumption::kRejectAttempt, "evaluation_reject"},
+        {ImplicitEvaluationStatus::kFailed, SolveAction::kFailRun, SolveConsumption::kFailRun,
+         "evaluation_failed"},
+    };
+    constexpr std::uint32_t reason = 0x75000001u;
+    for (const FailureCase& failure : cases) {
+      MultiFab state(boxes, mapping, 1, 0);
+      state.set_val(Real(3));
+      MultiFab aux(boxes, mapping, 3, 0);
+      aux.set_val(static_cast<Real>(rank));
+      NewtonReport diagnostics;
+      diagnostics.max_residual = Real(42);
+
+      SolveOutcome outcome =
+          backward_euler_source(RankLocalFallibleSource{failure.status, reason}, aux, state,
+                                Real(0.1), NewtonOptions{}, {}, &diagnostics);
+      require(outcome.report().status == SolveStatus::kInvalidEvaluation);
+      require(outcome.report().action == failure.action);
+      require(outcome.report().reason.find(failure.reason_fragment) != std::string::npos);
+      require(outcome.report().reason.find(std::to_string(reason)) != std::string::npos);
+      ExactSolveReportConsensusScratch consensus;
+      require(consensus.agrees(outcome.report()));
+      require(local_field_equals(state, Real(3)));
+      require(!diagnostics.enabled);
+      require(diagnostics.max_residual == Real(42));
+
+      const SolveReport consumed = outcome.consume(failure.consumption);
+      require(consumed.action == failure.action);
+      require(local_field_equals(state, Real(3)));
+      require(!diagnostics.enabled);
+      require(diagnostics.max_residual == Real(42));
+    }
+  }
+
+  {
+    SolveReport solved;
+    solved.mark_solved("rank-local-publication");
+    RankLocalPublication publication{rank == 0, false};
+    SolveOutcome outcome = SolveOutcome::collective_world(
+        std::move(solved), SolveOutcome::PublicationHooks{&publication,
+                                                          &RankLocalPublication::accept,
+                                                          nullptr,
+                                                          nullptr,
+                                                          {},
+                                                          &RankLocalPublication::validate});
+    bool rejected = false;
+    bool exact_error = false;
+    try {
+      (void)outcome.consume(SolveConsumption::kAccept);
+    } catch (const std::logic_error& error) {
+      rejected = true;
+      exact_error = std::string_view(error.what()) ==
+                    "SolveOutcome accept validation failed on at least one MPI rank";
+    } catch (...) {
+    }
+    require(rejected);
+    require(exact_error);
+    require(!publication.accepted);
+
+    publication.layout_valid = true;
+    require(outcome.consume(SolveConsumption::kAccept).solved());
+    require(publication.accepted);
+  }
+
+  // Consumption is itself a publication collective. A rank-divergent action is rejected before any
+  // rank can accept/reject, and the same intact outcome can then be consumed consistently.
+  {
+    ConsensusHierarchyPrepared solver(SolveReportFault::None);
+    SolveOutcome outcome = runtime::program::solve_prepared_hierarchy_tensor_collectively(
+        solver, {Real(1.0e-8), Real(0), 4});
+    bool rejected = false;
+    try {
+      (void)outcome.consume(rank == 0 ? SolveConsumption::kAccept : SolveConsumption::kFailRun);
+    } catch (const std::logic_error& error) {
+      rejected = std::string_view(error.what()) ==
+                 "SolveOutcome consumption action differs between MPI ranks";
+    } catch (...) {
+    }
+    require(rejected);
+    require(outcome.consume(SolveConsumption::kAccept).solved());
+  }
+
+  {
+    ConsensusAmrFieldPrepared solver(SolveReportFault::None);
+    SolveOutcome outcome = solve_prepared_amr_field_solver_collectively(solver);
+    bool rejected = false;
+    try {
+      (void)outcome.consume(rank == 0 ? SolveConsumption::kAccept
+                                      : SolveConsumption::kRejectAttempt);
+    } catch (const std::logic_error& error) {
+      rejected = std::string_view(error.what()) ==
+                 "SolveOutcome consumption action differs between MPI ranks";
+    } catch (...) {
+    }
+    require(rejected);
+    require(outcome.consume(SolveConsumption::kAccept).solved());
+  }
+  {
+    ConsensusAmrFieldPrepared solver(SolveReportFault::None);
+    SolveOutcome outcome = solve_prepared_amr_field_solver_collectively(solver);
+    solver.set_phi_layout_drift(rank == 0);
+    bool rejected = false;
+    bool exact_error = false;
+    try {
+      (void)outcome.consume(SolveConsumption::kAccept);
+    } catch (const std::logic_error& error) {
+      rejected = true;
+      exact_error = std::string_view(error.what()) ==
+                    "SolveOutcome accept validation failed on at least one MPI rank";
+    } catch (...) {
+    }
+    require(rejected);
+    require(exact_error);
+    solver.set_phi_layout_drift(false);
+    require(outcome.consume(SolveConsumption::kAccept).solved());
+  }
+  {
+    SolveReport divergent = make_consensus_report(SolveReportFault::OutcomeOnRankOne);
+    RankLocalPublication publication;
+    SolveOutcome outcome = SolveOutcome::collective_world(
+        std::move(divergent),
+        SolveOutcome::PublicationHooks{&publication, &RankLocalPublication::accept,
+                                       &RankLocalPublication::reject, nullptr});
+    bool rejected = false;
+    bool exact_error = false;
+    try {
+      (void)outcome.consume(SolveConsumption::kAccept);
+    } catch (const std::logic_error& error) {
+      rejected = true;
+      exact_error = std::string_view(error.what()) ==
+                    "SolveOutcome report disposition differs between MPI ranks";
+    } catch (...) {
+    }
+    require(rejected);
+    require(exact_error);
+    require(!publication.accepted);
+    require(publication.rejected);
+    bool already_consumed = false;
+    try {
+      (void)outcome.consume(SolveConsumption::kAccept);
+    } catch (const std::logic_error& error) {
+      already_consumed = std::string_view(error.what()) == "SolveOutcome has already been consumed";
+    } catch (...) {
+    }
+    require(already_consumed);
   }
 
   // A malformed or divergent elliptic layout is rejected collectively before an arbitrary backend

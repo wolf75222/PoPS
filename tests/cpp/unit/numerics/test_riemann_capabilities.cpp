@@ -187,6 +187,75 @@ struct IsoHLLC {
   }
 };
 
+template <int Dimension>
+struct DimensionalIsoHLLC {
+  static_assert(Dimension >= 1 && Dimension <= 3);
+
+  using State = pops::StateVec<Dimension + 2>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = Dimension + 2;
+  static constexpr int tracer_component = Dimension + 1;
+  Real cs2 = Real(0.5);
+
+  POPS_HD State flux(const State& value, const Aux&, int axis) const {
+    const int normal = axis + 1;
+    const Real normal_velocity = value[normal] / value[0];
+    State result{};
+    result[0] = value[normal];
+    for (int component = 0; component < Dimension; ++component)
+      result[component + 1] = value[component + 1] * normal_velocity;
+    result[normal] += pressure(value);
+    result[tracer_component] = value[tracer_component] * normal_velocity;
+    return result;
+  }
+
+  POPS_HD Real max_wave_speed(const State& value, const Aux&, int axis) const {
+    const Real normal_velocity = value[axis + 1] / value[0];
+    const Real absolute_velocity = normal_velocity < Real(0) ? -normal_velocity : normal_velocity;
+    return absolute_velocity + std::sqrt(cs2);
+  }
+
+  POPS_HD void wave_speeds(const State& value, const Aux&, int axis, Real& lower,
+                           Real& upper) const {
+    const Real normal_velocity = value[axis + 1] / value[0];
+    const Real sound_speed = std::sqrt(cs2);
+    lower = normal_velocity - sound_speed;
+    upper = normal_velocity + sound_speed;
+  }
+
+  POPS_HD Real pressure(const State& value) const { return cs2 * value[0]; }
+
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real lower, Real upper, int axis) const {
+    const int normal = axis + 1;
+    const Real density_left = left[0];
+    const Real density_right = right[0];
+    const Real velocity_left = left[normal] / density_left;
+    const Real velocity_right = right[normal] / density_right;
+    return (pressure_right - pressure_left +
+            density_left * velocity_left * (lower - velocity_left) -
+            density_right * velocity_right * (upper - velocity_right)) /
+           (density_left * (lower - velocity_left) - density_right * (upper - velocity_right));
+  }
+
+  POPS_HD State hllc_star_state(const State& value, Real, Real speed, Real contact,
+                                int axis) const {
+    const int normal = axis + 1;
+    const Real density = value[0];
+    const Real normal_velocity = value[normal] / density;
+    const Real star_density = density * (speed - normal_velocity) / (speed - contact);
+    State result{};
+    result[0] = star_density;
+    for (int component = 0; component < Dimension; ++component) {
+      const int momentum = component + 1;
+      result[momentum] =
+          momentum == normal ? star_density * contact : star_density * (value[momentum] / density);
+    }
+    result[tracer_component] = star_density * (value[tracer_component] / density);
+    return result;
+  }
+};
+
 using State4 = pops::StateVec<4>;
 using StateIso = pops::StateVec<5>;
 
@@ -241,6 +310,8 @@ TEST(test_riemann_capabilities, compile_time_detection) {
   static_assert(pops::HasHLLCStructure<PermutedEuler>);
   static_assert(pops::HasRoeDissipation<PermutedEuler>);
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");
+  static_assert(pops::HasHLLCStructure<DimensionalIsoHLLC<1>>);
+  static_assert(pops::HasHLLCStructure<DimensionalIsoHLLC<3>>);
   SUCCEED() << "detection des capabilities (Euler a-capabilites, Hooked/Iso capability)";
 }
 
@@ -336,6 +407,55 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
   for (int dir = 0; dir < 2; ++dir) {
     const double d = maxdiff(face_density(hllc, iso, U, a, U, a, dir), iso.flux(U, a, dir));
     EXPECT_LE(d, 1e-13) << "consistance HLLC isotherme (dir " << dir << ")";
+  }
+}
+
+TEST(test_riemann_capabilities, hllc_provider_contract_is_dimension_independent) {
+  const auto assert_consistency = []<int Dimension>() {
+    DimensionalIsoHLLC<Dimension> model;
+    typename DimensionalIsoHLLC<Dimension>::State value{};
+    value[0] = Real(1.3);
+    for (int component = 0; component < Dimension; ++component)
+      value[component + 1] = Real(0.2) * Real(component + 1);
+    value[DimensionalIsoHLLC<Dimension>::tracer_component] = Real(-0.7);
+    const Aux providers{};
+    for (int axis = 0; axis < Dimension; ++axis) {
+      const auto numerical =
+          face_density(pops::HLLCFlux{}, model, value, providers, value, providers, axis);
+      EXPECT_LE(maxdiff(numerical, model.flux(value, providers, axis)), 1e-13)
+          << "HLLC consistency failed in dimension " << Dimension << " on axis " << axis;
+    }
+  };
+
+  assert_consistency.template operator()<1>();
+  assert_consistency.template operator()<3>();
+}
+
+TEST(test_riemann_capabilities, three_dimensional_tangential_contact_is_provider_owned) {
+  DimensionalIsoHLLC<3> model;
+  const Aux providers{};
+
+  for (int axis = 0; axis < 3; ++axis) {
+    DimensionalIsoHLLC<3>::State left{}, right{};
+    left[0] = right[0] = Real(1);
+    left[1] = Real(2);
+    left[2] = Real(-3);
+    left[3] = Real(4);
+    right[1] = Real(-5);
+    right[2] = Real(6);
+    right[3] = Real(-7);
+    left[DimensionalIsoHLLC<3>::tracer_component] = Real(8);
+    right[DimensionalIsoHLLC<3>::tracer_component] = Real(-9);
+    left[axis + 1] = right[axis + 1] = Real(0);
+    const auto numerical =
+        face_density(pops::HLLCFlux{}, model, left, providers, right, providers, axis);
+    for (int component = 0; component < 3; ++component) {
+      if (component != axis)
+        EXPECT_LE(std::fabs(numerical[component + 1]), 1e-14)
+            << "tangential component " << component << " diffused on axis " << axis;
+    }
+    EXPECT_LE(std::fabs(numerical[DimensionalIsoHLLC<3>::tracer_component]), 1e-14)
+        << "passive tracer diffused on axis " << axis;
   }
 }
 

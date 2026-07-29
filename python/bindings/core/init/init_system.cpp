@@ -5,6 +5,7 @@
 
 #include <pops/runtime/dynamic/component_loader.hpp>
 
+#include <array>
 #include <initializer_list>
 #include <limits>
 
@@ -114,9 +115,9 @@ void bind_system_assembly(py::class_<System>& cls) {
   cls.def(py::init<const SystemConfig&>())
       // Per-block composition: model (bricks) + spatial scheme (limiter/riemann) + time
       // (explicit/imex) + substeps. Python says WHAT, the compiled C++ does the compute.
-      // ADC-214: the Python SURFACE is UNCHANGED (same flat newton_* kwargs, same defaults). The
-      // lambda receives them flat and BUILDS the NewtonOptions POD internally before calling the
-      // new C++ method (which groups these homogeneous parameters). adc_cases sees no change.
+      // The lambda receives the flat preparation controls and builds the NewtonOptions POD before
+      // calling the grouped C++ method. Failure policy is intentionally absent: the solve is
+      // fail-closed.
       .def(
           "add_block",
           [](System& s, const std::string& name, const ModelSpec& model, const std::string& limiter,
@@ -124,16 +125,14 @@ void bind_system_assembly(py::class_<System>& cls) {
              int substeps, bool evolve, int stride, const std::vector<std::string>& implicit_vars,
              const std::vector<std::string>& implicit_roles, int newton_max_iters,
              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-             bool newton_diagnostics, double newton_damping, const std::string& newton_fail_policy,
-             double positivity_floor, bool wave_speed_cache, double weno_epsilon) {
+             bool newton_diagnostics, double newton_damping, double positivity_floor,
+             bool wave_speed_cache, double weno_epsilon) {
             NewtonOptions newton;
             newton.max_iters = newton_max_iters;
             newton.rel_tol = static_cast<Real>(newton_rel_tol);
             newton.abs_tol = static_cast<Real>(newton_abs_tol);
             newton.fd_eps = static_cast<Real>(newton_fd_eps);
             newton.damping = static_cast<Real>(newton_damping);
-            newton.fail_policy =
-                newton_fail_policy_from_string(newton_fail_policy, "System::add_block");
             s.add_block(name, model, limiter, riemann, recon, time, substeps, evolve, stride,
                         implicit_vars, implicit_roles, newton, newton_diagnostics, positivity_floor,
                         wave_speed_cache, weno_epsilon);
@@ -147,15 +146,14 @@ void bind_system_assembly(py::class_<System>& cls) {
           // bit-identical. Resolved on the C++ side against the block's names/roles (error on a missing name/role).
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // Options of the implicit IMEX source Newton (defaults = historical constants 2 / 1e-7,
-          // bit-identical). newton_diagnostics=True enables the report (newton_report(name)).
+          // Options of the implicit IMEX source Newton. newton_diagnostics=True enables the report
+          // (newton_report(name)).
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_diagnostics") = false,
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_fail_policy") = "none",
           // Zhang-Shu POSITIVITY limiter (ADC-76): density floor of the reconstructed face states
           // (conservative scaling toward the cell mean). 0 (default) = inactive,
           // bit-identical path. Requires a model exposing the Density role.
@@ -174,22 +172,26 @@ void bind_system_assembly(py::class_<System>& cls) {
              const std::vector<double>& face_values,
              const std::vector<std::string>& face_identities,
              const std::vector<std::string>& component_roles,
-             const std::vector<int>& omitted_interface_faces, const std::string& state_identity) {
-            system.install_boundary_plan(name, identity, required_depth, face_types, face_values,
-                                         face_identities, component_roles, omitted_interface_faces,
-                                         state_identity, PreparedBoundaryReadDependencies{});
+             const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+             const std::vector<std::array<int, 6>>& periodic_identifications) {
+            system.install_boundary_plan(
+                name, identity, required_depth, face_types, face_values, face_identities,
+                component_roles, omitted_interface_faces, state_identity,
+                PreparedBoundaryReadDependencies{},
+                decode_periodic_identification_rows(periodic_identifications));
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
+          py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
           "Install one resolved per-block ghost-production plan before block construction.")
       .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
            "Bind one exact state Handle identity to native block storage.")
-      .def("_install_boundary_field_route", &System::install_boundary_field_route,
+      .def("_install_field_storage_route", &System::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
-           "Bind one exact boundary field Handle to native provider storage.")
+           "Bind one exact solved-field Handle to native provider storage.")
       .def("_discard_boundary_plans", &System::discard_boundary_plans,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
@@ -346,7 +348,8 @@ void bind_system_program(py::class_<System>& cls) {
       .def("mark_bound", &System::mark_bound)
       .def("lifecycle_state", &System::lifecycle_state)
       // ADC-466 (Spec criterion 24): configured field (Poisson) solver token (the last set_poisson
-      // solver, default "geometric_mg"). install_program reads it to validate a field operator's
+      // solver (geometry-specific default: geometric_mg Cartesian, polar on a ring). install_program
+      // reads it to validate a field operator's
       // solver requirement; exposed so the unified sim.install can pre-validate host-side too.
       .def("poisson_solver", &System::poisson_solver)
       // ADC-414 (spec op 23): scalar diagnostics a compiled Program records via P.record_scalar,
@@ -354,6 +357,7 @@ void bind_system_program(py::class_<System>& cls) {
       // program_diagnostics() returns the whole name -> value dict.
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &System::program_diagnostics)
+      .def("_consume_step_projections", &System::consume_step_projections)
       // ADC-542: the native collective reduction over a named block the diagnostics driver drives to
       // fire a declared typed measure (Norm / Integral / MinMax) each cadence tick, and the sink the
       // driver records the measured scalar into (readable via program_diagnostics, same map a
@@ -761,7 +765,8 @@ void bind_system_physics(py::class_<System>& cls) {
 
 // Stepping + profiling + custom-integrator primitives (field solve, step/advance/CFL, eval_rhs/state).
 void bind_system_stepping(py::class_<System>& cls) {
-  cls.def("solve_fields", &System::solve_fields)
+  cls.def("solve_fields",
+          [](System& system) { return consume_solve_outcome(system.solve_fields()); })
       .def("step", &System::step, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)
@@ -825,10 +830,6 @@ void bind_system_stepping(py::class_<System>& cls) {
            "bound "
            "of block 'name' -- to locate a collapsing dt. On demand, off the hot path.",
            py::arg("name"))
-      .def("step_adaptive", &System::step_adaptive,
-           "Reserved fail-closed entry point. Requires an installed whole-system Program, then "
-           "raises until adaptive multirate subcycling has a ProgramGraph lowering.",
-           py::arg("cfl"))
       // Explicit host inspection/state-transfer primitives.  Production time programs execute in
       // the prepared native runtime; these bulk copies exist for initialization, checkpoints,
       // diagnostics and numerical verification, never as a per-cell Python stepping route.

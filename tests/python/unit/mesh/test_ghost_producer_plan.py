@@ -54,10 +54,14 @@ CASE = OwnerPath.case("main")
 
 
 class _ExecutableBoundaryAuthority:
+    def __init__(self):
+        self.compile_calls = 0
+
     def canonical_identity(self):
         return {"authority_type": "test_boundary_execution"}
 
     def compile_boundary_data(self):
+        self.compile_calls += 1
         return {"schema_version": 1, "authority_type": "prepared_boundary_plan_compile"}
 
     def runtime_boundary_data(self, params):
@@ -182,9 +186,26 @@ def test_mpi_halo_and_oriented_periodic_are_canonical_plan_data():
         linearization_contributions=plan.linearization_contributions)
     assert reversed_plan.canonical_id == plan.canonical_id
 
-    executable = replace(plan, execution_authority=_ExecutableBoundaryAuthority())
-    with pytest.raises(NotImplementedError, match="signed/permuted periodic"):
-        executable.compile_boundary_data()
+    # This assertion targets periodic lowering only. The fixture's synthetic implicit operators
+    # deliberately have no installed FieldBoundaryClosure component and are proved separately
+    # above, so do not make them an unrelated prerequisite of this executable-boundary check.
+    executable = replace(
+        plan,
+        execution_authority=_ExecutableBoundaryAuthority(),
+        residual_contributions=(),
+        linearization_contributions=(),
+    )
+    compiled = executable.compile_boundary_data()
+    assert compiled["periodic_identifications"] == [{
+        "source": plan.topology.periodic[0].source.canonical_identity(),
+        "target": plan.topology.periodic[0].target.canonical_identity(),
+        "source_face": 0,
+        "target_face": 1,
+        "permutation": [0, 1],
+        "signs": [1, -1],
+    }]
+    assert executable.runtime_boundary_data({})["periodic_identifications"] \
+        == compiled["periodic_identifications"]
 
 
 def test_producer_dependencies_are_a_total_acyclic_graph():
@@ -237,17 +258,46 @@ def test_coverage_manifest_is_the_authority_for_empty_missing_and_extra_regions(
             (GhostProduction(first, producer), GhostProduction(second, producer)))
 
 
-def test_missing_overlap_and_extra_producers_fail_without_order_priority():
+def test_global_missing_and_overlapping_producers_fail_before_compile_lowering():
     topology = _topology()
     first = _region("first")
     second = _region("second")
     coverage = _coverage(first, second)
+    first_producer = SameLevelHaloMPI(
+        handle=_producer_handle("halo_first"), protocol=_protocol("halo_first"),
+        mpi_capability=_h("mpi_first", "capability"))
+    second_producer = SameLevelHaloMPI(
+        handle=_producer_handle("halo_second"), protocol=_protocol("halo_second"),
+        mpi_capability=_h("mpi_second", "capability"))
+    authority = _ExecutableBoundaryAuthority()
+
+    with pytest.raises(ValueError, match="missing ghost producer"):
+        GhostProducerRegistry(first_producer).resolve(
+            topology, coverage, (first, second),
+            (GhostProduction(first, first_producer),),
+            execution_authority=authority,
+        )
+    assert authority.compile_calls == 0
+
+    with pytest.raises(ValueError, match="overlapping ghost producers for one region"):
+        GhostProducerRegistry(first_producer, second_producer).resolve(
+            topology, coverage, (first, second),
+            (
+                GhostProduction(first, first_producer),
+                GhostProduction(first, second_producer),
+                GhostProduction(second, first_producer),
+            ),
+            execution_authority=authority,
+        )
+    assert authority.compile_calls == 0
+
+
+def test_overlapping_regions_and_extra_producers_fail_without_order_priority():
+    topology = _topology()
+    first = _region("first")
     producer = SameLevelHaloMPI(
         handle=_producer_handle("halo"), protocol=_protocol("halo"),
         mpi_capability=_h("mpi", "capability"))
-    with pytest.raises(ValueError, match="missing ghost producer"):
-        GhostProducerRegistry(producer).resolve(
-            topology, coverage, (first, second), (GhostProduction(first, producer),))
     with pytest.raises(ValueError, match="overlapping ghost regions"):
         GhostProducerRegistry(producer).resolve(
             topology, _coverage(first), (first, first),

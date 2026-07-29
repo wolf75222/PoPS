@@ -52,7 +52,7 @@ def test_cache_v5_preflight_accepts_complete_payload_and_rejects_truncation():
         "cache_names": np.array([name]),
         "cache_ncomp_%d" % nid: np.array(ncomp, dtype=np.int64),
         "cache_ngrow_%d" % nid: np.array(0, dtype=np.int64),
-        "cache_last_update_%d" % nid: np.array(3, dtype=np.int64),
+        "cache_last_update_%d" % nid: np.array(2, dtype=np.int64),
         "cache_accum_dt_%d" % nid: np.array(0.0035, dtype=np.float64),
         "cache_value_%d" % nid: value,
     }

@@ -1,149 +1,94 @@
-#!/usr/bin/env python3
-"""Contrat fail-closed du masque IMEX prive apres le cutover Program-only.
+"""A partial implicit update is an exact typed source, never a component-name mask.
 
-``engine.IMEX`` et ``engine.SourceImplicit`` conservent leurs champs d'auteur historiques afin de
-valider les noms et roles au chargement d'un bloc natif. Ils ne constituent toutefois plus une
-autorite temporelle : aucun ``System.advance`` ne peut deduire un backward-Euler, un masque partiel
-ou un solveur Newton de ces descripteurs. Un vrai ``pops.Program`` portant la primitive implicite
-doit etre installe ; cette primitive n'existe pas encore pour le masque partiel natif.
-
-Le test verifie donc les seules promesses executables actuelles :
-  1. normalisation stable des noms et roles portes par les descripteurs ;
-  2. toutes les variantes IMEX refusent d'avancer sans Program, sans fallback temporel cache ;
-  3. les noms/roles absents et un masque attache a ``Explicit`` restent rejetes clairement.
+The final Program route does not accept ``implicit_vars=["rho_u", ...]``.  Such a string list is
+ambiguous across StateSpaces and used to let a block policy choose time integration behind the
+Program.  The model instead declares the complete stiff source operator: components that are not
+implicit have an exact zero contribution.  The ordinary IMEX residual then keeps those components
+equal to the stage predictor while Newton solves the selected source contribution.
 """
 
-import sys
+from __future__ import annotations
 
-import pops.runtime._engine_descriptors as engine
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+import inspect
 
-fails = 0
+import pytest
 
-
-def chk(cond, label):
-    global fails
-    ok = "OK " if cond else "XX "
-    print(f"  [{ok}] {label}")
-    if not cond:
-        fails += 1
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.lib.time import IMEX
+from pops.physics._facade import Model
+from pops.problem import Case
+from pops.solvers.nonlinear import LocalNewton
 
 
-def electron_model():
-    return engine.Model(state=engine.FluidState("compressible", gamma=1.4),
-                     transport=engine.CompressibleFlux(),
-                     source=engine.PotentialForce(charge=-50.0),
-                     elliptic=engine.ChargeDensity(charge=-1.0))
-
-
-def system_with(policy):
-    system = System(n=16, periodicity=(False, False))
-    system.add_equation(
-        "ne",
-        electron_model(),
-        spatial=engine.Spatial(minmod=True),
-        time=policy,
+def _partial_momentum_program():
+    model = Model("typed_partial_implicit")
+    rho, momentum_x, momentum_y = model.conservative_vars(
+        "rho",
+        "momentum_x",
+        "momentum_y",
+        roles=("Density", "MomentumX", "MomentumY"),
     )
-    return system
+    explicit = model.rate("transport", flux=False, sources=())
+    drag = model.source_term(
+        "momentum_drag",
+        [
+            0.0 * rho,
+            -50.0 * momentum_x,
+            -50.0 * momentum_y,
+        ],
+    )
+    state = next(handle for handle in model.declaration_index().records() if handle.kind == "state")
+    block = Case("partial_implicit_case").block("fluid", model=model, states=(state,))
+    state_instance = block[state]
+    program = IMEX(
+        state_instance,
+        explicit_operator=explicit,
+        implicit_operator=drag,
+        implicit_solver=LocalNewton(
+            tolerance=1.0e-12,
+            max_iterations=12,
+            finite_difference_step=1.0e-7,
+        ),
+    )
+    return model, state_instance, explicit, drag, program
 
 
-def expect_program_required(policy, label):
-    system = system_with(policy)
-    try:
-        system.advance(0.002, 1)
-    except RuntimeError as error:
-        message = str(error)
-        chk(
-            "installed whole-system Program" in message,
-            f"{label}: avance refusee sans Program explicite",
+def test_partial_implicit_source_is_one_authenticated_program_operator():
+    model, _state, _explicit, drag, program = _partial_momentum_program()
+
+    assert drag.kind == "local_source"
+    assert program.validate() is True
+    nodes = program._serialize()["nodes"]
+    solve = next(node for node in nodes if node["op"] == "solve_local_nonlinear")
+    sources = [node for node in solve["attrs"]["residual_block"] if node["op"] == "source"]
+    assert len(sources) == 1
+    assert sources[0]["attrs"]["source"] == "momentum_drag"
+    identity = sources[0]["attrs"]["operator_handle"]["handle"]
+    assert identity["local_id"] == drag.local_id
+    assert identity["registered_operator_name"] == drag.registered_operator_name
+
+    consume = next(node for node in nodes if node["op"] == "solve_outcome")
+    assert consume["attrs"]["action"]["kind"] == "fail_run"
+    assert len(program.commits()) == 1
+
+    generated = emit_cpp_program(program, model=model)
+    assert "pops::prepare_local_nonlinear_problem<3>" in generated
+    assert "pops::solve_prepared_local_nonlinear(prepared_, Gval)" in generated
+    assert "pops::detail::mat_inverse<3>(" not in generated
+    assert "for (int it_ = 0;" not in generated
+
+
+def test_imex_has_no_component_name_or_role_mask_surface():
+    parameters = tuple(inspect.signature(IMEX).parameters)
+    assert "implicit_vars" not in parameters
+    assert "implicit_roles" not in parameters
+
+    _model, state, explicit, drag, _program = _partial_momentum_program()
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        IMEX(
+            state,
+            explicit_operator=explicit,
+            implicit_operator=drag,
+            implicit_solver=LocalNewton(),
+            implicit_vars=("momentum_x", "momentum_y"),
         )
-        return
-    chk(False, f"{label}: un moteur temporel cache a avance sans Program")
-
-
-def add_policy(policy):
-    s = System(n=16, periodicity=(False, False))
-    s.add_equation("ne", electron_model(), spatial=engine.Spatial(minmod=True), time=policy)
-
-
-# ---- 0. attributs portes par la politique (masque cote bloc, pas modele) -------
-print("== 0. IMEX / SourceImplicit portent le masque implicite ==")
-p = engine.IMEX(substeps=2, implicit_vars=["rho_u", "rho_v"])
-chk(p.implicit_vars == ["rho_u", "rho_v"], "IMEX.implicit_vars stocke les noms")
-chk(p.implicit_roles == [], "IMEX.implicit_roles vide par defaut")
-pr = engine.IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"])
-# normalisation PascalCase -> cle stable snake_case (cf. role_from_name C++)
-chk(pr.implicit_roles == ["momentum_x", "momentum_y", "energy"],
-    "IMEX.implicit_roles normalise PascalCase -> snake_case stable")
-si = engine.SourceImplicit(implicit_vars=["E"])
-chk(si.implicit_vars == ["E"], "SourceImplicit.implicit_vars stocke les noms")
-chk(engine.IMEX().implicit_vars == [] and engine.IMEX().implicit_roles == [],
-    "IMEX() sans masque : listes vides (defaut)")
-
-# ---- 1. aucune politique de bloc ne remplace un Program -----------------------
-print("== 1. les politiques IMEX de bloc ne sont pas des moteurs temporels ==")
-expect_program_required(engine.IMEX(substeps=2), "IMEX sans masque")
-expect_program_required(
-    engine.IMEX(substeps=2, implicit_vars=["rho_u", "rho_v"]),
-    "IMEX masque par noms",
-)
-expect_program_required(
-    engine.IMEX(substeps=2, implicit_roles=["MomentumX", "MomentumY"]),
-    "IMEX masque par roles",
-)
-expect_program_required(engine.SourceImplicit(substeps=2), "SourceImplicit")
-
-# ---- 2. erreur claire si nom / role absent du bloc ----------------------------
-print("== 2. erreur explicite sur un nom / role absent ==")
-try:
-    add_policy(engine.IMEX(implicit_vars=["rho_w"]))
-    chk(False, "implicit_vars=['rho_w'] doit lever (nom absent)")
-except Exception as e:
-    msg = str(e)
-    chk("rho_w" in msg and "implicit_vars" in msg,
-        "nom absent -> erreur mentionnant 'rho_w' et 'implicit_vars'")
-
-try:
-    add_policy(engine.IMEX(implicit_roles=["Pressure"]))
-    chk(False, "implicit_roles=['Pressure'] doit lever (role absent)")
-except Exception as e:
-    msg = str(e)
-    chk("implicit_roles" in msg,
-        "role absent -> erreur mentionnant 'implicit_roles'")
-
-try:
-    add_policy(engine.IMEX(implicit_roles=["NotARole"]))
-    chk(False, "implicit_roles=['NotARole'] doit lever (role inconnu)")
-except Exception as e:
-    chk("implicit_roles" in str(e),
-        "role inconnu -> erreur explicite")
-
-# ---- 3. masque interdit hors IMEX (explicite) ---------------------------------
-print("== 3. masque rejete sur une politique non-IMEX ==")
-# ``Explicit`` ne porte pas de masque par construction. Pour exercer la validation native sans
-# appeler ``_s`` directement, on attache volontairement un attribut de masque a la valeur de
-# politique puis on passe par ``System.add_equation`` : le runtime doit refuser ce contrat incoherent
-# (le masque n'a de sens qu'en IMEX).
-try:
-    s = System(n=16, periodicity=(False, False))
-    explicit_with_mask = engine.Explicit()
-    explicit_with_mask.implicit_vars = ["rho_u"]
-    explicit_with_mask.implicit_roles = []
-    s.add_equation(
-        "ne", electron_model(),
-        spatial=engine.Spatial(minmod=True),
-        time=explicit_with_mask,
-    )
-    chk(False, "add_block(time='explicit', implicit_vars=['rho_u']) doit lever")
-except Exception as e:
-    chk("imex" in str(e).lower(),
-        "masque sur time='explicit' -> erreur mentionnant imex")
-
-# ---- Bilan -------------------------------------------------------------------
-print()
-n_chks = sum(1 for line in open(__file__) if line.strip().startswith("chk("))
-if fails == 0:
-    print("OK test_implicit_vars (%d assertions)" % n_chks)
-else:
-    print("ECHEC test_implicit_vars : %d assertion(s) en erreur" % fails)
-    sys.exit(1)

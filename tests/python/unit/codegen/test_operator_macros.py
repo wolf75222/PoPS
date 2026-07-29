@@ -199,12 +199,13 @@ def test_field_reject_attempt_codegen_filters_selected_statuses_and_fails_closed
     source = emit_cpp_program(
         program, model=model, field_plans=codegen_field_plans(program))
     start = source.index("if (!field_report_")
-    end = source.index(" action=fail_run", start)
+    end = source.index(".action_name()", start)
     guard = source[start:end]
 
     assert "SolveStatus::kIterationLimit" in guard
     assert "SolveStatus::kBreakdown" in guard
     assert "SolveStatus::kSingular" not in guard
+    assert ".action == pops::SolveAction::kRejectAttempt" in guard
     assert "StepAttemptRejected" in guard
 
 

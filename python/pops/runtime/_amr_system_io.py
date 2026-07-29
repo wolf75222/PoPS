@@ -17,6 +17,20 @@ class _PreparedAMRSystemRestart:
     codec: Any
 
 
+@dataclass(frozen=True, slots=True)
+class _AMRRegridRestartEvidence:
+    """All-rank evidence agreed before the native restart transaction commits."""
+
+    restart_identity: Any
+    regrid_receipt: Any
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "restart_identity": self.restart_identity.token,
+            "regrid_receipt": dict(self.regrid_receipt),
+        }
+
+
 class _AmrSystemIO(_AmrSystem):
     """Private accepted-state codec and transactional restore adapter for ``AmrSystem``."""
 
@@ -26,6 +40,9 @@ class _AmrSystemIO(_AmrSystem):
 
     def last_restart_report(self) -> Any:
         return getattr(self, "_last_restart_report", None)
+
+    def last_restart_regrid_receipt(self) -> Any:
+        return getattr(self, "_last_restart_regrid_receipt", None)
 
     def checkpoint(self, path: Any) -> Any:
         """Encode the complete accepted AMR state for the RuntimeInstance checkpoint provider.
@@ -45,9 +62,20 @@ class _AmrSystemIO(_AmrSystem):
             getattr(self, "_history_persistence", None) or {},
         )
 
-    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedAMRSystemRestart:
+    def _prepare_checkpoint_restart(
+        self,
+        payload: bytes,
+        *,
+        bit_identical: bool,
+        hierarchy_mode: str = "restore_recorded_hierarchy",
+        hierarchy_identity: str | None = None,
+    ) -> _PreparedAMRSystemRestart:
         """Authenticate and preflight the complete AMR payload without native mutation."""
-        from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.output._checkpoint_collective import (
+            decode_checkpoint_bytes,
+            require_restart_bit_identical,
+            require_restart_hierarchy_mode,
+        )
         from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
         from pops.runtime._checkpoint_manifest import (
             authenticate_checkpoint_payload,
@@ -55,16 +83,30 @@ class _AmrSystemIO(_AmrSystem):
         )
         from pops.runtime._amr_checkpoint_v3 import prepare_v3
 
+        require_restart_bit_identical(bit_identical, where="AMR restart")
+        selected_hierarchy_mode = require_restart_hierarchy_mode(
+            hierarchy_mode, where="AMR restart"
+        )
         data = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
         require_exact_payload_version(
             data,
-            "pops_amr_checkpoint_version",
-            AMR_CHECKPOINT_PAYLOAD_VERSION,
-            runtime="AMR",
+            key="pops_amr_checkpoint_version",
+            expected=AMR_CHECKPOINT_PAYLOAD_VERSION,
+            runtime_kind="AMR",
         )
         return _PreparedAMRSystemRestart(
-            identity, prepare_v3(self, self._s, data, (self._L, self._Ly), (self._xlo, self._ylo))
+            identity,
+            prepare_v3(
+                self,
+                self._s,
+                data,
+                (self._L, self._Ly),
+                (self._xlo, self._ylo),
+                bit_identical=bit_identical,
+                hierarchy_mode=selected_hierarchy_mode,
+                hierarchy_identity=hierarchy_identity,
+            ),
         )
 
     def _begin_checkpoint_restart(self) -> None:
@@ -73,6 +115,7 @@ class _AmrSystemIO(_AmrSystem):
         self._checkpoint_restart_python_snapshot = (
             getattr(self, "_last_restart_identity", None),
             getattr(self, "_last_restart_report", None),
+            getattr(self, "_last_restart_regrid_receipt", None),
             getattr(self, "_temporal_restart_state", None),
             getattr(self, "_step_controller", None),
         )
@@ -89,6 +132,11 @@ class _AmrSystemIO(_AmrSystem):
 
         self._last_restart_report = apply_v3(self, self._s, prepared.codec)
         self._last_restart_identity = prepared.restart_identity
+        if prepared.codec.hierarchy_mode == "regrid_on_restart":
+            return _AMRRegridRestartEvidence(
+                prepared.restart_identity,
+                self._last_restart_regrid_receipt,
+            )
         return prepared.restart_identity
 
     def _commit_checkpoint_restart(self) -> None:
@@ -110,17 +158,24 @@ class _AmrSystemIO(_AmrSystem):
             (
                 self._last_restart_identity,
                 self._last_restart_report,
+                self._last_restart_regrid_receipt,
                 self._temporal_restart_state,
                 self._step_controller,
             ) = snapshot
             self.__dict__.pop("_checkpoint_restart_committed", None)
             del self._checkpoint_restart_python_snapshot
 
-    def restart(self, path: Any) -> Any:
+    def restart(self, path: Any, *, bit_identical: bool = False) -> Any:
         """Restore the direct AMR engine through the native collective transaction protocol."""
         from pops.output._checkpoint_collective import restore_checkpoint_path
 
-        return restore_checkpoint_path(self, self, path, phase_prefix="AMR direct-engine restart")
+        return restore_checkpoint_path(
+            self,
+            self,
+            path,
+            bit_identical=bit_identical,
+            phase_prefix="AMR direct-engine restart",
+        )
 
 
 __all__ = ["_AmrSystemIO"]

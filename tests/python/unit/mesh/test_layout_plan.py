@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 
 import pytest
@@ -52,7 +52,7 @@ def _complete_builder(reverse: bool = True):
     builder.assign_state(state, adaptive)
     builder.assign_field(field, uniform)
     builder.assign_block(block, adaptive)
-    builder.require_mapping(
+    (forward,) = builder.require_mapping(
         adaptive, uniform, source=state, target=field,
         operation=LayoutMappingOperation.CONSERVATIVE_CELL_AVERAGE_V1,
         synchronization=LayoutSynchronization.BEFORE_STEP_V1,
@@ -64,7 +64,8 @@ def _complete_builder(reverse: bool = True):
             operation=LayoutMappingOperation.CONSERVATIVE_CELL_AVERAGE_V1,
             synchronization=LayoutSynchronization.BEFORE_STEP_V1,
             source_representation=LayoutRepresentation.CELL_AVERAGE_V1,
-            target_representation=LayoutRepresentation.CELL_AVERAGE_V1)
+            target_representation=LayoutRepresentation.CELL_AVERAGE_V1,
+            reverse_of=forward)
     return builder, uniform, adaptive, state, field, block
 
 
@@ -117,13 +118,28 @@ def test_unassigned_double_and_unexpected_assignments_fail_loud():
 def test_each_explicit_direction_requires_its_own_provider():
     builder, uniform, adaptive, state, field, block = _complete_builder(reverse=True)
     down = Provider("provider/down", frozenset(((adaptive.qualified_id, uniform.qualified_id),)))
-    with pytest.raises(ValueError, match="missing mapping provider"):
+    with pytest.raises(ValueError, match="missing reverse mapping provider"):
         builder.resolve(states=[state], fields=[field], blocks=[block], providers=[down])
 
     up = Provider("provider/up", frozenset(((uniform.qualified_id, adaptive.qualified_id),)))
     plan = builder.resolve(states=[state], fields=[field], blocks=[block], providers=[up, down])
     assert {row.provider_id for row in plan.mappings} == {"provider/down", "provider/up"}
     assert len(plan.mappings) == 2
+    forward = next(row.requirement for row in plan.mappings if row.requirement.reverse_of is None)
+    reverse = next(row.requirement for row in plan.mappings if row.requirement.reverse_of is not None)
+    assert reverse.reverse_of == forward.qualified_id
+
+    forged = tuple(
+        replace(row, requirement=replace(row.requirement, reverse_of="missing-forward"))
+        if row.requirement == reverse else row
+        for row in plan.mappings
+    )
+    with pytest.raises(ValueError, match="reverse mapping references a missing requirement"):
+        LayoutPlan(plan.owner, plan.layouts, plan.assignments, forged, plan.canonical_id)
+    with pytest.raises(ValueError, match="duplicate mapping requirements"):
+        LayoutPlan(
+            plan.owner, plan.layouts, plan.assignments,
+            plan.mappings + (plan.mappings[0],), plan.canonical_id)
 
 
 def test_mapping_provider_resolution_rejects_ambiguity_and_duplicate_identity():

@@ -34,6 +34,20 @@ def test_mpi_python_build_bounds_hdf5_to_the_active_env_without_clobbering_overr
     assert "export HDF5_ROOT=\"$CONDA_PREFIX\"" in build
 
 
+def test_serial_python_build_overrides_a_persistent_mpi_cmake_cache() -> None:
+    build = (REPOSITORY / "scripts" / "build_python.sh").read_text(encoding="utf-8")
+
+    settings = build[
+        build.index("cmake_settings=(") : build.index('if [[ -n "$WHEEL_DIR" ]]')
+    ]
+    mpi_arm = settings.index("if [[ $WITH_MPI -eq 1 ]]")
+    serial_arm = settings.index("\nelse\n", mpi_arm)
+    assert mpi_arm < settings.index("cmake.define.POPS_USE_MPI=ON") < serial_arm
+    assert mpi_arm < settings.index("cmake.define.POPS_USE_HDF5=ON") < serial_arm
+    assert serial_arm < settings.index("cmake.define.POPS_USE_MPI=OFF")
+    assert serial_arm < settings.index("cmake.define.POPS_USE_HDF5=OFF")
+
+
 def test_setup_authenticates_the_solved_mpich_parallel_hdf5_stack() -> None:
     setup = (REPOSITORY / "scripts" / "setup_env.sh").read_text(encoding="utf-8")
 

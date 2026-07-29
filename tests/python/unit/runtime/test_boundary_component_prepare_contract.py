@@ -134,3 +134,108 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         assert native.state_routes == [("block", "case::block::state")]
         assert native.discarded is False
     assert native.prepare_overrides == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("target_axis", "target_face", "permutation", "signs", "face_types"),
+    (
+        (0, 1, [0, 1], [1, -1],
+         ["periodic", "periodic", "foextrap", "foextrap"]),
+        (1, 3, [1, 0], [1, 1],
+         ["periodic", "foextrap", "foextrap", "periodic"]),
+    ),
+)
+def test_signed_periodic_identification_reaches_native_install_without_callback(
+        target_axis, target_face, permutation, signs, face_types):
+    def boundary_identity(name, axis, side):
+        return {
+            "qualified_id": "case::%s" % name,
+            "orientation": {
+                "schema_version": 1,
+                "axis": axis,
+                "side": side,
+                "outward_sign": -1 if side == "lower" else 1,
+            },
+        }
+
+    source = boundary_identity("xlo", 0, "lower")
+    target = boundary_identity("target", target_axis, "upper")
+    runtime_data = {
+        "schema_version": 1,
+        "authority_type": "prepared_boundary_plan",
+        "identity": "case::block::reflected-periodic-plan",
+        "state": {"qualified_id": "case::block::state"},
+        "required_depth": 2,
+        "faces": [
+            {
+                "ordinal": ordinal,
+                "producer": "case::block::reflected-periodic::face::%d" % ordinal,
+                "type": face_types[ordinal],
+                "values": [0.0],
+            }
+            for ordinal in range(4)
+        ],
+        "omitted_interface_faces": [],
+        "periodic_identifications": [{
+            "source": source,
+            "target": target,
+            "source_face": 0,
+            "target_face": target_face,
+            "permutation": permutation,
+            "signs": signs,
+        }],
+        "component_regions": [],
+        "interface_component_bindings": [],
+        "interface_endpoints": [],
+    }
+
+    class Authority:
+        def runtime_boundary_data(self, params):
+            assert params == {}
+            return deepcopy(runtime_data)
+
+    class Native:
+        def __init__(self):
+            self.installed = None
+
+        def _install_block_state_route(self, block, identity):
+            assert (block, identity) == ("block", "case::block::state")
+
+        def _install_boundary_plan(self, *args):
+            self.installed = args
+
+        def _discard_boundary_plans(self):
+            raise AssertionError("valid signed periodic installation must not roll back")
+
+    class BoundaryBlock:
+        name = "block"
+        state_identities = ("case::block::state",)
+        boundaries = (Authority(),)
+
+    native = Native()
+    engine = SimpleNamespace(_s=native)
+    artifact = SimpleNamespace(
+        blocks=(SimpleNamespace(
+            name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
+        plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
+        layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
+    )
+    install_plan = SimpleNamespace(
+        artifact=artifact,
+        params={},
+        components={},
+        execution_context=_execution_context(),
+    )
+
+    install_runtime_authorities(engine, install_plan)
+
+    assert native.installed is not None
+    assert native.installed[3] == face_types
+    assert native.installed[5] == [
+        "case::block::reflected-periodic::face::0",
+        "case::block::reflected-periodic::face::1",
+        "case::block::reflected-periodic::face::2",
+        "case::block::reflected-periodic::face::3",
+    ]
+    assert native.installed[6] == ["Scalar"]
+    assert native.installed[9] == [[0, target_face, *permutation, *signs]]

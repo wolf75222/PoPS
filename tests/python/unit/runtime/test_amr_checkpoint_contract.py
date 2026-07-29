@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from pops._generated_release_contract import (
+    AMR_CHECKPOINT_PAYLOAD_VERSION,
+    UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
+)
+from pops.output._checkpoint_collective import restore_checkpoint_payload
 from pops.runtime._amr_checkpoint_contract import (
     contract_for,
     encode_contract,
     preflight_contract,
+    restart_topology_image,
+    validate_regridded_contract,
     validate_restored_contract,
 )
 from pops.runtime._amr_checkpoint_v3 import (
@@ -18,7 +27,12 @@ from pops.runtime._amr_checkpoint_v3 import (
     _live_amr_level_envelope,
     _require_exact_field_provider_depth,
 )
-from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
+from pops.runtime._amr_checkpoint_topology import (
+    owner_ranks_for_boxes,
+    recorded_rank_topology,
+)
+from pops.runtime._amr_system_io import _AmrSystemIO, _PreparedAMRSystemRestart
+from pops.runtime._checkpoint_manifest import require_exact_payload_version
 
 
 class _Payload(dict):
@@ -188,6 +202,62 @@ def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section)
         validate_restored_contract(_Sim(), payload)
 
 
+def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
+    class _RegriddedSim(_Sim):
+        def time(self):
+            return 0.4
+
+        def macro_step(self):
+            return 4
+
+        def checkpoint_topology_epoch(self):
+            return 8
+
+        def checkpoint_regrid_count(self):
+            return 5
+
+        def patch_boxes(self):
+            return [(1, 4, 4, 11, 11), (2, 10, 10, 17, 17)]
+
+        def level_owner_ranks(self, level):
+            return [[0], [0], [0]][level]
+
+        def program_clock_manifest(self):
+            return [["level", str(level), "4", "0", "1", "0.400000"] for level in range(3)] + [
+                ["logical", "clock.macro", "4"]
+            ]
+
+        def program_flux_ledger_manifest(self):
+            return []
+
+        def program_sync_manifest(self):
+            return []
+
+    sim = _RegriddedSim()
+    payload = _payload()
+    payload["t"] = np.array(0.4)
+    payload["macro_step"] = np.array(4)
+    after = restart_topology_image(sim)
+    receipt = {
+        "schema_version": 1,
+        "policy_identity": "pops.restart-hierarchy.v1:sha256:" + "0" * 64,
+        # The policy executed and advanced its audit counters, but the structural hierarchy
+        # identity did not change.
+        "changed": False,
+        "accepted_time": 0.4,
+        "accepted_macro_step": 4,
+        "before": {**after, "topology_epoch": 7, "regrid_count": 4},
+        "after": after,
+        "composite_integrals_before": [],
+        "composite_integrals_after": [],
+    }
+
+    assert validate_regridded_contract(sim, payload, receipt) is None
+    receipt["after"] = {**after, "topology_epoch": 9}
+    with pytest.raises(ValueError, match="receipt differs"):
+        validate_regridded_contract(sim, payload, receipt)
+
+
 def test_native_route_requires_no_program_blob_and_compiled_route_requires_one():
     compiled = _payload()
     compiled["program_accepted_state"] = np.array([], dtype=np.uint8)
@@ -226,7 +296,7 @@ def test_checkpoint_level_envelope_refuses_a_different_configured_depth():
         )
 
 
-def test_strict_v5_level_envelope_refuses_missing_configured_depth():
+def test_incomplete_v5_level_envelope_is_an_offline_migration_input():
     class _FilesOnlyPayload:
         files = ("n_levels",)
 
@@ -236,10 +306,119 @@ def test_strict_v5_level_envelope_refuses_missing_configured_depth():
             return np.array(3)
 
     sim = _Sim()
-    with pytest.raises(ValueError, match="configured_n_levels"):
+    with pytest.raises(
+        ValueError,
+        match="configured_n_levels.*historical checkpoints require offline migration",
+    ):
         _checkpoint_amr_level_envelope(sim, _FilesOnlyPayload())
-    with pytest.raises(ValueError, match="configured_n_levels"):
+    with pytest.raises(
+        ValueError,
+        match="configured_n_levels.*historical checkpoints require offline migration",
+    ):
         _checkpoint_amr_level_envelope(sim, {"n_levels": np.array(1)})
+
+
+@pytest.mark.parametrize(
+    ("runtime_kind", "key", "expected"),
+    [
+        ("Uniform", "pops_checkpoint_version", UNIFORM_CHECKPOINT_PAYLOAD_VERSION),
+        ("AMR", "pops_amr_checkpoint_version", AMR_CHECKPOINT_PAYLOAD_VERSION),
+    ],
+)
+def test_uniform_and_amr_payload_versions_are_exact_current_integer_scalars(
+    runtime_kind, key, expected,
+):
+    assert require_exact_payload_version(
+        {key: np.array(expected, dtype=np.int64)},
+        key=key,
+        expected=expected,
+        runtime_kind=runtime_kind,
+    ) == expected
+
+    for incompatible in (
+        np.array(True),
+        np.array(float(expected)),
+        np.array(str(expected)),
+        np.array([expected], dtype=np.int64),
+    ):
+        with pytest.raises(TypeError, match="exact integer scalar.*offline migration"):
+            require_exact_payload_version(
+                {key: incompatible},
+                key=key,
+                expected=expected,
+                runtime_kind=runtime_kind,
+            )
+
+    with pytest.raises(ValueError, match="missing payload version.*offline migration"):
+        require_exact_payload_version(
+            {},
+            key=key,
+            expected=expected,
+            runtime_kind=runtime_kind,
+        )
+    with pytest.raises(
+        ValueError,
+        match=rf"expected exactly {expected}.*offline migration",
+    ):
+        require_exact_payload_version(
+            {key: np.array(expected - 1, dtype=np.int64)},
+            key=key,
+            expected=expected,
+            runtime_kind=runtime_kind,
+        )
+
+
+@pytest.mark.parametrize(
+    ("runtime_kind", "key", "expected"),
+    [
+        ("Uniform", "pops_checkpoint_version", UNIFORM_CHECKPOINT_PAYLOAD_VERSION),
+        ("AMR", "pops_amr_checkpoint_version", AMR_CHECKPOINT_PAYLOAD_VERSION),
+    ],
+)
+def test_historical_version_refusal_happens_before_restart_transaction(
+    runtime_kind, key, expected,
+):
+    calls = []
+
+    class _Executor:
+        def _prepare_checkpoint_restart(self, _payload, *, bit_identical):
+            calls.append("prepare")
+            assert bit_identical is True
+            require_exact_payload_version(
+                {key: np.array(expected - 1, dtype=np.int64)},
+                key=key,
+                expected=expected,
+                runtime_kind=runtime_kind,
+            )
+
+        def _begin_checkpoint_restart(self):
+            calls.append("begin")
+
+        def _apply_checkpoint_restart(self, _prepared):
+            calls.append("apply")
+
+        def _commit_checkpoint_restart(self):
+            calls.append("commit")
+
+        def _finalize_checkpoint_restart(self):
+            calls.append("finalize")
+
+        def _rollback_checkpoint_restart(self):
+            calls.append("rollback")
+
+    owner = SimpleNamespace(
+        _execution_context=SimpleNamespace(
+            communicator=SimpleNamespace(identity="serial", handle=None)
+        )
+    )
+    with pytest.raises(ValueError, match="historical checkpoints require offline migration"):
+        restore_checkpoint_payload(
+            owner,
+            _Executor(),
+            b"historical",
+            bit_identical=True,
+        )
+    assert calls == ["prepare"]
 
 
 @pytest.mark.parametrize("phase", ["checkpoint capture", "restart"])
@@ -257,3 +436,153 @@ def test_topology_owner_alignment_is_level_local_and_strict():
         owner_ranks_for_boxes(payload, boxes + [(2, 6, 6, 7, 7)], 3)
     with pytest.raises(ValueError, match="lacks owner-rank map"):
         owner_ranks_for_boxes({}, boxes[:1], 3)
+
+
+def _rank_topology_payload():
+    return {
+        "program_accepted_state_rank_0": np.array([1, 2], dtype=np.uint8),
+        "program_accepted_state_rank_1": np.array([3, 4], dtype=np.uint8),
+        "dmap_rank_0_level_0": np.array([0], dtype=np.int64),
+        "dmap_rank_0_level_1": np.array([0, 1], dtype=np.int64),
+        "dmap_rank_1_level_0": np.array([0], dtype=np.int64),
+        "dmap_rank_1_level_1": np.array([0, 1], dtype=np.int64),
+    }
+
+
+def test_recorded_rank_topology_keeps_all_program_shards_and_one_exact_owner_map():
+    topology = recorded_rank_topology(_rank_topology_payload(), 2, 2)
+    assert topology.program_states == (b"\x01\x02", b"\x03\x04")
+    assert topology.level_owner_ranks == ((0,), (0, 1))
+
+
+def test_recorded_rank_topology_refuses_rank_local_owner_map_disagreement():
+    payload = _rank_topology_payload()
+    payload["dmap_rank_1_level_1"] = np.array([1, 0], dtype=np.int64)
+    with pytest.raises(ValueError, match="owner maps disagree"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_recorded_rank_topology_refuses_out_of_range_recorded_ownership():
+    payload = _rank_topology_payload()
+    payload["dmap_rank_0_level_1"] = np.array([0, 2], dtype=np.int64)
+    payload["dmap_rank_1_level_1"] = np.array([0, 2], dtype=np.int64)
+    with pytest.raises(ValueError, match=r"outside \[0, 2\)"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_recorded_rank_topology_refuses_mixed_program_presence():
+    payload = _rank_topology_payload()
+    payload["program_accepted_state_rank_1"] = np.array([], dtype=np.uint8)
+    with pytest.raises(ValueError, match="disagree on whether a compiled Program image is present"):
+        recorded_rank_topology(payload, 2, 2)
+
+
+def test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure(monkeypatch):
+    """The collective restart bracket must retain both native and Python snapshots through apply.
+
+    The native ``AcceptedSnapshot`` already has direct C++ coverage for topology/history/flux
+    restoration.  This source-only seam proves the new rank-change orchestration actually invokes
+    that rollback after hierarchy replacement, rather than releasing the snapshot too early.
+    """
+
+    accepted_native = {
+        "hierarchy": ((1, 0, 0, 7, 7),),
+        "owners": ((0, 1),),
+        "blocks": {"tracer": ((1.0, 2.0), (3.0, 4.0))},
+        "aux": ((5.0, 6.0),),
+        "potentials": ((7.0, 8.0),),
+        "histories": {"rhs": ((9.0, 10.0), (11.0, 12.0))},
+        "clock": (0.3, 3),
+        "counters": (2, 5),
+        "program_state": b"accepted-program-state",
+        "program_revision": 7,
+    }
+
+    class _TransactionalNativeAMR:
+        def __init__(self):
+            self.state = deepcopy(accepted_native)
+            self.snapshot = None
+            self.rollback_calls = 0
+            self.commit_calls = 0
+
+        def begin_restart_transaction(self):
+            if self.snapshot is not None:
+                raise RuntimeError("nested test restart transaction")
+            self.snapshot = deepcopy(self.state)
+
+        def rebuild_hierarchy(self, boxes, owners):
+            self.state["hierarchy"] = tuple(boxes)
+            self.state["owners"] = tuple(owners)
+            self.state["blocks"] = {"tracer": ((101.0,), (102.0,))}
+            self.state["histories"] = {"rhs": ((103.0,), (104.0,))}
+            self.state["program_state"] = b"partially-restored-program-state"
+            self.state["program_revision"] = 8
+
+        def commit_restart_transaction(self):
+            self.commit_calls += 1
+            self.snapshot = None
+
+        def rollback_restart_transaction(self):
+            self.rollback_calls += 1
+            if self.snapshot is None:
+                raise RuntimeError("test restart rollback lost its accepted snapshot")
+            self.state = self.snapshot
+            self.snapshot = None
+
+    class _InjectedFailureAMR(_AmrSystemIO):
+        def _prepare_checkpoint_restart(self, payload, *, bit_identical):
+            assert payload == b"rank-change-checkpoint"
+            assert bit_identical is False
+            return _PreparedAMRSystemRestart("new-restart-identity", object())
+
+    native = _TransactionalNativeAMR()
+    runtime = _InjectedFailureAMR()
+    runtime._s = native
+    runtime._execution_context = SimpleNamespace(
+        communicator=SimpleNamespace(identity="serial", handle=None)
+    )
+    runtime._last_restart_identity = "accepted-restart-identity"
+    runtime._last_restart_report = "accepted-restart-report"
+    runtime._temporal_restart_state = "accepted-temporal-state"
+    runtime._step_controller = "accepted-step-controller"
+
+    def fail_after_rebuild(owner, sim, prepared):
+        assert owner is runtime
+        assert sim is native
+        sim.rebuild_hierarchy(
+            ((1, 8, 8, 15, 15),),
+            (0,),
+        )
+        sim.state["aux"] = ((201.0,),)
+        sim.state["potentials"] = ((202.0,),)
+        sim.state["clock"] = (0.8, 8)
+        sim.state["counters"] = (9, 13)
+        owner._last_restart_report = "partial-restart-report"
+        owner._temporal_restart_state = "partial-temporal-state"
+        owner._step_controller = None
+        raise RuntimeError("injected failure after rank-change hierarchy rebuild")
+
+    monkeypatch.setattr(
+        "pops.runtime._amr_checkpoint_v3.apply_v3",
+        fail_after_rebuild,
+    )
+
+    with pytest.raises(RuntimeError, match="injected failure after rank-change hierarchy rebuild"):
+        restore_checkpoint_payload(
+            runtime,
+            runtime,
+            b"rank-change-checkpoint",
+            bit_identical=False,
+            phase_prefix="rank-change rollback proof",
+        )
+
+    assert native.state == accepted_native
+    assert native.snapshot is None
+    assert native.rollback_calls == 1
+    assert native.commit_calls == 0
+    assert runtime._last_restart_identity == "accepted-restart-identity"
+    assert runtime._last_restart_report == "accepted-restart-report"
+    assert runtime._temporal_restart_state == "accepted-temporal-state"
+    assert runtime._step_controller == "accepted-step-controller"
+    assert "_checkpoint_restart_python_snapshot" not in runtime.__dict__
+    assert "_checkpoint_restart_committed" not in runtime.__dict__

@@ -62,6 +62,27 @@ def _git(*args: str) -> str:
     return completed.stdout.strip()
 
 
+def _require_cpp_duration_catalogs() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/ci_select_tests.py",
+            "verify-cpp-duration-catalogs",
+            "--shard-total",
+            "7",
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if completed.returncode:
+        raise FinalGateError(
+            "C++ duration catalog contract failed:\n" + completed.stdout[-4000:]
+        )
+
+
 def _outside_checkout(path: Path) -> Path:
     resolved = path.expanduser().resolve()
     try:
@@ -397,6 +418,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         require_source_contract(ROOT)
+        _require_cpp_duration_catalogs()
         _check_clean_checkout()
         evidence_path = _outside_checkout(args.evidence)
         evidence_root = evidence_path.parent.resolve() / (evidence_path.stem + ".artifacts")

@@ -1,21 +1,39 @@
 """ADC-666: RuntimeInstance envelopes native state and accepted consumers atomically."""
 from __future__ import annotations
 
+import copy
 import os
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from pops._bootstrap import StepAttemptRejected
 from pops.output._consumer_contracts import ConsumerCursorSet, ScheduleCursor
 from pops.output._writers.common import _OutputRecoveryRequired, _StagedOutputFile
-from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._consumer_transaction import ConsumerTransactionReport
-from pops.time import ALL_PROVISIONAL_STORES
+from pops.runtime._multi_layout_executor import _CompositeTemporalRestartState
+from pops.runtime._runtime_instance import RuntimeInstance
+from pops.runtime._step_strategy import run_step_attempt
+from pops.runtime._temporal_restart import TemporalRestartState
+from pops.time import (
+    ALL_PROVISIONAL_STORES,
+    BlockProjection,
+    ErrorControlledDt,
+    FixedDt,
+    ProjectAndRecheck,
+    StepTransactionReport,
+)
 
 
 class _Native:
-    def __init__(self, *, fail_begin=False, fail_commit=False):
+    def __init__(
+        self,
+        *,
+        fail_begin: bool = False,
+        fail_commit: bool = False,
+        fault_phase: str | None = None,
+    ):
         self.t = 0.0
         self.step_index = 0
         self._accepted = None
@@ -26,6 +44,12 @@ class _Native:
         self._step_transaction_plan = SimpleNamespace(stores=ALL_PROVISIONAL_STORES)
         self._step_controller = None
         self._last_step_transaction_report = None
+        self._executed_step_projections = []
+        self.fault_phase = fault_phase
+        self.states = {"left": [1.0, 2.0], "right": [3.0, 4.0]}
+        self.cache = {"rhs": [5.0]}
+        self.history = {"left.U": [[0.5, 1.5]]}
+        self.diagnostics = {"accepted_norm": 7.0}
 
     def time(self):
         return self.t
@@ -33,17 +57,53 @@ class _Native:
     def macro_step(self):
         return self.step_index
 
-    def step(self, dt):
+    def _consume_step_projections(self):
+        result = tuple(self._executed_step_projections)
+        self._executed_step_projections.clear()
+        return result
+
+    def accepted_stores(self):
+        return copy.deepcopy({
+            "states": self.states,
+            "clock": (self.t, self.step_index),
+            "cache": self.cache,
+            "history": self.history,
+            "diagnostics": self.diagnostics,
+        })
+
+    def _mutate_provisional_stores(self, dt):
         self.t += float(dt)
         self.step_index += 1
+        self.states["left"][0] += 11.0
+        self.states["right"][1] -= 13.0
+        self.cache["rhs"].append(17.0)
+        self.history["left.U"].append([19.0, 23.0])
+        self.diagnostics["provisional_norm"] = 29.0
+
+    def _reject_fault(self, phase):
+        error = StepAttemptRejected(f"fault injected during {phase}")
+        error.status = "invalid_evaluation"
+        error.phase = phase
+        error.detail = f"fault injected during {phase}"
+        error.disposition = "reject"
+        error.reason_code = 666
+        raise error
+
+    def step(self, dt):
+        self._mutate_provisional_stores(dt)
+        if self.fault_phase in {"stage", "solve", "synchronize", "guard"}:
+            self._reject_fault(self.fault_phase)
         return float(dt)
 
     def _begin_step_transaction(self):
         if self._accepted is not None:
             raise RuntimeError("nested transaction")
-        self._accepted = (self.t, self.step_index)
+        self._accepted = self.accepted_stores()
         self._committed = False
         self.events.append("begin")
+        if self.fault_phase == "prepare":
+            self._mutate_provisional_stores(0.375)
+            raise RuntimeError("fault injected during prepare")
         if self.fail_begin:
             self.t = 0.375
             self.step_index = 3
@@ -67,7 +127,12 @@ class _Native:
     def _rollback_step_transaction(self):
         if self._accepted is None:
             raise RuntimeError("missing transaction")
-        self.t, self.step_index = self._accepted
+        accepted = self._accepted
+        self.states = accepted["states"]
+        self.t, self.step_index = accepted["clock"]
+        self.cache = accepted["cache"]
+        self.history = accepted["history"]
+        self.diagnostics = accepted["diagnostics"]
         self._accepted = None
         self._committed = False
         self.events.append("rollback")
@@ -180,6 +245,259 @@ def test_success_commits_native_clock_cursors_and_attempt_counter_together():
     assert native.events == ["begin", "commit", "publish", "finalize"]
 
 
+def test_passing_guard_does_not_report_an_unexecuted_projection():
+    native = _Native()
+    native._step_transaction_plan = SimpleNamespace(
+        stores=ALL_PROVISIONAL_STORES,
+        guards=(
+            SimpleNamespace(
+                name="realizability",
+                action=ProjectAndRecheck(BlockProjection()),
+            ),
+        ),
+    )
+
+    report = run_step_attempt(native, native, FixedDt(0.125), t_end=0.125)
+
+    assert report.projections == ()
+    assert report.to_data()["projections"] == []
+
+
+def test_controller_report_carries_only_the_executed_projection_identity():
+    class ProjectingNative(_Native):
+        def step(self, dt):
+            self._executed_step_projections.append("realizability")
+            return super().step(dt)
+
+    native = ProjectingNative()
+    native._step_transaction_plan = SimpleNamespace(
+        stores=ALL_PROVISIONAL_STORES,
+        guards=(
+            SimpleNamespace(
+                name="realizability",
+                action=ProjectAndRecheck(BlockProjection()),
+            ),
+        ),
+    )
+
+    report = run_step_attempt(native, native, FixedDt(0.125), t_end=0.125)
+
+    assert report.projections == ("realizability",)
+    assert report.to_data()["projections"] == ["realizability"]
+
+
+def test_rejected_projection_is_reported_while_its_state_rolls_back():
+    class RejectingProjectedNative(_Native):
+        def step(self, dt):
+            self._executed_step_projections.append("realizability")
+            return super().step(dt)
+
+    native = RejectingProjectedNative(fault_phase="guard")
+    native._step_transaction_plan = SimpleNamespace(
+        stores=ALL_PROVISIONAL_STORES,
+        guards=(
+            SimpleNamespace(
+                name="realizability",
+                action=ProjectAndRecheck(BlockProjection()),
+            ),
+        ),
+    )
+    accepted = native.accepted_stores()
+    runtime = _Runtime(native)
+
+    with pytest.raises(StepAttemptRejected, match="fault injected during guard"):
+        runtime._accepted_controller_step(
+            native,
+            native,
+            FixedDt(0.125),
+            t_end=0.125,
+            controls={},
+        )
+
+    assert native.accepted_stores() == accepted
+    assert native._executed_step_projections == []
+    report = native._last_step_transaction_report
+    assert (report.status, report.phase, report.action) == (
+        "rejected",
+        "guard",
+        "reject_attempt",
+    )
+    assert report.projections == ("realizability",)
+
+
+def test_error_controlled_retry_rolls_back_before_opening_the_next_attempt():
+    class RejectOnceNative(_Native):
+        def __init__(self):
+            super().__init__()
+            self.native_attempts = 0
+
+        def step(self, dt):
+            self.native_attempts += 1
+            self._mutate_provisional_stores(dt)
+            if self.native_attempts == 1:
+                self._reject_fault("guard")
+            return float(dt)
+
+    native = RejectOnceNative()
+    runtime = _Runtime(native)
+    accepted = native.accepted_stores()
+    strategy = ErrorControlledDt(
+        dt_init=0.2,
+        rtol=1.0e-4,
+        atol=1.0e-8,
+        dt_min=0.01,
+        dt_max=0.5,
+        max_rejections=2,
+        shrink=0.5,
+        growth=1.5,
+    )
+
+    report = runtime._accepted_controller_step(
+        native,
+        native,
+        strategy,
+        t_end=0.5,
+        controls={},
+    )
+
+    assert report.attempts == 2
+    assert native.native_attempts == 2
+    assert (native.time(), native.macro_step()) == (0.1, 1)
+    assert native.states["left"][0] == accepted["states"]["left"][0] + 11.0
+    assert native.states["right"][1] == accepted["states"]["right"][1] - 13.0
+    assert native.cache["rhs"] == accepted["cache"]["rhs"] + [17.0]
+    assert native.history["left.U"] == accepted["history"]["left.U"] + [[19.0, 23.0]]
+    assert native.events == [
+        "begin",
+        "rollback",
+        "begin",
+        "commit",
+        "publish",
+        "finalize",
+    ]
+    assert runtime._attempt == 6
+    assert runtime.consumer_cursors.for_consumer("sample").committed_samples == 1
+    assert native._step_controller.next_dt == pytest.approx(0.15)
+    assert native._last_step_transaction_report == report
+
+
+def test_error_controlled_retry_preserves_composite_temporal_attempt_stats():
+    class RejectOnceNative(_Native):
+        def __init__(self):
+            super().__init__()
+            self.native_attempts = 0
+            self._temporal_restart_state = _CompositeTemporalRestartState(
+                (TemporalRestartState(), TemporalRestartState())
+            )
+
+        def step(self, dt):
+            self.native_attempts += 1
+            self._mutate_provisional_stores(dt)
+            if self.native_attempts == 1:
+                self._reject_fault("guard")
+            return float(dt)
+
+    native = RejectOnceNative()
+    runtime = _Runtime(native)
+    strategy = ErrorControlledDt(
+        dt_init=0.2,
+        rtol=1.0e-4,
+        atol=1.0e-8,
+        dt_min=0.01,
+        dt_max=0.5,
+        max_rejections=2,
+        shrink=0.5,
+        growth=1.5,
+    )
+
+    report = runtime._accepted_controller_step(
+        native,
+        native,
+        strategy,
+        t_end=0.5,
+        controls={},
+    )
+
+    assert report.attempts == 2
+    assert native.native_attempts == 2
+    for state in native._temporal_restart_state.states:
+        assert state.transaction_stats == {
+            "accepted": 1,
+            "rejected": 1,
+            "failed": 0,
+        }
+        assert state.status == "accepted"
+        assert state.synchronized is True
+
+
+def test_attempt_stats_restore_failure_does_not_mask_the_initiating_error():
+    native = _Native()
+    native._temporal_restart_state = TemporalRestartState()
+    runtime = _Runtime(native)
+
+    def fail_with_malformed_stats():
+        native._temporal_restart_state.transaction_stats["failed"] = "malformed"
+        raise ValueError("initiating failure")
+
+    with pytest.raises(ValueError, match="initiating failure") as caught:
+        runtime._accepted_step_transaction(fail_with_malformed_stats)
+
+    assert any(
+        "attempt-statistics restoration also failed" in note
+        for note in getattr(caught.value, "__notes__", ())
+    )
+
+
+def test_error_controlled_retry_exhaustion_restores_the_last_accepted_boundary():
+    class RejectAlwaysNative(_Native):
+        def __init__(self):
+            super().__init__()
+            self.native_attempts = 0
+
+        def step(self, dt):
+            self.native_attempts += 1
+            self._mutate_provisional_stores(dt)
+            self._reject_fault("guard")
+
+    native = RejectAlwaysNative()
+    runtime = _Runtime(native)
+    accepted = native.accepted_stores()
+    strategy = ErrorControlledDt(
+        dt_init=0.2,
+        rtol=1.0e-4,
+        atol=1.0e-8,
+        dt_min=0.01,
+        dt_max=0.5,
+        max_rejections=1,
+        shrink=0.5,
+        growth=1.5,
+    )
+
+    with pytest.raises(StepAttemptRejected, match="fault injected during guard"):
+        runtime._accepted_controller_step(
+            native,
+            native,
+            strategy,
+            t_end=0.5,
+            controls={},
+        )
+
+    assert native.native_attempts == 2
+    assert native.accepted_stores() == accepted
+    assert native.events == ["begin", "rollback", "begin", "rollback"]
+    assert runtime._attempt == 4
+    assert runtime.consumer_cursors.rows == ()
+    assert runtime.artifacts == set()
+    assert native._step_controller.next_dt == pytest.approx(0.2)
+    report = native._last_step_transaction_report
+    assert (report.status, report.phase, report.action, report.attempts) == (
+        "rejected",
+        "guard",
+        "reject_attempt",
+        2,
+    )
+
+
 def test_post_native_finalize_failure_retries_with_owner_and_keeps_acceptance():
     native = _Native()
     runtime = _Runtime(native, fail_finalize=True)
@@ -250,6 +568,12 @@ def test_native_failure_rolls_back_even_when_the_fault_happens_after_mutation():
 
 def test_native_begin_failure_rolls_back_partial_mutation_and_python_envelope():
     native = _Native(fail_begin=True)
+    native._last_step_transaction_report = StepTransactionReport(
+        status="accepted",
+        phase="commit",
+        action="commit",
+        projections=("previous-attempt",),
+    )
     runtime = _Runtime(native)
 
     with pytest.raises(RuntimeError, match="native begin"):
@@ -261,6 +585,8 @@ def test_native_begin_failure_rolls_back_partial_mutation_and_python_envelope():
     assert runtime.consumer_cursors.rows == ()
     assert runtime._consumer_reports == ()
     assert native.events == ["begin", "rollback"]
+    assert native._last_step_transaction_report.status == "failed"
+    assert native._last_step_transaction_report.projections == ()
 
 
 def test_native_commit_failure_discards_prepared_outputs_before_they_become_visible():
@@ -277,3 +603,98 @@ def test_native_commit_failure_discards_prepared_outputs_before_they_become_visi
     assert runtime.artifacts == set()
     assert "publish" not in native.events
     assert native.events == ["begin", "commit", "rollback"]
+
+
+@pytest.mark.parametrize(
+    ("phase", "status", "action", "diagnostic"),
+    (
+        ("prepare", "failed", "fail_run", "fault injected during prepare"),
+        ("stage", "rejected", "reject_attempt", "fault injected during stage"),
+        ("solve", "rejected", "reject_attempt", "fault injected during solve"),
+        (
+            "synchronize",
+            "rejected",
+            "reject_attempt",
+            "fault injected during synchronize",
+        ),
+        ("guard", "rejected", "reject_attempt", "fault injected during guard"),
+        ("effect", "failed", "fail_run", "fault injected during effect publication"),
+        ("commit", "failed", "fail_run", "fault injected during native commit"),
+    ),
+)
+def test_fault_injection_matrix_restores_every_available_store_and_reports_exact_phase(
+    phase,
+    status,
+    action,
+    diagnostic,
+):
+    native = _Native(
+        fault_phase=phase if phase in {
+            "prepare", "stage", "solve", "synchronize", "guard"
+        } else None,
+        fail_commit=phase == "commit",
+    )
+    native._step_transaction_plan = SimpleNamespace(
+        stores=ALL_PROVISIONAL_STORES,
+        guards=(
+            SimpleNamespace(
+                name="realizability",
+                action=ProjectAndRecheck(BlockProjection()),
+            ),
+        ),
+    )
+    runtime = _Runtime(native, fail_effect=phase == "effect")
+    runtime._consumer_cursors = ConsumerCursorSet((
+        ScheduleCursor("accepted-sample", "accepted-occurrence", 3),
+    ))
+    native._last_step_transaction_report = StepTransactionReport(
+        status="accepted",
+        phase="commit",
+        action="commit",
+        staged_effects=("states",),
+        committed_effects=("states",),
+    )
+    runtime._consumer_reports = ("accepted-report",)
+    runtime._checkpoint_cursor_override = "accepted-checkpoint-cursor"
+    runtime.temporaries = {"accepted.tmp"}
+    runtime.artifacts = {"accepted.out"}
+
+    accepted_native = native.accepted_stores()
+    accepted_cursors = runtime.consumer_cursors.to_data()
+    accepted_reports = runtime._consumer_reports
+    accepted_checkpoint_cursor = runtime._checkpoint_cursor_override
+    accepted_temporaries = set(runtime.temporaries)
+    accepted_artifacts = set(runtime.artifacts)
+    accepted_attempt = runtime._attempt
+
+    def advance():
+        report = run_step_attempt(
+            native,
+            native,
+            FixedDt(0.25),
+            t_end=0.25,
+        )
+        return report, report.attempts
+
+    with pytest.raises(RuntimeError, match=diagnostic):
+        runtime._accepted_step_transaction(advance)
+
+    assert native.accepted_stores() == accepted_native
+    assert native._accepted is None
+    assert native._step_controller is None
+    assert runtime.consumer_cursors.to_data() == accepted_cursors
+    assert runtime._consumer_reports == accepted_reports
+    assert runtime._checkpoint_cursor_override == accepted_checkpoint_cursor
+    assert runtime.temporaries == accepted_temporaries
+    assert runtime.artifacts == accepted_artifacts
+    assert runtime._attempt == accepted_attempt
+
+    report = native._last_step_transaction_report
+    assert (report.status, report.phase, report.action) == (status, phase, action)
+    stores = tuple(store.value for store in ALL_PROVISIONAL_STORES)
+    assert report.staged_effects == stores
+    assert report.committed_effects == ()
+    assert report.rolled_back_effects == stores
+    assert report.attempts == 1
+    assert report.projections == ()
+    assert report.diagnostics == (diagnostic,)

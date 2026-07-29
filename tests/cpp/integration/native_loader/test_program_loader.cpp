@@ -3,7 +3,7 @@
 //
 // We compile AT RUNTIME a stub problem.so -- the role the codegen (Phase 2c-ii) will fill -- that
 // exports pops_program_abi_key(), the required block-identity table, and
-// pops_install_program(void* sys); the installer wraps the System in a ProgramContext and installs the
+// pops_install_program(System* sys); the installer selects the System provider and installs the
 // SAME Forward-Euler closure as the in-process test_program_runtime.
 // We then sim.install_program(so) + sim.step(dt) and check bit-parity against a reference Forward-Euler
 // step computed from the same primitives (solve_fields + eval_rhs + U + dt*R). This validates the
@@ -120,7 +120,7 @@ extern "C" bool pops_program_has_dt_bound() { return true; }
   }
   if (install_step) {
     source += R"CPP(
-extern "C" void pops_install_program(void* sys) {
+extern "C" void pops_install_program(pops::System* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
 )CPP";
     if (register_history) {
@@ -134,7 +134,8 @@ extern "C" void pops_install_program(void* sys) {
   ctx.install([ctx](double dt) {
     ctx.begin_step(dt);
     ctx.set_stage_time(0, 1);
-    ctx.solve_fields();
+    auto field_outcome = ctx.solve_fields();
+    (void)field_outcome.consume(pops::SolveConsumption::kAccept);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       pops::MultiFab& U = ctx.state(b);
       pops::MultiFab R = ctx.rhs_scratch_like(U);
@@ -146,7 +147,7 @@ extern "C" void pops_install_program(void* sys) {
 )CPP";
   } else {
     source += R"CPP(
-extern "C" void pops_install_program(void* sys) {
+extern "C" void pops_install_program(pops::System* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
   ctx.register_history("poison", 1, 1, 0, "test:poison/state", "test:poison/space",
                        "clock.macro", "test:poison/interp");
@@ -161,7 +162,7 @@ void prepare_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, cons
 void add_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, const pops::Geometry&,
                            const pops::FieldBoundaryExecutionContext&) {}
 }  // namespace
-extern "C" void pops_install_field_boundaries(void* sys) {
+extern "C" void pops_install_field_boundaries(pops::System* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
   ctx.set_field_boundary_kernel(
 )CPP";
@@ -203,7 +204,7 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   System ref(cfg);
   add_gas(ref);
   ref.set_state("gas", U0);
-  ref.solve_fields();
+  (void)pops::consume_solve_outcome(ref.solve_fields());
   const std::vector<double> R0 = ref.eval_rhs("gas");
   std::vector<double> Uref(4 * nn);
   for (std::size_t k = 0; k < Uref.size(); ++k)
@@ -388,7 +389,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
     replacement.program_cache().store(11, replacement.block_state(0), 0, "artifact-A-cache");
     replacement.record_program_diagnostic("artifact-A-diagnostic", Real(1));
     try {
-      (void)replacement.solve_fields_from_state(slot, 0, replacement.block_state(0));
+      (void)consume_solve_outcome(
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
       std::printf("FAIL dynamic-boundary artifact did not install its field kernel\\n");
       ++fails;
     } catch (const std::exception& e) {
@@ -405,8 +407,8 @@ static int pops_run_test_program_loader(int argc, char** argv) {
       ++fails;
     }
     try {
-      const SolveReport report =
-          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0));
+      const SolveReport report = consume_solve_outcome(
+          replacement.solve_fields_from_state(slot, 0, replacement.block_state(0)));
       if (!report.solved()) {
         std::printf("FAIL static replacement field solve returned %s\\n", report.status_name());
         ++fails;

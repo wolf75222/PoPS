@@ -220,14 +220,44 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     return lines
 
 
+def _prepared_local_control_lines(attrs: Any, *, indent: str = "    ") -> list[str]:
+    safeguard = {
+        "exact": "pops::LocalSafeguardKind::kExactNewton",
+        "damped": "pops::LocalSafeguardKind::kFixedDamping",
+        "backtracking": "pops::LocalSafeguardKind::kBacktrackingLineSearch",
+    }[attrs["safeguard"]]
+    return [
+        indent + "pops::PreparedLocalNonlinearControls controls_;",
+        indent + "controls_.absolute_tolerance = static_cast<pops::Real>(%s);"
+        % scalar_cpp(attrs["tol"]),
+        indent + "controls_.relative_tolerance = static_cast<pops::Real>(%s);"
+        % scalar_cpp(attrs["relative_tol"]),
+        indent + "controls_.step_tolerance = static_cast<pops::Real>(%s);"
+        % scalar_cpp(attrs["step_tol"]),
+        indent + "controls_.max_iterations = %d;" % int(attrs["max_iter"]),
+        indent + "controls_.max_evaluations = %d;" % int(attrs["max_evaluations"]),
+        indent + "controls_.finite_difference_step = static_cast<pops::Real>(%s);"
+        % scalar_cpp(attrs["fd_eps"]),
+        indent + "controls_.safeguard = %s;" % safeguard,
+        indent + "controls_.initial_step = static_cast<pops::Real>(%s);"
+        % scalar_cpp(attrs["damping"]),
+        indent + "controls_.max_backtracks = %d;" % int(attrs["max_backtracks"]),
+        indent + "controls_.minimum_step = static_cast<pops::Real>(%s);"
+        % scalar_cpp(attrs["minimum_step"]),
+        indent + "controls_.armijo = static_cast<pops::Real>(%s);"
+        % scalar_cpp(attrs["armijo"]),
+    ]
+
+
 def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any,
-                                        scratch: Any, status: str, *, tol: Any,
-                                        max_iter: int, fd_eps: Any, coefficient: Any) -> list:
-    """Emit one fail-closed backward-Euler Newton kernel over a coupled ``RateBundle``.
+                                        scratch: Any, status: str, *, controls: Any,
+                                        coefficient: Any) -> list:
+    """Emit one fail-closed prepared nonlinear solve over a coupled ``RateBundle``.
 
     Every output block is an unknown; additional signed inputs are frozen catalysts.  Results land
-    only in fresh scratches.  A per-cell status field is reduced after the kernel so generated host
-    code can construct one collective ``SolveReport`` before any result is publishable.
+    only in fresh scratches.  The generated route contributes only a residual functor and controls;
+    the unique prepared provider owns convergence, finite-difference Jacobians, pivoted factorization,
+    budgets and diagnostics.
     """
     blocks = list(components)
     offsets = {}
@@ -244,8 +274,6 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
             if state.block in offsets else ("frozen", var[state.id], index)),
     )
     driver = scratch[blocks[0]]
-    tol_cpp = scalar_cpp(tol)
-    eps_cpp = scalar_cpp(fd_eps)
     coefficient_cpp = scalar_cpp(coefficient)
     lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
     for block in blocks:
@@ -284,58 +312,41 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
                 "static_cast<pops::Real>(%s) * dt * (%s);"
                 % (slot, slot, slot, coefficient_cpp, expr.to_cpp()))
     lines.append("    };")
-    lines.append("    pops::Real U_[%d];" % total)
-    lines.append("    for (int c_ = 0; c_ < %d; ++c_) U_[c_] = G_[c_];" % total)
-    lines.append("    int failure_ = 1;")  # iteration_limit until convergence proves otherwise
-    lines.append("    for (int it_ = 0; it_ < %d; ++it_) {" % int(max_iter))
-    lines.append("      pops::Real r_[%d];" % total)
-    lines.append("      residual_eval(U_, r_);")
-    lines.append("      pops::Real rmax_ = pops::Real(0);")
-    lines.append("      for (int c_ = 0; c_ < %d; ++c_) {" % total)
-    lines.append("        if (!std::isfinite(r_[c_])) { failure_ = 3; break; }")
-    lines.append("        rmax_ = std::fmax(rmax_, std::fabs(r_[c_]));")
-    lines.append("      }")
-    lines.append("      if (failure_ == 3) break;")
-    lines.append("      if (rmax_ <= static_cast<pops::Real>(%s)) { failure_ = 0; break; }"
-                 % tol_cpp)
-    lines.append("      pops::Real J_[%d][%d];" % (total, total))
-    lines.append("      pops::Real Up_[%d], rp_[%d];" % (total, total))
-    lines.append("      for (int col_ = 0; col_ < %d; ++col_) {" % total)
-    lines.append("        for (int c_ = 0; c_ < %d; ++c_) Up_[c_] = U_[c_];" % total)
-    lines.append("        const pops::Real eps_ = static_cast<pops::Real>(%s) * "
-                 "std::fmax(std::fabs(U_[col_]), pops::Real(1));" % eps_cpp)
-    lines.append("        Up_[col_] += eps_;")
-    lines.append("        residual_eval(Up_, rp_);")
-    lines.append("        for (int row_ = 0; row_ < %d; ++row_) "
-                 "J_[row_][col_] = (rp_[row_] - r_[row_]) / eps_;" % total)
-    lines.append("      }")
-    lines.append("      pops::Real Jinv_[%d][%d];" % (total, total))
-    lines.append("      if (!pops::detail::mat_inverse<%d>(J_, Jinv_)) { failure_ = 2; break; }"
-                 % total)
-    lines.append("      for (int row_ = 0; row_ < %d; ++row_) {" % total)
-    lines.append("        pops::Real delta_ = pops::Real(0);")
-    lines.append("        for (int col_ = 0; col_ < %d; ++col_) "
-                 "delta_ += Jinv_[row_][col_] * r_[col_];" % total)
-    lines.append("        U_[row_] -= delta_;")
-    lines.append("        if (!std::isfinite(U_[row_])) failure_ = 3;")
-    lines.append("      }")
-    lines.append("      if (failure_ == 3) break;")
-    lines.append("    }")
-    lines.append("    if (failure_ == 1) {")
-    lines.append("      pops::Real final_r_[%d];" % total)
-    lines.append("      residual_eval(U_, final_r_);")
-    lines.append("      pops::Real final_max_ = pops::Real(0);")
-    lines.append("      for (int c_ = 0; c_ < %d; ++c_) "
-                 "final_max_ = std::fmax(final_max_, std::fabs(final_r_[c_]));" % total)
-    lines.append("      if (std::isfinite(final_max_) && "
-                 "final_max_ <= static_cast<pops::Real>(%s)) failure_ = 0;" % tol_cpp)
-    lines.append("      else if (!std::isfinite(final_max_)) failure_ = 3;")
-    lines.append("    }")
+    lines += _prepared_local_control_lines(controls)
+    lines.append(
+        "    const auto prepared_ = pops::prepare_local_nonlinear_problem<%d>("
+        "residual_eval, pops::FiniteDifferenceLocalJacobian<%d>{}, "
+        "pops::AcceptAllLocalCandidates<%d>{}, controls_);"
+        % (total, total, total))
+    lines.append(
+        "    const pops::LocalNonlinearCellResult<%d> solved_ = "
+        "pops::solve_prepared_local_nonlinear(prepared_, G_);" % total)
     for block in blocks:
         for index in range(len(components[block])):
-            lines.append("    %sA(i, j, %d) = U_[%d];"
+            lines.append("    %sA(i, j, %d) = solved_.value[%d];"
                          % (scratch[block], index, offsets[block] + index))
-    lines.append("    %sA(i, j, 0) = static_cast<pops::Real>(failure_);" % status)
+    lines += [
+        "    %sA(i, j, 0) = static_cast<pops::Real>("
+        "pops::local_nonlinear_status_code(solved_.status));" % status,
+        "    %sA(i, j, 1) = static_cast<pops::Real>(solved_.iterations);" % status,
+        "    %sA(i, j, 2) = static_cast<pops::Real>(solved_.evaluations);" % status,
+        "    %sA(i, j, 3) = solved_.reference_residual_norm;" % status,
+        "    %sA(i, j, 4) = solved_.residual_norm;" % status,
+        "    %sA(i, j, 5) = solved_.step_norm;" % status,
+        "    %sA(i, j, 6) = solved_.condition_evidence;" % status,
+        "    %sA(i, j, 7) = static_cast<pops::Real>(solved_.safeguard_steps);" % status,
+        "    %sA(i, j, 10) = static_cast<pops::Real>("
+        "pops::local_nonlinear_status_priority(solved_.status));" % status,
+        "    if (!solved_.solved()) {",
+        "      %sA(i, j, 8) = pops::detail::encode_ranked_local_nonlinear_failure("
+        "pops::local_nonlinear_status_priority(solved_.status), "
+        "i, j, solved_.failing_component);" % status,
+        "      %sA(i, j, 9) = pops::Real(1);" % status,
+        "    } else {",
+        "      %sA(i, j, 8) = pops::Real(0);" % status,
+        "      %sA(i, j, 9) = pops::Real(0);" % status,
+        "    }",
+    ]
     lines += ["  });", "}"]
     return lines
 
@@ -397,7 +408,7 @@ def _emit_apply_kernel(model: Any, name: Any, state_var: Any, out_var: Any, bloc
 
 
 def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var: Any, out_var: Any,
-                                    block_idx: Any = 0) -> list:
+                                    status_var: Any, block_idx: Any = 0) -> list:
     """Lower ``solve_local_linear``: per cell M = I - a*L (a = a_coeff(dt)), invert M (dense N x N
     via pops::detail::mat_inverse) and set outA(i,j,r) = sum_c Minv[r][c] * q(i,j,c), q = the rhs state.
     L's coefficients depend on aux / const / params only, so M is assembled from the aux / param locals +
@@ -410,22 +421,42 @@ def _emit_solve_local_linear_kernel(model: Any, name: Any, a_coeff: Any, rhs_var
     impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
     params_block = block_idx if _has_runtime_param(flat) else None
     body = _kernel_open(out_var, rhs_var, params_block)
+    lambda_index = next(
+        index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const pops::Array4 solve_statusA = %s.fab(li).array();" % status_var,
+    ]
     body += ["    " + ln for ln in _cell_locals(impl, flat, rhs_var, with_cons=False,
                                                  with_prim=False)]
     body.append("    const pops::Real a_ = %s;" % a_cpp)
     body.append("    pops::Real M_[%d][%d];" % (n, n))
+    body.append("    int solve_failure_ = 0;")
     for r in range(n):
         for c in range(n):
             ident = "pops::Real(1)" if r == c else "pops::Real(0)"
             body.append("    M_[%d][%d] = %s - a_ * (%s);" % (r, c, ident, rows[r][c].to_cpp()))
+            body.append(
+                "    if (!std::isfinite(M_[%d][%d])) solve_failure_ = 3;" % (r, c))
+    for c in range(n):
+        body.append(
+            "    if (!std::isfinite(%sA(i, j, %d))) solve_failure_ = 3;"
+            % (rhs_var, c))
     body.append("    pops::Real Minv_[%d][%d];" % (n, n))
-    # mat_inverse returns false on a singular M; we do not branch in the device kernel (no throw on
-    # device). I - a*L is invertible for a well-posed local source (e.g. Lorentz: det = 1 + (a*B)^2 > 0);
-    # a singular user operator yields a non-finite result that surfaces downstream, not a plausible wrong one.
-    body.append("    pops::detail::mat_inverse<%d>(M_, Minv_);" % n)
+    body.append(
+        "    if (solve_failure_ == 0 && !pops::detail::mat_inverse<%d>(M_, Minv_)) "
+        "solve_failure_ = 2;" % n)
     for r in range(n):
         terms = ["Minv_[%d][%d] * %sA(i, j, %d)" % (r, c, rhs_var, c) for c in range(n)]
-        body.append("    outA(i, j, %d) = %s;" % (r, " + ".join(terms)))
+        body.append(
+            "    pops::Real solved_%d_ = %sA(i, j, %d);" % (r, rhs_var, r))
+        body.append(
+            "    if (solve_failure_ == 0) solved_%d_ = %s;"
+            % (r, " + ".join(terms)))
+        body.append(
+            "    if (!std::isfinite(solved_%d_)) solve_failure_ = 3;" % r)
+        body.append("    outA(i, j, %d) = solved_%d_;" % (r, r))
+    body.append(
+        "    solve_statusA(i, j, 0) = static_cast<pops::Real>(solve_failure_);")
     body += _kernel_close()
     return body
 
@@ -506,92 +537,107 @@ def _emit_residual_eval(impl: Any, v: Any, n: Any) -> list:
     return lines
 
 
-def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_var: Any,
-                                       block_idx: Any = 0) -> list:
-    """Lower ``solve_local_nonlinear`` (spec op 10) to a per-cell Newton kernel: from the initial guess
-    U0 (the @p guess_var state), iterate ``J dU = -r``, ``U -= dU`` until ``max_c |r_c| < tol`` or the
-    fixed budget, then write the converged U into @p out_var. Reuses ``pops::for_each_cell`` + the SAME
-    stack dense inverse ``pops::detail::mat_inverse<N>`` as `solve_local_linear` -- no heap / std::function
-    / Eigen in the device kernel (only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
+def _emit_solve_local_nonlinear_kernel(
+    model: Any,
+    v: Any,
+    guess_var: Any,
+    out_var: Any,
+    status_var: Any,
+    active_mask_var: Any,
+    block_idx: Any = 0,
+) -> list:
+    """Lower ``solve_local_nonlinear`` to the unique prepared local nonlinear provider.
 
-    The residual is evaluated by an inlined device lambda built from the residual sub-block (the
-    iterate stack, the frozen guess, named ``source`` / ``apply`` per-cell Exprs, affine combines). The
-    Jacobian is finite-difference: column j perturbs ``U[j] += eps`` and forms ``(r(U+eps e_j)-r(U))/eps``
-    with a relative ``eps`` so it scales with the iterate magnitude."""
+    Generated code contributes only the residual functor, immutable controls and a
+    transaction-local candidate scratch. The provider owns convergence, finite-difference
+    Jacobians, pivoted factorization, safeguards, budgets and typed diagnostics.
+    """
     impl = _model_impl(model)
     n = len(impl.cons_names)
-    tol = scalar_cpp(v.attrs["tol"])
-    max_iter = int(v.attrs["max_iter"])
-    # ADC-617: the FD Jacobian relative step. None on the node -> the historical "1e-7" literal
-    # VERBATIM (so the emitted kernel and its program hash stay byte-identical to before). A configured
-    # fd_eps replaces the literal, and since fd_eps is a hashed node attribute the cache busts.
     fd_eps = v.attrs.get("fd_eps")
-    fd_eps_lit = "1e-7" if fd_eps is None else scalar_cpp(fd_eps)
-    # The aux fields the residual reads: bind them once per cell (constant across the Newton iterates),
-    # so the residual lambda captures them by reference. Gather the dependency set over every term Expr.
     term_exprs = []
     for w in v.attrs["residual_block"]:
         if w.op in ("source", "apply"):
             term_exprs += _residual_term_exprs(impl, w)
-    impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
+    impl.assign_runtime_indices()
     params_block = block_idx if _has_runtime_param(term_exprs) else None
     body = _kernel_open(out_var, guess_var, params_block)
-    # Per-cell aux + the live primitives are NOT pre-bound here: the prims depend on the ITERATE (they
-    # are recomputed inside the residual lambda from Ueval). Only the aux locals are cell constants.
-    body += ["    " + ln for ln in _cell_locals(impl, term_exprs, guess_var, with_cons=False,
-                                                with_prim=False)]
-    # The frozen initial guess as a stack vector (the residual reads it as a per-cell constant).
+    lambda_index = next(index for index, line in enumerate(body) if "pops::for_each_cell" in line)
+    body[lambda_index:lambda_index] = [
+        "  const pops::Array4 solve_statusA = %s.fab(li).array();" % status_var,
+        "  const bool nonlinear_has_active_mask_ = %s != nullptr;" % active_mask_var,
+        "  const pops::ConstArray4 nonlinear_activeA_ = "
+        "nonlinear_has_active_mask_ ? %s->fab(li).const_array() : pops::ConstArray4{};"
+        % active_mask_var,
+    ]
+    body += [
+        "    if (nonlinear_has_active_mask_ && "
+        "!(nonlinear_activeA_(i, j, 0) >= pops::Real(0.5))) {",
+    ]
+    for component in range(n):
+        body.append("      outA(i, j, %d) = %sA(i, j, %d);" % (component, guess_var, component))
+    body += [
+        "      for (int component_ = 0; component_ < 11; ++component_)",
+        "        solve_statusA(i, j, component_) = pops::Real(0);",
+        "      return;",
+        "    }",
+    ]
+    body += [
+        "    " + line
+        for line in _cell_locals(impl, term_exprs, guess_var, with_cons=False, with_prim=False)
+    ]
     body.append("    pops::Real Gval[%d];" % n)
-    for c in range(n):
-        body.append("    Gval[%d] = %sA(i, j, %d);" % (c, guess_var, c))
-    # The residual-eval lambda r(Ueval) -> rout (device, stack-only, no std::function): captures the
-    # cell-constant aux locals + the frozen guess by reference; recomputes the iterate-dependent
-    # primitives inside from Ueval (bound to the conservative names).
-    body.append("    auto residual_eval = [&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {"
-                % (n, n))
-    for c, cn in enumerate(impl.cons_names):
-        body.append("      const pops::Real %s = Ueval[%d];" % (cn, c))
-    # Live primitives of the residual terms, in declaration order (a prim may use an earlier prim).
+    for component in range(n):
+        body.append("    Gval[%d] = %sA(i, j, %d);" % (component, guess_var, component))
+    body.append(
+        "    auto residual_eval = "
+        "[&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {" % (n, n)
+    )
+    for component, name in enumerate(impl.cons_names):
+        body.append("      const pops::Real %s = Ueval[%d];" % (name, component))
     live = impl._live_prims(term_exprs) if term_exprs else set()
-    for p, expr in impl.prim_defs.items():
-        if p in live:
-            body.append("      const pops::Real %s = %s;" % (p, expr.to_cpp()))
-    body += ["      " + ln for ln in _emit_residual_eval(impl, v, n)]
+    for name, expr in impl.prim_defs.items():
+        if name in live:
+            body.append("      const pops::Real %s = %s;" % (name, expr.to_cpp()))
+    body += ["      " + line for line in _emit_residual_eval(impl, v, n)]
     body.append("    };")
-    # Newton state: the iterate U_ (seeded to the guess), the residual r_, the FD Jacobian J_ and step.
-    body.append("    pops::Real U_[%d];" % n)
-    for c in range(n):
-        body.append("    U_[%d] = Gval[%d];" % (c, c))
-    body.append("    pops::Real r_[%d];" % n)
-    body.append("    for (int it_ = 0; it_ < %d; ++it_) {" % max_iter)
-    body.append("      residual_eval(U_, r_);")
-    # Convergence on max_c |r_c| (the per-cell residual infinity norm).
-    body.append("      pops::Real rmax_ = pops::Real(0);")
-    body.append("      for (int c_ = 0; c_ < %d; ++c_) rmax_ = std::fmax(rmax_, std::fabs(r_[c_]));" % n)
-    body.append("      if (rmax_ < static_cast<pops::Real>(%s)) break;" % tol)
-    # FD Jacobian J_[i][j] = (r_i(U + eps e_j) - r_i(U)) / eps, eps relative to |U_j| (floored).
-    body.append("      pops::Real J_[%d][%d];" % (n, n))
-    body.append("      pops::Real Up_[%d];" % n)
-    body.append("      pops::Real rp_[%d];" % n)
-    body.append("      for (int j_ = 0; j_ < %d; ++j_) {" % n)
-    body.append("        for (int k_ = 0; k_ < %d; ++k_) Up_[k_] = U_[k_];" % n)
-    body.append("        const pops::Real eps_ = static_cast<pops::Real>(%s) "
-                "* std::fmax(std::fabs(U_[j_]), static_cast<pops::Real>(1));" % fd_eps_lit)
-    body.append("        Up_[j_] += eps_;")
-    body.append("        residual_eval(Up_, rp_);")
-    body.append("        for (int i_ = 0; i_ < %d; ++i_) J_[i_][j_] = (rp_[i_] - r_[i_]) / eps_;" % n)
-    body.append("      }")
-    # Newton step J dU = -r via the SAME stack dense inverse solve_local_linear uses; U -= dU.
-    body.append("      pops::Real Jinv_[%d][%d];" % (n, n))
-    body.append("      pops::detail::mat_inverse<%d>(J_, Jinv_);" % n)
-    body.append("      for (int i_ = 0; i_ < %d; ++i_) {" % n)
-    body.append("        pops::Real du_ = pops::Real(0);")
-    body.append("        for (int k_ = 0; k_ < %d; ++k_) du_ += Jinv_[i_][k_] * r_[k_];" % n)
-    body.append("        U_[i_] -= du_;")
-    body.append("      }")
-    body.append("    }")
-    for c in range(n):
-        body.append("    outA(i, j, %d) = U_[%d];" % (c, c))
+    attrs = dict(v.attrs)
+    attrs["fd_eps"] = 1.0e-7 if fd_eps is None else fd_eps
+    body += _prepared_local_control_lines(attrs)
+    body.append(
+        "    const auto prepared_ = pops::prepare_local_nonlinear_problem<%d>("
+        "residual_eval, pops::FiniteDifferenceLocalJacobian<%d>{}, "
+        "pops::AcceptAllLocalCandidates<%d>{}, controls_);" % (n, n, n)
+    )
+    body.append(
+        "    const pops::LocalNonlinearCellResult<%d> solved_ = "
+        "pops::solve_prepared_local_nonlinear(prepared_, Gval);" % n
+    )
+    for component in range(n):
+        body.append("    outA(i, j, %d) = solved_.value[%d];" % (component, component))
+    body += [
+        "    solve_statusA(i, j, 0) = static_cast<pops::Real>("
+        "pops::local_nonlinear_status_code(solved_.status));",
+        "    solve_statusA(i, j, 1) = static_cast<pops::Real>(solved_.iterations);",
+        "    solve_statusA(i, j, 2) = static_cast<pops::Real>(solved_.evaluations);",
+        "    solve_statusA(i, j, 3) = solved_.reference_residual_norm;",
+        "    solve_statusA(i, j, 4) = solved_.residual_norm;",
+        "    solve_statusA(i, j, 5) = solved_.step_norm;",
+        "    solve_statusA(i, j, 6) = solved_.condition_evidence;",
+        "    solve_statusA(i, j, 7) = static_cast<pops::Real>(solved_.safeguard_steps);",
+        "    solve_statusA(i, j, 10) = static_cast<pops::Real>("
+        "pops::local_nonlinear_status_priority(solved_.status));",
+        "    if (!solved_.solved()) {",
+        "      solve_statusA(i, j, 8) = "
+        "pops::detail::encode_ranked_local_nonlinear_failure("
+        "pops::local_nonlinear_status_priority(solved_.status), "
+        "i, j, solved_.failing_component);",
+        "      solve_statusA(i, j, 9) = pops::Real(1);",
+        "    } else {",
+        "      solve_statusA(i, j, 8) = pops::Real(0);",
+        "      solve_statusA(i, j, 9) = pops::Real(0);",
+        "    }",
+    ]
     body += _kernel_close()
     return body
 

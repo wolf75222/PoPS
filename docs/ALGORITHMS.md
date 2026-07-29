@@ -23,7 +23,7 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [4. Time-integration bricks: SSPRK and object integrators](#4-time-integration-bricks-ssprk-and-object-integrators)
 - [5. Stiff sources: asymptotic-preserving IMEX and partial IMEX](#5-stiff-sources-asymptotic-preserving-imex-and-partial-imex)
 - [6. Operator splitting: Lie and Strang](#6-operator-splitting-lie-and-strang)
-- [7. Retained low-level multirate formulas](#7-retained-low-level-multirate-formulas)
+- [7. Test-only multirate reference formulas](#7-test-only-multirate-reference-formulas)
 - [8. Parabolic term: diffusion as face flux](#8-parabolic-term-diffusion-as-face-flux)
 - [9. Elliptic: geometric multigrid](#9-elliptic-geometric-multigrid)
 - [10. Elliptic: spectral Poisson (FFT), single-rank and distributed](#10-elliptic-spectral-poisson-fft-single-rank-and-distributed)
@@ -483,7 +483,7 @@ solved once per step limits the field to order 1, whatever SSPRK is chosen on th
 computing declared stability bounds. They do not create a scheduler: production subcycling,
 holds, or catch-up must appear as explicit Program composition (section 7).
 The `SSPRK2Step`/`SSPRK3Step` objects reproduce bit-for-bit the
-old inline copies `SystemCoupler::advance_explicit_ssprk2/ssprk3` (deduplication). Validation:
+old static-driver inline copies (deduplication). Validation:
 `test_user_time_integrator` checks that a user-provided integrator gives the same result
 as a core SSPRK.
 
@@ -512,14 +512,15 @@ without the constraint `dt < eps`. The scalar implicit step (per cell) is solved
 
 $$F(W) = W - \tilde U - \Delta t\,S(W) = 0,\qquad J = I - \Delta t\,\frac{\partial S}{\partial W},$$
 
-exact in one iteration if `S` is linear in `U`, quadratic otherwise. The Jacobian is formed by
-finite differences (no analytic Jacobian to provide on the model side).
+exact in one iteration if `S` is linear in `U`, quadratic otherwise. One prepared provider accepts
+a finite-difference, analytic, or automatic-differentiation Jacobian provider; the implicit-source
+adapter selects the model's analytic `source_jacobian` when available and finite differences otherwise.
 
 **Partial IMEX.** When only a subset of the variables is stiff, we integrate implicitly only
 those components. The solve becomes a forward-backward Euler per component: the explicit components
-advance by forward Euler at the input state, `W_e = U^n_e + dt S_e(U^n)`, then the implicit components
-are solved by Newton on the reduced `n x n` subsystem (`n` = number of implicit ones `<= N`), the
-explicit ones frozen at their advanced value as known data. The partitioning comes either from the model
+advance by forward Euler at the input state, `W_e = U^n_e + dt S_e(U^n)`. The prepared residual keeps
+the complete `N x N` state space: explicit rows are identity constraints fixing those known values,
+while implicit rows carry the backward-Euler residual. The partitioning comes either from the model
 (trait `is_implicit(c)`), or from a mask carried by the block (priority over the model default), which
 allows reusing the same model with different treatments depending on the block. This
 partition is read only when an explicitly authored typed implicit Program primitive is
@@ -531,59 +532,72 @@ function imex_euler_step(U, dt, Texpl, Simpl):
     Texpl(U, dt)            # explicite en place : U <- U^n + dt*T(U^n) (membre connu)
     Simpl(U, dt)            # implicite en place : resout U <- W tel que W = U + dt*S(W)
 
-# pas implicite par cellule (Newton local, IMEX partiel), N = Model::n_vars
-function newton_source_solve(model, Un, aux, dt, iters, mask):
-    impl <- liste des c dans [0,N) tels que is_implicit_component(mask, c)   # m = |impl| <= N
-    W <- Un
-    # (1) composantes explicites : Euler avant a l'etat d'entree
-    if m < N:
-        S_in <- model.source(Un, aux)
-        for c not in impl: W[c] <- Un[c] + dt * S_in[c]
-    # (2) composantes implicites : Newton sur le sous-systeme reduit m x m
-    for it in 0..iters-1:
-        S0 <- model.source(W, aux)
-        for r in 0..m-1:                          # residu F = W - Un - dt*S(W)
-            c <- impl[r];  F[r] <- W[c] - Un[c] - dt * S0[c]
-        for cc in 0..m-1:                          # jacobienne par differences finies, colonne par colonne
-            col <- impl[cc];  h <- 1e-7*|W[col]| + 1e-7
-            Wp <- W;  Wp[col] += h;  Sp <- model.source(Wp, aux)
-            for rr in 0..m-1:
-                row <- impl[rr];  dSdW <- (Sp[row] - S0[row]) / h
-                J[rr][cc] <- (row==col ? 1 : 0) - dt * dSdW       # I - dt*(dS/dW)
-        solve_dense(J, F, delta, m)                # Gauss + pivot partiel, tableau fixe N, device-callable
-        for r in 0..m-1: W[impl[r]] -= delta[r]
-    return W
+# preparation locale, N = Model::n_vars
+function prepare_implicit_source_problem(model, Un, aux, dt, controls, mask):
+    S_in <- model.source(Un, aux)
+    for c in 0..N-1:
+        explicit_target[c] <- Un[c] + dt*S_in[c]
+    residual(W)[c] <-
+        W[c] - Un[c] - dt*model.source(W, aux)[c]  si c est implicite
+        W[c] - explicit_target[c]                  sinon
+    jacobian <- model.source_jacobian si disponible, differences finies sinon
+    return PreparedLocalNonlinearProblem(
+        residual, jacobian, domaine_admissible, controls, echelles)
 
-# stepper de bloc : pas implicite sur la source locale du modele, en place sur tout le MultiFab
-function backward_euler_source(model, aux, U, dt, iters, mask):
+function solve_prepared_local_nonlinear(problem, guess):
+    # tableaux fixes N sur la pile, aucun callback/type-erasure/allocation dans la boucle cellule
+    # residu mis a l'echelle, budget iterations/evaluations, pivot partiel, safeguard explicite
+    return LocalNonlinearCellResult(candidate, status, iterations, evaluations, diagnostics)
+
+# stepper de bloc : candidat transactionnel + publication seulement apres succes collectif
+function backward_euler_source(model, aux, U, dt, controls, mask):
+    candidate <- MultiFab(layout(U))
+    statistics <- MultiFab(layout(U))
     for chaque fab local de U:
-        for_each_cell(box, BackwardEulerSourceKernel:
+        for_each_cell(box, PreparedImplicitSourceKernel:
             Un <- load_state(U, i, j);  a <- load_aux(aux, i, j)
-            W  <- newton_source_solve(model, Un, a, dt, iters, mask)
-            U(i,j,:) <- W)
+            problem <- prepare_implicit_source_problem(model, Un, a, dt, controls, mask)
+            result <- solve_prepared_local_nonlinear(problem, Un)
+            candidate(i,j,:) <- result.candidate
+            statistics(i,j,:) <- result.status et diagnostics)
+    report <- reduction MPI collective des statistics
+    outcome <- SolveOutcome(report, candidate)
+    # le consumer choisit collectivement accept/reject/fail
+    # seul accept publie candidate dans U et les diagnostics persistants
+    return outcome
 ```
 
 **Code.** [`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp):
 `imex_euler_step(U, dt, Texpl, Simpl)` chains the in-place explicit transport then the in-place implicit
-source solve (two callables `TransportStep` / `ImplicitSourceSolve`). The implicit step lives in
-[`include/pops/numerics/time/integrators/implicit_stepper.hpp`](../include/pops/numerics/time/integrators/implicit_stepper.hpp):
-`newton_source_solve<Model>` (local per-cell Newton, forward-backward Euler for the partial IMEX),
-`detail::solve_dense<N>` (dense `n x n` resolution by Gauss elimination with partial pivoting, a
-fixed constexpr array hence device-callable, no allocation), and `backward_euler_source<Model>` which applies
-the kernel `detail::BackwardEulerSourceKernel<Model>` via `for_each_cell` (a named functor and not an
-extended lambda, for robust device emission from an external TU). The implicit/explicit partitioning
+source solve (two callables `TransportStep` / `ImplicitSourceSolve`). The provider in
+[`include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp`](../include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp)
+owns the only cell-local nonlinear algorithm: immutable concrete functors, scaled stopping controls,
+finite-difference/analytic/AD Jacobian providers, partial-pivot factorization without inverse,
+safeguards, budgets and explicit statuses. The adapter in
+[`include/pops/numerics/time/integrators/implicit_stepper.hpp`](../include/pops/numerics/time/integrators/implicit_stepper.hpp)
+forms the forward-backward Euler residual, runs the named device kernel into a candidate field,
+constructs the common collective `SolveReport`, and publishes only a globally solved candidate. The
+implicit/explicit partitioning
 goes through the `PartiallyImplicitModel` concept (trait `M::is_implicit(c)`), `model_is_implicit<Model>`
 (default: everything implicit when the trait is absent), the POD carrier `ImplicitMask<N>` (`active`, `flag[N]`,
 carried by the block, passed by value on the device) and `is_implicit_component<Model, N>` (an active mask
-with priority over the model default). `ImplicitSourceStepper` (`iters = 2`) models the concept
-`ImplicitBlockStepper` for the low-level `SystemCoupler` numerical utility. Production `System` and
-`AmrSystem` do not schedule that helper: their normalized `ProgramGraph` must place a typed implicit
-primitive explicitly, and an unavailable lowering fails closed.
+with priority over the model default). `ImplicitSourceStepper` models the concept
+`ImplicitBlockStepper` for isolated numerical tests. Production `System` and `AmrSystem` do not
+schedule that helper: their normalized `ProgramGraph` must place a typed implicit primitive
+explicitly, and an unavailable lowering fails closed.
 
 **Constraints / remarks.** The implicit step is unconditionally stable for a linear relaxation
 (where a plain Picard fixed point would diverge as soon as `dt * stiffness > 1`, precisely the
-stiff regime); it is exact in one iteration if `S` is linear in `U`, quadratic convergence otherwise
-(default `iters = 2`). The finite-difference Jacobian uses a step `h = 1e-7 |W_col| + 1e-7`.
+stiff regime); an affine source is solved in one Newton iteration up to rounding. Local quadratic
+convergence requires the usual smoothness assumptions and an exact analytic/AD Jacobian; finite
+differences and safeguards retain the same outcome contract without promising that rate.
+The default finite-difference relative step is `1e-7`. `LocalNewton` defaults to an absolute
+threshold of `1e-12` and a budget of 20 iterations; the native implicit-source adapter maps its
+central runtime policy (`abs_tol=1e-12`, `rel_tol=1e-10`, 25 iterations) into the same prepared
+controls. Singular pivots, exhausted budgets, NaN/Inf, inadmissible candidates, safeguard failures
+and unsupported Jacobian capabilities remain distinct outcomes. Collective priority is independent
+of status numbering, so a fatal cell or MPI-rank failure cannot be hidden by a recoverable rejection.
+There is no warning-only or unchecked publication policy.
 Limits: `imex_euler_step` is first order in time (forward-backward Euler); the AP covers the relaxation
 limit, not the condensation of the potential-velocity-Lorentz couplings at high `omega_c`, which is the
 domain of Schur condensation (section 13). Inactive mask and a model without the `is_implicit` trait:
@@ -669,12 +683,22 @@ Lie/Strang endpoints and explicit field-solve placement.
 
 ---
 
-## 7. Retained low-level multirate formulas
+## 7. Test-only multirate reference formulas
 
-**Scope.** This section records the tested low-level `SystemCoupler` formulas and their
-historical descriptor semantics. They are not a production time engine. `System` and
-`AmrSystem` execute only their installed `ProgramGraph`; production subcycling, holds,
-catch-up, and adaptive-step placement must be authored as typed Program composition.
+**Scope.** This section records historical formulas retained only by
+`tests/cpp/support/reference_time_scheduler.hpp` and
+`tests/cpp/support/reference_system_driver.hpp`. They are not installed PoPS code and cannot become
+a production time engine. `System` and `AmrSystem` execute only their installed `ProgramGraph`;
+production subcycling, holds, catch-up, and adaptive-step placement must be authored as typed Program
+composition.
+
+The hardware-dependent cutover proof is deliberately not a routine conformance test. The ADC-700
+campaign under [`benchmarks/adc700/`](../benchmarks/adc700/) builds one AMR workload against the
+pinned pre-cutover native revision and the Program-only candidate, executes both in paired ABBA
+order on a real device, and emits a machine-readable candidate/pre-cutover throughput ratio. It
+rejects CPU runs, incomplete device inventories, incomparable parameters, failed numerical
+signatures, and a median ratio below `0.98`; no report from the campaign means no hardware
+performance proof.
 
 **Intuition.** Not all species of a coupled system require the same time step.
 A stiff species (electrons) splits a macro-step into several substeps ($\text{substeps}$); a
@@ -719,16 +743,17 @@ $$\text{dt}_b = \frac{\text{cfl} \; h_{\text{cell}} \; \text{substeps}_b}{\text{
 where $h_{\text{cell}} = \min(dx, dy)$ in Cartesian, $\min(dr, r_{\min}\, d\theta)$ in polar (the
 physical azimuthal step is minimal at the inner radius), and $w_b$ is the max wave speed of the block.
 
-The retained low-level `SystemCoupler::step_adaptive` algorithm fixes the macro-step on the slowest block,
-$\Delta t = \text{cfl}\, h_{\text{cell}} / w_{\min}$, and subcycles each faster block
+The test-only `ReferenceSystemDriver::step_adaptive` oracle fixes the macro-step on the fastest block,
+$\Delta t = \text{cfl}\, h_{\text{cell}} / w_{\max}$, and assigns each block the runtime stride
 
-$$n_b = \left\lceil \text{stride}_b \; \frac{w_b}{w_{\min}} \right\rceil$$
+$$m_b = \max\!\left(1,\left\lfloor\frac{w_{\max}}{w_b}\right\rfloor\right).$$
 
-times over its effective step $\Delta t^{\text{eff}}_b = m\,\Delta t$; aux is frozen on the macro-step
-(once-per-step coupling). This formula remains a tested numerical building block, but it is not yet
-lowered by `ProgramGraph`. Consequently, the production `System::step_adaptive` facade fails closed
-even when a Program is installed; multirate subcycling must first become an explicit Program
-composition. `System` and `AmrSystem` never fall back to this low-level scheduler.
+Block $b$ advances once every $m_b$ macro-steps by the effective step
+$\Delta t^{\text{eff}}_b = m_b\,\Delta t$; aux is frozen on the macro-step (once-per-step coupling).
+This formula remains a tested numerical building block, but it is not yet lowered by
+`ProgramGraph`. Consequently, no production facade exposes adaptive multirate subcycling; it must
+first become an explicit Program composition. `System` and `AmrSystem` never fall back to this
+low-level scheduler.
 Consequently, `Substeps`, `Stride`, or a `TimePolicy` descriptor by itself has no
 production scheduling effect.
 
@@ -762,19 +787,18 @@ function step_cfl(cfl):                           # choix du macro-pas par CFL
     t += dt; macro_step += 1
     return dt
 
-function step_adaptive(cfl):
-    require installed whole-system Program
-    raise "no ProgramGraph lowering for multirate subcycling"
 ```
 
-**Code.** The skeleton is [`numerics/time/scheduler.hpp`](../include/pops/numerics/time/schemes/scheduler.hpp),
-function `advance_subcycled` (two overloads: with and without `macro_step`). It is a low-level
-composition brick used by `SystemCoupler`, not a fallback of the production facade. It reads
-`block_substeps_v`, `block_stride_v` and `block_time_treatment_v`, aliases of `TimePolicyTraits`
-defined in [`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)
+**Code.** The skeleton is
+[`reference_time_scheduler.hpp`](../tests/cpp/support/reference_time_scheduler.hpp), function
+`pops::test_support::advance_subcycled` (two overloads: with and without `macro_step`). It is
+deliberately outside the installed headers and only the test oracle composes it into a complete
+temporal driver. It reads `reference_block_substeps_v`, `reference_block_stride_v` and
+`reference_block_time_treatment_v`, test-only aliases of `TimePolicyTraits` defined in
+[`numerics/time/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)
 (`TimePolicy<Method, Treatment, substeps, stride>`, aliases `ExplicitTime` / `ImplicitTime` /
 `IMEXTime` / `PrescribedTime`). A `TimeTreatment::Prescribed` block is skipped (the guard
-`!= Prescribed`). The step choice lives in
+`!= Prescribed`). The production step choice lives in
 [`runtime/system_program_driver.hpp`](../include/pops/runtime/system/system_program_driver.hpp): `step_cfl` computes
 the bound, then dispatches the installed normalized graph. Its internal
 `run_program_cadence` mechanically interprets the graph-authored whole-Program cadence
@@ -793,13 +817,13 @@ hold/cache behavior must author that policy explicitly. The speed $w_b$ comes fr
 $\text{dt} = \text{cfl}\,h\,\text{substeps}/(\text{stride}\,w)$ gives, for $\text{substeps}_b > 1$, a
 step $\text{substeps}_b$ times larger than the old formula $\text{dt} = \text{cfl}\,h/(\text{stride}\,w)$.
 Bit-identical parity with the history therefore holds only for $\text{substeps} = 1$ (at any
-stride); to replay a run calibrated on the old formula, pass the explicit historical $\text{dt}$
-to `step(dt)`, not `step_cfl`. Under MPI, the absence of `all_reduce_max` would desynchronize the
+stride); to reproduce the historical test formula, supply the explicit historical $\text{dt}$ to
+the oracle rather than its CFL helper. Under MPI, the absence of `all_reduce_max` would desynchronize the
 ranks (each would see the max of its own boxes only) and would make the simulation diverge. The
 stride semantics is hold-then-catch-up: the slow block is loosely coupled, which is an assumed choice
 (the gas is not resolved at every step). Tests `test_multirate_stride`, `test_adaptive_multirate`
-and `test_cfl_dt` prove the low-level `SystemCoupler` numerical bricks. Facade contract tests
-separately prove that no `System` or `AmrSystem` launch can select them implicitly.
+and `test_cfl_dt` prove the test-only numerical oracle. The architecture gate separately proves that
+no installed header and no `System` or `AmrSystem` launch can select it.
 
 ## 8. Parabolic term: diffusion as face flux
 
@@ -2083,9 +2107,9 @@ the selected blocks; the adaptive executor runs the same graph over a shared hie
 DistributionMapping and geometry per level via `same_layout_or_throw`), performs coarse co-located
 Poisson assembly, and conservatively transfers/refluxes every declared state. Inter-species sources
 are typed component-interface implementations in the graph; the bytecode and native registration
-calls remain internal lowering details. On the coupling side:
-`coupling/system_coupler.hpp` (`SystemAssembler` assembles, `SystemDriver` advances),
-`coupling/amr_system_coupler.hpp` (the system carried over AMR).
+calls remain internal lowering details. On the coupling side,
+`coupling/system_coupler.hpp` contains only `SystemAssembler`, while
+`coupling/amr_system_coupler.hpp` carries the static system over AMR without owning a time scheme.
 [`runtime/model_factory.hpp`](../include/pops/runtime/builders/factory/model_factory.hpp):
 `dispatch_model` / `dispatch_transport` / `dispatch_source` / `dispatch_elliptic` assemble a
 `CompositeModel` from a `ModelSpec` (the core names no scenario).
@@ -2099,8 +2123,9 @@ so the Program applies a term-set whose invariants are machine-checked rather th
 ionization is declared NON-conservative in density (it net-sources an electron/ion pair) while collision
 conserves momentum and thermal exchange conserves energy. The named couplings are presets lowering to
 this one representation, inspectable read-only through `coupled_operators()`. The production facade
-applies `substeps` and `stride` only to the whole installed Program. Per-block multirate cadence
-remains a low-level `SystemCoupler` capability until its explicit `ProgramGraph` lowering exists.
+applies `substeps` and `stride` only to the whole installed Program. Per-block runtime-adaptive
+cadence is unsupported until its explicit `ProgramGraph` lowering exists; only the test oracle
+retains its historical formula.
 In multi-block AMR, `regrid_every > 0` is supported (the union-tag regrid rebuilds the hierarchy from all blocks' tags; `regrid_every == 0` keeps it frozen)
 and `set_conservative_state` accepts a complete block-qualified conservative state for every native
 or deferred compiled (`.so`) block. Without an explicit IMEX mask

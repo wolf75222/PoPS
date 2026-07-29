@@ -2,15 +2,20 @@
 
 The sealed payload preserves owner-rank mappings, all block/level state, aux and elliptic warm starts,
 regrid counters, qualified history rings, rational clocks, lagged flux publications, level relations
-and transfer-plan provenance. Restore is transactional and the public route has one guarantee only:
-bit-identical continuation under the same bound composition. Historical or weaker fallback formats
-are refused.
+and transfer-plan provenance. Restore is transactional: ``bit_identical=True`` requires the recorded
+rank topology, while the default exact-geometry policy may rematerialize hierarchy ownership and
+rank-owned Program state for a new MPI cardinality. Rank-count changes require every persisted
+history ring to be Dense because selective replay is a same-rank operation. Historical or weaker
+fallback formats are refused.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _VERSION
+
+_RestartPhaseT = TypeVar("_RestartPhaseT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +24,9 @@ class _PreparedAMRRestart:
     temporal_state: Any
     cadence_state: Any
     program_state: Any
+    source_program_states: tuple[bytes, ...]
+    source_level_owner_ranks: tuple[tuple[int, ...], ...]
+    checkpoint_ranks: int
     regrid_count: int
     topology_epoch: int
     levels: int
@@ -29,6 +37,8 @@ class _PreparedAMRRestart:
     aux_payload: tuple[Any, ...]
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
+    hierarchy_mode: str
+    hierarchy_identity: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,14 +90,15 @@ def _checkpoint_amr_level_envelope(sim, payload):
     elif callable(stored_files):
         stored_files = stored_files()
     files = set(cast(Any, stored_files))
-    if "n_levels" not in files:
-        raise ValueError("restart: AMR checkpoint lacks level-envelope key 'n_levels'")
+    required = {"n_levels", "configured_n_levels"}
+    missing = sorted(required - files)
+    if missing:
+        raise ValueError(
+            "restart: strict AMR checkpoint lacks level-envelope key(s) %r; "
+            "historical checkpoints require offline migration" % missing
+        )
     checkpoint_active = int(payload["n_levels"])
     _current_active, current_configured = _live_amr_level_envelope(sim)
-    if "configured_n_levels" not in files:
-        raise ValueError(
-            "restart: strict AMR checkpoint lacks level-envelope key 'configured_n_levels'"
-        )
     checkpoint_configured = int(payload["configured_n_levels"])
     if checkpoint_configured != current_configured:
         raise ValueError(
@@ -401,7 +412,17 @@ def write_v3(owner, sim, path, lengths, lower, regrid_every, persistence=None):
     )
 
 
-def prepare_v3(owner, sim, d, lengths, lower):
+def prepare_v3(
+    owner,
+    sim,
+    d,
+    lengths,
+    lower,
+    *,
+    bit_identical=False,
+    hierarchy_mode="restore_recorded_hierarchy",
+    hierarchy_identity=None,
+):
     """Validate an accepted-state v5 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
@@ -414,50 +435,58 @@ def prepare_v3(owner, sim, d, lengths, lower):
 
     topology = checkpoint_topology(owner)
     current_ranks = topology.size
+    if type(bit_identical) is not bool:
+        raise TypeError("restart: bit_identical policy must be an exact bool")
     if "n_ranks" not in d:
         raise ValueError("restart: AMR checkpoint lacks its exact native rank count")
     checkpoint_ranks = int(d["n_ranks"])
-    if checkpoint_ranks != current_ranks:
+    if checkpoint_ranks < 1:
+        raise ValueError("restart: AMR checkpoint rank count must be positive")
+    if bit_identical and checkpoint_ranks != current_ranks:
         raise ValueError(
-            "restart: AMR accepted state was captured under %d rank(s), current run has %d; "
-            "rank-local DistributionMappings and compiled Program publications require the exact "
-            "native rank topology" % (checkpoint_ranks, current_ranks)
+            "restart: bit_identical=True requires the recorded MPI rank topology "
+            "(checkpoint=%d, current=%d)" % (checkpoint_ranks, current_ranks)
         )
+    if hierarchy_mode not in {"restore_recorded_hierarchy", "regrid_on_restart"}:
+        raise ValueError("restart: unsupported hierarchy policy %r" % hierarchy_mode)
+    if hierarchy_mode != "regrid_on_restart" and hierarchy_identity is not None:
+        raise ValueError("restart: hierarchy identity is only valid with RegridOnRestart")
+    if hierarchy_mode == "regrid_on_restart":
+        from pops.output.restart import RegridOnRestart
+
+        expected_identity = RegridOnRestart().identity.token
+        if hierarchy_identity != expected_identity:
+            raise ValueError(
+                "restart: RegridOnRestart hierarchy identity differs from its built-in policy"
+            )
+        if bit_identical:
+            raise ValueError("restart: RegridOnRestart cannot provide bit-identical continuation")
+        if checkpoint_ranks != current_ranks:
+            raise ValueError(
+                "restart: bounded RegridOnRestart requires the checkpoint MPI cardinality "
+                "(checkpoint=%d, current=%d)" % (checkpoint_ranks, current_ranks)
+            )
+        if not sim.installed_program_hash():
+            raise ValueError(
+                "restart: RegridOnRestart requires an artifact-backed compiled AMR Program"
+            )
     checkpoint_levels, checkpoint_configured_levels = _checkpoint_amr_level_envelope(sim, d)
+    from pops.runtime._amr_checkpoint_topology import recorded_rank_topology
+
+    recorded_topology = recorded_rank_topology(d, checkpoint_levels, checkpoint_ranks)
     selected = dict(d)
     selected["configured_n_levels"] = checkpoint_configured_levels
-    for rank in range(checkpoint_ranks):
-        state_key = "program_accepted_state_rank_%d" % rank
-        if state_key not in d:
-            raise ValueError(
-                "restart: AMR checkpoint lacks accepted Program state for rank %d" % rank
-            )
-        state = np.asarray(d[state_key])
-        if state.dtype != np.dtype("uint8") or state.ndim != 1:
-            raise TypeError(
-                "restart: AMR accepted Program state for rank %d must be a uint8 vector" % rank
-            )
-        for level in range(checkpoint_levels):
-            dmap_key = "dmap_rank_%d_level_%d" % (rank, level)
-            if dmap_key not in d:
-                raise ValueError(
-                    "restart: AMR checkpoint lacks owner map for rank %d level %d" % (rank, level)
-                )
-            owner_map = np.asarray(d[dmap_key])
-            if owner_map.dtype.kind not in "iu" or owner_map.ndim != 1:
-                raise TypeError(
-                    "restart: AMR owner map for rank %d level %d must be an integer vector"
-                    % (rank, level)
-                )
+    selected_source_rank = topology.rank if checkpoint_ranks == current_ranks else 0
     selected["program_accepted_state"] = np.asarray(
-        d["program_accepted_state_rank_%d" % topology.rank], dtype=np.uint8
+        d["program_accepted_state_rank_%d" % selected_source_rank], dtype=np.uint8
     )
     for level in range(checkpoint_levels):
         selected["dmap_%d" % level] = np.asarray(
-            d["dmap_rank_%d_level_%d" % (topology.rank, level)], dtype=np.int64
+            recorded_topology.level_owner_ranks[level], dtype=np.int64
         )
     d = selected
-    program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
+    preflight_program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
+    program_state = preflight_program_state if checkpoint_ranks == current_ranks else b""
     cadence = prepare_program_cadence(
         sim,
         d,
@@ -542,6 +571,10 @@ def prepare_v3(owner, sim, d, lengths, lower):
             "restart : checkpoint qualified field providers %r != installed providers %r"
             % (checkpoint_slots, current_slots)
         )
+    if hierarchy_mode == "regrid_on_restart" and checkpoint_slots:
+        raise NotImplementedError(
+            "restart: bounded RegridOnRestart does not yet support elliptic field providers"
+        )
     field_payload = []
     for index, slot in enumerate(checkpoint_slots):
         levels_key = "field_provider_levels_%d" % index
@@ -604,8 +637,15 @@ def prepare_v3(owner, sim, d, lengths, lower):
     if multi:
         from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
 
+        current_base_owner_count = len(sim.level_owner_ranks(0))
+        recorded_base_owner_count = len(recorded_topology.level_owner_ranks[0])
+        if recorded_base_owner_count != current_base_owner_count:
+            raise ValueError(
+                "restart: recorded coarse owner map has %d entries, current composition has %d"
+                % (recorded_base_owner_count, current_base_owner_count)
+            )
         owner_ranks = owner_ranks_for_boxes(d, boxes, nlev)
-        nranks = current_ranks
+        nranks = checkpoint_ranks
         for level in range(1, nlev):
             key = "dmap_%d" % level
             if key not in d:
@@ -693,6 +733,9 @@ def prepare_v3(owner, sim, d, lengths, lower):
         temporal_state=restored_temporal,
         cadence_state=cadence,
         program_state=program_state,
+        source_program_states=recorded_topology.program_states,
+        source_level_owner_ranks=recorded_topology.level_owner_ranks,
+        checkpoint_ranks=checkpoint_ranks,
         regrid_count=int(regrid_count),
         topology_epoch=int(topology_epoch),
         levels=nlev,
@@ -703,7 +746,90 @@ def prepare_v3(owner, sim, d, lengths, lower):
         aux_payload=tuple(aux_payload),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
+        hierarchy_mode=hierarchy_mode,
+        hierarchy_identity=hierarchy_identity,
     )
+
+
+def _restart_topology_image(sim):
+    from pops.runtime._amr_checkpoint_contract import restart_topology_image
+
+    return restart_topology_image(sim)
+
+
+def _restart_collective_phase(
+    owner: Any,
+    phase: str,
+    action: Callable[[], _RestartPhaseT],
+) -> _RestartPhaseT:
+    """Run one restart subphase and make every rank observe the same outcome.
+
+    RegridOnRestart mixes local validation with native collectives.  A rank must never continue into
+    the next native collective while a peer has already failed locally, so every such boundary is
+    closed by the checkpoint communicator before progress continues.
+    """
+    from pops.output._checkpoint_collective import checkpoint_topology, consensus
+
+    value = None
+    error = None
+    try:
+        value = action()
+    except BaseException as caught:
+        error = caught
+    rows = consensus(
+        checkpoint_topology(owner),
+        "AMR RegridOnRestart %s" % phase,
+        error=error,
+        value=value,
+    )
+    if any(row["value"] != rows[0]["value"] for row in rows[1:]):
+        raise RuntimeError("AMR RegridOnRestart ranks returned divergent %s evidence" % phase)
+    return cast(_RestartPhaseT, value)
+
+
+def _restart_composite_integrals(owner, sim, *, phase):
+    plan = _restart_collective_phase(
+        owner,
+        "%s integral plan" % phase,
+        lambda: [
+            [str(block), component]
+            for block in sim.block_names()
+            for component in range(int(sim.block_n_vars(block)))
+        ],
+    )
+    rows = []
+    for index, (block, component) in enumerate(plan):
+        value = _restart_collective_phase(
+            owner,
+            "%s integral %d" % (phase, index),
+            lambda block=block, component=component: float(
+                sim.composite_reduce(block, "sum", component)
+            ),
+        )
+        rows.append(
+            {
+                "block": block,
+                "component": component,
+                "value": value,
+            }
+        )
+    return rows
+
+
+def _require_restart_conservation(before, after):
+    import math
+
+    if [(row["block"], row["component"]) for row in before] != [
+        (row["block"], row["component"]) for row in after
+    ]:
+        raise RuntimeError("restart: RegridOnRestart changed the conservative component registry")
+    for old, new in zip(before, after, strict=True):
+        scale = max(1.0, abs(old["value"]), abs(new["value"]))
+        if not math.isclose(old["value"], new["value"], rel_tol=2.0e-12, abs_tol=2.0e-13 * scale):
+            raise RuntimeError(
+                "restart: RegridOnRestart violated composite conservation for "
+                "%s[%d] (%r -> %r)" % (old["block"], old["component"], old["value"], new["value"])
+            )
 
 
 def apply_v3(owner, sim, prepared):
@@ -711,21 +837,59 @@ def apply_v3(owner, sim, prepared):
     if type(prepared) is not _PreparedAMRRestart:
         raise TypeError("AMR restart requires its exact prepared payload")
     d = prepared.payload
+    from pops.output._checkpoint_collective import checkpoint_topology
     from pops.runtime._program_cadence_checkpoint import restore_program_cadence
+
+    current_ranks = checkpoint_topology(owner).size
+    rank_topology_changed = prepared.checkpoint_ranks != current_ranks
+    target_owner_ranks = prepared.owner_ranks
 
     # (3) Impose the exact recorded hierarchy.
     if prepared.multi:
-        sim.rebuild_hierarchy(prepared.boxes, prepared.owner_ranks)
+        if rank_topology_changed:
+            target_owner_ranks = tuple(
+                int(rank) for rank in sim.rematerialize_hierarchy_ownership(prepared.boxes)
+            )
+            if len(target_owner_ranks) != len(prepared.boxes):
+                raise RuntimeError(
+                    "restart: native ownership rematerialization returned the wrong patch count"
+                )
+        sim.rebuild_hierarchy(prepared.boxes, target_owner_ranks)
     elif prepared.levels >= 2:
+        if rank_topology_changed:
+            raise ValueError(
+                "restart: rank-topology rematerialization requires the unified AMR runtime"
+            )
         sim.set_hierarchy(prepared.boxes)
+
+    program_state = prepared.program_state
+    if rank_topology_changed:
+        if prepared.source_program_states and prepared.source_program_states[0]:
+            target_level_owners = tuple(
+                tuple(int(rank) for rank in sim.level_owner_ranks(level))
+                for level in range(prepared.levels)
+            )
+            program_state = bytes(
+                sim.rematerialize_program_accepted_state(
+                    prepared.source_program_states,
+                    prepared.source_level_owner_ranks,
+                    target_level_owners,
+                )
+            )
+            if not program_state:
+                raise RuntimeError(
+                    "restart: compiled Program rematerialization returned an empty image"
+                )
+        else:
+            program_state = b""
 
     # A freshly bound compiled Program has not executed its prelude yet, so its native history
     # rings do not exist.  Materialize the exact qualified registry from the authenticated accepted
     # image on the already rebuilt hierarchy; never advance physics merely to trigger allocation.
     history_names = [str(name) for name in d["history_names"]] if "history_names" in d else []
-    if history_names and prepared.program_state:
+    if history_names and program_state:
         sim.materialize_program_restart_histories(
-            prepared.program_state,
+            program_state,
             history_names,
             [int(d["history_depth_" + name]) for name in history_names],
             [int(d["history_ncomp_" + name]) for name in history_names],
@@ -766,8 +930,6 @@ def apply_v3(owner, sim, prepared):
 
     # (6) Selectively stored clean-window histories may replay the Program. A window containing a
     # scheduled regrid was explicitly promoted to dense storage during capture.
-    from pops.output._checkpoint_collective import checkpoint_topology
-
     macro_step = int(d["macro_step"])
     if history_names:
         # History replay first primes the facade cursor. A mid-stride cursor is valid only with its
@@ -783,10 +945,9 @@ def apply_v3(owner, sim, prepared):
     # (7) Replay is allowed to mutate Program clocks/ring publications and regrid counters while it
     # reconstructs policy-omitted dense values. Replace those temporary values with the checkpoint's
     # exact accepted semantic state before exposing the runtime again.
-    sim.restore_program_accepted_state(prepared.program_state)
+    sim.restore_program_accepted_state(program_state)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
 
-    validate_restored_contract(sim, d)
     sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
 
     # (8) Clock last: the next cadence decision is identical to the uninterrupted run.
@@ -797,6 +958,65 @@ def apply_v3(owner, sim, prepared):
         accepted_time=float(d["t"]),
     )
     sim.set_clock(float(d["t"]), macro_step)
+    if prepared.hierarchy_mode == "regrid_on_restart":
+        _restart_collective_phase(
+            owner,
+            "exact accepted-state validation",
+            lambda: validate_restored_contract(sim, d),
+        )
+    else:
+        validate_restored_contract(sim, d)
+
+    owner._last_restart_regrid_receipt = None
+    if prepared.hierarchy_mode == "regrid_on_restart":
+        before_topology = _restart_collective_phase(
+            owner,
+            "recorded topology image",
+            lambda: _restart_topology_image(sim),
+        )
+        before_integrals = _restart_composite_integrals(owner, sim, phase="recorded hierarchy")
+        _restart_collective_phase(
+            owner,
+            "native preflight",
+            sim.preflight_regrid_on_restart,
+        )
+        _restart_collective_phase(
+            owner,
+            "native transform",
+            sim.regrid_on_restart,
+        )
+        after_topology = _restart_collective_phase(
+            owner,
+            "transformed topology image",
+            lambda: _restart_topology_image(sim),
+        )
+        after_integrals = _restart_composite_integrals(owner, sim, phase="transformed hierarchy")
+        receipt = {
+            "schema_version": 1,
+            "policy_identity": prepared.hierarchy_identity,
+            "changed": (
+                before_topology["topology_identity"] != after_topology["topology_identity"]
+            ),
+            "accepted_time": float(d["t"]),
+            "accepted_macro_step": macro_step,
+            "before": before_topology,
+            "after": after_topology,
+            "composite_integrals_before": before_integrals,
+            "composite_integrals_after": after_integrals,
+        }
+        from pops.runtime._amr_checkpoint_contract import validate_regridded_contract
+
+        def validate_transformed_state():
+            _require_restart_conservation(before_integrals, after_integrals)
+            validate_regridded_contract(sim, d, receipt)
+            return receipt
+
+        receipt = _restart_collective_phase(
+            owner,
+            "conservation and transformed-state validation",
+            validate_transformed_state,
+        )
+        owner._last_restart_regrid_receipt = receipt
     owner._temporal_restart_state = prepared.temporal_state
     owner._step_controller = None
     return report

@@ -28,6 +28,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
+#include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 
 #include <algorithm>
@@ -121,7 +122,7 @@ static void install_multirate_forward_euler_program(AmrSystem& system, std::vect
   context->install(
       [context, substeps = std::move(substeps), strides = std::move(strides)](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context, &substeps, &strides](double level_dt) {
-          (void)context->solve_fields();
+          (void)consume_solve_outcome(context->solve_fields());
           for (int block = 0; block < context->n_blocks(); ++block) {
             const auto index = static_cast<std::size_t>(block);
             if ((context->macro_step() + 1) % strides[index] != 0)
@@ -227,8 +228,8 @@ static std::unique_ptr<AmrSystem> make_temporal_contract_system(
                              "clocked");
   system->set_density("clocked", initial);
   system->set_poisson("charge_density", "geometric_mg", "periodic");
-  // A configured (but never re-evaluated) criterion selects the two-level hierarchy template.
-  system->set_refinement(1e29);
+  // A prepared (but never re-evaluated) criterion selects the two-level hierarchy template.
+  test::install_prepared_threshold_union(*system, {{"clocked", "u", 1e29}});
   const amr::Rational ratio = relation.temporal_ratio();
   system->set_temporal_relations({ratio.numerator}, {ratio.denominator},
                                  {relation.remainder_policy() == amr::RemainderPolicy::IntegralOnly
@@ -276,7 +277,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       system->set_poisson("charge_density", "geometric_mg", "periodic");
       system->set_density("A", rho0);
       system->set_density("B", rho1);
-      system->set_refinement(1e29);
+      test::install_prepared_threshold_union(*system, {{"A", "n", 1e29}, {"B", "n", 1e29}});
       system->set_temporal_relations({2}, {1}, {"integral_only"});
       system->set_program_block_map({0, 1});
       system->install_program_step([](double) {});
@@ -290,12 +291,12 @@ TEST(test_amr_multiblock_substeps, Runs) {
         context->advance_hierarchy(macro_dt, [context, per_stage](double) {
           if (!per_stage) {
             context->set_stage_time(0, 1);
-            (void)context->solve_fields();
+            (void)consume_solve_outcome(context->solve_fields());
             return;
           }
           for (int stage = 0; stage < 4; ++stage) {
             context->set_stage_time(stage, 4);
-            (void)context->solve_fields();
+            (void)consume_solve_outcome(context->solve_fields());
           }
         });
       });

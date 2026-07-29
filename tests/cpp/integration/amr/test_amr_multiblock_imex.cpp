@@ -42,6 +42,7 @@
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 
+#include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 
 #include <cmath>
@@ -189,20 +190,19 @@ double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
 
 template <class Model>
 AmrCompiledBlockBuilder make_program_block_builder(Model model) {
-  return
-      [model](const detail::SharedAmrLayout& layout, const std::string& name,
-              const std::vector<double>& density, bool has_density,
-              const std::vector<double>& state, bool has_state, double gamma, int substeps,
-              bool recon_prim, int stride, const std::vector<std::string>& implicit_vars,
-              const std::vector<std::string>& implicit_roles, double pos_floor, double weno_epsilon,
-              bool wave_speed_cache) {
-        if (!implicit_vars.empty() || !implicit_roles.empty())
-          throw std::invalid_argument(
-              "the IMEX test Program owns source treatment; its spatial block must be explicit");
-        return detail::build_amr_block<Model, Minmod, RusanovFlux>(
-            model, layout, name, density, has_density, gamma, substeps, recon_prim, stride,
-            has_state ? &state : nullptr, pos_floor, weno_epsilon, wave_speed_cache);
-      };
+  return [model](const detail::SharedAmrLayout& layout, const std::string& name,
+                 const std::vector<double>& density, bool has_density,
+                 const std::vector<double>& state, bool has_state, double gamma, int substeps,
+                 bool recon_prim, int stride, const std::vector<std::string>& implicit_vars,
+                 const std::vector<std::string>& implicit_roles, double pos_floor,
+                 double weno_epsilon, bool wave_speed_cache) {
+    if (!implicit_vars.empty() || !implicit_roles.empty())
+      throw std::invalid_argument(
+          "the IMEX test Program owns source treatment; its spatial block must be explicit");
+    return detail::build_amr_block<Model, Minmod, RusanovFlux>(
+        model, layout, name, density, has_density, gamma, substeps, recon_prim, stride,
+        has_state ? &state : nullptr, pos_floor, weno_epsilon, wave_speed_cache);
+  };
 }
 
 // Install one explicitly authored Lie Program:
@@ -220,7 +220,7 @@ void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool 
   context->install([context, stiff_model, implicit_stiff, stiff_substeps](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context, stiff_model, implicit_stiff,
                                           stiff_substeps](double level_dt) {
-      (void)context->solve_fields();
+      (void)consume_solve_outcome(context->solve_fields());
       MultiFab& stiff_live = context->state(0);
       MultiFab& neutral_live = context->state(1);
       MultiFab& stiff_candidate = context->scratch_state(1000, 0, stiff_live);
@@ -235,8 +235,9 @@ void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool 
         if (implicit_stiff) {
           context->neg_div_flux_default_into(0, stiff_candidate, stiff_rate, 3000 + substep);
           context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
-          backward_euler_source(stiff_model, context->aux(), stiff_candidate, stiff_dt,
-                                NewtonOptions{}, ImplicitMask<StiffModel::n_vars>{}, nullptr);
+          (void)consume_solve_outcome(
+              backward_euler_source(stiff_model, context->aux(), stiff_candidate, stiff_dt,
+                                    NewtonOptions{}, ImplicitMask<StiffModel::n_vars>{}, nullptr));
         } else {
           context->rhs_into(0, stiff_candidate, stiff_rate, 3000 + substep);
           context->axpy(stiff_candidate, stiff_dt, stiff_rate, stiff_dt, {{1, 1, 1}});
@@ -273,8 +274,9 @@ void install_nonlinear_source_program(AmrSystem& system, NonlinearDensityDecay d
       MultiFab& neutral_candidate = context->scratch_state(4001, 0, neutral_live);
       context->lincomb(decay_candidate, Real(1), decay_live, Real(0), decay_live);
       context->lincomb(neutral_candidate, Real(1), neutral_live, Real(0), neutral_live);
-      backward_euler_source(decay, context->aux(), decay_candidate, Real(level_dt), NewtonOptions{},
-                            ImplicitMask<NonlinearDensityDecay::n_vars>{}, nullptr);
+      (void)consume_solve_outcome(backward_euler_source(
+          decay, context->aux(), decay_candidate, Real(level_dt), NewtonOptions{},
+          ImplicitMask<NonlinearDensityDecay::n_vars>{}, nullptr));
       context->commit_many({{&decay_live, &decay_candidate}, {&neutral_live, &neutral_candidate}});
     });
   });
@@ -300,7 +302,8 @@ std::unique_ptr<AmrSystem> make_stiff_pair(int N, double L, double eps, bool ime
   system->set_density("stiff", rho);
   system->set_density("neutral", rho);
   system->set_poisson("charge_density", "geometric_mg", "periodic");
-  system->set_refinement(1e29);
+  test::install_prepared_threshold_union(*system,
+                                         {{"stiff", "rho", 1e29}, {"neutral", "rho", 1e29}});
   system->set_temporal_relations({2}, {1}, {"integral_only"});
   install_stiff_pair_program(*system, stiff_model, imex_stiff, substeps);
   return system;
@@ -323,7 +326,8 @@ std::unique_ptr<AmrSystem> make_nonlinear_source_pair(int n, double rate,
   system->set_density("decay", initial);
   system->set_density("neutral", initial);
   system->set_poisson("charge_density", "geometric_mg", "periodic");
-  system->set_refinement(1e29);
+  test::install_prepared_threshold_union(*system,
+                                         {{"decay", "rho", 1e29}, {"neutral", "rho", 1e29}});
   system->set_temporal_relations({2}, {1}, {"integral_only"});
   install_nonlinear_source_program(*system, decay);
   return system;

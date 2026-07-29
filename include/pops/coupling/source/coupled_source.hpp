@@ -6,7 +6,7 @@
 /// belong in the local PhysicalModel: it is a system-level responsibility. A CoupledSource reads the state
 /// of MULTIPLE blocks (+ aux = phi, grad phi) and updates the blocks over a step dt, via the minimal
 /// contract apply(system, aux, dt). The skeleton applies it by splitting (additive forward-Euler,
-/// SystemCoupler::coupled_source_step). The concrete sources live in adc_cases / the tests (the core stays
+/// a typed Program coupling operation). Concrete sources live in applications / tests (the core stays
 /// model-free).
 
 #pragma once

@@ -11,6 +11,93 @@ from types import MappingProxyType
 from typing import Any, cast
 
 
+def _boundary_face_ordinal(value: Any, *, where: str) -> int:
+    if not isinstance(value, dict):
+        raise TypeError("%s must be one canonical BoundaryHandle identity" % where)
+    orientation = value.get("orientation")
+    if not isinstance(orientation, dict) or set(orientation) != {
+            "schema_version", "axis", "side", "outward_sign"}:
+        raise TypeError("%s has no canonical boundary orientation" % where)
+    axis = orientation["axis"]
+    side = orientation["side"]
+    outward_sign = orientation["outward_sign"]
+    if isinstance(axis, bool) or not isinstance(axis, int) or axis not in (0, 1) \
+            or side not in {"lower", "upper"}:
+        raise ValueError("%s is not one 2D Cartesian face" % where)
+    expected_sign = -1 if side == "lower" else 1
+    if isinstance(outward_sign, bool) or not isinstance(outward_sign, int) \
+            or outward_sign != expected_sign:
+        raise ValueError("%s outward sign is inconsistent with its side" % where)
+    return 2 * axis + (0 if side == "lower" else 1)
+
+
+def _periodic_identification_rows(data: dict[str, Any], face_types: list[str]) -> list[list[int]]:
+    raw = data.get("periodic_identifications", [])
+    if not isinstance(raw, list):
+        raise TypeError("prepared periodic_identifications must be a list")
+    rows = []
+    claimed = set()
+    mapped = 0
+    required = {
+        "source", "target", "source_face", "target_face", "permutation", "signs",
+    }
+    for index, row in enumerate(raw):
+        if not isinstance(row, dict) or set(row) != required:
+            raise TypeError("prepared periodic identification rows must have exact v1 keys")
+        source_face = row["source_face"]
+        target_face = row["target_face"]
+        if isinstance(source_face, bool) or not isinstance(source_face, int) \
+                or isinstance(target_face, bool) or not isinstance(target_face, int) \
+                or source_face not in range(4) or target_face not in range(4) \
+                or source_face == target_face:
+            raise ValueError("prepared periodic endpoints must be distinct face ordinals 0..3")
+        if _boundary_face_ordinal(
+                row["source"], where="periodic[%d].source" % index) != source_face \
+                or _boundary_face_ordinal(
+                    row["target"], where="periodic[%d].target" % index) != target_face:
+            raise ValueError("prepared periodic face ordinals changed BoundaryHandle identity")
+        permutation = row["permutation"]
+        signs = row["signs"]
+        if not isinstance(permutation, list) or any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for value in permutation) or sorted(permutation) != [0, 1]:
+            raise ValueError("prepared periodic permutation must be the exact 2D permutation")
+        if not isinstance(signs, list) or len(signs) != 2 \
+                or any(isinstance(value, bool) or not isinstance(value, int)
+                       or value not in (-1, 1) for value in signs):
+            raise ValueError("prepared periodic signs must contain one -1/+1 per source axis")
+        source_axis = source_face // 2
+        target_axis = target_face // 2
+        if permutation[source_axis] != target_axis:
+            raise ValueError("prepared periodic source normal does not map to target normal")
+        source_outward = -1 if source_face % 2 == 0 else 1
+        target_outward = -1 if target_face % 2 == 0 else 1
+        if signs[source_axis] != -source_outward * target_outward:
+            raise ValueError(
+                "prepared periodic normal sign does not map source interior to target exterior")
+        endpoints = {source_face, target_face}
+        if claimed & endpoints:
+            raise ValueError("one prepared face belongs to multiple periodic identifications")
+        claimed.update(endpoints)
+        if permutation != [0, 1] or signs != [1, 1]:
+            mapped += 1
+        rows.append([
+            source_face, target_face,
+            int(permutation[0]), int(permutation[1]), int(signs[0]), int(signs[1]),
+        ])
+    periodic_faces = {
+        ordinal for ordinal, face_type in enumerate(face_types) if face_type == "periodic"
+    }
+    if raw and claimed != periodic_faces:
+        raise ValueError(
+            "prepared periodic face types differ from explicit identification endpoints")
+    if mapped and len(rows) != 1:
+        raise NotImplementedError(
+            "mapped periodic topology currently requires one identification; "
+            "mixed periodic corners need a composed native scheduler")
+    return rows
+
+
 def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     compiled_by_name = {row.name: row for row in install_plan.artifact.blocks}
     reports = {}
@@ -99,6 +186,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         required_depth = first.get("required_depth")
         if isinstance(required_depth, bool) or not isinstance(required_depth, int):
             raise TypeError("prepared boundary required_depth must be an exact integer")
+        periodic_identifications = _periodic_identification_rows(first, types)
         base_arguments = (
             block.name,
             str(first.get("identity")),
@@ -109,6 +197,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             list(component_roles),
             list(first.get("omitted_interface_faces", [])),
             state_identity,
+            periodic_identifications,
         )
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):
@@ -208,8 +297,10 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
         raise ValueError(
             "boundary component field dependencies lack exact solved-field routes: %s"
             % sorted(missing_fields))
-    field_routes = tuple(
-        (identity, available_fields[identity]) for identity in sorted(required_fields))
+    # The exact solved-field -> provider-storage registry is shared by every prepared runtime
+    # consumer.  Boundary components use a subset, while AMR tagging may consume another subset;
+    # install the complete resolved table once instead of manufacturing a tagging-only route.
+    field_routes = tuple(sorted(available_fields.items()))
 
     # Installation is an all-authorities transaction from Python's point of
     # view.  Validate and authenticate every block/component row before the
@@ -226,7 +317,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     try:
         for state_identity, block_name in sorted(state_routes.items()):
             cast(Callable[..., Any], install_state_route)(block_name, state_identity)
-        install_field_route = getattr(native, "_install_boundary_field_route", None)
+        install_field_route = getattr(native, "_install_field_storage_route", None)
         if field_routes and not callable(install_field_route):
             raise NotImplementedError(
                 "the selected native provider cannot bind qualified boundary field storage")
@@ -554,7 +645,9 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
 
         flow_bootstrap_tagging(
             engine, install_plan.bootstrap_plan, install_plan.params,
-            clock_identity=install_plan.amr_providers["tagger"]["clock_identity"])
+            clock_identity=install_plan.amr_providers["tagger"]["clock_identity"],
+            field_plans=install_plan.artifact.plan.field_plans,
+        )
 
 
 __all__ = ["finalize_runtime_authorities", "install_runtime_authorities"]

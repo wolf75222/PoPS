@@ -227,6 +227,18 @@ class _CompositeTemporalRestartState:
         return self._same_attribute("controller_state")
 
     @property
+    def event_queue(self) -> Any:
+        return self._same_attribute("event_queue")
+
+    @property
+    def time_hex(self) -> Any:
+        return self._same_attribute("time_hex")
+
+    @property
+    def macro_step(self) -> Any:
+        return self._same_attribute("macro_step")
+
+    @property
     def program_schedule(self) -> Any:
         return self._same_attribute("program_schedule")
 
@@ -245,6 +257,24 @@ class _CompositeTemporalRestartState:
 
     def before_attempt(self, *, time: Any, macro_step: Any) -> None:
         self._broadcast("before_attempt", time=time, macro_step=macro_step)
+
+    def before_queued_attempt(
+        self, event: Any, *, time: Any, macro_step: Any,
+    ) -> None:
+        for state in self.states:
+            state.before_queued_attempt(event, time=time, macro_step=macro_step)
+
+    def queue_error_controlled_proposal(self, **kwargs: Any) -> Any:
+        return _common_exact(
+            (state.queue_error_controlled_proposal(**kwargs) for state in self.states),
+            where="multi-layout temporal proposal",
+        )
+
+    def queued_error_controlled_proposal(self, **kwargs: Any) -> Any:
+        return _common_exact(
+            (state.queued_error_controlled_proposal(**kwargs) for state in self.states),
+            where="multi-layout queued temporal proposal",
+        )
 
     def accept(self, **kwargs: Any) -> None:
         self._broadcast("accept", **kwargs)
@@ -266,7 +296,11 @@ class _MultiLayoutUniformExecutor:
     """Atomic coordinator for independently compiled Uniform layout Systems."""
 
     def __init__(
-        self, plan: Any, runtime_plan: Any, engines: dict[str, Any], blocks: dict[str, str],
+        self,
+        plan: Any,
+        runtime_plan: Any,
+        engines: dict[str, Any],
+        blocks: dict[str, str],
         transfer_routes: tuple[_NativeTransferRoute, ...],
     ) -> None:
         self._plan = plan
@@ -285,6 +319,7 @@ class _MultiLayoutUniformExecutor:
         self._last_mapping_receipts = ()
         self._last_run_manifest = None
         self._last_run_identity = None
+        self._restart_lineage_identity = None
         self._last_restart_identity = None
         self._step_strategy = _common_exact(
             (engine._step_strategy for engine in self._engines.values()),
@@ -326,6 +361,18 @@ class _MultiLayoutUniformExecutor:
     @property
     def last_restart_identity(self) -> Any:
         return self._last_restart_identity
+
+    def _restore_checkpoint_run_identity(self, identity: Any) -> None:
+        from pops.identity import Identity
+
+        if type(identity) is not Identity or identity.domain != "run":
+            raise TypeError("multi-layout restart requires an authenticated run identity")
+        restored = Identity.from_data(identity.to_data())
+        self._last_run_manifest = None
+        self._last_run_identity = restored
+        self._restart_lineage_identity = restored
+        for engine in self._engines.values():
+            engine._restore_checkpoint_run_identity(restored)
 
     def executor_for_layout(self, layout_id: str) -> Any:
         try:
@@ -369,6 +416,23 @@ class _MultiLayoutUniformExecutor:
     def macro_step(self) -> int:
         return int(self._common_clock("macro_step"))
 
+    def _consume_step_projections(self) -> tuple[str, ...]:
+        """Consume the union of projection identities executed by child layouts."""
+        result = []
+        for engine in self._engines.values():
+            consume = getattr(engine, "_consume_step_projections", None)
+            if not callable(consume):
+                raise TypeError("multi-layout child lacks the step-projection report protocol")
+            rows = consume()
+            if not isinstance(rows, (tuple, list)) or any(
+                not isinstance(name, str) or not name for name in rows
+            ):
+                raise TypeError("multi-layout child returned an invalid step-projection report")
+            for name in rows:
+                if name not in result:
+                    result.append(name)
+        return tuple(result)
+
     def _native_step_target(self) -> Any:
         """The coordinator itself is the raw target for one composite attempt."""
         return self
@@ -377,7 +441,12 @@ class _MultiLayoutUniformExecutor:
         return _mapping_blocks(self._plan, transfer)
 
     def _authenticate_mapping_receipt(
-        self, route: _NativeTransferRoute, receipt: Any, *, generation: int, attempt: int,
+        self,
+        route: _NativeTransferRoute,
+        receipt: Any,
+        *,
+        generation: int,
+        attempt: int,
     ) -> None:
         transfer = route.transfer
         component = self._plan.components[transfer.component_id]
@@ -453,7 +522,8 @@ class _MultiLayoutUniformExecutor:
             for route in self._transfer_routes:
                 receipt = route.session.apply(generation, attempt)
                 self._authenticate_mapping_receipt(
-                    route, receipt, generation=generation, attempt=attempt)
+                    route, receipt, generation=generation, attempt=attempt
+                )
                 receipts.append(receipt)
             for engine in self._engines.values():
                 native_step_target(engine).step(dt)
@@ -569,7 +639,12 @@ class _MultiLayoutUniformExecutor:
         return to_data() if callable(to_data) else result
 
     def _checkpoint_children(
-        self, root: str, prefix: str, topology: Any, *, retain_payloads: bool,
+        self,
+        root: str,
+        prefix: str,
+        topology: Any,
+        *,
+        retain_payloads: bool,
     ) -> tuple[tuple[str, ...], tuple[bytes, ...]]:
         """Capture every child collectively; only rank zero may read the resulting files."""
         from pops.output._checkpoint_collective import (
@@ -591,8 +666,7 @@ class _MultiLayoutUniformExecutor:
         for index, engine in enumerate(self._engines.values()):
             engine._last_run_manifest = self._last_run_manifest
             engine._last_run_identity = self._last_run_identity
-            expected = canonical_checkpoint_path(
-                os.path.join(root, "%s-%d" % (prefix, index)))
+            expected = canonical_checkpoint_path(os.path.join(root, "%s-%d" % (prefix, index)))
             produced = None
             capture_error = None
             try:
@@ -616,15 +690,16 @@ class _MultiLayoutUniformExecutor:
                 )
 
             def authenticate_root(
-                child_engine: Any = engine, child_path: Path = expected,
+                child_engine: Any = engine,
+                child_path: Path = expected,
             ) -> bytes | None:
                 with np.load(child_path, allow_pickle=False) as stored:
-                    authenticate_checkpoint_payload(
-                        child_engine, stored, runtime_kind="uniform")
+                    authenticate_checkpoint_payload(child_engine, stored, runtime_kind="uniform")
                 return child_path.read_bytes() if retain_payloads else None
 
             payload = root_effect(
-                topology, "%s layout %d authentication" % (prefix, index),
+                topology,
+                "%s layout %d authentication" % (prefix, index),
                 authenticate_root,
             )
             paths.append(str(expected))
@@ -640,8 +715,7 @@ class _MultiLayoutUniformExecutor:
 
         def create_root() -> str:
             target.parent.mkdir(parents=True, exist_ok=True)
-            return tempfile.mkdtemp(
-                prefix=".%s.%s." % (target.name, purpose), dir=target.parent)
+            return tempfile.mkdtemp(prefix=".%s.%s." % (target.name, purpose), dir=target.parent)
 
         return str(root_value(topology, "%s workspace selection" % purpose, create_root))
 
@@ -650,7 +724,8 @@ class _MultiLayoutUniformExecutor:
         from pops.output._checkpoint_collective import root_effect
 
         root_effect(
-            topology, "%s workspace cleanup" % purpose,
+            topology,
+            "%s workspace cleanup" % purpose,
             lambda: shutil.rmtree(root, ignore_errors=False),
         )
 
@@ -676,7 +751,8 @@ class _MultiLayoutUniformExecutor:
         root = self._shared_checkpoint_root(target, topology, "capture")
         try:
             _paths, children = self._checkpoint_children(
-                root, "child", topology, retain_payloads=True)
+                root, "child", topology, retain_payloads=True
+            )
 
             def write_root() -> None:
                 if len(children) != len(self._engines):
@@ -686,18 +762,22 @@ class _MultiLayoutUniformExecutor:
                     "macro_step": np.asarray(self.macro_step()),
                     "abi_key": np.asarray(abi_key()),
                     "layout_ids": np.asarray(tuple(self._engines), dtype=np.str_),
-                    "mapping_evaluations": np.asarray(json.dumps(
-                        self._mapping_evaluations,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )),
+                    "mapping_evaluations": np.asarray(
+                        json.dumps(
+                            self._mapping_evaluations,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    ),
                 }
                 for index, child in enumerate(children):
                     payload["layout_checkpoint_%d" % index] = np.frombuffer(
-                        child, dtype=np.uint8).copy()
+                        child, dtype=np.uint8
+                    ).copy()
                 seal_checkpoint_payload(self, payload, runtime_kind="multi_layout_uniform")
                 fd, temporary_name = tempfile.mkstemp(
-                    prefix=".%s." % target.name, suffix=".tmp", dir=target.parent)
+                    prefix=".%s." % target.name, suffix=".tmp", dir=target.parent
+                )
                 os.close(fd)
                 temporary = os.fspath(temporary_name)
                 try:
@@ -708,26 +788,44 @@ class _MultiLayoutUniformExecutor:
                     Path(temporary).unlink(missing_ok=True)
                 with np.load(target, allow_pickle=False) as stored:
                     authenticate_checkpoint_payload(
-                        self, stored, runtime_kind="multi_layout_uniform")
+                        self, stored, runtime_kind="multi_layout_uniform"
+                    )
 
             root_effect(topology, "multi-layout container sealing", write_root)
         finally:
             self._cleanup_checkpoint_root(root, topology, "capture")
         return str(target)
 
-    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedMultiLayoutRestart:
+    def _prepare_checkpoint_restart(
+        self,
+        payload: bytes,
+        *,
+        bit_identical: bool,
+        hierarchy_mode: str = "restore_recorded_hierarchy",
+        hierarchy_identity: str | None = None,
+    ) -> _PreparedMultiLayoutRestart:
+        if hierarchy_mode != "restore_recorded_hierarchy":
+            raise NotImplementedError("multi-layout restart does not yet support RegridOnRestart")
+        if hierarchy_identity is not None:
+            raise ValueError(
+                "multi-layout restart hierarchy identity is only valid with RegridOnRestart"
+            )
         import numpy as np
-        from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.output._checkpoint_collective import (
+            decode_checkpoint_bytes,
+            require_restart_bit_identical,
+        )
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
 
+        policy = require_restart_bit_identical(bit_identical, where="multi-layout restart")
         stored = decode_checkpoint_bytes(payload)
         identity = authenticate_checkpoint_payload(
-            self, stored, runtime_kind="multi_layout_uniform")
+            self, stored, runtime_kind="multi_layout_uniform"
+        )
         layout_ids = tuple(str(value) for value in stored["layout_ids"])
         if layout_ids != tuple(self._engines):
             raise ValueError("checkpoint layout identities differ from RuntimeInstance")
-        child_names = tuple(
-            "layout_checkpoint_%d" % index for index in range(len(layout_ids)))
+        child_names = tuple("layout_checkpoint_%d" % index for index in range(len(layout_ids)))
         if any(name not in stored.files for name in child_names):
             raise ValueError("checkpoint lacks a per-layout native payload")
         mapping = json.loads(str(stored["mapping_evaluations"]))
@@ -737,23 +835,26 @@ class _MultiLayoutUniformExecutor:
         ):
             raise ValueError("checkpoint mapping counters differ from RuntimeInstance plan")
         prepared_children = []
-        for index, (engine, name) in enumerate(zip(
-            self._engines.values(), child_names, strict=True
-        )):
+        for index, (engine, name) in enumerate(
+            zip(self._engines.values(), child_names, strict=True)
+        ):
             prepare = getattr(engine, "_prepare_checkpoint_restart", None)
             if not callable(prepare):
                 raise TypeError(
-                    "layout %d engine lacks the in-memory restart preflight protocol" % index)
+                    "layout %d engine lacks the in-memory restart preflight protocol" % index
+                )
             child_bytes = np.asarray(stored[name], dtype=np.uint8).tobytes()
-            prepared_children.append(prepare(child_bytes))
+            prepared_children.append(prepare(child_bytes, bit_identical=policy))
         return _PreparedMultiLayoutRestart(identity, dict(mapping), tuple(prepared_children))
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_snapshot" in self.__dict__:
             raise RuntimeError("multi-layout checkpoint restart transaction is already active")
         self._checkpoint_restart_snapshot = (
-            dict(self._mapping_evaluations), self._last_restart_identity,
-            self._temporal_restart_state, getattr(self, "_step_controller", None),
+            dict(self._mapping_evaluations),
+            self._last_restart_identity,
+            self._temporal_restart_state,
+            getattr(self, "_step_controller", None),
         )
         begun = []
         try:
@@ -768,7 +869,8 @@ class _MultiLayoutUniformExecutor:
                 except BaseException as rollback_error:
                     rollback_errors.append(rollback_error)
             mapping, identity, temporal, controller = self.__dict__.pop(
-                "_checkpoint_restart_snapshot")
+                "_checkpoint_restart_snapshot"
+            )
             self._mapping_evaluations = mapping
             self._last_restart_identity = identity
             self._temporal_restart_state = temporal
@@ -816,9 +918,10 @@ class _MultiLayoutUniformExecutor:
         del self._checkpoint_restart_snapshot
         if errors:
             raise RuntimeError(
-                "multi-layout child rollback failed: %s" % "; ".join(map(str, errors)))
+                "multi-layout child rollback failed: %s" % "; ".join(map(str, errors))
+            )
 
-    def restart(self, path: Any) -> str:
+    def restart(self, path: Any, *, bit_identical: bool = False) -> str:
         from pops.output._checkpoint_collective import (
             canonical_checkpoint_path,
             checkpoint_topology,
@@ -832,10 +935,14 @@ class _MultiLayoutUniformExecutor:
         rows = consensus(topology, "multi-layout restart target", value=str(target))
         if any(row["value"] != str(target) for row in rows):
             raise ValueError("multi-layout restart target differs across ranks")
-        payload = root_bytes(
-            topology, "multi-layout restart read", target.read_bytes)
+        payload = root_bytes(topology, "multi-layout restart read", target.read_bytes)
         restore_checkpoint_payload(
-            self, self, payload, phase_prefix="multi-layout restart")
+            self,
+            self,
+            payload,
+            bit_identical=bit_identical,
+            phase_prefix="multi-layout restart",
+        )
         return str(target)
 
 
@@ -902,9 +1009,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         target = configs[transfer.target_layout_id]
         _require_conservative_cell_average_geometry(source, target)
         if source.n < target.n or source.n % target.n:
-            raise ValueError(
-                "CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts"
-            )
+            raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
 
     from pops.runtime._runtime_executor import _uniform_initial_sources
 
@@ -923,7 +1028,11 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         }
         view = _LayoutCompiledView(plan.artifact, programs[layout_id])
         engine._install_compiled(
-            view, instances=selected, params=plan.params, aux={}, field_plans={},
+            view,
+            instances=selected,
+            params=plan.params,
+            aux={},
+            field_plans={},
             initial_sources=selected_initials,
         )
         engines[layout_id] = engine
@@ -942,9 +1051,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             or source_nx % target_nx
             or source_ny % target_ny
         ):
-            raise ValueError(
-                "CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts"
-            )
+            raise ValueError("CONSERVATIVE_CELL_AVERAGE_V1 requires aligned fine-to-coarse layouts")
         ratio = (source_ny // target_ny, source_nx // target_nx)
         component = plan.components[transfer.component_id]
         source_native = source_engine._native_step_target()
@@ -973,16 +1080,17 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
         target_components = int(target_engine.n_vars(target_block))
         if source_components != target_components or source_components <= 0:
             raise ValueError("layout transfer source/target component counts differ")
-        transfer_routes.append(_NativeTransferRoute(
-            transfer=transfer,
-            source_block=source_block,
-            target_block=target_block,
-            session=session,
-            source_element_count=source_components * source_nx * source_ny,
-            destination_element_count=target_components * target_nx * target_ny,
-        ))
-    return _MultiLayoutUniformExecutor(
-        plan, runtime_plan, engines, blocks, tuple(transfer_routes))
+        transfer_routes.append(
+            _NativeTransferRoute(
+                transfer=transfer,
+                source_block=source_block,
+                target_block=target_block,
+                session=session,
+                source_element_count=source_components * source_nx * source_ny,
+                destination_element_count=target_components * target_nx * target_ny,
+            )
+        )
+    return _MultiLayoutUniformExecutor(plan, runtime_plan, engines, blocks, tuple(transfer_routes))
 
 
 __all__ = ["install_multi_layout_uniform"]

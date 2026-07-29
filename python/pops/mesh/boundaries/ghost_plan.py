@@ -481,17 +481,30 @@ class GhostProducerPlan:
         data = self.execution_authority.compile_boundary_data()
         if type(data) is not dict:
             raise TypeError("boundary compile authority must return a dict")
-        periodic = [row for production in self.productions
-                    for row in production.producer.periodic]
-        for identification in periodic:
+        periodic_identifications = []
+        for identification in self.topology.periodic:
             orientation = identification.orientation
             dimension = len(orientation.permutation)
-            if orientation.permutation != tuple(range(dimension)) or any(
-                    sign != 1 for sign in orientation.signs):
-                raise NotImplementedError(
-                    "the installed native provider does not execute signed/permuted periodic "
-                    "identifications; select an oriented-periodic provider before compile"
-                )
+            if dimension != 2:
+                if orientation.permutation != tuple(range(dimension)) or any(
+                        sign != 1 for sign in orientation.signs):
+                    raise NotImplementedError(
+                        "the installed native provider executes signed/permuted periodic "
+                        "identifications in exactly two dimensions"
+                    )
+                # Preserve the historical translation-only lowering for non-2D providers. Their
+                # native runtimes already derive ordinary axis periodicity from the face table.
+                continue
+            periodic_identifications.append({
+                "source": identification.source.canonical_identity(),
+                "target": identification.target.canonical_identity(),
+                "source_face": 2 * identification.source.orientation.axis + (
+                    0 if identification.source.orientation.side.value == "lower" else 1),
+                "target_face": 2 * identification.target.orientation.axis + (
+                    0 if identification.target.orientation.side.value == "lower" else 1),
+                "permutation": list(orientation.permutation),
+                "signs": list(orientation.signs),
+            })
         if self.interfaces:
             depth = data.get("required_depth")
             if isinstance(depth, bool) or not isinstance(depth, int) or depth != 1:
@@ -613,6 +626,7 @@ class GhostProducerPlan:
                 for row in self.interfaces
             ],
             "omitted_interface_faces": omitted_interface_faces,
+            "periodic_identifications": periodic_identifications,
             "interface_component_bindings": [
                 {
                     "interface": row.canonical_identity(),
@@ -651,6 +665,7 @@ class GhostProducerPlan:
         result["interface_endpoints"] = compiled["interface_endpoints"]
         result["interface_component_bindings"] = compiled[
             "interface_component_bindings"]
+        result["periodic_identifications"] = compiled["periodic_identifications"]
         result["identity"] = _canonical_id({
             "schema_version": _SCHEMA_VERSION,
             "prepared_authority": data.get("identity"),

@@ -16,7 +16,6 @@ from pops.runtime._numeric import native_block_scalars, native_real, positive_in
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
-    NEWTON_DEFAULT_FAIL_POLICY,
     NEWTON_DEFAULT_FD_EPS,
     NEWTON_DEFAULT_MAX_ITERS,
     NEWTON_DEFAULT_REL_TOL,
@@ -86,7 +85,6 @@ class _SystemInstall(_System):
                           rel_tol, abs_tol, fd_eps,
                           getattr(time, "newton_diagnostics", False),
                           damping,
-                          getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           positivity_floor,
                           getattr(spatial, "wave_speed_cache", False), **_weno_kwargs(spatial))
 
@@ -132,7 +130,6 @@ class _SystemInstall(_System):
                               rel_tol, abs_tol, fd_eps,
                               getattr(time, "newton_diagnostics", False),
                               damping,
-                              getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                               positivity_floor,
                               getattr(spatial, "wave_speed_cache", False),
                               **_weno_kwargs(spatial))
@@ -158,12 +155,10 @@ class _SystemInstall(_System):
                 != NEWTON_DEFAULT_FD_EPS
                 or getattr(time, "newton_diagnostics", False)
                 or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)
-                != NEWTON_DEFAULT_DAMPING
-                or getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY)
-                != NEWTON_DEFAULT_FAIL_POLICY):
+                != NEWTON_DEFAULT_DAMPING):
             raise ValueError(
                 "add_equation: the Newton options (newton_max_iters/rel_tol/abs_tol/fd_eps/"
-                "diagnostics/damping/fail_policy) are carried only by a composed native model "
+                "diagnostics/damping) are carried only by a composed native model "
                 "(ModelSpec), available on the internal native engine API (not part of the "
                 "pops.bind surface). The compiled model (.so) ABI does not carry them.")
 
@@ -277,7 +272,7 @@ class _SystemInstall(_System):
         self.add_block(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
 
-    def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg",
+    def set_poisson(self, rhs: Any = "charge_density", solver: Any = None,
                     bc: Any = None, wall: Any = None,
                     epsilon: float = 1.0, abs_tol: float = 0.0, rel_tol: Any = None,
                     max_cycles: Any = None, min_coarse: Any = None, pre_smooth: Any = None,
@@ -285,11 +280,14 @@ class _SystemInstall(_System):
                     coarse_threshold: Any = None) -> Any:
         """Configure the shared Poisson solve with typed boundary and wall selectors.
 
-        ``bc`` accepts a typed native boundary descriptor; omission keeps automatic boundary
+        ``solver=None`` keeps the geometry's explicit native default (``geometric_mg`` on a
+        Cartesian domain, ``polar`` on a polar mesh). ``bc`` accepts a typed native boundary descriptor; omission keeps automatic boundary
         selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
         :class:`pops.mesh.geometry.NoWall`; omission selects no wall. Strings and a separate
         ``wall_radius`` are deliberately absent: every descriptor owns its complete data.
         """
+        if solver is None:
+            solver = self._s.poisson_solver()
         bc_token = "auto" if bc is None else _lower_bc(bc)
         wall_token, wall_radius = ("none", 0.0) if wall is None else _lower_wall(wall)
         self._set_poisson_native(
@@ -338,7 +336,7 @@ class _SystemInstall(_System):
         if not isinstance(model.rhs, CompositeRhs):
             raise NotImplementedError("add_elliptic_model: rhs must be composite_rhs() (sum of the "
                                       "per-block bricks) or charge_density() (its usual case)")
-        kind = solver.kind if solver is not None else "geometric_mg"
+        kind = solver.kind if solver is not None else None
         # Honest token: "composite" for a generic right-hand side, "charge_density" (alias,
         # bit-identical) when all blocks carry a charge density. Both take the
         # SAME numerical path on the C++ side (sum of each block's elliptic bricks).

@@ -4,8 +4,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
+from pops._report import Report
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
 
@@ -24,6 +25,32 @@ def _thaw(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_thaw(item) for item in value]
     return value
+
+
+class _BoundaryOperatorReport(Report):
+    """Detached exact contribution/component rows for one implicit boundary operation."""
+
+    def __init__(self, ghost_plan_identity: str, terms: list[dict[str, Any]]) -> None:
+        self.ghost_plan_identity = ghost_plan_identity
+        self.terms = terms
+
+    def to_dict(self) -> dict[str, Any]:
+        return self._stamp({
+            "ghost_plan_identity": self.ghost_plan_identity,
+            "terms": _thaw(self.terms),
+        })
+
+
+class BoundaryResidualReport(_BoundaryOperatorReport):
+    """Residual-side implicit boundary terms carried by one compiled ghost plan."""
+
+    report_type = "boundary_residual"
+
+
+class BoundaryLinearizationReport(_BoundaryOperatorReport):
+    """JVP-side implicit boundary terms carried by one compiled ghost plan."""
+
+    report_type = "boundary_linearization"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +93,81 @@ class CompiledBoundaryPlan:
             "compiled_boundary_plan": self.canonical_id,
             "compile_data": _thaw(self.compile_data),
         }
+
+    def _operator_report(
+            self, *, contribution_table: str, target_name: str, operation: str,
+            report_type: type[_BoundaryOperatorReport]) -> _BoundaryOperatorReport:
+        data = _thaw(self.compile_data)
+        contributions = data.get(contribution_table, [])
+        templates = data.get("component_region_templates", [])
+        if not isinstance(contributions, list) or not isinstance(templates, list):
+            raise TypeError("compiled boundary contribution report requires canonical lists")
+
+        components: dict[str, dict[str, Any]] = {}
+        for template in templates:
+            if not isinstance(template, dict) or template.get("operation") != operation:
+                continue
+            target = template.get("target")
+            qualified_id = target.get("qualified_id") if isinstance(target, dict) else None
+            if not isinstance(qualified_id, str) or not qualified_id:
+                raise TypeError(
+                    "compiled boundary %s component has no qualified target" % operation)
+            if qualified_id in components:
+                raise ValueError(
+                    "compiled boundary %s report has duplicate component target %s"
+                    % (operation, qualified_id))
+            components[qualified_id] = template
+
+        rows = []
+        contribution_targets = set()
+        for contribution in contributions:
+            if not isinstance(contribution, dict):
+                raise TypeError("compiled boundary contribution report rows must be mappings")
+            target = contribution.get(target_name)
+            qualified_id = target.get("qualified_id") if isinstance(target, dict) else None
+            if not isinstance(qualified_id, str) or not qualified_id:
+                raise TypeError(
+                    "compiled boundary %s contribution has no qualified operator"
+                    % target_name)
+            if qualified_id in contribution_targets:
+                raise ValueError(
+                    "compiled boundary %s report has duplicate contribution target %s"
+                    % (target_name, qualified_id))
+            contribution_targets.add(qualified_id)
+            try:
+                component = components[qualified_id]
+            except KeyError:
+                raise ValueError(
+                    "compiled boundary %s contribution %s has no exact component report row"
+                    % (target_name, qualified_id)) from None
+            rows.append({
+                "contribution": contribution,
+                "component_region": component,
+            })
+        extra = sorted(set(components) - contribution_targets)
+        if extra:
+            raise ValueError(
+                "compiled boundary %s report has unclaimed component target(s) %s"
+                % (target_name, extra))
+        return report_type(self.canonical_id, rows)
+
+    def residual_report(self) -> BoundaryResidualReport:
+        """Return exact residual contributions and their authenticated component rows."""
+        return cast(BoundaryResidualReport, self._operator_report(
+            contribution_table="residual_contributions",
+            target_name="residual",
+            operation="residual",
+            report_type=BoundaryResidualReport,
+        ))
+
+    def linearization_report(self) -> BoundaryLinearizationReport:
+        """Return exact JVP contributions and their authenticated component rows."""
+        return cast(BoundaryLinearizationReport, self._operator_report(
+            contribution_table="linearization_contributions",
+            target_name="linearization",
+            operation="jvp",
+            report_type=BoundaryLinearizationReport,
+        ))
 
     def runtime_boundary_data(self, params: Any) -> dict[str, Any]:
         """Bind scalar values through one generic evaluator, never an authoring callback."""
@@ -155,6 +257,8 @@ class CompiledBoundaryPlan:
             "corner_required": bool(data.get("corner_policies")),
             "residual_contributions": data.get("residual_contributions", []),
             "linearization_contributions": data.get("linearization_contributions", []),
+            "residual_report": self.residual_report().to_dict(),
+            "linearization_report": self.linearization_report().to_dict(),
             "interfaces": data.get("interfaces", []),
             # The endpoint rows were proved from owner-qualified BoundaryHandles by the
             # resolved GhostProducerPlan.  They are executable topology evidence, not
@@ -162,6 +266,7 @@ class CompiledBoundaryPlan:
             "interface_endpoints": data.get("interface_endpoints", []),
             "interface_component_bindings": data.get("interface_component_bindings", []),
             "omitted_interface_faces": list(data.get("omitted_interface_faces", [])),
+            "periodic_identifications": list(data.get("periodic_identifications", [])),
             "ghost_plan_identity": self.canonical_id,
             "producer_order": list(data["producer_order"]),
             "component_regions": component_regions,
@@ -173,4 +278,6 @@ class CompiledBoundaryPlan:
         return evidence
 
 
-__all__ = ["CompiledBoundaryPlan"]
+__all__ = [
+    "BoundaryLinearizationReport", "BoundaryResidualReport", "CompiledBoundaryPlan",
+]

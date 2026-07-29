@@ -63,15 +63,27 @@ def _program(*, consume=True, coefficient=1, action=None):
     return module, program, solved
 
 
-def test_coupled_implicit_is_one_native_newton_kernel_with_explicit_action():
+def test_coupled_implicit_uses_one_prepared_provider_with_explicit_action():
     _module, program, solved = _program()
     source = emit_cpp_program(program, model=None)
 
     assert len(solved) == 2
     assert source.count("pops::for_each_cell") == 1
-    assert "pops::detail::mat_inverse<6>" in source
+    assert "pops::prepare_local_nonlinear_problem<6>" in source
+    assert "pops::solve_prepared_local_nonlinear(prepared_, G_)" in source
+    assert "pops::detail::mat_inverse<6>" not in source
+    assert "Jinv_" not in source
+    assert "for (int it_ =" not in source
     assert "Ueval[0] - G_[0] - static_cast<pops::Real>(pops::Real(1)) * dt *" in source
     assert "pops::reduce_max(ci_status_" in source
+    assert "ctx.scalar_scratch(2, 0, u0, 11, 0)" in source
+    assert "pops::detail::encode_ranked_local_nonlinear_failure(" in source
+    assert "pops::detail::decode_ranked_local_nonlinear_failure(" in source
+    assert "collective status/location precedence mismatch" in source
+    assert "pops::reduce_sum(ci_status_" in source
+    assert "pops::local_nonlinear_status_priority(solved_.status)" in source
+    assert "pops::local_nonlinear_status_from_priority(" in source
+    assert "pops::SolveAction::kRejectAttempt" in source
     assert "SolveStatus::kSingular" in source
     assert "StepAttemptRejected" in source
     assert source.count("ctx.commit_many(") == 1
@@ -83,13 +95,14 @@ def test_coupled_reject_attempt_codegen_filters_selected_statuses_and_fails_clos
     _module, program, _solved = _program(
         action=time.RejectAttempt(statuses=("iteration_limit",)))
     source = emit_cpp_program(program, model=None)
-    start = source.index("if (!ci_report_")
-    end = source.index(" action=fail_run", start)
+    start = source.index("if (!ci_outcome_")
+    end = source.index(".action_name()", start)
     guard = source[start:end]
 
     assert "SolveStatus::kIterationLimit" in guard
     assert "SolveStatus::kSingular" not in guard
     assert "SolveStatus::kInvalidEvaluation" not in guard
+    assert ".action == pops::SolveAction::kRejectAttempt" in guard
     assert "StepAttemptRejected" in guard
 
 
@@ -118,7 +131,7 @@ def test_unconsumed_coupled_implicit_is_rejected_by_graph_validation_and_codegen
 def test_failed_coupled_implicit_never_aliases_live_state_before_guard():
     _module, program, _solved = _program()
     source = emit_cpp_program(program, model=None)
-    guard = source.index("if (!ci_report_")
+    guard = source.index("if (!ci_outcome_")
     first_commit = source.index("ctx.commit_many(", guard)
 
     assert "ctx.scratch_state(2, 0, u0)" in source
@@ -205,4 +218,6 @@ def test_dense_newton_dimension_follows_the_typed_rate_bundle():
     program.commit_many({left_next: solved[left_n.block], right_next: solved[right_n.block]})
 
     source = emit_cpp_program(program, model=None)
-    assert "pops::detail::mat_inverse<17>" in source
+    assert "pops::prepare_local_nonlinear_problem<17>" in source
+    assert "pops::LocalNonlinearCellResult<17>" in source
+    assert "pops::detail::mat_inverse<17>" not in source

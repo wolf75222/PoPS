@@ -12,7 +12,7 @@
 // BoxArray multi-box round-robin) : c'est le seul chemin ou (R4) est active (en grossier REPLIQUE,
 // chaque rang a deja la grille de tags complete, all_reduce_or serait l'identite). regrid_every=2 :
 // la grille se re-grille effectivement pendant la sequence, en suivant l'union des tags densite par
-// bloc + le tag de phi sur |grad phi| (set_phi_refinement, feuille aux du graphe prepare). On avance
+// bloc + le tag de phi sur |grad phi|, tous installes dans un seul graphe prepare. On avance
 // plusieurs macro-pas (donc plusieurs regrids), puis on observe la hierarchie finale.
 //
 // ASSERTIONS :
@@ -39,6 +39,7 @@
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
 #include "test_harness.hpp"  // pops::test::checksum (somme des carres partagee)
+#include "amr_tagging_test_authority.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -102,15 +103,15 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   sys.add_block("a", exb_charge(q0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.add_block("b", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.set_poisson("charge_density", "geometric_mg", "periodic");
-  sys.set_refinement(1.5);  // tag densite > 1.5 (union des deux blobs, par bloc)
-  sys.set_phi_refinement(
-      1e-3);  // tag |grad phi| > 1e-3 (bord d'anneau ; predicat phi cable facade)
+  test::install_prepared_thresholds_and_shared_aux_gradient(sys, {{"a", "n", 1.5}, {"b", "n", 1.5}},
+                                                            Real(1e-3));
   sys.set_density("a", rho0);
   sys.set_density("b", rho1);
   test::install_forward_euler_program(sys);
 
   const double m0a = sys.mass("a");  // declenche le build paresseux
   const double m0b = sys.mass("b");
+  EXPECT_NE(sys.engine(), nullptr);
 
   const double dt = 1e-3;
   for (int s = 0; s < 16; ++s)

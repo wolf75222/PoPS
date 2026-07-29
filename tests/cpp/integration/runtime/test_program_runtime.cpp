@@ -142,6 +142,9 @@ TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
   EXPECT_TRUE(state.block_map_.empty());
   EXPECT_TRUE(state.block_params_.empty());
   EXPECT_FALSE(state.dt_bound_);
+  EXPECT_FALSE(state.restart_regrid_preflight_);
+  EXPECT_FALSE(state.restart_regrid_);
+  EXPECT_FALSE(state.restart_resync_);
   EXPECT_FALSE(state.authorizes_history_replay("gas.previous", 3))
       << "a direct native step must revoke every earlier artifact authority";
 }
@@ -150,7 +153,12 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   runtime::program::ProgramRuntimeState state;
   int old_steps = 0;
   int new_steps = 0;
+  int restart_preflights = 0;
+  int restart_regrids = 0;
+  int restart_resyncs = 0;
   state.install_unverified_step([&](double) { ++old_steps; });
+  state.install_restart_hooks([&] { ++restart_preflights; }, [&] { ++restart_regrids; },
+                              [&] { ++restart_resyncs; }, "test");
   state.operator_authorities_ = {{{1, 2, 3, 4}}};
   state.history_replay_authorities_ = {{"gas.previous", 3}};
   state.installed_hash_ = "accepted-artifact";
@@ -176,6 +184,12 @@ TEST(ProgramRuntime, ArtifactStepInstallRequiresOneNewStepAndRollsBackExactly) {
   ASSERT_TRUE(state.dt_bound_);
   EXPECT_DOUBLE_EQ(state.dt_bound_(0.4), 0.2);
   EXPECT_TRUE(state.authorizes_history_replay("gas.previous", 3));
+  EXPECT_NO_THROW(state.preflight_regrid_on_restart("test"));
+  EXPECT_NO_THROW(state.regrid_on_restart("test"));
+  EXPECT_NO_THROW(state.resync_after_restart_rollback("test"));
+  EXPECT_EQ(restart_preflights, 1);
+  EXPECT_EQ(restart_regrids, 1);
+  EXPECT_EQ(restart_resyncs, 1);
 
   const auto no_op = state.capture_artifact_step_install();
   EXPECT_THROW(state.require_exact_artifact_step_install(no_op, "test"), std::runtime_error);
@@ -226,14 +240,6 @@ TEST(ProgramRuntime, FacadeTemporalOperationsRequireProgramBeforeMutation) {
   expect_program_required([&] { system.step(0.01); }, "System::step");
   expect_program_required([&] { system.advance(0.01, 0); }, "System::advance");
   expect_program_required([&] { (void)system.step_cfl(0.4); }, "System::step_cfl");
-  expect_program_required([&] { (void)system.step_adaptive(0.4); }, "System::step_adaptive");
-
-  int program_calls = 0;
-  system.install_program_step([&](double) { ++program_calls; });
-  EXPECT_THROW((void)system.step_adaptive(0.4), std::logic_error);
-  EXPECT_EQ(program_calls, 0);
-  EXPECT_DOUBLE_EQ(system.time(), initial_time);
-  EXPECT_EQ(system.macro_step(), initial_step);
 }
 
 TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
@@ -552,7 +558,7 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   System ref(cfg);
   add_gas(ref, gamma);
   ref.set_state("gas", U0);
-  ref.solve_fields();
+  (void)pops::consume_solve_outcome(ref.solve_fields());
   const std::vector<double> R0 = ref.eval_rhs("gas");
   std::vector<double> Uref(4 * nn);
   for (std::size_t k = 0; k < Uref.size(); ++k)
@@ -569,7 +575,8 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   ctx.install([ctx](double h) {
     ctx.begin_step(h);
     ctx.set_stage_time(0, 1);
-    ctx.solve_fields();
+    auto field_outcome = ctx.solve_fields();
+    (void)field_outcome.consume(SolveConsumption::kAccept);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);
       MultiFab R = ctx.rhs_scratch_like(U);
@@ -1182,6 +1189,124 @@ TEST(ProgramRuntime, PointwiseProjectionPreservesEmbeddedBoundaryInactiveCells) 
   }
   EXPECT_GT(active_cells, 0);
   EXPECT_GT(inactive_cells, 0);
+}
+
+TEST(ProgramRuntime, ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+
+  System sim(cfg);
+  add_projecting_gas(sim, gamma);
+  sim.set_poisson("charge_density", "geometric_mg");
+  std::vector<double> initial(4 * static_cast<std::size_t>(n) * n);
+  fill_ic(initial, n, gamma);
+  sim.set_state("gas", initial);
+  sim.set_program_block_map({0});
+
+  int consumed_solves = 0;
+  runtime::program::ProgramContext ctx(&sim);
+  ctx.install([ctx, &consumed_solves](double dt) {
+    ctx.begin_step(dt);
+    MultiFab& state = ctx.state(0);
+    MultiFab& candidate = ctx.scratch_state(666001, 0, state);
+    candidate.set_val(Real(-1));
+
+    auto field_outcome = ctx.solve_fields();
+    const SolveReport field_report = field_outcome.consume(SolveConsumption::kAccept);
+    if (!field_report.solved_value_available())
+      throw std::logic_error("ProjectAndRecheck test did not receive a solved field value");
+    ++consumed_solves;
+
+    if (ctx.min(0, candidate) <= Real(0)) {
+      ctx.apply_projection(0, candidate);
+      if (ctx.min(0, candidate) <= Real(0))
+        throw runtime::program::StepAttemptRejected(
+            SolveStatus::kIterationLimit, "guard recheck",
+            "ProjectAndRecheck projection did not repair the candidate");
+    }
+    ctx.commit_many({{&state, &candidate}});
+  });
+  sim.set_program_block_map({0});
+
+  sim.step(1e-3);
+
+  EXPECT_EQ(consumed_solves, 1);
+  EXPECT_EQ(sim.macro_step(), 1);
+  EXPECT_DOUBLE_EQ(sim.time(), 1e-3);
+  const std::vector<double> accepted = sim.get_state("gas");
+  const std::size_t cells = static_cast<std::size_t>(n) * n;
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    EXPECT_DOUBLE_EQ(accepted[cell], 2.0);
+    for (int component = 1; component < 4; ++component)
+      EXPECT_DOUBLE_EQ(accepted[static_cast<std::size_t>(component) * cells + cell], -1.0);
+  }
+}
+
+TEST(ProgramRuntime, ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+
+  System sim(cfg);
+  add_projecting_gas(sim, gamma);
+  sim.set_poisson("charge_density", "geometric_mg");
+  std::vector<double> initial(4 * static_cast<std::size_t>(n) * n);
+  fill_ic(initial, n, gamma);
+  sim.set_state("gas", initial);
+  sim.register_history("gas.guard_candidate", 2, 4);
+  sim.set_program_block_map({0});
+
+  int consumed_solves = 0;
+  runtime::program::ProgramContext ctx(&sim);
+  ctx.install([ctx, &consumed_solves](double dt) {
+    ctx.begin_step(dt);
+    MultiFab& state = ctx.state(0);
+    MultiFab& candidate = ctx.scratch_state(666002, 0, state);
+    candidate.set_val(Real(-1));
+
+    auto field_outcome = ctx.solve_fields();
+    const SolveReport field_report = field_outcome.consume(SolveConsumption::kAccept);
+    if (!field_report.solved_value_available())
+      throw std::logic_error("ProjectAndRecheck test did not receive a solved field value");
+    ++consumed_solves;
+
+    if (ctx.min(0, candidate) < Real(3)) {
+      ctx.apply_projection(0, candidate);
+      ctx.store_history("gas.guard_candidate", candidate);
+      ctx.rotate_histories();
+      ctx.cache_store_scratch(666002, candidate);
+      ctx.record_scalar("project_and_recheck.provisional", Real(1));
+      if (ctx.min(0, candidate) < Real(3))
+        throw runtime::program::StepAttemptRejected(
+            SolveStatus::kIterationLimit, "guard recheck",
+            "ProjectAndRecheck candidate remained inadmissible");
+    }
+    ctx.commit_many({{&state, &candidate}});
+  });
+  sim.set_program_block_map({0});
+
+  EXPECT_THROW(sim.step(1e-3), runtime::program::StepAttemptRejected);
+
+  EXPECT_EQ(consumed_solves, 1);
+  EXPECT_EQ(sim.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.0);
+  EXPECT_EQ(sim.get_state("gas"), initial);
+  EXPECT_FALSE(sim.history_initialized("gas.guard_candidate"));
+  EXPECT_FALSE(sim.program_cache().has(666002));
+  EXPECT_TRUE(sim.program_diagnostics().empty());
 }
 
 TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntryPoints) {

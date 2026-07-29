@@ -500,6 +500,7 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
       boundary.fill_same_level_and_physical(U, point);
       detail::compute_amr_face_fluxes<Limiter, Flux>(model, U, aux, Fx, Fy, geom.dx(), geom.dy(),
                                                      rprim, pf, weps, ws_cache);
+      detail::zero_prepared_interface_fluxes(Fx, Fy, boundary.context());
       pops::mf_eval_rhs(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
     };
     b.level_flux_capture_neg_div_prepared =
@@ -511,6 +512,7 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
           boundary.fill_same_level_and_physical(U, point);
           detail::compute_amr_face_fluxes<Limiter, Flux>(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(),
                                                          rprim, pf, weps, ws_cache);
+          detail::zero_prepared_interface_fluxes(Fx, Fy, boundary.context());
           pops::mf_eval_rhs(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
         };
   }
@@ -709,7 +711,7 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
 
 /// Wires @p model (concrete CompositeModel) as an AMR block of @p sys, with the requested scheme. The
 /// build is DEFERRED (like add_block): the captured closures are invoked at the first
-/// step/mass/density via ensure_built(), after set_refinement / set_poisson / set_density.
+/// step/mass/density via ensure_built(), after prepared AMR authorities and initial state are installed.
 ///
 /// Every block count materializes the same type-erased AmrRuntimeBlock on the shared layout.
 /// @p time: legacy authoring token normalized into the installed ProgramGraph. The runtime block

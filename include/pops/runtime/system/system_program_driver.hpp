@@ -3,13 +3,17 @@
 #include <pops/core/foundation/types.hpp>                   // Real
 #include <pops/coupling/source/coupled_source_program.hpp>  // CoupledFreqKernel (per-cell coupled frequency)
 #include <pops/mesh/execution/for_each.hpp>  // reduce_max_cell (max mu over the cells, device-clean functor)
+#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/parallel/comm.hpp>  // all_reduce_min/max (global bounds: identical dt on all ranks)
+#include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 
 #include <stdexcept>
 
 #include <algorithm>  // std::min, std::max (CFL: min grid physical step, min dt over the blocks)
 #include <cmath>      // std::isfinite (step_cfl)
+#include <exception>  // std::exception_ptr (rank-symmetric field-solve failure)
 #include <limits>     // std::numeric_limits (per-block CFL: dt = min over the blocks)
 #include <string>     // last_dt_bound (name of the active bound of the last step_cfl)
 
@@ -244,7 +248,44 @@ class SystemProgramDriver {
                   double max_dt = std::numeric_limits<double>::infinity(), double min_dt = 0.0) {
     Impl* P = owner_;
     P->program_.require_step_installed("System::step_cfl");
-    P->solve_fields();
+    SolveReport field_report;
+    std::exception_ptr field_error;
+    long field_failed_local = 0;
+    try {
+      field_report = P->solve_fields();
+    } catch (...) {
+      field_error = std::current_exception();
+      field_failed_local = 1;
+    }
+    if (all_reduce_max(field_failed_local) != 0) {
+      if (n_ranks() == 1 && field_error != nullptr)
+        std::rethrow_exception(field_error);
+      throw std::runtime_error("System::step_cfl field solver failed on at least one MPI rank");
+    }
+    const long malformed_local =
+        solve_report_is_publishable(field_report, std::numeric_limits<int>::max()) ? 0L : 1L;
+    if (all_reduce_max(malformed_local) != 0)
+      throw std::runtime_error("System::step_cfl field solver published a malformed SolveReport");
+    ExactSolveReportConsensusScratch field_report_consensus;
+    if (!field_report_consensus.agrees(field_report))
+      throw std::runtime_error("System::step_cfl field solver report differs between MPI ranks");
+
+    SolveOutcome field_outcome = SolveOutcome::collective_world(std::move(field_report));
+    const SolveConsumption field_action =
+        field_outcome.report().solved_value_available()
+            ? SolveConsumption::kAccept
+            : (field_outcome.report().action == SolveAction::kRejectAttempt
+                   ? SolveConsumption::kRejectAttempt
+                   : SolveConsumption::kFailRun);
+    field_report = field_outcome.consume(field_action);
+    if (!field_report.solved_value_available()) {
+      if (field_action == SolveConsumption::kRejectAttempt)
+        throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
+                                                    field_report.reason);
+      throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
+                               field_report.status_name() + " action=" +
+                               field_report.action_name() + " reason=" + field_report.reason);
+    }
     // MIN physical step of the grid (Cartesian min(dx,dy) / polar min(dr, r_min*dtheta), cf.
     // cfl_grid_h). The rest of the CFL formula (per block, substeps/stride) is unchanged.
     const Real h = cfl_grid_h();

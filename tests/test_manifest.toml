@@ -1115,6 +1115,11 @@ sources = ["tests/cpp/unit/numerics/test_flux_interfaces.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_interface_flux_fragment_ledger"
+sources = ["tests/cpp/unit/numerics/test_interface_flux_fragment_ledger.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_multiblock_interface_scheduler"
 sources = ["tests/cpp/integration/runtime/test_multiblock_interface_scheduler.cpp"]
 labels = ["integration", "runtime", "medium"]
@@ -1174,8 +1179,13 @@ labels = ["integration", "python", "mpi", "medium"]
 mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_history_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_scientific_output_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py", nproc = 2 },
+]
+mpi_orchestrators = [
+  { path = "tests/python/integration/mpi/test_amr_rank_change_restart.py" },
 ]
 
 [[python.suite]]

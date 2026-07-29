@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
@@ -19,6 +20,7 @@
 #include <pops/parallel/load_balance.hpp>
 
 #include <cmath>
+#include <array>
 #include <cstdio>
 #include <new>
 #include <stdexcept>
@@ -93,6 +95,55 @@ static int pops_run_test_mpi_fillboundary(int argc, char** argv) {
           for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
             if (std::fabs(F(i, j, c) - deep_val(i, j, c)) > 1e-12)
               ++fails;
+    }
+  }
+
+  // The prepared boundary authority carries a non-translation periodic identification all the way
+  // into the same native MPI halo transport. xlo<->xhi wraps normally while the tangential cell
+  // index is reflected. With this multi-box SFC distribution, opposite reflected strips cross rank
+  // ownership as well as local box ownership.
+  {
+    constexpr int mapped_ng = 2;
+    const Box2D mapped_domain = Box2D::from_extents(32, 24);
+    const BoxArray mapped_boxes = BoxArray::from_domain(mapped_domain, 8);
+    const DistributionMapping mapped_distribution = make_sfc_distribution(mapped_boxes, np);
+    MultiFab mapped(mapped_boxes, mapped_distribution, 1, mapped_ng);
+    auto mapped_value = [](int i, int j) { return Real(i + 1000 * j); };
+    for (int local = 0; local < mapped.local_size(); ++local) {
+      Fab2D& field = mapped.fab(local);
+      const Box2D valid = field.box();
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+          field(i, j, 0) = mapped_value(i, j);
+    }
+    const PeriodicIdentification2D reflected_x{0, 1, std::array<int, 2>{{0, 1}},
+                                               std::array<int, 2>{{1, -1}}};
+    auto boundary = prepare_hyperbolic_boundary<2>(
+        {"periodic", "periodic", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+        {"test::mpi::xlo", "test::mpi::xhi", "test::mpi::ylo", "test::mpi::yhi"}, {"Scalar"}, true);
+    PreparedBoundaryPlan plan("test::mpi::reflected-periodic", mapped_ng, std::move(boundary), {},
+                              "", {}, {reflected_x});
+
+    plan.fill_same_level_and_physical(mapped, mapped_domain);
+
+    for (int local = 0; local < mapped.local_size(); ++local) {
+      const Fab2D& field = mapped.fab(local);
+      const Box2D grown = field.grown_box();
+      for (int j = mapped_domain.lo[1]; j <= mapped_domain.hi[1]; ++j) {
+        const int reflected_j = mapped_domain.lo[1] + mapped_domain.hi[1] - j;
+        for (int depth = 1; depth <= mapped_ng; ++depth) {
+          const int lower_ghost = mapped_domain.lo[0] - depth;
+          const int upper_ghost = mapped_domain.hi[0] + depth;
+          if (grown.contains(lower_ghost, j) &&
+              std::fabs(field(lower_ghost, j, 0) -
+                        mapped_value(mapped_domain.hi[0] - depth + 1, reflected_j)) > 1e-12)
+            ++fails;
+          if (grown.contains(upper_ghost, j) &&
+              std::fabs(field(upper_ghost, j, 0) -
+                        mapped_value(mapped_domain.lo[0] + depth - 1, reflected_j)) > 1e-12)
+            ++fails;
+        }
+      }
     }
   }
 

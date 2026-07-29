@@ -1,13 +1,14 @@
-// Pas macro choisi par CFL multi-especes (sec.8.2 C) : SystemDriver::step_cfl. Le pas est
+// Pas macro choisi par CFL multi-especes (sec.8.2 C), conserve comme oracle numerique test-only.
 // dt = cfl * min(dx,dy) / w_max, ou w_max est la plus grande vitesse d'onde sur TOUTES les
 // especes -> l'espece la plus rapide contraint le pas. Combine au Stride d'une espece lente,
 // cela donne le multirate pratique.
 
 #include <gtest/gtest.h>
 
+#include "reference_system_driver.hpp"
+
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
-#include <pops/coupling/system/system_coupler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -98,7 +99,7 @@ TEST(test_cfl_dt, fastest_species_sets_the_step) {
   Blk fast{"fast", AdvectX{Real(2)}, Uf, bc};
   Blk slow{"slow", AdvectX{Real(0.5)}, Us, bc};
   CoupledSystem system{fast, slow};
-  auto sim = make_system_coupler(system, geom, ba, bc, ZeroSystemRhs{});
+  auto sim = test_support::make_reference_system_driver(system, geom, ba, bc, ZeroSystemRhs{});
 
   const Real cfl = Real(0.4);
   const Real h = std::min(geom.dx(), geom.dy());
@@ -128,7 +129,7 @@ TEST(test_cfl_dt, quiescent_system_dt_clamped_to_floor) {
   Uq.set_val(Real(1));
   Blk quiet{"quiet", AdvectX{Real(0)}, Uq, bc};  // a = 0 -> w_max = 0
   CoupledSystem qsys{quiet};
-  SystemCoupler qsim(qsys, geom, ba, bc, ZeroSystemRhs{});
+  auto qsim = test_support::make_reference_system_driver(qsys, geom, ba, bc, ZeroSystemRhs{});
   const Real dtq = qsim.step_cfl(cfl);
   const Real floor_dt = cfl * h / Real(1e-30);  // denominateur clampe au plancher
   EXPECT_TRUE(std::isfinite(dtq)) << "quiescent_dt_finite";
@@ -150,7 +151,7 @@ TEST(test_cfl_dt, nan_wave_speed_is_rejected_before_the_step) {
   using NanBlk = EquationBlock<NanSpeed, FirstOrder, ExplicitTime<SSPRK2, 1>>;
   NanBlk nblk{"nan", NanSpeed{}, Un, bc};
   CoupledSystem nsys{nblk};
-  SystemCoupler nsim(nsys, geom, ba, bc, ZeroSystemRhs{});
+  auto nsim = test_support::make_reference_system_driver(nsys, geom, ba, bc, ZeroSystemRhs{});
   EXPECT_THROW((void)nsim.cfl_dt(cfl), std::domain_error);
 }
 

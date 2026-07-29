@@ -499,6 +499,25 @@ class LayoutMappingRequirement:
         }
 
 
+def validate_reverse_mapping(
+        requirement: LayoutMappingRequirement,
+        referenced: LayoutMappingRequirement,
+) -> None:
+    """Prove that one directional requirement is the exact reverse of another."""
+    if type(requirement) is not LayoutMappingRequirement \
+            or type(referenced) is not LayoutMappingRequirement:
+        raise TypeError("reverse mapping validation requires exact LayoutMappingRequirement values")
+    if requirement.reverse_of != referenced.qualified_id:
+        raise ValueError("reverse mapping does not reference the supplied forward requirement")
+    if referenced.reverse_of is not None:
+        raise ValueError("reverse mapping must reference a forward requirement")
+    if requirement.source_layout != referenced.target_layout \
+            or requirement.target_layout != referenced.source_layout \
+            or requirement.source_port != referenced.target_port \
+            or requirement.target_port != referenced.source_port:
+        raise ValueError("reverse mapping must swap the referenced layouts and qualified ports")
+
+
 def reject_concurrent_overwrite_mappings(requirements: Any) -> None:
     """Require one writer per target storage/synchronization for overwrite operations."""
     writers: dict[tuple[str, str, str], str] = {}
@@ -586,6 +605,17 @@ class LayoutPlan:
                row.requirement.target_layout.qualified_id not in known_layouts
                for row in self.mappings):
             raise ValueError("LayoutPlan mapping references an undeclared layout")
+        requirement_ids = [row.requirement.qualified_id for row in self.mappings]
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError("LayoutPlan contains duplicate mapping requirements")
+        requirements = {row.requirement.qualified_id: row.requirement for row in self.mappings}
+        for requirement in requirements.values():
+            if requirement.reverse_of is None:
+                continue
+            referenced = requirements.get(requirement.reverse_of)
+            if referenced is None:
+                raise ValueError("LayoutPlan reverse mapping references a missing requirement")
+            validate_reverse_mapping(requirement, referenced)
         assignments = {
             (row.subject_kind, row.subject_id): row.layout for row in self.assignments
         }

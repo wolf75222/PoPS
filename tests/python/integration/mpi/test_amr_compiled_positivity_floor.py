@@ -18,7 +18,7 @@ facade AmrSystem.add_equation. It checks, on the compiled .so path:
       refined AMR C/F ghost flooring is covered by tests/cpp/integration/amr/test_cf_interface.cpp.
       The full refined Program trajectory is covered by
       tests/cpp/integration/amr/test_amr_program_positivity_floor.cpp instead of depending on this
-      pre-ADC-324 never-tagged seed of set_refinement(1e30), which is now mono-level. The floor still
+      pre-ADC-324 never-tagged seed, which is now mono-level. The floor still
       rides the compiled loader -- exercised by (2)'s dmax==0 marshalling check and (3)'s multi-block
       routing.
   (2) BIT-IDENTICAL AT floor=0: on a smooth strictly-positive drifting state, the compiled run with
@@ -115,7 +115,6 @@ def compiled_single(cm, pf, state):
     the full conservative state, stepped 38 times. Returns the coarse density (flat array)."""
     s = AmrSystem(n=N, L=1.0, periodicity=(True, True))
     s.set_temporal_relations([2], [1], ["integral_only"])
-    s.set_refinement(1e30)
     s.add_equation(
         "gas",
         cm,
@@ -148,7 +147,7 @@ def main():
         assert cm.backend == "production" and cm.target == "amr_system"
 
         # --- (1) no longer raises + the floor rides the .so; floored run finite on the 1e6 spike ------
-        # ADC-341/ADC-324: set_refinement(1e30) is now a MONO-LEVEL hierarchy (no seed fine patch). The
+        # ADC-341/ADC-324: no prepared tagging authority gives a MONO-LEVEL hierarchy. The
         # historical "unfloored .so run blows up" assertion relied on the never-tagged 1e30 seed and is
         # not robust on the resulting coarse-only grid (neither floored nor unfloored diverges there); the
         # load-bearing property is covered on System by tests/cpp/unit/numerics/test_positivity_floor.cpp;
@@ -191,7 +190,6 @@ def main():
         density = smooth_state()[0]
         sm = AmrSystem(n=N, L=1.0, periodicity=(True, True))
         sm.set_temporal_relations([2], [1], ["integral_only"])
-        sm.set_refinement(1e30)
         sm.add_equation(
             "a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8)
         )

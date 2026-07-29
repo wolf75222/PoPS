@@ -56,6 +56,22 @@ def test_generated_release_contract_is_current_and_preflight_passes_static_check
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_final_and_release_preflights_verify_cpp_duration_catalogs_before_build():
+    selector = (ROOT / "scripts" / "ci_select_tests.py").read_text(encoding="utf-8")
+    final_gate = (ROOT / "scripts" / "run_final_gate.py").read_text(encoding="utf-8")
+    release_preflight = (ROOT / "scripts" / "release_preflight.py").read_text(
+        encoding="utf-8"
+    )
+
+    command = "verify-cpp-duration-catalogs"
+    final_main = final_gate[final_gate.index("def main("):]
+    assert command in selector
+    assert final_main.index("_require_cpp_duration_catalogs()") < final_main.index(
+        'recorder.run("official_build"'
+    )
+    assert command in release_preflight
+
+
 def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
     generated = _load("_release_contract_test",
                       ROOT / "python" / "pops" / "_generated_release_contract.py")

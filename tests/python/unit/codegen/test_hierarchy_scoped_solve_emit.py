@@ -61,7 +61,15 @@ def _linear_handle(model):
     )
 
 
-def _build(solver, *, nullspace=None, gauge=None, properties=None, _return_model=False):
+def _build(
+    solver,
+    *,
+    nullspace=None,
+    gauge=None,
+    properties=None,
+    _return_model=False,
+    _nested_hierarchy_solve=False,
+):
     model = _coupled_model("hierarchy_tensor_model")
     program = Program("hierarchy_tensor_step")._bind_operators(model)
 
@@ -114,11 +122,23 @@ def _build(solver, *, nullspace=None, gauge=None, properties=None, _return_model
     }
     if properties is not None:
         problem_options["properties"] = properties
-    phi = program.solve(
-        LinearProblem(operator, rhs, **problem_options),
-        solver=solver,
-        name="phi",
-    ).consume(action=FailRun())
+    def solve_phi(builder):
+        return builder.solve(
+            LinearProblem(operator, rhs, **problem_options),
+            solver=solver,
+            name="phi",
+        ).consume(action=FailRun())
+
+    phi = (
+        program.branch(
+            program.norm2(current) > 0,
+            solve_phi,
+            lambda _builder: rhs,
+            name="conditional_phi",
+        )
+        if _nested_hierarchy_solve
+        else solve_phi(program)
+    )
     program.store_history("blk.tensor_phi", phi)
     reconstructed = program.condensed_reconstruct(
         "reconstructed",
@@ -213,6 +233,14 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     )
     assert dict(solve.attrs["hierarchy_solver_options"]) == expected_identity["options"]
     assert "hierarchy_solver" not in solve.attrs
+
+
+def test_hierarchy_solve_nested_under_control_flow_is_rejected_before_lowering():
+    with pytest.raises(
+        NotImplementedError,
+        match=r"hierarchy-scoped solve.*top-level barrier.*phi",
+    ):
+        _build(CompositeTensorFAC(), _nested_hierarchy_solve=True)
 
 
 def test_program_reauthenticates_composite_fac_native_iteration_capacity():

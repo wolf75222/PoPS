@@ -104,6 +104,7 @@ set(POPS_CPP_TEST_SOURCE_test_prepared_boundary_plan "tests/cpp/unit/mesh/test_p
 set(POPS_CPP_TEST_SOURCE_test_flux_register "tests/cpp/integration/amr/test_flux_register.cpp")
 set(POPS_CPP_TEST_SOURCE_test_flux_failure_loader_transaction "tests/cpp/integration/native_loader/test_flux_failure_loader_transaction.cpp")
 set(POPS_CPP_TEST_SOURCE_test_flux_interfaces "tests/cpp/unit/numerics/test_flux_interfaces.cpp")
+set(POPS_CPP_TEST_SOURCE_test_interface_flux_fragment_ledger "tests/cpp/unit/numerics/test_interface_flux_fragment_ledger.cpp")
 set(POPS_CPP_TEST_SOURCE_test_full_tensor_operator "tests/cpp/unit/elliptic/test_full_tensor_operator.cpp")
 set(POPS_CPP_TEST_SOURCE_test_generic_krylov "tests/cpp/unit/elliptic/test_generic_krylov.cpp")
 set(POPS_CPP_TEST_SOURCE_test_krylov_workspace_reentrancy "tests/cpp/unit/elliptic/test_krylov_workspace_reentrancy.cpp")

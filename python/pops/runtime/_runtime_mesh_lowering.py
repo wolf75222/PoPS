@@ -5,6 +5,7 @@ This module contains only backend lowering.  Runtime selection lives in
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
@@ -104,28 +105,9 @@ def install_uniform_embedded_boundary(sim: Any, normalized_layout: Any) -> None:
     )
 
 
-def flow_amr_layout(
-    sim: Any,
-    layout: Any,
-    n_blocks: Any = 1,
-    *,
-    bind_schema: Any = None,
-    params: Any = None,
-) -> None:
-    """Lower a typed AMR refinement criterion before native block installation."""
-    criterion = getattr(layout, "refine", None)
-    if criterion is not None:
-        _apply_refine_criterion(
-            sim,
-            criterion,
-            is_multiblock=n_blocks > 1,
-            bind_schema=bind_schema,
-            params=params,
-        )
-
-
 def flow_bootstrap_tagging(
     sim: Any, bootstrap: Any, params: Any, *, clock_identity: str,
+    field_plans: Any = None,
 ) -> None:
     """Compile one authenticated tagging graph to the native data-only VM."""
     if not isinstance(clock_identity, str) or not clock_identity:
@@ -149,7 +131,23 @@ def flow_bootstrap_tagging(
             raise ValueError("pops.bind: duplicate tagging lowering registration")
         registrations[node_type] = lowering.get("qualified_id")
 
-    leaves: list[tuple[str, str, int, float, int]] = []
+    resolved_field_plans = field_plans if isinstance(field_plans, Mapping) else {}
+    field_plans_by_identity: dict[str, Any] = {}
+    for field_name, plan in resolved_field_plans.items():
+        unknown = getattr(getattr(plan, "operator", None), "unknown", None)
+        identity = getattr(unknown, "qualified_id", None)
+        if not isinstance(identity, str) or not identity:
+            raise TypeError(
+                "pops.bind: resolved field plan %r has no qualified solved-field identity"
+                % field_name
+            )
+        if identity in field_plans_by_identity:
+            raise ValueError(
+                "pops.bind: multiple resolved field plans claim solved-field identity %s"
+                % identity
+            )
+        field_plans_by_identity[identity] = plan
+    leaves: list[tuple[str, str, str, str, int, int, float, int]] = []
     stencils: list[dict[str, Any]] = []
     stencil_indices: dict[str, int] = {}
 
@@ -164,14 +162,35 @@ def flow_bootstrap_tagging(
             indicator = node.get("indicator")
             if type(indicator) is not dict or indicator.get("kind") not in {"state", "field"}:
                 raise TypeError("pops.bind: native tag leaves require a state/field Handle")
-            block = indicator.get("block_ref")
-            if type(block) is not dict or not isinstance(block.get("local_id"), str):
-                raise ValueError("pops.bind: native tag leaves must be block-qualified")
+            subject_kind = indicator["kind"]
+            subject_identity = indicator.get("qualified_id")
+            if not isinstance(subject_identity, str) or not subject_identity:
+                raise ValueError("pops.bind: native tag leaves require a qualified subject identity")
             variable = node.get("variable", indicator.get("local_id"))
             threshold = node.get("threshold")
             if not isinstance(variable, str) or not variable \
                     or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
                 raise TypeError("pops.bind: malformed native tag leaf")
+            block_name = ""
+            field_component_index = -1
+            if subject_kind == "state":
+                block = indicator.get("block_ref")
+                if type(block) is not dict or not isinstance(block.get("local_id"), str):
+                    raise ValueError(
+                        "pops.bind: native state tag leaves must be block-qualified")
+                block_name = block["local_id"]
+            else:
+                plan = field_plans_by_identity.get(subject_identity)
+                if plan is None:
+                    raise ValueError(
+                        "pops.bind: native field tag leaf has no authenticated field plan")
+                options = getattr(plan, "native_options", None)
+                output = options.get("output_route") if isinstance(options, Mapping) else None
+                components = output.get("components") if isinstance(output, Mapping) else None
+                if not isinstance(components, (list, tuple)) or components.count(variable) != 1:
+                    raise ValueError(
+                        "pops.bind: native field tag leaf is absent from its prepared output route")
+                field_component_index = components.index(variable)
             stencil_index = -1
             if node_type in {"gradient_above", "gradient_below"}:
                 context = node.get("discrete_context")
@@ -190,8 +209,10 @@ def flow_bootstrap_tagging(
                 elif stencils[stencil_index] != canonical:
                     raise ValueError(
                         "pops.bind: AMR stencil identity collision changed coefficients")
-            leaves.append((block["local_id"], variable, leaf_op,
-                           float(threshold), stencil_index))
+            leaves.append((
+                subject_kind, subject_identity, block_name, variable, field_component_index,
+                leaf_op, float(threshold), stencil_index,
+            ))
             return [leaf_op], [len(leaves) - 1]
 
         logical_op = _TAG_LOGICAL_OPS.get(node_type)
@@ -233,9 +254,11 @@ def flow_bootstrap_tagging(
         "resolved_graph_identity": bootstrap.tagging.qualified_id,
         "stencils": stencils,
         "leaves": [
-            {"block": block, "variable": variable, "opcode": opcode,
-             "threshold": threshold, "stencil_index": stencil_index}
-            for block, variable, opcode, threshold, stencil_index in leaves
+            {"subject_kind": kind, "subject_identity": identity, "block": block,
+             "variable": variable, "field_component_index": component_index,
+             "opcode": opcode, "threshold": threshold, "stencil_index": stencil_index}
+            for (kind, identity, block, variable, component_index, opcode, threshold,
+                 stencil_index) in leaves
         ],
         "refine_opcodes": refine_ops,
         "refine_arguments": refine_args,
@@ -255,6 +278,9 @@ def flow_bootstrap_tagging(
         [row[2] for row in leaves],
         [row[3] for row in leaves],
         [row[4] for row in leaves],
+        [row[5] for row in leaves],
+        [row[6] for row in leaves],
+        [row[7] for row in leaves],
         stencils,
         refine_ops,
         refine_args,
@@ -274,121 +300,8 @@ _TAG_LEAF_OPS = dict(NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"])
 _TAG_LOGICAL_OPS = dict(NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"])
 
 
-def _apply_refine_criterion(
-    sim: Any,
-    criterion: Any,
-    is_multiblock: bool = False,
-    *,
-    bind_schema: Any = None,
-    params: Any = None,
-) -> None:
-    """Lower one authenticated refinement criterion to native AMR seams."""
-    from pops.mesh._amr import Refine, TagUnion
-
-    if isinstance(criterion, TagUnion):
-        for child in criterion.criteria:
-            _apply_refine_criterion(
-                sim,
-                child,
-                is_multiblock=is_multiblock,
-                bind_schema=bind_schema,
-                params=params,
-            )
-        return
-    if not isinstance(criterion, Refine):
-        raise TypeError(
-            "pops.bind: AMR refine criterion must be an internal Refine / TagUnion "
-            "(got %r)" % type(criterion).__name__
-        )
-    if not getattr(criterion, "references_authenticated", False):
-        raise ValueError(
-            "pops.bind: Refine criterion references were not authenticated by Case.resolve; "
-            "run it through pops.compile(problem, layout=...) instead of attaching a raw or "
-            "canonical-looking Handle directly to a compiled/runtime layout"
-        )
-    threshold = criterion.threshold
-    if threshold is None:
-        raise ValueError(
-            "pops.bind: Refine criterion has no threshold "
-            "(use Refine.on(subject).above(value))"
-        )
-    threshold = _refine_threshold_value(threshold, bind_schema, params)
-
-    from pops.model import Handle
-
-    if not isinstance(criterion.subject, Handle):
-        raise NotImplementedError(
-            "pops.bind: [amr:expression_indicator unavailable] Refine subject %s is a semantic "
-            "indicator expression. Its Handle leaves were validated and resolved at compile, but "
-            "the current native AMR runtime only lowers direct declaration Handle selectors and "
-            "the dedicated potential-gradient predicate. Add the expression-indicator backend "
-            "capability before running this criterion; it is never flattened to a variable name."
-            % type(criterion.subject).__name__
-        )
-    subject = _refine_subject_name(criterion.subject)
-    if criterion.predicate == "gradient_above" and subject in (
-        "phi",
-        "grad phi",
-        "potential",
-    ):
-        sim.set_phi_refinement(float(threshold))
-        return
-    if _is_default_density_subject(subject):
-        sim.set_refinement(float(threshold))
-        return
-    if not is_multiblock:
-        raise NotImplementedError(
-            "pops.bind: refining on %r is a multi-block AMR feature; the single-block AMR route "
-            "refines on the density (component 0) only. Refine on the density "
-            "(Refine.on(Density).above(...)), or use the |grad phi| tag "
-            "(Refine.on(phi).gradient_above(...))." % (subject,)
-        )
-    sim.set_refinement(float(threshold), variable=subject)
-
-
-def _refine_threshold_value(threshold: Any, schema: Any, params: Any) -> Any:
-    """Resolve one canonical parameter threshold from the effective bind mapping."""
-    from pops._ir import ValueExpr
-    from pops.model import ParamHandle
-
-    handle = threshold.handle if isinstance(threshold, ValueExpr) else threshold
-    if not isinstance(handle, ParamHandle):
-        return threshold
-    if schema is None:
-        raise ValueError("pops.bind: parameterized AMR threshold requires BindSchema")
-    slot = schema.slot(handle)
-    if slot.handle not in (params or {}):
-        raise ValueError("pops.bind: resolved params are missing AMR threshold %s" % slot.qid)
-    return params[slot.handle]
-
-
-def _refine_subject_name(subject: Any) -> Any:
-    """Lower one canonical Handle to the native variable token at the runtime boundary."""
-    from pops.model import Handle
-
-    if not isinstance(subject, Handle):
-        raise TypeError(
-            "pops.bind: Refine subject must be a resolved pops.model.Handle, got %r; strings "
-            "are not declaration identities" % type(subject).__name__
-        )
-    if not subject.is_resolved:
-        raise ValueError(
-            "pops.bind: Refine subject %s is still authoring-owned; compile must resolve every "
-            "reference through Case.resolve before runtime lowering" % subject.qualified_id
-        )
-    return subject.local_id
-
-
-def _is_default_density_subject(subject: Any) -> bool:
-    """Return whether the subject denotes native component-zero density."""
-    if subject is None:
-        return True
-    return subject in ("Density", "density", "rho", "n", "ne")
-
-
 __all__ = [
     "amr_config_from_layout",
-    "flow_amr_layout",
     "flow_bootstrap_tagging",
     "system_config_from_layout",
 ]

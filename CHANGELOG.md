@@ -18,6 +18,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ADC-749 carries exact periodic face identifications through the model-aware hyperbolic boundary
+  plan. Uniform scalar layouts execute mapped periodic halos (including cross-axis maps); mapped
+  vector/axial component transforms and AMR mapped periodic fill-patch/regrid remain explicit
+  fail-closed capabilities until their model-aware component and hierarchy contracts are available.
+- AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
+  non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
+  executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
+  policy restores and authenticates the recorded accepted state before one artifact-owned
+  scientific regrid, emits a global before/after receipt, and derives a distinct continuation run
+  identity. This first operational slice is one AMR layout, unchanged MPI cardinality, and refuses
+  fields, shared interfaces, and bootstrap staggered caches.
+- Add an explicit offline-only migration for the byte-exact frozen Uniform-v2 checkpoint fixture.
+  Migration requires a complete authenticated current-v5 authority plus a reviewed mapping that pins
+  both artifacts, all lifecycle/ABI/Program identities, every block/component/history
+  correspondence, and every missing metadata class inherited from the authority. The first route is
+  deliberately limited to same-grid/same-clock, Dense fully stored histories and empty
+  field-provider/cache/ConsumerGraph state; it validates before atomic no-clobber publication.
+  Runtime restart remains unchanged and fail-closed for every historical payload.
+- Internal frozen two-level serial AMR shared-interface transactions now retain endpoint-qualified
+  canonical flux fragments, authoritative local substep durations, and exact rational Program
+  weights. The fragments authenticate the paired RHS update and are deliberately not a second
+  reflux source. Public refined execution remains fail-closed until fixed-hierarchy authoring,
+  bind-to-run conservation, and historical-rate provenance are proved end to end.
 - Strict Uniform/AMR accepted-state checkpoints now use payload v5, persist the held Program cadence
   window and last accepted Program interval, commit clock restoration transactionally, and allow
   selective history replay only for the exact ring/depth authority exported by the installed artifact.
@@ -81,6 +104,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   System/AMR/native pipeline; Euler supplies the same prepared physical capability as any model,
   missing capabilities fail closed before native installation, and the Roe entropy correction is
   an explicit typed provider policy.
+- ADC-700 removes the always-throwing `System::step_adaptive` production facade and its Python
+  binding, plus the installed static `SystemDriver` / `SystemCoupler` scheme-and-cadence driver.
+  Runtime-speed-derived multirate cadence remains only as a test numerical oracle until it has an
+  explicit `ProgramGraph` lowering; `System` and `AmrSystem` expose no fallback time engine.
 - ADC-637 Retire the hand-written condensed-Schur Program brick. The condensed-implicit electrostatic-Lorentz push is now authored entirely in the DSL and emitted to C++ on EVERY layout (System, flat and refined AMR): the coupling/schur/program/** headers (schur_program_kernels.hpp, condensed_schur_operator.hpp) and the P.schur_* Program ops are gone, the generic condensed_* route (block_inverse / block_apply_inverse, the authored J on a momentum subset, a generic condensed_energy kernel) is the sole route, and the generated .so carries all scheme kernels. condensed_schur no longer takes route= or c_bz=. Zero Schur-specific C++ remains on the compiled Program path; the generic tensor-coefficient elliptic apply and the GeometricMG preconditioner are re-homed to Schur-free elliptic infrastructure (runtime/program/coeff_elliptic_ops.hpp), and the AMR composite driver is the renamed generic AmrCondensedElliptic (amr_condensed_elliptic.hpp) over CompositeFacPoisson. Bit-identical to the retired brick on System and flat AMR (golden, np.array_equal, theta == 1 and theta == 0.5) and >= 98% of its throughput. The order-exact conservative refined-multilevel condensed solve stays a precise refusal pending ADC-648 (gather-then-solve, on the generic ops); the native CondensedSchur source-stage steppers are unaffected and retire under their own follow-up after ADC-648.
 - routes: the 24 unreferenced symmetric route-id constants (ADC-630); named constants remain only for identifiers with a live consumer.
 

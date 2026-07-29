@@ -3,6 +3,7 @@
 #include <pops/core/foundation/types.hpp>
 
 #include <string>
+#include <type_traits>
 #include <vector>
 
 /// @file
@@ -10,20 +11,21 @@
 ///
 /// These values are the user-visible defaults of the native runtime. Keeping them in one header
 /// avoids silent drift between pybind defaults, C++ facade defaults, solver fallbacks and reports.
-/// The constants intentionally preserve historical values; this header makes them inspectable.
+/// Each family documents whether its values preserve an existing trajectory or define a stricter
+/// contract; centralization makes either choice inspectable.
 
 namespace pops {
 
-// Newton / IMEX source solve.
-inline constexpr int kNewtonFailNone = 0;
-inline constexpr int kNewtonFailWarn = 1;
-inline constexpr int kNewtonFailThrow = 2;
-inline constexpr int kNewtonDefaultMaxIters = 2;
-inline constexpr Real kNewtonDefaultRelTol = Real(0);
-inline constexpr Real kNewtonDefaultAbsTol = Real(0);
+// Newton / IMEX source solve. These defaults are the converged double-precision contract: every
+// candidate must satisfy the mixed residual tolerance before it may be published.
+static_assert(std::is_same_v<Real, double>,
+              "implicit Newton defaults require double precision; define a precision-aware "
+              "tolerance contract before changing pops::Real");
+inline constexpr int kNewtonDefaultMaxIters = 25;
+inline constexpr Real kNewtonDefaultRelTol = Real(1e-10);
+inline constexpr Real kNewtonDefaultAbsTol = Real(1e-12);
 inline constexpr Real kNewtonDefaultFdEps = Real(1e-7);
 inline constexpr Real kNewtonDefaultDamping = Real(1);
-inline constexpr int kNewtonDefaultFailPolicy = kNewtonFailNone;
 inline constexpr Real kNewtonFiniteAbsLimit = Real(1e300);
 
 // Krylov family defaults.
@@ -95,16 +97,6 @@ inline constexpr Real kPhysicalDefaultGravitySign = Real(1);
 inline constexpr Real kPhysicalDefaultFourPiG = Real(1);
 inline constexpr Real kPhysicalDefaultGravityRho0 = Real(1);
 
-inline const char* newton_fail_policy_name(int policy) {
-  if (policy == kNewtonFailNone)
-    return "none";
-  if (policy == kNewtonFailWarn)
-    return "warn";
-  if (policy == kNewtonFailThrow)
-    return "throw";
-  return "invalid";
-}
-
 /// The embedded-boundary / cut-cell thresholds (ADC-615): the volume-fraction small-cell floor, the
 /// closed-face aperture threshold, and the cut-fraction clamp shared with the elliptic wall. Defaults
 /// are the kEb* constants, so a default-constructed EbThresholds reproduces today's EB scheme AND the
@@ -136,7 +128,6 @@ struct EffectiveNewtonOptions {
   double abs_tol = static_cast<double>(kNewtonDefaultAbsTol);
   double fd_eps = static_cast<double>(kNewtonDefaultFdEps);
   double damping = static_cast<double>(kNewtonDefaultDamping);
-  std::string fail_policy = "none";
   bool diagnostics = false;
   bool non_default = false;
 };

@@ -17,6 +17,8 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
+#include "amr_tagging_test_authority.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -119,7 +121,7 @@ RunResult advance_with_floor(double positivity_floor) {
   pops::add_compiled_model(system, "density", DensityAdvection{}, "weno5", "rusanov",
                            "conservative", "euler", 1.4, 1, 1, {}, {}, positivity_floor);
   system.set_poisson("charge_density", "geometric_mg", "periodic");
-  system.set_refinement(1e29);
+  pops::test::install_prepared_threshold_union(system, {{"density", "rho", 1e29}});
   system.set_conservative_state("density", contrast_state());
   pops::test::install_forward_euler_program(system);
 

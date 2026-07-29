@@ -117,6 +117,7 @@ class StepTransactionReport:
     committed_effects: tuple[str, ...] = ()
     rolled_back_effects: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
+    projections: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.status not in _STATUSES:
@@ -129,6 +130,27 @@ class StepTransactionReport:
             raise ValueError("accepted transaction reports cannot include rolled_back_effects")
         if self.status != "accepted" and self.committed_effects:
             raise ValueError("rejected/failed transaction reports cannot include committed_effects")
+        effect_groups = (
+            ("staged_effects", self.staged_effects),
+            ("committed_effects", self.committed_effects),
+            ("rolled_back_effects", self.rolled_back_effects),
+        )
+        for label, effects in effect_groups:
+            if any(not isinstance(name, str) or not name for name in effects):
+                raise ValueError(
+                    "StepTransactionReport.%s must contain non-empty effect names" % label)
+            if len(set(effects)) != len(effects):
+                raise ValueError("StepTransactionReport.%s cannot contain duplicates" % label)
+        if self.status == "accepted" and set(self.committed_effects) != set(self.staged_effects):
+            raise ValueError("accepted transaction reports must commit every staged_effect")
+        if self.status != "accepted" and set(self.rolled_back_effects) != set(self.staged_effects):
+            raise ValueError(
+                "rejected/failed transaction reports must roll back every staged_effect")
+        if any(not isinstance(name, str) or not name for name in self.projections):
+            raise ValueError(
+                "StepTransactionReport.projections must contain non-empty guard names")
+        if len(set(self.projections)) != len(self.projections):
+            raise ValueError("StepTransactionReport.projections cannot contain duplicates")
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -139,6 +161,7 @@ class StepTransactionReport:
             "staged_effects": list(self.staged_effects),
             "committed_effects": list(self.committed_effects),
             "rolled_back_effects": list(self.rolled_back_effects),
+            "projections": list(self.projections),
             "diagnostics": list(self.diagnostics),
         }
 

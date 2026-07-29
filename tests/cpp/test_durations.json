@@ -5,7 +5,8 @@
     "estimated_targets": [
       "test_amr_program_diffusion",
       "test_amr_program_positivity_floor",
-      "test_flux_failure_loader_transaction"
+      "test_flux_failure_loader_transaction",
+      "test_interface_flux_fragment_ledger"
     ],
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next CTest timing refresh",
     "measured_refresh": {
@@ -15,7 +16,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 186,
+    "target_count": 187,
     "unit_seconds": "aggregate CTest wall time per build target"
   },
   "test_adaptive_multirate": 0.02,
@@ -80,7 +81,7 @@
   "test_compiled_model_parity": 0.01,
   "test_component_interfaces": 0.03,
   "test_composite_fac_adjacent": 2.13,
-  "test_composite_fac_nlevel": 3.44,
+  "test_composite_fac_nlevel": 3.6,
   "test_composite_fac_poisson": 2.18,
   "test_composite_fac_tensor": 10.18,
   "test_composite_fac_variable_eps": 0.96,
@@ -130,6 +131,7 @@
   "test_imex_ap": 0.01,
   "test_imex_partial": 0.01,
   "test_imex_transport": 0.01,
+  "test_interface_flux_fragment_ledger": 0.01,
   "test_isothermal_vacuum_floor": 0.01,
   "test_load_balance": 0.03,
   "test_model_registry": 0.03,

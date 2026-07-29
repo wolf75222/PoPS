@@ -14,6 +14,8 @@
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
+#include "amr_tagging_test_authority.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -75,6 +77,31 @@ static void install_regrid_state_authorities(AmrSystem& system,
                                              "linear_time_interpolation", 2, {0}, 2, kAmrRefRatio);
     system.bind_bootstrap_block_subject(subject, block);
   }
+}
+
+TEST(test_amr_system_contract, RefusesMappedPeriodicityBeforeAmrFillPatchConstruction) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 8;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {false, false};
+  AmrSystem system(cfg);
+  const std::string state_identity = "case::block::tracer::state::U";
+  system.install_block_state_route("tracer", state_identity);
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+
+  EXPECT_THROW(
+      system.install_boundary_plan(
+          "tracer", "case::block::tracer::boundary", 1,
+          {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+          {"case::block::tracer::xlo", "case::block::tracer::xhi", "case::block::tracer::ylo",
+           "case::block::tracer::yhi"},
+          {"Scalar"}, {}, state_identity, PreparedBoundaryReadDependencies{}, {xlo_to_yhi}),
+      std::runtime_error);
 }
 
 TEST(test_amr_system_contract, Runs) {
@@ -339,7 +366,8 @@ TEST(test_amr_system_contract, Runs) {
         s.set_conservative_state(name, state);
       }
       s.set_magnetic_field(std::vector<double>(cells, magnetic_field));
-      s.set_refinement(1e29);  // request the deterministic central fine seed without later regrids
+      // Request the deterministic central fine seed through the prepared tagging authority.
+      test::install_prepared_threshold_union(s, {{"magnetic_0", "rho", 1e29}});
       test::install_forward_euler_program(s);
       s.advance(0.01, 1);
       std::vector<std::vector<std::vector<double>>> states;

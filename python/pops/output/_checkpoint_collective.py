@@ -4,6 +4,7 @@ The native Uniform/AMR codecs own field gathers, MPI transport and state mutatio
 only builds small deterministic control envelopes around one authenticated native communicator.
 It never imports a Python MPI binding or executes a collective outside :mod:`pops._pops`.
 """
+
 from __future__ import annotations
 
 import os
@@ -198,8 +199,7 @@ def _raise_collective_failure(
     families = {record["family"] for _rank, record in failures}
     error_type = _ERROR_FAMILIES[next(iter(families))] if len(families) == 1 else RuntimeError
     details = "; ".join(
-        "rank %d: %s: %s" % (rank, record["type"], record["message"])
-        for rank, record in failures
+        "rank %d: %s: %s" % (rank, record["type"], record["message"]) for rank, record in failures
     )
     raise error_type("collective checkpoint %s failed: %s" % (phase, details))
 
@@ -335,7 +335,8 @@ def consensus(
             int(row["rank"]),
             _validated_error_record(row["error"], phase=phase),
         )
-        for row in normalized if row["error"] is not None
+        for row in normalized
+        if row["error"] is not None
     )
     if failures:
         _raise_collective_failure(phase, failures)
@@ -382,7 +383,8 @@ def collective_checkpoint_capture(
     )
     if any(row["value"] != plan_identity for row in rows):
         raise RuntimeError(
-            "collective checkpoint %s capture plans differ across ranks" % phase_prefix)
+            "collective checkpoint %s capture plans differ across ranks" % phase_prefix
+        )
 
     artifact = None
     artifact_identity = None
@@ -404,7 +406,8 @@ def collective_checkpoint_capture(
     )
     if any(row["value"] != artifact_identity for row in rows):
         raise RuntimeError(
-            "collective checkpoint %s sealed payloads differ across ranks" % phase_prefix)
+            "collective checkpoint %s sealed payloads differ across ranks" % phase_prefix
+        )
 
     return root_value(
         topology,
@@ -426,11 +429,34 @@ def _result_evidence(value: Any) -> Any:
     return to_data() if callable(to_data) else value
 
 
+def require_restart_bit_identical(value: Any, *, where: str) -> bool:
+    """Require the exact restart reproducibility policy at every private handoff."""
+    if type(value) is not bool:
+        raise TypeError("%s bit_identical must be an exact bool" % where)
+    return value
+
+
+_RESTART_HIERARCHY_MODES = {
+    "restore_recorded_hierarchy",
+    "regrid_on_restart",
+}
+
+
+def require_restart_hierarchy_mode(value: Any, *, where: str) -> str:
+    """Require one exact built-in hierarchy policy at every collective handoff."""
+    if not isinstance(value, str) or value not in _RESTART_HIERARCHY_MODES:
+        raise ValueError("%s hierarchy mode is unsupported" % where)
+    return value
+
+
 def restore_checkpoint_payload(
     owner: Any,
     executor: Any,
     payload: bytes,
     *,
+    bit_identical: bool,
+    hierarchy_mode: str = "restore_recorded_hierarchy",
+    hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
 ) -> Any:
     """Preflight and atomically apply one in-memory payload on the installed communicator.
@@ -442,6 +468,42 @@ def restore_checkpoint_payload(
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
     topology = checkpoint_topology(owner)
+    policy = None
+    selected_hierarchy_mode = None
+    selected_hierarchy_identity = None
+    policy_error = None
+    try:
+        policy = require_restart_bit_identical(bit_identical, where="restart preparation policy")
+        selected_hierarchy_mode = require_restart_hierarchy_mode(
+            hierarchy_mode, where="restart preparation policy"
+        )
+        if selected_hierarchy_mode == "regrid_on_restart":
+            from pops.identity import Identity
+
+            selected = Identity.from_token(hierarchy_identity)
+            if selected.domain != "restart-hierarchy":
+                raise ValueError("restart preparation hierarchy identity has the wrong domain")
+            selected_hierarchy_identity = selected.token
+        elif hierarchy_identity is not None:
+            raise ValueError(
+                "restart preparation hierarchy identity is only valid with RegridOnRestart"
+            )
+    except BaseException as error:
+        policy_error = error
+    policy_rows = consensus(
+        topology,
+        "%s policy" % phase_prefix,
+        error=policy_error,
+        value={
+            "bit_identical": policy,
+            "hierarchy_mode": selected_hierarchy_mode,
+            "hierarchy_identity": selected_hierarchy_identity,
+        },
+    )
+    if any(row["value"] != policy_rows[0]["value"] for row in policy_rows[1:]):
+        raise ValueError("%s restart policy differs across ranks" % phase_prefix)
+    if policy and selected_hierarchy_mode == "regrid_on_restart":
+        raise ValueError("%s cannot combine bit_identical=True with RegridOnRestart" % phase_prefix)
     method_names = (
         "_prepare_checkpoint_restart",
         "_begin_checkpoint_restart",
@@ -477,7 +539,15 @@ def restore_checkpoint_payload(
     prepared = None
     prepare_error = None
     try:
-        prepared = methods["_prepare_checkpoint_restart"](payload)
+        if selected_hierarchy_mode == "regrid_on_restart":
+            prepared = methods["_prepare_checkpoint_restart"](
+                payload,
+                bit_identical=policy,
+                hierarchy_mode=selected_hierarchy_mode,
+                hierarchy_identity=selected_hierarchy_identity,
+            )
+        else:
+            prepared = methods["_prepare_checkpoint_restart"](payload, bit_identical=policy)
     except BaseException as error:
         prepare_error = error
     consensus(topology, "%s preflight" % phase_prefix, error=prepare_error)
@@ -574,6 +644,9 @@ def restore_checkpoint_path(
     executor: Any,
     path: Any,
     *,
+    bit_identical: bool,
+    hierarchy_mode: str = "restore_recorded_hierarchy",
+    hierarchy_identity: str | None = None,
     phase_prefix: str = "native restart",
 ) -> Any:
     """Collectively read and restore one shared checkpoint through native transports.
@@ -584,6 +657,12 @@ def restore_checkpoint_path(
     """
     if not isinstance(phase_prefix, str) or not phase_prefix:
         raise TypeError("restart phase prefix must be non-empty text")
+    policy = require_restart_bit_identical(bit_identical, where="restart path policy")
+    selected_hierarchy_mode = require_restart_hierarchy_mode(
+        hierarchy_mode, where="restart path policy"
+    )
+    if selected_hierarchy_mode != "regrid_on_restart" and hierarchy_identity is not None:
+        raise ValueError("restart path hierarchy identity is only valid with RegridOnRestart")
     topology = checkpoint_topology(owner)
     target = None
     target_text = None
@@ -604,17 +683,35 @@ def restore_checkpoint_path(
     if any(row["value"] != target_text for row in rows):
         raise ValueError("%s target differs across ranks" % phase_prefix)
     payload = root_bytes(topology, "%s read" % phase_prefix, target.read_bytes)
+    if selected_hierarchy_mode == "regrid_on_restart":
+        return restore_checkpoint_payload(
+            owner,
+            executor,
+            payload,
+            bit_identical=policy,
+            hierarchy_mode=selected_hierarchy_mode,
+            hierarchy_identity=hierarchy_identity,
+            phase_prefix=phase_prefix,
+        )
     return restore_checkpoint_payload(
-        owner, executor, payload, phase_prefix=phase_prefix)
+        owner,
+        executor,
+        payload,
+        bit_identical=policy,
+        phase_prefix=phase_prefix,
+    )
 
 
 __all__ = [
-    "CheckpointTopology", "InMemoryCheckpoint",
+    "CheckpointTopology",
+    "InMemoryCheckpoint",
     "canonical_checkpoint_path",
     "checkpoint_topology",
     "collective_checkpoint_capture",
     "consensus",
     "decode_checkpoint_bytes",
+    "require_restart_bit_identical",
+    "require_restart_hierarchy_mode",
     "restore_checkpoint_path",
     "restore_checkpoint_payload",
     "root_effect",

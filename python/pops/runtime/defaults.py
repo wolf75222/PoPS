@@ -13,15 +13,11 @@ from typing import Any
 # internal_default (fixed but inspectable), diagnostic_only (a counter / instrumented fact),
 # hard_limit (a fixed cap enforced fail-fast).
 _CONSTANT_CLASSIFICATION: dict = {
-    "kNewtonFailNone": "internal_default",
-    "kNewtonFailWarn": "internal_default",
-    "kNewtonFailThrow": "internal_default",
     "kNewtonDefaultMaxIters": "public_knob",
     "kNewtonDefaultRelTol": "public_knob",
     "kNewtonDefaultAbsTol": "public_knob",
     "kNewtonDefaultFdEps": "public_knob",
     "kNewtonDefaultDamping": "public_knob",
-    "kNewtonDefaultFailPolicy": "public_knob",
     "kNewtonFiniteAbsLimit": "internal_default",
     "kKrylovDefaultRelTol": "public_knob",
     "kPolarTensorKrylovDefaultMaxIters": "public_knob",
@@ -79,12 +75,11 @@ def _static_report() -> dict:
         "schema_version": 1,
         "source": "source-only",
         "newton": {
-            "max_iters": 2,
-            "rel_tol": 0.0,
-            "abs_tol": 0.0,
+            "max_iters": 25,
+            "rel_tol": 1e-10,
+            "abs_tol": 1e-12,
             "fd_eps": 1e-7,
             "damping": 1.0,
-            "fail_policy": "none",
             "finite_abs_limit": 1e300,
         },
         "krylov": {
@@ -206,7 +201,6 @@ NEWTON_DEFAULT_REL_TOL = float(_NEWTON["rel_tol"])
 NEWTON_DEFAULT_ABS_TOL = float(_NEWTON["abs_tol"])
 NEWTON_DEFAULT_FD_EPS = float(_NEWTON["fd_eps"])
 NEWTON_DEFAULT_DAMPING = float(_NEWTON["damping"])
-NEWTON_DEFAULT_FAIL_POLICY = str(_NEWTON["fail_policy"])
 PHYSICAL_DEFAULT_B0 = float(_PHYSICAL["B0"])
 PHYSICAL_DEFAULT_GAMMA = float(_PHYSICAL["gamma"])
 PHYSICAL_DEFAULT_FLUID_STATE_CS2 = float(_PHYSICAL["fluid_state_cs2"])
@@ -228,7 +222,6 @@ __all__ = [
     "NEWTON_DEFAULT_ABS_TOL",
     "NEWTON_DEFAULT_FD_EPS",
     "NEWTON_DEFAULT_DAMPING",
-    "NEWTON_DEFAULT_FAIL_POLICY",
     "PHYSICAL_DEFAULT_B0",
     "PHYSICAL_DEFAULT_GAMMA",
     "PHYSICAL_DEFAULT_FLUID_STATE_CS2",

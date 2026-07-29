@@ -3,6 +3,8 @@
 // scheduler-cache save/restore accessors. This TU is a subdivision of system.cpp (persistence and
 // checkpoint surface of the compiled program runtime state).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
+#include <cmath>
+
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
 #include <cmath>
@@ -27,6 +29,13 @@ void System::set_clock(double t, int macro_step) {
 }
 
 void System::store_history(const std::string& name, const MultiFab& value) {
+  store_history(name, value, static_cast<double>(p_->program_.last_dt_));
+}
+
+void System::store_history(const std::string& name, const MultiFab& value, double outgoing_dt) {
+  if (!std::isfinite(outgoing_dt) || outgoing_dt < 0.0)
+    throw std::runtime_error(
+        "System::store_history: outgoing logical-clock dt must be finite and non-negative");
   auto it = p_->program_.hist_.histories.find(name);
   if (it == p_->program_.hist_.histories.end())
     throw std::runtime_error("System::store_history: unknown history '" + name +
@@ -44,14 +53,14 @@ void System::store_history(const std::string& name, const MultiFab& value) {
   std::vector<Real>& dts = p_->program_.hist_.slot_dt[name];
   if (dts.size() != ring.size())
     dts.assign(ring.size(), Real(0));
-  dts[0] = p_->program_.last_dt_;
+  dts[0] = static_cast<Real>(outgoing_dt);
   if (!p_->program_.hist_.initialized[name]) {
     // COLD START (first store): broadcast into every deeper slot so a multistep step 0 reads the same
     // value at every lag (degenerating to a one-step method). Deterministic + machine-precision exact.
     // The dt broadcasts the same way so every cold-start slot carries the step-0 dt.
     for (std::size_t k = 1; k < ring.size(); ++k) {
       pops::lincomb(ring[k], Real(1), value, Real(0), value);
-      dts[k] = p_->program_.last_dt_;
+      dts[k] = static_cast<Real>(outgoing_dt);
     }
     p_->program_.hist_.initialized[name] = true;
   }
@@ -356,8 +365,8 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
 // Load a generated problem.so and install its compiled time Program. Mirrors add_native_block
 // (native_loader.hpp): self-promote this module to the global scope so the .so resolves the System
 // seam accessors (POPS_EXPORT) against it, load the generated package locally, fail-loud on ABI-key
-// mismatch, then call pops_install_program(this), which wraps the System in a ProgramContext and
-// installs the macro-step closure. The .so stays loaded for the process lifetime.
+// mismatch, then call pops_install_program(this), whose shared facade factory selects the provider
+// and installs the macro-step closure. The .so stays loaded for the process lifetime.
 POPS_EXPORT void System::install_program(const std::string& so_path) {
   require_assembling(p_->lifecycle_,
                      "install_program");  // frozen once pops.bind completes (ADC-592)
@@ -433,7 +442,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     pops::dynlib::close(h);
     throw;
   }
-  auto install = reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_program"));
+  auto install = reinterpret_cast<void (*)(System*)>(pops::dynlib::sym(h, "pops_install_program"));
   if (!install) {
     pops::dynlib::close(h);
     throw std::runtime_error("System::install_program: pops_install_program missing from '" +
@@ -490,7 +499,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   // dt bound but omits its target entry is malformed; silently falling back to native CFL would
   // execute different numerics from the authored Program.
   using has_dt_t = bool (*)();
-  using dt_bound_t = pops::Real (*)(pops::runtime::program::ProgramContext*, pops::Real);
+  using dt_bound_t = pops::Real (*)(System*, pops::Real);
   auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
   auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound"));
   const bool program_has_dt_bound = has_dt && has_dt();
@@ -503,7 +512,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
   const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
   auto install_boundaries =
-      reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_field_boundaries"));
+      reinterpret_cast<void (*)(System*)>(pops::dynlib::sym(h, "pops_install_field_boundaries"));
 
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled Program numbers its blocks in
   // P.state declaration order (the .so's pops_program_block_name table); the System numbers its blocks
@@ -597,7 +606,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     for (const auto& [block, defaults] : program_param_defaults)
       seed_program_params(block, defaults);
     p_->program_.operator_authorities_ = operator_authorities;
-    install(static_cast<void*>(this));
+    install(this);
     p_->program_.require_exact_artifact_step_install(previous_install, "System::install_program:");
 
     p_->program_.block_map_ = std::move(program_block_map);
@@ -608,17 +617,14 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     p_->program_.installed_hash_ = installed_hash;
     if (program_has_dt_bound) {
       System* self = this;
-      p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real {
-        pops::runtime::program::ProgramContext ctx(self);
-        return dt_bound(&ctx, cfl);
-      };
+      p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real { return dt_bound(self, cfl); };
     }
     p_->program_.artifact_backed_ = true;
 
     // Dynamic field kernels are installed last. Their structural snapshot is restored before the
     // DSO is closed if any generated setter fails.
     if (install_boundaries)
-      install_boundaries(static_cast<void*>(this));
+      install_boundaries(this);
     p_->fields_.commit_program_install();
   } catch (...) {
     const std::exception_ptr failure = std::current_exception();

@@ -1,115 +1,117 @@
-#!/usr/bin/env python3
-"""Contrat fail-closed de l'ancien descripteur IMEX-RK ARS(2,2,2).
+"""Public Program proof for nonlinear IMEX ARS(2,2,2).
 
-``engine.IMEXRK`` conserve l'identite et les validations de la famille historique. Depuis le cutover
-Program-only, ce descripteur de bloc n'installe toutefois aucun schema temporel et ne peut plus
-declencher le moteur C++ ARS(2,2,2). Un ``System.step`` doit exiger un vrai Program whole-system au
-lieu de reconstruire silencieusement l'ancien integrateur.
-
-La convergence d'ordre deux et la stabilite raide devront etre retablies dans un test numerique
-distinct lorsque le Program public disposera d'une primitive ARS(2,2,2) exacte pour cette source
-native. Ici on prouve uniquement les contrats executables actuels : identite du descripteur,
-absence de fallback temporel, et rejets AMR/polaire/masque partiel.
+This test owns no stepper and calls no compatibility runtime.  It proves that the public
+``pops.lib.time.IMEX`` factory builds the two diagonal nonlinear stages through typed
+``LocalResidual``/``LocalNewton`` solves, that every result is consumed fail-closed, and that the
+exported binary64 ARS tableau retains second-order behavior on a split scalar problem.
 """
-from pops.numerics.reconstruction.limiters import Minmod
-import sys
 
-import pops.runtime._engine_descriptors as engine
-from pops.mesh import PolarMesh
-from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from __future__ import annotations
 
-fails = 0
+from math import exp
 
-
-def chk(cond, label):
-    global fails
-    print(f"  [{'OK ' if cond else 'XX '}] {label}")
-    if not cond:
-        fails += 1
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.lib.time import IMEX, IMEX_ARS222_TABLEAU
+from pops.physics._facade import Model
+from pops.solvers.nonlinear import LocalNewton
+from pops.time import Program
+from typed_program_support import state_refs
 
 
-def cyclotron_model(q):
-    """Fluide isotherme + force magnetique q*(v x B). elliptic charge=0 -> Poisson trivial (phi=0),
-    aucune force electrique : la dynamique d'un etat uniforme est la pure gyration cyclotron."""
-    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
-                     transport=engine.IsothermalFlux(),
-                     source=engine.MagneticLorentzForce(charge=q),
-                     elliptic=engine.ChargeDensity(charge=0.0))
-
-
-def build(time_policy):
-    sim = System(n=8, L=1.0, periodicity=(True, True))
-    sim.add_equation(
-        "e",
-        cyclotron_model(1.0),
-        spatial=engine.Spatial(limiter=Minmod()),
-        time=time_policy,
+def _authoring():
+    model = Model("imex_ars222_model")
+    (u,) = model.conservative_vars("u")
+    model.source_term("slow", [-0.2 * u])
+    implicit = model.source_term("stiff", [-u * u])
+    explicit = model.rate("explicit", flux=False, sources=("slow",))
+    block, state = state_refs(Program("imex_ars222_refs"), "scalar", model=model)
+    program = IMEX(
+        block[state],
+        explicit_operator=explicit,
+        implicit_operator=implicit,
+        tableau=IMEX_ARS222_TABLEAU,
+        implicit_solver=LocalNewton(
+            tolerance=1.0e-12,
+            max_iterations=25,
+            finite_difference_step=1.0e-7,
+        ),
     )
-    return sim
+    return model, program
 
 
-def expect_program_required(policy, label):
-    sim = build(policy)
-    try:
-        sim.step(0.1)
-    except RuntimeError as error:
-        chk(
-            "installed whole-system Program" in str(error),
-            f"{label}: step refuse sans Program explicite",
+def test_public_ars222_uses_two_consumed_local_newton_stages():
+    model, program = _authoring()
+
+    assert program.validate() is True
+    nodes = program._serialize()["nodes"]
+    operations = [node["op"] for node in nodes]
+    assert operations.count("solve_local_nonlinear") == 2
+    assert operations.count("solve_outcome") == 2
+    assert operations.count("source") == 3
+
+    solves = [node for node in nodes if node["op"] == "solve_local_nonlinear"]
+    assert all(node["attrs"]["problem_kind"] == "local_residual" for node in solves)
+    assert all(node["attrs"]["max_iter"] == 25 for node in solves)
+    assert all(
+        any(
+            residual["op"] == "source" and residual["attrs"]["source"] == "stiff"
+            for residual in node["attrs"]["residual_block"]
         )
-        return
-    chk(False, f"{label}: un integrateur temporel cache a ete execute")
+        for node in solves
+    )
+    consumes = [node for node in nodes if node["op"] == "solve_outcome"]
+    assert all(node["attrs"]["action"]["kind"] == "fail_run" for node in consumes)
+
+    generated = emit_cpp_program(program, model=model)
+    assert generated.count("pops::prepare_local_nonlinear_problem<1>") == 2
+    assert generated.count("pops::solve_prepared_local_nonlinear(prepared_, Gval)") == 2
+    assert "for (int it_ = 0;" not in generated
+    assert "pops::detail::mat_inverse<1>(" not in generated
 
 
-# --- (a) IDENTITE DU DESCRIPTEUR ---------------------------------------------------------
-print("== (a) identite stable des descripteurs IMEX / IMEXRK ==")
-chk(engine.IMEX().kind == "imex", "engine.IMEX.kind == 'imex' (backward-Euler local, defaut)")
-chk(engine.IMEXRK().kind == "imexrk_ars222", "engine.IMEXRK.kind == 'imexrk_ars222' (famille distincte)")
-chk(engine.IMEX().kind != engine.IMEXRK().kind, "kinds distincts -> chemins C++ distincts (pas un alias)")
-chk(engine.IMEXRK().scheme == "ars222", "engine.IMEXRK.scheme == 'ars222'")
+def _ars222_step(value: float, dt: float) -> float:
+    tableau = IMEX_ARS222_TABLEAU
+    explicit_rates: list[float] = []
+    implicit_rates: list[float] = []
 
-# --- (b) AUCUN MOTEUR TEMPOREL CACHE ----------------------------------------------------
-print("== (b) les descripteurs de bloc n'avancent pas sans Program ==")
-expect_program_required(engine.IMEXRK(), "IMEXRK ARS(2,2,2)")
-expect_program_required(engine.IMEX(), "IMEX backward-Euler")
+    for stage in range(tableau.stages):
+        predictor = value
+        for previous in range(stage):
+            predictor += dt * tableau.explicit.A[stage][previous] * explicit_rates[previous]
+            predictor += dt * tableau.implicit_A[stage][previous] * implicit_rates[previous]
 
-# --- (c) REJETS EXPLICITES (perimetre = System cartesien) -------------------------------
-print("== (c) rejets explicites : AMR / polaire / masque partiel ==")
+        diagonal = tableau.implicit_A[stage][stage]
+        candidate = predictor
+        for _ in range(20):
+            residual = candidate - predictor + dt * diagonal * candidate * candidate
+            candidate -= residual / (1.0 + 2.0 * dt * diagonal * candidate)
 
-# (c1) AMR
-amr = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
-try:
-    amr.add_equation("e", cyclotron_model(1.0), spatial=engine.Spatial(limiter=Minmod()),
-                  time=engine.IMEXRK())
-    chk(False, "AMR + IMEXRK aurait du lever")
-except (RuntimeError, ValueError, TypeError) as e:
-    chk("imexrk" in str(e).lower() or "imex-rk" in str(e).lower(), f"AMR rejet explicite : {e}")
+        explicit_rates.append(-0.2 * candidate)
+        implicit_rates.append(-candidate * candidate)
 
-# (c2) polaire (anneau) : la source raide implicite n'y est pas cablee
-simp = System(mesh=PolarMesh(r_min=0.2, r_max=1.0, nr=16, ntheta=16))
-try:
-    simp.add_equation("e",
-                   engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
-                             source=engine.NoSource(), elliptic=engine.BackgroundDensity()),
-                   spatial=engine.Spatial(), time=engine.IMEXRK())
-    chk(False, "polaire + IMEXRK aurait du lever")
-except (RuntimeError, ValueError, TypeError) as e:
-    chk("imex" in str(e).lower(), f"polaire rejet explicite : {e}")
+    result = value
+    for weight, rate in zip(tableau.explicit.b, explicit_rates, strict=True):
+        result += dt * weight * rate
+    for weight, rate in zip(tableau.implicit_b, implicit_rates, strict=True):
+        result += dt * weight * rate
+    return result
 
-# (c3) masque IMEX partiel : la source IMEXRK est pleinement implicite -> rejet a l'ajout du bloc
-sim_mask = System(n=8, L=1.0, periodicity=(True, True))
-try:
-    # engine.IMEXRK n'expose pas implicit_vars ; on force l'attribut pour exercer la garde C++.
-    pol = engine.IMEXRK()
-    pol.implicit_vars = ["rho_u"]
-    sim_mask.add_equation("e", cyclotron_model(1.0), spatial=engine.Spatial(limiter=Minmod()),
-                       time=pol)
-    chk(False, "IMEXRK + implicit_vars aurait du lever")
-except (RuntimeError, ValueError) as e:
-    chk("imexrk" in str(e).lower() or "fully implicit" in str(e).lower(),
-        f"masque partiel rejete : {e}")
 
-if fails:
-    print(f"FAIL test_imexrk : {fails} echec(s)")
-    sys.exit(1)
-print("OK test_imexrk")
+def _integrate(steps: int) -> float:
+    value = 1.0
+    dt = 1.0 / steps
+    for _ in range(steps):
+        value = _ars222_step(value, dt)
+    return value
+
+
+def test_ars222_tableau_has_observed_second_order_on_a_split_nonlinear_problem():
+    # u' = -0.2 u - u^2, u(0)=1:
+    # u(t) = a*u0*exp(-a*t) / (a + u0*(1-exp(-a*t))).
+    decay = 0.2
+    exact = decay * exp(-decay) / (decay + 1.0 - exp(-decay))
+    errors = [abs(_integrate(steps) - exact) for steps in (20, 40, 80)]
+
+    assert errors[0] > errors[1] > errors[2]
+    assert errors[0] / errors[1] > 3.7
+    assert errors[1] / errors[2] > 3.7

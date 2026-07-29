@@ -35,6 +35,7 @@ from tests.python.support.explicit_program import (
     install_ssprk2_program,
     install_ssprk3_program,
 )
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 
 def _bump(n, amp):
@@ -65,7 +66,7 @@ def _check_mono(n=32):
         time=engine.Explicit(ssprk3=True),
     )  # SSPRK3 mono-bloc (ProgramGraph, AmrRuntime spatial)
     sim.set_poisson(bc=Periodic())
-    sim.set_refinement(1.05)  # seuil bas -> le bump tague et raffine (patchs fins actifs)
+    install_prepared_threshold_union(sim, (("ne", "n", 1.05),))
     sim.set_density("ne", _bump(n, 0.40))
     install_ssprk3_program(sim)
     m0 = sim.mass()
@@ -98,7 +99,8 @@ def _check_multi(n=32):
         time=engine.Explicit(ssprk3=True),
     )  # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
     sim.set_poisson(bc=Periodic())
-    sim.set_refinement(1.05)  # union des tags -> patchs fins actifs
+    install_prepared_threshold_union(
+        sim, (("ions", "n", 1.05), ("electrons", "n", 1.05)))
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
     install_ssprk3_program(sim)
@@ -215,6 +217,7 @@ def _check_imex_ssprk3_rejected(n=16):
     # newton_diagnostics) AVEC time='ssprk3' est REJETE : ssprk3 = transport explicite, exclusif de
     # l'IMEX. La normalisation du Program refuse cette composition avant execution.
     model = _scalar_charge(+1.0)
+    newton_defaults = engine.IMEX()
 
     def add(time, **kw):
         s = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=0)
@@ -222,12 +225,11 @@ def _check_imex_ssprk3_rejected(n=16):
         kwargs = dict(
             implicit_vars=[],
             implicit_roles=[],
-            newton_max_iters=2,
-            newton_rel_tol=0.0,
-            newton_abs_tol=0.0,
-            newton_fd_eps=1e-7,
-            newton_damping=1.0,
-            newton_fail_policy="none",
+            newton_max_iters=newton_defaults.newton_max_iters,
+            newton_rel_tol=newton_defaults.newton_rel_tol,
+            newton_abs_tol=newton_defaults.newton_abs_tol,
+            newton_fd_eps=newton_defaults.newton_fd_eps,
+            newton_damping=newton_defaults.newton_damping,
             newton_diagnostics=False,
         )
         kwargs.update(kw)
@@ -247,7 +249,6 @@ def _check_imex_ssprk3_rejected(n=16):
             kwargs["newton_abs_tol"],
             kwargs["newton_fd_eps"],
             kwargs["newton_damping"],
-            kwargs["newton_fail_policy"],
             kwargs["newton_diagnostics"],
         )
         return s

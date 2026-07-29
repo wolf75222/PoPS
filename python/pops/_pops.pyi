@@ -77,6 +77,8 @@ class StepAttemptRejected(RuntimeError):
         "breakdown",
         "iteration_limit",
         "invalid_evaluation",
+        "inadmissible_candidate",
+        "safeguard_failure",
         "capability_failure",
         "invalid_input",
         "incompatible_rhs",
@@ -85,6 +87,7 @@ class StepAttemptRejected(RuntimeError):
     detail: str
     disposition: Literal["retry", "reject"]
     reason_code: int
+    failed_rank: int
 
 
 class _RuntimeEnvironmentReport(TypedDict):
@@ -183,9 +186,16 @@ class _NativeObserverMpiLane:
 
 class _SolveReport:
     iters: int
+    evaluations: int
+    safeguard_steps: int
     rel_residual: float
     reference_residual_norm: float
     residual_norm: float
+    step_norm: float
+    condition_evidence: float
+    failed_i: int
+    failed_j: int
+    failed_component: int
     status: str
     action: str
     reason: str
@@ -265,6 +275,7 @@ class ModelSpec:
 class System:
     def __init__(self, config: SystemConfig) -> None: ...
     def solve_fields(self) -> _SolveReport: ...
+    def _consume_step_projections(self) -> list[str]: ...
     def output_state_local_pieces(
         self, block: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
@@ -283,6 +294,7 @@ class AmrSystem:
     def __init__(self, config: AmrSystemConfig) -> None: ...
     def n_levels(self) -> int: ...
     def configured_n_levels(self) -> int: ...
+    def _consume_step_projections(self) -> list[str]: ...
     def materialize_program_restart_histories(
         self,
         payload: bytes,

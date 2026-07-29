@@ -80,6 +80,10 @@ struct CopyComp0Kernel {
 };
 }  // namespace detail
 
+namespace validation {
+struct GeometricMGValidationAccess;
+}
+
 inline BCRec homogeneous(const BCRec& b) {
   BCRec h = b;
   h.xlo_val = h.xhi_val = h.ylo_val = h.yhi_val = 0;
@@ -536,7 +540,7 @@ class GeometricMG {
     auto invalid_evaluation = [&](int cycles, Real residual) {
       last_cycles_ = cycles;
       last_residual_ = residual;
-      return finish(cycles, std::numeric_limits<Real>::infinity(), SolveStatus::kInvalidEvaluation,
+      return finish(cycles, std::numeric_limits<Real>::max(), SolveStatus::kInvalidEvaluation,
                     SolveAction::kRejectAttempt);
     };
     trace_mark("solve: before initial current_residual");
@@ -578,27 +582,34 @@ class GeometricMG {
                   SolveAction::kRejectAttempt);
   }
 
-  // EllipticSolver concept interface: solve() with no argument (default
-  // tolerance) and residual() (alias of current_residual). Lets couplers
-  // depend on the concept, not on GeometricMG directly. Propagates abs_tol_ (absolute
-  // floor, default 0 -> historical relative criterion unchanged) to the mixed criterion.
-  void solve() {
+  /// Prepared default-control solve used by report-aware runtime adapters. Unlike the legacy
+  /// EllipticSolver concept entry point below, failure remains an inspectable SolveReport so a
+  /// caller can select RejectAttempt versus FailRun before publishing phi.
+  SolveReport solve_default_report() {
     require_collective_configuration_(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_,
-                                      "GeometricMG::solve()");
+                                      "GeometricMG::solve_default_report()");
     if (has_boundary_kernel_ && boundary_kernel_.observes_iteration) {
-      require_collective_solve_inputs_("GeometricMG::solve()");
+      require_collective_solve_inputs_("GeometricMG::solve_default_report()");
       if (!has_field_newton_options_)
         throw std::runtime_error(
             "iterate-dependent field boundary requires an installed nonlinear outer solver");
       SolveReport nonlinear_report = solve_boundary_newton(field_newton_options_);
       last_solve_report_ = std::move(nonlinear_report);
-      if (!last_solve_report_.solved())
-        throw std::runtime_error(std::string("field Newton solve failed: ") +
-                                 last_solve_report_.status_name());
-      require_exact_published_phi_("GeometricMG::solve()");
-      return;
+      if (last_solve_report_.solved())
+        require_exact_published_phi_("GeometricMG::solve_default_report()");
+      return last_solve_report_;
     }
     solve(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_);
+    return last_solve_report_;
+  }
+
+  // EllipticSolver concept interface: solve() with no argument (default tolerance) and residual()
+  // (alias of current_residual). Legacy couplers have no report-consumption boundary, so this route
+  // fails closed instead of letting them derive fields from an unconverged iterate.
+  void solve() {
+    const SolveReport report = solve_default_report();
+    if (!report.solved())
+      throw std::runtime_error(std::string("GeometricMG solve failed: ") + report.status_name());
   }
   Real residual() { return current_residual(); }
 
@@ -612,6 +623,9 @@ class GeometricMG {
     abs_tol_ = abs_tol;
   }
   Real abs_tol() const { return abs_tol_; }
+
+ private:
+  friend struct validation::GeometricMGValidationAccess;
 
   // HARDENED solve for the embedded boundary at high resolution. On a fine grid, the geometric
   // V-cycle sometimes diverges near the conducting wall: coarsening is
@@ -655,7 +669,7 @@ class GeometricMG {
     auto invalid_evaluation = [&](int cycles, Real residual) {
       last_cycles_ = cycles;
       last_residual_ = residual;
-      return finish(cycles, std::numeric_limits<Real>::infinity(), SolveStatus::kInvalidEvaluation,
+      return finish(cycles, std::numeric_limits<Real>::max(), SolveStatus::kInvalidEvaluation,
                     SolveAction::kRejectAttempt);
     };
     double initial_norms[2] = {static_cast<double>(forcing_residual_local()),
@@ -733,6 +747,7 @@ class GeometricMG {
     return iteration_limit(total, hardened_residual);
   }
 
+ public:
   // Current residual (infinity norm) at the finest level. all_reduce_max MANDATORY for
   // a DISTRIBUTED MULTI-BOX coarse: without it, norm_inf returns the LOCAL max (different per rank),
   // so the V-cycle stopping criterion fires at different iterations depending on the rank
@@ -1962,7 +1977,7 @@ class GeometricMG {
       run_collective_materialization_stage_("boundary Newton failed-state restore",
                                             [&] { cache.restore_published(); });
       return make_solve_report_collectively_(
-          0, std::numeric_limits<Real>::infinity(), SolveStatus::kInvalidEvaluation,
+          0, std::numeric_limits<Real>::max(), SolveStatus::kInvalidEvaluation,
           SolveAction::kRejectAttempt, "GeometricMG::solve_boundary_newton");
     }
     const Real base = r0 > Real(0) ? r0 : Real(1);
@@ -1988,8 +2003,9 @@ class GeometricMG {
       try {
         cache.linear_problem().prepare(linear_snapshot);
         cache.linear_workspace().bind(cache.linear_problem());
-        linear.emplace(solve_prepared_affine(cache.linear_problem(), cache.linear_workspace(),
-                                             cache.delta_, cache.residual_, *linear_controls));
+        linear.emplace(detail::solve_prepared_affine_in_place(
+            cache.linear_problem(), cache.linear_workspace(), cache.delta_, cache.residual_,
+            *linear_controls));
       } catch (...) {
         run_collective_materialization_stage_("boundary Newton exceptional-state restore",
                                               [&] { cache.restore_published(); });

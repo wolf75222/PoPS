@@ -268,9 +268,7 @@ class RestartV3:
         policy = require_restart_hierarchy(self.hierarchy, where="RestartV3.hierarchy")
         object.__setattr__(self, "hierarchy", policy)
         if self.bit_identical and type(policy) is RegridOnRestart:
-            raise ValueError(
-                "RestartV3 cannot combine bit_identical=True with RegridOnRestart()"
-            )
+            raise ValueError("RestartV3 cannot combine bit_identical=True with RegridOnRestart()")
 
     def consumer_data(self) -> dict[str, Any]:
         return {
@@ -279,9 +277,7 @@ class RestartV3:
             "extension": ".npz",
             "bit_identical": self.bit_identical,
             "guarantee": (
-                "bit_identical_accepted_state"
-                if self.bit_identical
-                else self.hierarchy.guarantee
+                "bit_identical_accepted_state" if self.bit_identical else self.hierarchy.guarantee
             ),
             "hierarchy": self.hierarchy.to_data(),
             "hierarchy_identity": self.hierarchy.identity.token,
@@ -289,18 +285,13 @@ class RestartV3:
             # without this explicit capability (notably parallel HDF5) remain fail-closed when no
             # distributed communicator is present.
             "supports_singleton_collective": True,
-            "supports_regrid_on_restart": False,
+            "supports_regrid_on_restart": True,
         }
 
     def validate_configuration(self) -> None:
-        """Reject a semantic policy that this exact provider cannot execute."""
-        from .restart import RegridOnRestart
-
-        if type(self.hierarchy) is RegridOnRestart:
-            raise NotImplementedError(
-                "pops.restart.accepted-state-v5 does not implement RegridOnRestart(); "
-                "it supports only exact RestoreRecordedHierarchy() replay"
-            )
+        """Validate the policy pair before capture/reopen touches collective state."""
+        if self.bit_identical and self.hierarchy.mode == "regrid_on_restart":
+            raise ValueError("RestartV3 cannot combine bit_identical=True with RegridOnRestart()")
 
     def snapshot(self, runtime: Any, directory: Any) -> Any:
         self.validate_configuration()
@@ -362,7 +353,19 @@ class RestartV3:
         self.validate_configuration()
         if type(reopened) is not ReopenedRestart:
             raise TypeError("RestartV3.restore requires an exact ReopenedRestart")
-        return runtime._restore_checkpoint(reopened.payload, reopened.cursors)
+        if self.hierarchy.mode == "regrid_on_restart":
+            return runtime._restore_checkpoint(
+                reopened.payload,
+                reopened.cursors,
+                bit_identical=self.bit_identical,
+                hierarchy_mode=self.hierarchy.mode,
+                hierarchy_identity=self.hierarchy.identity.token,
+            )
+        return runtime._restore_checkpoint(
+            reopened.payload,
+            reopened.cursors,
+            bit_identical=self.bit_identical,
+        )
 
 
 @dataclass(frozen=True, slots=True)

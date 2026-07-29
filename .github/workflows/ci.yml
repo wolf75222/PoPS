@@ -311,7 +311,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-cpp-prewarm
@@ -419,7 +419,7 @@ jobs:
     if: needs.set-mode.outputs.cpp_required == 'true'
 
     env:
-      # Le cache final fusionne les trois partitions runtime puis ajoute les objets de tests du
+      # Le cache final fusionne les quatre partitions runtime puis ajoute les objets de tests du
       # shard. Deux Gio evitent d'evincer le socle authentifie avant son utilisation.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
@@ -525,7 +525,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/cpp-prewarm" \
               -name 'cpp-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 3
+          test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -586,7 +586,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/cpp-prewarm" \
               -name 'cpp-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos \
             --verify-contracts "${compile_contracts[@]}"
@@ -723,11 +723,11 @@ jobs:
       - name: Pyright
         run: pyright
 
-  # PREWARM PYTHON NATIF : trois runners compilent des ensembles d'objets O3 disjoints du MEME
-  # graphe Ninja (System/core, AMR base, AMR compressible). Ils ne publient aucun
+  # PREWARM PYTHON NATIF : quatre runners compilent des ensembles d'objets O3 disjoints du MEME
+  # graphe Ninja (System/core, AMR core, AMR block base, AMR compressible). Ils ne publient aucun
   # binaire : seulement
   # les entrees ccache adressees par contenu et un contrat compilateur/flags/SHA/sources. Le build
-  # final ci-dessous reconfigure officiellement tout le module, authentifie les trois contrats,
+  # final ci-dessous reconfigure officiellement tout le module, authentifie les quatre contrats,
   # consomme les hits puis effectue lui-meme le link. Un cache module exact evite meme ce prewarm.
   gate-python-prewarm:
     name: ubuntu-latest / Kokkos Serial (Python prewarm ${{ matrix.lane }})
@@ -738,7 +738,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
@@ -958,7 +958,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/python-prewarm" \
               -name 'python-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 3
+          test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -1020,7 +1020,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/python-prewarm" \
               -name 'python-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           # Refuse prewarmed entries unless the final official graph proves the same compiler,
           # complete command flags, Git revision and source content for every runtime object.
           python3 scripts/ci_python_module_objects.py \
@@ -1430,20 +1430,22 @@ jobs:
         run: ccache -s
 
   # PREWARM MPI NATIF. Le prewarm Serial ci-dessus ne peut pas produire de hits ccache fiables pour
-  # une compilation MPI/HDF5 : les definitions, include paths et commandes C++ different. Ces trois
+  # une compilation MPI/HDF5 : les definitions, include paths et commandes C++ different. Ces quatre
   # lanes configurent donc le graphe ci-mpi exact et compilent uniquement sa partition disjointe
   # d'objets runtime. Comme pour le prewarm Serial, les artefacts ne contiennent aucun binaire lie :
   # seulement les entrees ccache et un contrat compiler/flags/revision/sources que le job final verifie.
   gate-mpi-prewarm:
     name: ubuntu-24.04 / MPI + Kokkos Serial (C++ prewarm ${{ matrix.lane }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 22
+    # setup-kokkos can consume ~15 minutes on a cold runner. Keep enough room
+    # for the explicit 18-minute compile watchdog and artifact publication.
+    timeout-minutes: 40
     needs: [set-mode, changes]
     if: needs.set-mode.outputs.mpi_required == 'true'
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-mpi-prewarm
@@ -1688,7 +1690,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/mpi-prewarm" \
               -name 'mpi-prewarm-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 3
+          test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -1707,9 +1709,11 @@ jobs:
             --explain-file build-mpi/mpi-test-plan.json
           python3 scripts/ci_select_tests.py python-mpi \
             --plan-file build-mpi/python-mpi-plan.tsv \
+            --orchestrator-plan-file build-mpi/python-mpi-orchestrators.txt \
             --github-output "$GITHUB_OUTPUT" \
             --explain-file build-mpi/python-mpi-plan.json
           test -s build-mpi/python-mpi-plan.tsv
+          test -s build-mpi/python-mpi-orchestrators.txt
           test -s build-mpi/mpi-ctest-groups.tsv
 
       - name: Configure + build (MPI + Kokkos Serial)
@@ -1763,7 +1767,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/mpi-prewarm" \
               -name 'mpi-prewarm-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-mpi \
             --verify-contracts "${compile_contracts[@]}"
@@ -1923,6 +1927,14 @@ jobs:
             run_mpi "Python MPI contract ${mpi_test}" \
               -n "$mpi_ranks" /usr/bin/python3 -u "$mpi_test"
           done < build-mpi/python-mpi-plan.tsv
+          # This pytest process stays outside MPI: each manifest-owned orchestrator creates and
+          # tears down its own independent rank worlds (for example np=2 capture, then np=1 restart).
+          while IFS= read -r mpi_orchestrator; do
+            test -n "$mpi_orchestrator" && test -f "$mpi_orchestrator"
+            echo "Running serial Python MPI orchestrator: ${mpi_orchestrator}"
+            timeout --signal=TERM --kill-after=30s 25m \
+              /usr/bin/python3 -m pytest -q -ra --maxfail=1 "$mpi_orchestrator"
+          done < build-mpi/python-mpi-orchestrators.txt
       - name: ccache stats (MPI)
         if: always()
         run: ccache -s
@@ -1937,7 +1949,7 @@ jobs:
   # PREWARM OPENMP NATIF. Une invalidation froide des en-tetes de production ne doit pas forcer
   # chacun des sept shards C++ ni le module Python a recompiler leur socle runtime avant leurs
   # executables/bindings. Les graphes C++ et Python ont volontairement des defines/visibilites
-  # differents : chaque graphe possede donc ses trois lanes semantiques exactes. Elles publient
+  # differents : chaque graphe possede donc ses quatre lanes semantiques exactes. Elles publient
   # uniquement ccache et le contrat compilateur/flags/revision/sources ; aucun binaire lie n'est
   # transmis, et chaque consommateur reconfigure puis authentifie son propre contrat.
   gate-openmp-prewarm:
@@ -1950,7 +1962,7 @@ jobs:
       fail-fast: false
       matrix:
         graph: [cpp, python]
-        lane: [system, amr-base, amr-compressible]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-openmp-prewarm
@@ -2303,7 +2315,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
               -name 'openmp-prewarm-${{ matrix.kind }}-ccache-*.tar' -type f | sort
           )
-          test "${#cache_archives[@]}" -eq 3
+          test "${#cache_archives[@]}" -eq 4
           for cache_archive in "${cache_archives[@]}"; do
             tar -C "$CCACHE_DIR" -xf "$cache_archive"
           done
@@ -2311,8 +2323,8 @@ jobs:
 
       - name: Configure + build (backend Kokkos OpenMP)
         if: matrix.kind == 'cpp'
-        # Le socle runtime froid est construit une seule fois par les trois lanes semantiques. Ce
-        # shard reconfigure le graphe officiel, authentifie les trois contrats puis ne compile que
+        # Le socle runtime froid est construit une seule fois par les quatre lanes semantiques. Ce
+        # shard reconfigure le graphe officiel, authentifie les quatre contrats puis ne compile que
         # ses executables/tests propres ; le watchdog reste un garde-fou, pas le mecanisme de vitesse.
         timeout-minutes: 43
         # MEME preset ci-kokkos que le job Serial (binaryDir build-kokkos) : seule l'install
@@ -2357,7 +2369,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
               -name 'openmp-prewarm-cpp-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos \
             --verify-contracts "${compile_contracts[@]}"
@@ -2476,7 +2488,7 @@ jobs:
             find "${{ github.workspace }}/.pops-ci/openmp-prewarm" \
               -name 'openmp-prewarm-python-contract-*.json' -type f | sort
           )
-          test "${#compile_contracts[@]}" -eq 3
+          test "${#compile_contracts[@]}" -eq 4
           python3 scripts/ci_python_module_objects.py \
             --build-dir build-kokkos-py \
             --verify-contracts "${compile_contracts[@]}"

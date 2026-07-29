@@ -68,10 +68,10 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
           "speed cache only applies to the HLL flux ; received riemann='" +
           riemann + "')");
     if (imex)
-      throw std::runtime_error("System::add_block : wave_speed_cache not supported with time='" +
-                               time +
-                               "' (the cached residual is not available to an implicit Program ; use time "
-                               "'explicit'/'ssprk3'/'euler')");
+      throw std::runtime_error(
+          "System::add_block : wave_speed_cache not supported with time='" + time +
+          "' (the cached residual is not available to an implicit Program ; use time "
+          "'explicit'/'ssprk3'/'euler')");
     if (P->polar_)
       throw std::runtime_error(
           "System::add_block : wave_speed_cache not supported on the polar "
@@ -162,7 +162,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     const GridContext ctx = P->grid_ctx(name);
     // Preserve the requested diagnostic carrier until the typed implicit Program primitive owns and
     // writes it. The spatial closures never capture this state.
-    if (newton_diagnostics || newton.fail_policy != NewtonOptions::kFailNone) {
+    if (newton_diagnostics) {
       auto rep = std::make_shared<NewtonReport>();
       P->diagnostics_.newton_reports[name] = rep;
     }
@@ -255,11 +255,10 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // via Kokkos), without copy.
   install_block(name, ncomp, cons_vs, prim_vs, model.gamma, std::move(clo), std::move(max_speed),
                 std::move(add_poisson_rhs), substeps, evolve, stride);
-  EffectiveBlockOptions block_options =
-      make_system_block_options(name, model, "native_model", limiter, riemann, recon, time, method,
-                                substeps, evolve, stride, implicit_vars, implicit_roles,
-                                newton, newton_diagnostics, positivity_floor, wave_speed_cache,
-                                weno_epsilon);
+  EffectiveBlockOptions block_options = make_system_block_options(
+      name, model, "native_model", limiter, riemann, recon, time, method, substeps, evolve, stride,
+      implicit_vars, implicit_roles, newton, newton_diagnostics, positivity_floor, wave_speed_cache,
+      weno_epsilon);
   block_options.ncomp = ncomp;
   block_options.conservative_vars = cons_vs.names;
   block_options.primitive_vars = prim_vs.names;
@@ -314,6 +313,19 @@ POPS_EXPORT void System::install_boundary_plan(const std::string& name, const st
                                                const std::vector<int>& omitted_interface_faces,
                                                const std::string& state_identity,
                                                PreparedBoundaryReadDependencies read_dependencies) {
+  install_boundary_plan(name, identity, required_depth, face_types, face_values, face_identities,
+                        component_roles, omitted_interface_faces, state_identity,
+                        std::move(read_dependencies), {});
+}
+
+POPS_EXPORT void System::install_boundary_plan(
+    const std::string& name, const std::string& identity, int required_depth,
+    const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+    const std::vector<std::string>& face_identities,
+    const std::vector<std::string>& component_roles,
+    const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+    PreparedBoundaryReadDependencies read_dependencies,
+    std::vector<PeriodicIdentification2D> periodic_identifications) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_boundary_plan");
   if (name.empty() || state_identity.empty())
@@ -325,25 +337,25 @@ POPS_EXPORT void System::install_boundary_plan(const std::string& name, const st
         "System::install_boundary_plan state differs from the exact block state route");
   if (P->boundary_plans_.count(name) != 0)
     throw std::runtime_error("System::install_boundary_plan duplicate block '" + name + "'");
-  auto hyperbolic =
-      prepare_hyperbolic_boundary<2>(face_types, face_values, face_identities, component_roles);
-  auto plan = std::make_shared<PreparedBoundaryPlan>(identity, required_depth,
-                                                     std::move(hyperbolic), omitted_interface_faces,
-                                                     state_identity, std::move(read_dependencies));
+  auto hyperbolic = prepare_hyperbolic_boundary<2>(
+      face_types, face_values, face_identities, component_roles, !periodic_identifications.empty());
+  auto plan = std::make_shared<PreparedBoundaryPlan>(
+      identity, required_depth, std::move(hyperbolic), omitted_interface_faces, state_identity,
+      std::move(read_dependencies), std::move(periodic_identifications));
   for (const auto& [_, installed] : P->boundary_plans_)
     if (installed->state_identity() == state_identity)
       throw std::runtime_error("System::install_boundary_plan duplicate qualified state identity");
   P->boundary_plans_.emplace(name, std::move(plan));
 }
 
-POPS_EXPORT void System::install_boundary_field_route(const std::string& field_identity,
-                                                      const std::string& provider_slot) {
+POPS_EXPORT void System::install_field_storage_route(const std::string& field_identity,
+                                                     const std::string& provider_slot) {
   Impl* P = p_.get();
-  require_assembling(P->lifecycle_, "install_boundary_field_route");
+  require_assembling(P->lifecycle_, "install_field_storage_route");
   if (field_identity.empty() || provider_slot.empty() ||
-      !P->boundary_field_routes_.emplace(field_identity, provider_slot).second)
+      !P->field_storage_routes_.emplace(field_identity, provider_slot).second)
     throw std::runtime_error(
-        "System boundary field route requires unique non-empty qualified identities");
+        "System field storage route requires unique non-empty qualified identities");
 }
 
 POPS_EXPORT void System::discard_boundary_plans() {
@@ -354,7 +366,7 @@ POPS_EXPORT void System::discard_boundary_plans() {
         "System::discard_boundary_plans is restricted to a failed pre-block transaction");
   P->boundary_plans_.clear();
   P->block_state_identities_.clear();
-  P->boundary_field_routes_.clear();
+  P->field_storage_routes_.clear();
 }
 
 POPS_EXPORT void System::install_ghost_boundary_component(
@@ -583,10 +595,8 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
   p_->index(name);  // raises if unknown block
   const NewtonReport* rp = p_->diagnostics_.newton_report_ptr(name);
   if (rp == nullptr)
-    throw std::runtime_error(
-        "System::newton_report : Newton diagnostics not enabled for block '" + name +
-        "' ; enable diagnostics on the installed private implicit-solve policy or set "
-        "newton_fail_policy='warn'/'throw'");
+    throw std::runtime_error("System::newton_report : Newton diagnostics not enabled for block '" +
+                             name + "' ; pass newton_diagnostics=True when installing the block");
   const NewtonReport& r = *rp;
   return SourceNewtonReport{r.enabled,
                             r.converged,
@@ -675,6 +685,12 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   if (!std::isfinite(epsilon) || epsilon == 0.0)
     throw std::runtime_error("System::set_poisson : finite epsilon != 0 required");
+  if (p_->polar_ && solver != "polar")
+    throw std::runtime_error(
+        "System::set_poisson: polar geometry requires solver='polar'; solver substitution is "
+        "forbidden");
+  if (!p_->polar_ && solver == "polar")
+    throw std::runtime_error("System::set_poisson: solver='polar' requires polar geometry");
   using FieldSolver = field_solver::SystemFieldSolver<Impl>;
   if (solver == "geometric_mg") {
     GeometricMgOptions mg_options;
@@ -748,12 +764,12 @@ void System::set_field_solver_plan(
   const auto existing = p_->fields_.named_field_plans_.find(provider_slot);
   if (existing != p_->fields_.named_field_plans_.end())
     throw std::runtime_error("System::set_field_solver_plan duplicate provider slot");
-  const auto duplicate_output = std::find_if(
-      p_->fields_.named_field_plans_.begin(), p_->fields_.named_field_plans_.end(),
-      [&](const auto& configured) {
-        return configured.second.output_block == output_block &&
-               configured.second.output_key == output_key;
-      });
+  const auto duplicate_output =
+      std::find_if(p_->fields_.named_field_plans_.begin(), p_->fields_.named_field_plans_.end(),
+                   [&](const auto& configured) {
+                     return configured.second.output_block == output_block &&
+                            configured.second.output_key == output_key;
+                   });
   if (duplicate_output != p_->fields_.named_field_plans_.end())
     throw std::runtime_error(
         "System::set_field_solver_plan output block/key already belongs to another qualified "

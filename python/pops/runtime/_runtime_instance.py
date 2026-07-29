@@ -1,4 +1,5 @@
 """Private implementation of the single runtime value returned by :func:`pops.bind`."""
+
 from __future__ import annotations
 
 import copy
@@ -45,7 +46,41 @@ def _identity_data(value: Any) -> Any:
         return dict(value)
     if isinstance(value, (str, int, float, bool)):
         return value
-    raise TypeError("runtime identity evidence must implement to_data() or be canonical scalar data")
+    raise TypeError(
+        "runtime identity evidence must implement to_data() or be canonical scalar data"
+    )
+
+
+def _regrid_receipt_identity_data(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the validated scientific receipt onto canonical identity scalars.
+
+    The public receipt deliberately keeps binary64 values as ``float`` so callers can inspect and
+    compare them numerically.  Identity payloads have the stricter contract used everywhere else in
+    PoPS: binary64 values are represented by their exact ``float.hex()`` spelling.
+    """
+    data = dict(receipt)
+    accepted_time = data.get("accepted_time")
+    if type(accepted_time) is not float or not math.isfinite(accepted_time):
+        raise TypeError("RegridOnRestart receipt accepted_time must be one finite binary64 value")
+    data["accepted_time"] = accepted_time.hex()
+    for section in ("composite_integrals_before", "composite_integrals_after"):
+        values = data.get(section)
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("RegridOnRestart receipt %s must be a sequence" % section)
+        projected = []
+        for row in values:
+            if not isinstance(row, Mapping):
+                raise TypeError("RegridOnRestart receipt %s rows must be mappings" % section)
+            canonical_row = dict(row)
+            value = canonical_row.get("value")
+            if type(value) is not float or not math.isfinite(value):
+                raise TypeError(
+                    "RegridOnRestart receipt %s values must be finite binary64" % section
+                )
+            canonical_row["value"] = value.hex()
+            projected.append(canonical_row)
+        data[section] = projected
+    return data
 
 
 def _same_physical_time(left: float, right: float) -> bool:
@@ -67,27 +102,28 @@ def _validate_external_grid_deadline(
     if deadline > run_end:
         return
     grid = tuple(float(value) for value in controls[strategy.grid_id])
-    if not any(
-            value >= deadline and _same_physical_time(value, deadline)
-            for value in grid):
+    if not any(value >= deadline and _same_physical_time(value, deadline) for value in grid):
         raise ValueError(
             "every_dt deadline %s is absent from ExternalTimeGrid %r; add every physical-output "
-            "deadline to the declared external grid"
-            % (deadline.hex(), strategy.grid_id)
+            "deadline to the declared external grid" % (deadline.hex(), strategy.grid_id)
         )
 
 
-_FIELD_TOPOLOGY_ROW_KEYS = frozenset({
-    "patch_identity",
-    "topology_digest",
-    "provenance",
-    "material_points",
-    "connected_components",
-})
-_FIELD_TOPOLOGY_OPTIONAL_ROW_KEYS = frozenset({
-    "source_layout_identity",
-    "materialized_layout_identity",
-})
+_FIELD_TOPOLOGY_ROW_KEYS = frozenset(
+    {
+        "patch_identity",
+        "topology_digest",
+        "provenance",
+        "material_points",
+        "connected_components",
+    }
+)
+_FIELD_TOPOLOGY_OPTIONAL_ROW_KEYS = frozenset(
+    {
+        "source_layout_identity",
+        "materialized_layout_identity",
+    }
+)
 
 
 def _field_topology_rows(executor: Any, slot: str) -> tuple[dict[str, Any], ...]:
@@ -110,7 +146,8 @@ def _field_topology_rows(executor: Any, slot: str) -> tuple[dict[str, Any], ...]
         reports.append(inspect_topology(slot))
     if len(reports) > 1:
         raise RuntimeError(
-            "one qualified field-provider slot is materialized by multiple native executors")
+            "one qualified field-provider slot is materialized by multiple native executors"
+        )
     if not reports:
         return ()
     normalized = []
@@ -120,7 +157,8 @@ def _field_topology_rows(executor: Any, slot: str) -> tuple[dict[str, Any], ...]
         row = dict(raw)
         keys = frozenset(row)
         if not _FIELD_TOPOLOGY_ROW_KEYS <= keys or keys - (
-                _FIELD_TOPOLOGY_ROW_KEYS | _FIELD_TOPOLOGY_OPTIONAL_ROW_KEYS):
+            _FIELD_TOPOLOGY_ROW_KEYS | _FIELD_TOPOLOGY_OPTIONAL_ROW_KEYS
+        ):
             raise TypeError("native field topology report row has an invalid schema")
         for name in ("patch_identity", "topology_digest", "provenance"):
             if not isinstance(row[name], str) or not row[name]:
@@ -158,7 +196,8 @@ def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | No
             reports.append(getter(slot))
     if len(reports) > 1:
         raise RuntimeError(
-            "one qualified field-provider slot has multiple native solver configurations")
+            "one qualified field-provider slot has multiple native solver configurations"
+        )
     if not reports:
         return None
     row = reports[0]
@@ -166,30 +205,38 @@ def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | No
         raise TypeError("native field solver configuration must be a mapping")
     result = copy.deepcopy(dict(row))
     expected = {
-        "schema_version", "provider_slot", "plan_identity", "provider_identity", "solver",
-        "hierarchy_policy", "option_schema_identity", "options",
+        "schema_version",
+        "provider_slot",
+        "plan_identity",
+        "provider_identity",
+        "solver",
+        "hierarchy_policy",
+        "option_schema_identity",
+        "options",
     }
-    if set(result) != expected or result["schema_version"] != 1 \
-            or result["provider_slot"] != slot \
-            or not isinstance(result["plan_identity"], str) \
-            or not result["plan_identity"]:
+    if (
+        set(result) != expected
+        or result["schema_version"] != 1
+        or result["provider_slot"] != slot
+        or not isinstance(result["plan_identity"], str)
+        or not result["plan_identity"]
+    ):
         raise TypeError("native field solver configuration has an invalid schema")
     for name in ("provider_identity", "solver", "option_schema_identity"):
         if not isinstance(result[name], str) or not result[name]:
-            raise TypeError(
-                "native field solver configuration requires an exact %s" % name
-            )
+            raise TypeError("native field solver configuration requires an exact %s" % name)
     hierarchy_policy = result["hierarchy_policy"]
     if not isinstance(hierarchy_policy, Mapping) or set(hierarchy_policy) != {
-        "policy_id", "interface_version", "option_schema", "options",
+        "policy_id",
+        "interface_version",
+        "option_schema",
+        "options",
     }:
         raise TypeError("native field solver hierarchy policy has an invalid schema")
     hierarchy_policy = dict(hierarchy_policy)
     for name in ("policy_id", "option_schema"):
         if not isinstance(hierarchy_policy[name], str) or not hierarchy_policy[name]:
-            raise TypeError(
-                "native field solver hierarchy policy requires an exact %s" % name
-            )
+            raise TypeError("native field solver hierarchy policy requires an exact %s" % name)
     version = hierarchy_policy["interface_version"]
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise TypeError(
@@ -214,7 +261,9 @@ def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | No
 
 
 def _field_provider_evidence(
-    install_plan: Any, layout_plan: Any, executor: Any,
+    install_plan: Any,
+    layout_plan: Any,
+    executor: Any,
 ) -> tuple[dict[str, Any], ...]:
     """Return one common, honest report schema for builtin and external field providers."""
     result = []
@@ -230,29 +279,33 @@ def _field_provider_evidence(
         digests = {row["topology_digest"] for row in patches}
         provenances = {row["provenance"] for row in patches}
         materialized_layouts = {
-            row["materialized_layout_identity"] for row in patches
+            row["materialized_layout_identity"]
+            for row in patches
             if row["materialized_layout_identity"] is not None
         }
         if len(digests) > 1 or len(provenances) > 1 or len(materialized_layouts) > 1:
             raise RuntimeError(
-                "one field-provider materialization returned inconsistent global topology facts")
-        result.append({
-            "field": name,
-            "provider_slot": slot,
-            "provider": binding.to_data()["provider"],
-            "source_layout_identity": layout_plan.qualified_id,
-            "topology_recipe_identity": binding.facts.layout["topology_identity"],
-            "topology_contract": binding.resolution.to_data()["topology_contract"],
-            "component_bindings": binding.resolution.to_data()["component_bindings"],
-            "materialized": bool(patches),
-            "materialized_layout_identity": (
-                next(iter(materialized_layouts)) if materialized_layouts else None
-            ),
-            "topology_digest": next(iter(digests)) if digests else None,
-            "provenance": next(iter(provenances)) if provenances else None,
-            "solver_configuration": _field_solver_configuration(executor, slot),
-            "patches": list(patches),
-        })
+                "one field-provider materialization returned inconsistent global topology facts"
+            )
+        result.append(
+            {
+                "field": name,
+                "provider_slot": slot,
+                "provider": binding.to_data()["provider"],
+                "source_layout_identity": layout_plan.qualified_id,
+                "topology_recipe_identity": binding.facts.layout["topology_identity"],
+                "topology_contract": binding.resolution.to_data()["topology_contract"],
+                "component_bindings": binding.resolution.to_data()["component_bindings"],
+                "materialized": bool(patches),
+                "materialized_layout_identity": (
+                    next(iter(materialized_layouts)) if materialized_layouts else None
+                ),
+                "topology_digest": next(iter(digests)) if digests else None,
+                "provenance": next(iter(provenances)) if provenances else None,
+                "solver_configuration": _field_solver_configuration(executor, slot),
+                "patches": list(patches),
+            }
+        )
     return tuple(result)
 
 
@@ -318,8 +371,11 @@ class RuntimeInstance:
         publisher: Any = None,
     ) -> None:
         plan = require_install_plan(install_plan)
-        manifests = component_manifests_for_install(plan) \
-            if component_manifests is None else component_manifests
+        manifests = (
+            component_manifests_for_install(plan)
+            if component_manifests is None
+            else component_manifests
+        )
         runtime_plan = build_runtime_plans(plan, manifests)
         graph = plan.artifact.plan.consumer_graph
         if graph is None:
@@ -416,7 +472,8 @@ class RuntimeInstance:
         flush = getattr(self._publisher, "flush_post_commit_consumers", None)
         if not callable(flush):
             raise NotImplementedError(
-                "the installed consumer publisher has no post-commit flush route")
+                "the installed consumer publisher has no post-commit flush route"
+            )
         reports = flush(run_identity)
         if not isinstance(reports, tuple):
             raise TypeError("post-commit flush must return a tuple of reports")
@@ -449,7 +506,8 @@ class RuntimeInstance:
             raise KeyError("unknown consumer recovery %r" % recovery_id)
         if owner.record.state != "restored":
             raise RuntimeError(
-                "consumer recovery must be restored before its retained authority is cleaned")
+                "consumer recovery must be restored before its retained authority is cleaned"
+            )
         owner.authority.cleanup_restored()
         del registry[recovery_id]
 
@@ -462,8 +520,7 @@ class RuntimeInstance:
         return getattr(self._executor, "last_restart_identity", None)
 
     def layout_identity(self, layout_id: str) -> Identity:
-        rows = [row for row in self._layout_plan.layouts
-                if row.handle.qualified_id == layout_id]
+        rows = [row for row in self._layout_plan.layouts if row.handle.qualified_id == layout_id]
         if len(rows) != 1:
             raise KeyError("unknown RuntimeInstance layout %s" % layout_id)
         return _layout_identity(rows[0])
@@ -472,8 +529,7 @@ class RuntimeInstance:
         selector = getattr(self._executor, "executor_for_layout", None)
         if callable(selector):
             return selector(layout_id)
-        rows = [row for row in self._layout_plan.layouts
-                if row.handle.qualified_id == layout_id]
+        rows = [row for row in self._layout_plan.layouts if row.handle.qualified_id == layout_id]
         if len(rows) != 1 or len(self._layout_plan.layouts) != 1:
             raise KeyError("unknown RuntimeInstance layout %s" % layout_id)
         return self._executor
@@ -482,8 +538,11 @@ class RuntimeInstance:
         selector = getattr(self._executor, "executor_for_block", None)
         if callable(selector):
             return selector(block)
-        matches = [row for row in self._layout_plan.assignments
-                   if row.subject_kind == "block" and row.subject.local_id == block]
+        matches = [
+            row
+            for row in self._layout_plan.assignments
+            if row.subject_kind == "block" and row.subject.local_id == block
+        ]
         if len(matches) != 1:
             raise KeyError("unknown RuntimeInstance block %s" % block)
         return self._executor_for_layout(matches[0].layout.qualified_id)
@@ -511,7 +570,11 @@ class RuntimeInstance:
         return tuple(self._executor.block_names())
 
     def integral(
-        self, block: str, component: int = 0, *, levels: tuple[int, ...] | None = None,
+        self,
+        block: str,
+        component: int = 0,
+        *,
+        levels: tuple[int, ...] | None = None,
     ) -> float:
         """Return the native volume integral of one conservative component.
 
@@ -523,21 +586,21 @@ class RuntimeInstance:
         if isinstance(component, bool) or not isinstance(component, int) or component < 0:
             raise TypeError("integral component must be a non-negative integer")
         selected_levels = () if levels is None else tuple(levels)
-        if any(isinstance(level, bool) or not isinstance(level, int) or level < 0
-               for level in selected_levels):
+        if any(
+            isinstance(level, bool) or not isinstance(level, int) or level < 0
+            for level in selected_levels
+        ):
             raise TypeError("integral levels must contain non-negative integers")
         if tuple(sorted(set(selected_levels))) != selected_levels:
             raise ValueError("integral levels must be strictly increasing and unique")
         assignments = [
-            row for row in self._layout_plan.assignments
+            row
+            for row in self._layout_plan.assignments
             if row.subject_kind == "block" and row.subject.local_id == block
         ]
         if len(assignments) != 1:
             raise KeyError("unknown RuntimeInstance block %s" % block)
-        layouts = [
-            row for row in self._layout_plan.layouts
-            if row.handle == assignments[0].layout
-        ]
+        layouts = [row for row in self._layout_plan.layouts if row.handle == assignments[0].layout]
         if len(layouts) != 1:
             raise KeyError("block %s has no exact runtime layout" % block)
         layout = layouts[0]
@@ -552,8 +615,7 @@ class RuntimeInstance:
 
         provider = getattr(engine, "reduce_component", None)
         if not callable(provider):
-            raise NotImplementedError(
-                "uniform runtime provider does not expose reduce_component")
+            raise NotImplementedError("uniform runtime provider does not expose reduce_component")
         if selected_levels not in {(), (0,)}:
             raise ValueError("uniform integral accepts only level 0")
         from pops.mesh._layout_plan_contracts import (
@@ -562,10 +624,8 @@ class RuntimeInstance:
         )
 
         geometry = layout.geometry
-        if type(geometry) is not NormalizedGeometry \
-                or geometry.cell_measure != CARTESIAN_CELL_AREA:
-            raise NotImplementedError(
-                "uniform integral requires the native Cartesian cell measure")
+        if type(geometry) is not NormalizedGeometry or geometry.cell_measure != CARTESIAN_CELL_AREA:
+            raise NotImplementedError("uniform integral requires the native Cartesian cell measure")
         measure = 1.0
         for length, cells in zip(geometry.lengths, geometry.cells, strict=True):
             measure *= float(length) / int(cells)
@@ -699,28 +759,24 @@ class RuntimeInstance:
                 "layout_plan": self._layout_plan.inspect(),
                 "execution_context": self._execution_context.to_data(),
                 "installed_components": [
-                    component.to_data()
-                    for component in self._installed_components.values()
+                    component.to_data() for component in self._installed_components.values()
                 ],
                 "consumer_graph": self._consumer_graph.to_data(),
-                "restart_authority": (
-                    self._install_plan.artifact.plan.restart_authority.to_data()
-                ),
+                "restart_authority": (self._install_plan.artifact.plan.restart_authority.to_data()),
                 "consumer_cursors": self._consumer_cursors.to_data(),
                 "consumer_reports": [report.to_data() for report in self._consumer_reports],
                 "accepted_diagnostics": [
                     payload.to_data() for payload in self._publisher.accepted_diagnostics
                 ],
-                "post_commit_reports": [
-                    report.to_data() for report in self.post_commit_reports
-                ],
+                "post_commit_reports": [report.to_data() for report in self.post_commit_reports],
                 "post_commit_diagnostics": list(self.post_commit_diagnostics),
                 "attempt": self._attempt,
                 "output_root": None if self._output_root is None else str(self._output_root),
                 "last_run_identity": _identity_data(self.last_run_identity),
                 "last_restart_identity": _identity_data(self.last_restart_identity),
-                "field_providers": list(_field_provider_evidence(
-                    self._install_plan, self._layout_plan, self._executor)),
+                "field_providers": list(
+                    _field_provider_evidence(self._install_plan, self._layout_plan, self._executor)
+                ),
             },
         )
 
@@ -731,47 +787,58 @@ class RuntimeInstance:
             generation = int(cast(Any, counter()))
         return tuple(LayoutBinding(row.handle, generation) for row in self._layout_plan.layouts)
 
-    def _moments(self, *, at_start: bool = False, at_end: bool = False) -> tuple[ConsumerMoment, ...]:
+    def _moments(
+        self, *, at_start: bool = False, at_end: bool = False
+    ) -> tuple[ConsumerMoment, ...]:
         clocks = {row.schedule.domain.clock for row in self._consumer_graph.nodes}
         native = self._executor
         temporal = getattr(native, "_temporal_restart_state", None)
         if clocks and temporal is None:
             raise RuntimeError(
-                "RuntimeInstance consumers require accepted qualified temporal clock state")
+                "RuntimeInstance consumers require accepted qualified temporal clock state"
+            )
         temporal_state = cast(Any, temporal)
         accepted_step = int(native.macro_step())
         moments = []
         for clock in sorted(clocks, key=lambda value: value.qualified_id):
             cursor = temporal_state.cursor_for_clock(clock)
-            moments.append(ConsumerMoment(
-                TimePoint(clock, step=int(cursor["tick"])),
-                accepted_step=accepted_step,
-                attempt=self._attempt,
-                physical_time_hex=cursor["time"],
-                clock_tick=int(cursor["tick"]),
-                wall_tick=accepted_step,
-                layouts=self._layout_bindings(),
-                at_start=at_start,
-                at_end=at_end,
-            ))
+            moments.append(
+                ConsumerMoment(
+                    TimePoint(clock, step=int(cursor["tick"])),
+                    accepted_step=accepted_step,
+                    attempt=self._attempt,
+                    physical_time_hex=cursor["time"],
+                    clock_tick=int(cursor["tick"]),
+                    wall_tick=accepted_step,
+                    layouts=self._layout_bindings(),
+                    at_start=at_start,
+                    at_end=at_end,
+                )
+            )
         return tuple(moments)
 
     def _stage_consumers(
-        self, *, at_start: bool = False, at_end: bool = False,
+        self,
+        *,
+        at_start: bool = False,
+        at_end: bool = False,
     ) -> tuple[ConsumerTransaction, ...]:
         plans = tuple(
             plan_accepted_side_effects(
-                self._runtime_plan, self._consumer_graph, moment, self._consumer_cursors)
+                self._runtime_plan, self._consumer_graph, moment, self._consumer_cursors
+            )
             for moment in self._moments(at_start=at_start, at_end=at_end)
         )
         plans = tuple(plan for plan in plans if plan.effects)
         all_effects = tuple(effect for plan in plans for effect in plan.effects)
         checkpoint_ids = {
-            row.qualified_id for row in self._consumer_graph.nodes
+            row.qualified_id
+            for row in self._consumer_graph.nodes
             if row.kind is ConsumerKind.CHECKPOINT
         }
         checkpoint_effects = tuple(
-            effect for effect in all_effects if effect.consumer_id in checkpoint_ids)
+            effect for effect in all_effects if effect.consumer_id in checkpoint_ids
+        )
         if checkpoint_effects:
             if len(checkpoint_effects) != 1 or all_effects[-1] is not checkpoint_effects[0]:
                 raise ValueError(
@@ -791,8 +858,7 @@ class RuntimeInstance:
         staged = []
         try:
             for plan in plans:
-                staged.append(ConsumerTransaction(
-                    plan, self._consumer_cursors, self._publisher))
+                staged.append(ConsumerTransaction(plan, self._consumer_cursors, self._publisher))
         except BaseException as error:
             cleanup_error = self._abort_consumers(tuple(staged))
             if cleanup_error is not None:
@@ -815,30 +881,28 @@ class RuntimeInstance:
             if type(recoveries) is not tuple:
                 raise TypeError("ConsumerTransaction.recoveries must return a tuple")
         except BaseException as error:
-            return (
-                "consumer recovery registry failed: %s: %s"
-                % (type(error).__name__, error),
-            )
+            return ("consumer recovery registry failed: %s: %s" % (type(error).__name__, error),)
         registry = getattr(self, "_consumer_recoveries", None)
         if registry is None:
             registry = {}
             self._consumer_recoveries = registry
         for recovery in recoveries:
             if type(recovery) is not _QuarantineRecovery:
-                failures.append(
-                    "consumer recovery registry refused a non-canonical authority")
+                failures.append("consumer recovery registry refused a non-canonical authority")
                 continue
-            recovery_id = make_identity("consumer-output-recovery", {
-                "public_path": recovery.public_path.as_posix(),
-                "quarantine_path": recovery.quarantine_path.as_posix(),
-                "owner": list(recovery.owner),
-                "directory_owner": list(recovery.directory_owner),
-            }).token
+            recovery_id = make_identity(
+                "consumer-output-recovery",
+                {
+                    "public_path": recovery.public_path.as_posix(),
+                    "quarantine_path": recovery.quarantine_path.as_posix(),
+                    "owner": list(recovery.owner),
+                    "directory_owner": list(recovery.directory_owner),
+                },
+            ).token
             existing = registry.get(recovery_id)
             if existing is not None:
                 if existing.authority is not recovery and existing.authority != recovery:
-                    failures.append(
-                        "consumer recovery identity collides with another authority")
+                    failures.append("consumer recovery identity collides with another authority")
                 continue
             record = ConsumerRecoveryRecord(
                 recovery_id,
@@ -856,9 +920,12 @@ class RuntimeInstance:
         if type(recoveries) is not tuple:
             return ("output recovery transfer requires a tuple",)
         return self._retain_consumer_recoveries(
-            _ConsumerRecoveryBatch(recoveries), consumer_report_index=None)
+            _ConsumerRecoveryBatch(recoveries), consumer_report_index=None
+        )
 
-    def _abort_consumers(self, transactions: tuple[ConsumerTransaction, ...]) -> BaseException | None:
+    def _abort_consumers(
+        self, transactions: tuple[ConsumerTransaction, ...]
+    ) -> BaseException | None:
         failure = None
         for transaction in reversed(transactions):
             try:
@@ -867,13 +934,15 @@ class RuntimeInstance:
                 if failure is None:
                     failure = error
             recovery_failures = self._retain_consumer_recoveries(
-                transaction, consumer_report_index=None)
+                transaction, consumer_report_index=None
+            )
             if recovery_failures and failure is None:
                 failure = RuntimeError("; ".join(recovery_failures))
         return failure
 
     def _accept_consumers(
-        self, transactions: tuple[ConsumerTransaction, ...],
+        self,
+        transactions: tuple[ConsumerTransaction, ...],
     ) -> tuple[tuple[Any, ...], ConsumerCursorSet, tuple[Any, ...]]:
         reports = tuple(transaction.accept() for transaction in transactions)
         cursors = self._consumer_cursors
@@ -887,18 +956,14 @@ class RuntimeInstance:
         try:
             result = transaction.seal()
             if type(result) is not tuple or any(
-                    not isinstance(item, str) or not item for item in result):
-                return (
-                    "consumer seal contract violation: seal() must return tuple[str, ...]",
-                )
+                not isinstance(item, str) or not item for item in result
+            ):
+                return ("consumer seal contract violation: seal() must return tuple[str, ...]",)
             return result
         except BaseException as error:
             # A release failure is evidence only after native finalization.  Catch BaseException
             # so a rank-local cancellation cannot reopen compensation or strand its owner.
-            return (
-                "consumer seal failed post-commit: %s: %s"
-                % (type(error).__name__, error),
-            )
+            return ("consumer seal failed post-commit: %s: %s" % (type(error).__name__, error),)
 
     @staticmethod
     def _report_with_finalize_diagnostics(
@@ -932,9 +997,9 @@ class RuntimeInstance:
             report_index = report_offset + index
             diagnostics = self._consumer_seal_diagnostics(transaction)
             diagnostics += self._retain_consumer_recoveries(
-                transaction, consumer_report_index=report_index)
-            report = self._report_with_finalize_diagnostics(
-                report, base_diagnostics, diagnostics)
+                transaction, consumer_report_index=report_index
+            )
+            report = self._report_with_finalize_diagnostics(report, base_diagnostics, diagnostics)
             sealed.append(report)
             if diagnostics or bool(getattr(transaction, "finalize_pending", False)):
                 pending.append(
@@ -993,10 +1058,15 @@ class RuntimeInstance:
 
     def _step_transaction_methods(self) -> tuple[Any, Any, Any, Any]:
         native = self._executor
-        methods = tuple(getattr(native, name, None) for name in (
-            "_begin_step_transaction", "_commit_step_transaction",
-            "_finalize_step_transaction", "_rollback_step_transaction",
-        ))
+        methods = tuple(
+            getattr(native, name, None)
+            for name in (
+                "_begin_step_transaction",
+                "_commit_step_transaction",
+                "_finalize_step_transaction",
+                "_rollback_step_transaction",
+            )
+        )
         if any(not callable(method) for method in methods):
             raise TypeError(
                 "RuntimeInstance executor must implement the native step-transaction protocol"
@@ -1011,10 +1081,10 @@ class RuntimeInstance:
             "consumer_reports": self._consumer_reports,
             "checkpoint_cursor_override": self._checkpoint_cursor_override,
             "temporal_restart_state": copy.deepcopy(
-                getattr(native, "_temporal_restart_state", None)),
+                getattr(native, "_temporal_restart_state", None)
+            ),
             "step_controller": copy.deepcopy(getattr(native, "_step_controller", None)),
-            "last_step_transaction_report": getattr(
-                native, "_last_step_transaction_report", None),
+            "last_step_transaction_report": getattr(native, "_last_step_transaction_report", None),
         }
 
     def _restore_step_envelope(self, snapshot: dict[str, Any]) -> None:
@@ -1035,7 +1105,104 @@ class RuntimeInstance:
         if hasattr(native, "_last_step_transaction_report"):
             native._last_step_transaction_report = snapshot["last_step_transaction_report"]
 
+    def _restore_unsuccessful_attempt_stats(
+        self,
+        accepted_temporal: Any,
+        failed_temporal: Any,
+    ) -> None:
+        """Keep attempt counters while every executable cursor rolls back.
+
+        ``TemporalRestartState.reject/fail`` deliberately marks the provisional envelope
+        unsynchronized. The transaction restores the complete accepted envelope before a retry,
+        but attempt statistics are accepted diagnostic/controller state and must survive that
+        rollback. Carry only monotone unsuccessful-counter deltas; never copy a failed cursor,
+        status, event queue, history, cache, or controller proposal.
+        """
+        if accepted_temporal is None or failed_temporal is None:
+            return
+        restored = getattr(self._executor, "_temporal_restart_state", None)
+        if restored is None:
+            raise RuntimeError("transaction rollback lost the accepted temporal authority")
+
+        def leaves(temporal: Any) -> tuple[Any, ...]:
+            states = getattr(temporal, "states", None)
+            if states is None:
+                return (temporal,)
+            if type(states) is not tuple or not states:
+                raise RuntimeError(
+                    "composite temporal attempt statistics require non-empty exact states"
+                )
+            return tuple(leaf for state in states for leaf in leaves(state))
+
+        accepted_leaves = leaves(accepted_temporal)
+        failed_leaves = leaves(failed_temporal)
+        restored_leaves = leaves(restored)
+        if not (len(accepted_leaves) == len(failed_leaves) == len(restored_leaves)):
+            raise RuntimeError("transaction rollback changed the temporal authority cardinality")
+        updates: list[tuple[dict[str, int], str, int]] = []
+        for accepted_leaf, failed_leaf, restored_leaf in zip(
+            accepted_leaves,
+            failed_leaves,
+            restored_leaves,
+            strict=True,
+        ):
+            accepted_stats = getattr(accepted_leaf, "transaction_stats", None)
+            failed_stats = getattr(failed_leaf, "transaction_stats", None)
+            restored_stats = getattr(restored_leaf, "transaction_stats", None)
+            if (
+                type(accepted_stats) is not dict
+                or type(failed_stats) is not dict
+                or type(restored_stats) is not dict
+            ):
+                raise RuntimeError(
+                    "transaction rollback received malformed temporal attempt statistics"
+                )
+            accepted_exact = cast(dict[str, int], accepted_stats)
+            failed_exact = cast(dict[str, int], failed_stats)
+            restored_exact = cast(dict[str, int], restored_stats)
+            for status in ("rejected", "failed"):
+                before = accepted_exact.get(status)
+                after = failed_exact.get(status)
+                current = restored_exact.get(status)
+                if (
+                    type(before) is not int
+                    or before < 0
+                    or type(after) is not int
+                    or after < 0
+                    or type(current) is not int
+                    or current < 0
+                ):
+                    raise RuntimeError(
+                        "temporal attempt statistics require non-negative exact integers"
+                    )
+                if after < before:
+                    raise RuntimeError("temporal unsuccessful-attempt statistics moved backwards")
+                updates.append((restored_exact, status, current + after - before))
+        for stats, status, value in updates:
+            stats[status] = value
+
     def _accepted_step_transaction(
+        self,
+        advance: Any,
+        *,
+        at_end: Any = False,
+    ) -> Any:
+        """Run one attempt controller inside the sole collective publication envelope."""
+        native = self._executor
+        missing = object()
+        previous = getattr(native, "_collective_step_envelope_active", missing)
+        if previous is True:
+            raise RuntimeError("nested collective step envelope")
+        native._collective_step_envelope_active = True
+        try:
+            return self._accepted_step_transaction_body(advance, at_end=at_end)
+        finally:
+            if previous is missing:
+                delattr(native, "_collective_step_envelope_active")
+            else:
+                native._collective_step_envelope_active = previous
+
+    def _accepted_step_transaction_body(
         self,
         advance: Any,
         *,
@@ -1048,7 +1215,7 @@ class RuntimeInstance:
         native = self._executor
         begin, commit, finalize, rollback = self._step_transaction_methods()
         snapshot = self._step_envelope_snapshot()
-        phase = "begin"
+        phase = "prepare"
         attempts = 1
         failure_report = None
         transactions = ()
@@ -1072,7 +1239,8 @@ class RuntimeInstance:
             phase = "effect"
             self._attempt += attempts
             transactions = self._stage_consumers(
-                at_end=bool(at_end() if callable(at_end) else at_end))
+                at_end=bool(at_end() if callable(at_end) else at_end)
+            )
             phase = "commit"
             commit()
             phase = "effect"
@@ -1087,25 +1255,34 @@ class RuntimeInstance:
             self._retry_consumer_finalizers()
             return result
         except BaseException as error:
+            try:
+                failed_temporal = copy.deepcopy(getattr(native, "_temporal_restart_state", None))
+            except BaseException as stats_snapshot_error:
+                failed_temporal = None
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        f"temporal attempt-statistics snapshot also failed: {stats_snapshot_error}"
+                    )
             if phase == "native_finalized":
                 # The engine and published receipts are already irrevocably accepted.  A release
                 # bug is operational evidence only: never compensate artifacts, call native
                 # rollback, or restore the pre-step Python envelope from this boundary.
                 accepted_reports = list(reports)
-                diagnostic = (
-                    "consumer finalization failed post-commit: %s: %s"
-                    % (type(error).__name__, error)
+                diagnostic = "consumer finalization failed post-commit: %s: %s" % (
+                    type(error).__name__,
+                    error,
                 )
                 if accepted_reports and type(accepted_reports[0]) is ConsumerTransactionReport:
                     try:
                         report = accepted_reports[0]
                         accepted_reports[0] = replace(
-                            report, diagnostics=report.diagnostics + (diagnostic,))
+                            report, diagnostics=report.diagnostics + (diagnostic,)
+                        )
                     except BaseException:
                         pass
                 self._consumer_cursors = cursors
-                self._consumer_reports = (
-                    snapshot["consumer_reports"] + tuple(accepted_reports))
+                self._consumer_reports = snapshot["consumer_reports"] + tuple(accepted_reports)
                 return result
             failure_report = getattr(native, "_last_step_transaction_report", None)
             cleanup_error = self._abort_consumers(transactions)
@@ -1120,18 +1297,33 @@ class RuntimeInstance:
                         # replacing the actionable root cause.
                         add_note = getattr(error, "add_note", None)
                         if callable(add_note):
-                            add_note(
-                                "step-transaction rollback also failed: "
-                                f"{rollback_error}")
+                            add_note(f"step-transaction rollback also failed: {rollback_error}")
             finally:
                 self._restore_step_envelope(snapshot)
-            if phase in {"effect", "commit"}:
+                try:
+                    self._restore_unsuccessful_attempt_stats(
+                        snapshot["temporal_restart_state"], failed_temporal
+                    )
+                except BaseException as stats_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note(
+                            f"temporal attempt-statistics restoration also failed: {stats_error}"
+                        )
+            # A prepare failure can escape before the controller replaces the previous accepted
+            # report.  Object identity distinguishes that stale snapshot from a report produced by
+            # this attempt; effect/commit failures deliberately supersede its provisional success.
+            stale_failure_report = failure_report is snapshot["last_step_transaction_report"]
+            if stale_failure_report or phase in {"effect", "commit"}:
                 transaction_plan = getattr(native, "_step_transaction_plan", None)
-                stores = tuple(
-                    store.value
-                    for store in cast(
-                        Iterable[Any], getattr(transaction_plan, "stores", ()))
-                ) if transaction_plan is not None else ()
+                stores = (
+                    tuple(
+                        store.value
+                        for store in cast(Iterable[Any], getattr(transaction_plan, "stores", ()))
+                    )
+                    if transaction_plan is not None
+                    else ()
+                )
                 failure_report = StepTransactionReport(
                     status="failed",
                     phase=phase,
@@ -1139,6 +1331,9 @@ class RuntimeInstance:
                     attempts=attempts,
                     staged_effects=stores,
                     rolled_back_effects=stores,
+                    projections=tuple(
+                        () if stale_failure_report else getattr(failure_report, "projections", ())
+                    ),
                     diagnostics=(str(error),),
                 )
             if failure_report is not None and hasattr(native, "_last_step_transaction_report"):
@@ -1147,22 +1342,83 @@ class RuntimeInstance:
                 raise cleanup_error from error
             raise
 
-    def _run(self, t_end: Any, *, max_steps: int = 1_000_000,
-             output_dir: Any = None, console: bool = True,
-             **controller_controls: Any) -> RunReport:
+    def _accepted_controller_step(
+        self,
+        native: Any,
+        step_target: Any,
+        strategy: Any,
+        *,
+        t_end: float,
+        controls: Mapping[str, Any],
+        deadline: float | None = None,
+        at_end: Any = False,
+    ) -> Any:
+        """Execute one accepted controller step with one transaction per native attempt."""
+        from pops._bootstrap import StepAttemptRejected
+        from pops.runtime._step_strategy import (
+            prepare_step_attempts,
+            run_prepared_step_attempt,
+        )
+
+        sequence = prepare_step_attempts(
+            native,
+            step_target,
+            strategy,
+            t_end=float(t_end),
+            controls=controls,
+        )
+        while True:
+
+            def advance() -> tuple[Any, int]:
+                report = run_prepared_step_attempt(sequence)
+                reached = float(native.time())
+                if (
+                    deadline is not None
+                    and reached > deadline
+                    and not _same_physical_time(reached, deadline)
+                ):
+                    raise RuntimeError(
+                        "step controller crossed every_dt hard deadline %s and reached %s"
+                        % (deadline.hex(), reached.hex())
+                    )
+                return report, report.attempts
+
+            try:
+                return self._accepted_step_transaction(advance, at_end=at_end)
+            except StepAttemptRejected as error:
+                # _accepted_step_transaction has already restored every native/Python store here.
+                # It also carries the one rejected-attempt statistic into the accepted temporal
+                # authority; only the detached proposal cursor may advance to the next retry.
+                if sequence.retry(error):
+                    continue
+                raise
+
+    def _run(
+        self,
+        t_end: Any,
+        *,
+        max_steps: int = 1_000_000,
+        output_dir: Any = None,
+        console: bool = True,
+        **controller_controls: Any,
+    ) -> RunReport:
         if type(console) is not bool:
             raise TypeError("pops.run console= must be an exact bool")
         if "progress" in controller_controls:
             raise TypeError(
                 "pops.run progress= was removed; declare a scheduled "
-                "pops.output.ConsoleMonitor instead")
+                "pops.output.ConsoleMonitor instead"
+            )
         if "strategy" in controller_controls or "cfl" in controller_controls:
             raise TypeError(
                 "RuntimeInstance._run does not accept strategy= or cfl=; declare the controller "
                 "with Program.step_strategy(...)"
             )
         from pops.runtime._step_strategy import (
-            prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+            prepare_step_controller,
+            resolve_run_strategy,
+            run_control_payload,
+        )
         from pops.runtime._native_step_target import native_step_target
         from pops.runtime.run_report import RunStopReason
 
@@ -1196,47 +1452,31 @@ class RuntimeInstance:
                 from pops.runtime._console_run import safe_begin_console_run
 
                 console_session = safe_begin_console_run(self, manifest, selected)
-            begin_post_commit = getattr(
-                self._publisher, "begin_post_commit_consumers", None)
+            begin_post_commit = getattr(self._publisher, "begin_post_commit_consumers", None)
             if callable(begin_post_commit):
                 begin_post_commit(manifest.run_identity)
             self._fire_consumers(at_start=True)
             while native.time() < t_end and steps < max_steps:
                 deadline = next_consumer_deadline(self._consumer_graph, self._moments())
                 run_end = float(t_end)
-                _validate_external_grid_deadline(
-                    selected, controller_controls, deadline, run_end)
+                _validate_external_grid_deadline(selected, controller_controls, deadline, run_end)
                 # A tolerance can validate a controller landing, but it must never extend the
                 # requested run.  In particular, a threshold one ULP above t_end is a future
                 # occurrence, not an end-of-run sample.
                 if deadline is not None and deadline <= run_end:
                     deadline_is_active = True
-                    step_end = (
-                        run_end if _same_physical_time(deadline, run_end) else deadline)
+                    step_end = run_end if _same_physical_time(deadline, run_end) else deadline
                 else:
                     deadline_is_active = False
                     step_end = run_end
 
-                def advance(
-                    *,
-                    accepted_deadline: float | None = deadline if deadline_is_active else None,
-                    accepted_step_end: float = step_end,
-                ) -> tuple[Any, int]:
-                    report = run_step_attempt(
-                        native, step_target, selected, t_end=accepted_step_end,
-                        controls=controller_controls)
-                    reached = float(native.time())
-                    if accepted_deadline is not None \
-                            and reached > accepted_deadline \
-                            and not _same_physical_time(reached, accepted_deadline):
-                        raise RuntimeError(
-                            "step controller crossed every_dt hard deadline %s and reached %s"
-                            % (accepted_deadline.hex(), reached.hex())
-                        )
-                    return report, report.attempts
-
-                step_report = self._accepted_step_transaction(
-                    advance,
+                step_report = self._accepted_controller_step(
+                    native,
+                    step_target,
+                    selected,
+                    t_end=step_end,
+                    controls=controller_controls,
+                    deadline=deadline if deadline_is_active else None,
                     at_end=lambda: not (native.time() < t_end),
                 )
                 rejected_steps += int(step_report.attempts) - 1
@@ -1245,7 +1485,8 @@ class RuntimeInstance:
                 raise RuntimeError(
                     "max_steps exhausted before t_end: "
                     f"accepted {steps} step(s), reached t={native.time()!r}, "
-                    f"requested t_end={t_end!r}")
+                    f"requested t_end={t_end!r}"
+                )
             if steps == 0:
                 self._fire_consumers(at_end=True)
             close_live = getattr(self._publisher, "close_live_visualizations", None)
@@ -1261,15 +1502,15 @@ class RuntimeInstance:
                     except BaseException as close_error:
                         add_note = getattr(error, "add_note", None)
                         if callable(add_note):
-                            add_note(
-                                "post-commit consumer close also failed: %s" % close_error)
+                            add_note("post-commit consumer close also failed: %s" % close_error)
                     after = self.post_commit_diagnostics
                     if len(after) > before:
                         add_note = getattr(error, "add_note", None)
                         if callable(add_note):
                             add_note(
                                 "post-commit consumer delivery diagnostics: %s"
-                                % "; ".join(after[before:]))
+                                % "; ".join(after[before:])
+                            )
             # ``begin_run`` binds controller/strategy state before the first native transaction.
             # If no macro-step commits, the complete failed call leaves the temporal authority at
             # its entry boundary.  After one or more accepted steps, each later failed transaction
@@ -1312,7 +1553,8 @@ class RuntimeInstance:
             execution_identity=self._execution_context.identity,
             artifact_identity=self._install_plan.artifact.artifact_identity,
             field_providers=_field_provider_evidence(
-                self._install_plan, self._layout_plan, self._executor),
+                self._install_plan, self._layout_plan, self._executor
+            ),
         )
         if console_session is not None:
             from pops.runtime._console_run import safe_console_completed
@@ -1371,15 +1613,21 @@ class RuntimeInstance:
                 authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
                 payload = {
                     name: np.asarray(stored[name]).copy()
-                    for name in stored.files if name not in {MANIFEST_KEY, IDENTITY_KEY}
+                    for name in stored.files
+                    if name not in {MANIFEST_KEY, IDENTITY_KEY}
                 }
             payload["runtime_consumer_graph"] = np.asarray(self._consumer_graph.identity.token)
             cursors = self._checkpoint_cursor_override or self._consumer_cursors
-            payload["runtime_consumer_cursors"] = np.asarray(json.dumps(
-                cursors.to_data(), sort_keys=True, separators=(",", ":")))
-            payload["runtime_consumer_diagnostics"] = np.asarray(json.dumps(
-                self._publisher.diagnostic_restart_state(),
-                sort_keys=True, separators=(",", ":")))
+            payload["runtime_consumer_cursors"] = np.asarray(
+                json.dumps(cursors.to_data(), sort_keys=True, separators=(",", ":"))
+            )
+            payload["runtime_consumer_diagnostics"] = np.asarray(
+                json.dumps(
+                    self._publisher.diagnostic_restart_state(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
             seal_checkpoint_payload(self, payload, runtime_kind=runtime_kind)
             temporary = expected.with_name(expected.name + ".runtime-instance.tmp")
             try:
@@ -1433,14 +1681,19 @@ class RuntimeInstance:
 
     @staticmethod
     def _checkpoint_cursors_from_data(cursor_data: Any) -> ConsumerCursorSet:
-        if not isinstance(cursor_data, Mapping) \
-                or set(cursor_data) != {"schema_version", "rows"} \
-                or cursor_data["schema_version"] != 1 \
-                or not isinstance(cursor_data["rows"], list):
+        if (
+            not isinstance(cursor_data, Mapping)
+            or set(cursor_data) != {"schema_version", "rows"}
+            or cursor_data["schema_version"] != 1
+            or not isinstance(cursor_data["rows"], list)
+        ):
             raise ValueError("restart consumer cursor schema is unsupported")
-        cursors = ConsumerCursorSet(tuple(ScheduleCursor(
-            row["consumer_id"], row["last_occurrence"], row["committed_samples"])
-            for row in cursor_data["rows"]))
+        cursors = ConsumerCursorSet(
+            tuple(
+                ScheduleCursor(row["consumer_id"], row["last_occurrence"], row["committed_samples"])
+                for row in cursor_data["rows"]
+            )
+        )
         # Reject duplicate/non-canonical input instead of accepting a decoder normalization.
         if cursors.to_data() != dict(cursor_data):
             raise ValueError("restart consumer cursor rows are not canonical")
@@ -1477,25 +1730,99 @@ class RuntimeInstance:
         self._publisher.validate_diagnostic_restart_state(diagnostic_data)
         return self._checkpoint_cursors_from_data(cursor_data)
 
-    def _restore_checkpoint(self, payload: bytes, cursors: ConsumerCursorSet) -> Any:
+    def _restore_checkpoint(
+        self,
+        payload: bytes,
+        cursors: ConsumerCursorSet,
+        *,
+        bit_identical: bool,
+        hierarchy_mode: str = "restore_recorded_hierarchy",
+        hierarchy_identity: str | None = None,
+    ) -> Any:
         from pops.output._checkpoint_collective import (
             decode_checkpoint_bytes,
+            require_restart_bit_identical,
+            require_restart_hierarchy_mode,
             restore_checkpoint_payload,
         )
 
+        policy = require_restart_bit_identical(bit_identical, where="RuntimeInstance restart")
+        selected_hierarchy_mode = require_restart_hierarchy_mode(
+            hierarchy_mode, where="RuntimeInstance restart"
+        )
+        if selected_hierarchy_mode != "regrid_on_restart" and hierarchy_identity is not None:
+            raise ValueError(
+                "RuntimeInstance restart hierarchy identity is only valid with RegridOnRestart"
+            )
         stored = decode_checkpoint_bytes(payload)
-        diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
-        canonical_diagnostics = self._publisher.validate_diagnostic_restart_state(
-            diagnostic_data)
+        from ._checkpoint_manifest import checkpoint_run_identity
 
-        result = restore_checkpoint_payload(
-            self, self._executor, payload, phase_prefix="native restart")
+        source_run_identity = checkpoint_run_identity(stored)
+        restore_run_identity = getattr(self._executor, "_restore_checkpoint_run_identity", None)
+        if not callable(restore_run_identity):
+            raise TypeError(
+                "restart executor lacks the authenticated source-run publication protocol"
+            )
+        diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
+        canonical_diagnostics = self._publisher.validate_diagnostic_restart_state(diagnostic_data)
+
+        if selected_hierarchy_mode == "regrid_on_restart":
+            result = restore_checkpoint_payload(
+                self,
+                self._executor,
+                payload,
+                bit_identical=policy,
+                hierarchy_mode=selected_hierarchy_mode,
+                hierarchy_identity=hierarchy_identity,
+                phase_prefix="native restart",
+            )
+        else:
+            result = restore_checkpoint_payload(
+                self,
+                self._executor,
+                payload,
+                bit_identical=policy,
+                phase_prefix="native restart",
+            )
+        restored_run_identity = source_run_identity
+        if selected_hierarchy_mode == "regrid_on_restart":
+            from pops.identity import Identity, make_identity
+            from pops.runtime._amr_system_io import _AMRRegridRestartEvidence
+
+            if type(result) is not _AMRRegridRestartEvidence:
+                raise TypeError(
+                    "RegridOnRestart requires exact all-rank transformed-topology evidence"
+                )
+            restart_identity = result.restart_identity
+            if type(restart_identity) is not Identity or restart_identity.domain != "restart":
+                raise TypeError(
+                    "RegridOnRestart requires an authenticated domain-'restart' identity"
+                )
+            policy_identity = Identity.from_token(hierarchy_identity)
+            if policy_identity.domain != "restart-hierarchy":
+                raise TypeError("RegridOnRestart policy identity has the wrong domain")
+            receipt = result.regrid_receipt
+            if not isinstance(receipt, Mapping) or not receipt:
+                raise RuntimeError(
+                    "RegridOnRestart executor returned no transformed-topology receipt"
+                )
+            restored_run_identity = make_identity(
+                "run",
+                {
+                    "continuation": "regrid_on_restart",
+                    "source_run_identity": source_run_identity.to_data(),
+                    "restart_identity": restart_identity.to_data(),
+                    "hierarchy_policy_identity": policy_identity.to_data(),
+                    "regrid_receipt": _regrid_receipt_identity_data(receipt),
+                },
+            )
         # A checkpoint can restore an older topology epoch whose integer value was already cached
         # by this RuntimeInstance for a different hierarchy.  Never expose that stale geometry.
         self._snapshot_builder.invalidate_geometry_cache()
         self._consumer_cursors = cursors
         self._publisher.restore_diagnostic_restart_state(canonical_diagnostics)
-        return result
+        restore_run_identity(restored_run_identity)
+        return result.restart_identity if selected_hierarchy_mode == "regrid_on_restart" else result
 
     def restart(self, path: Any) -> Any:
         operation = self._restart_operation()
@@ -1504,8 +1831,10 @@ class RuntimeInstance:
 
     def __str__(self) -> str:
         return "RuntimeInstance(layouts=%d, blocks=%d, consumers=%d)" % (
-            len(self._layout_plan.layouts), len(self._install_plan.instances),
-            len(self._consumer_graph.nodes))
+            len(self._layout_plan.layouts),
+            len(self._install_plan.instances),
+            len(self._consumer_graph.nodes),
+        )
 
 
 __all__ = ["RuntimeInstance"]
