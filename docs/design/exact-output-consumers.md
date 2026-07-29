@@ -456,6 +456,10 @@ five returned scalars and residual but never traverses arrays, invents a zero te
 previous step. A rejected attempt or failed consumer publication restores the mailbox with the
 rest of the native transaction.
 
+The `pops.balance-term` namespace is reserved. Ordinary `Program.record_scalar(...)` authoring and
+the Python runtime diagnostic binding both reject it; generated `record_balance` code reaches a
+separate native sink that validates the route and canonical term before touching the mailbox.
+
 This route is explicit evidence, not automatic numerical instrumentation: a Program that cannot
 produce its actual reflux or projection increment cannot declare `Balance`. In particular, the
 generic automatic extraction of AMR reflux/projection contributions from the internal native
