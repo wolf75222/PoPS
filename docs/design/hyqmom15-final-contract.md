@@ -40,8 +40,8 @@ model's explicit signed wave pair. The example authors the ordinary inspectable 
 explicitly so its realizability guard is visibly inside the commit transaction. The
 `pops.lib.time.IMEX(...)` preset remains an ordinary `Program` constructor with no alternate runtime
 route, but it does not hide this model-specific scientific guard. The local solve is specialized from
-the resolved state manifest and therefore emits exact 15 by 15 storage and `mat_inverse<15>`, without
-an eight-component fallback or family dispatch.
+the resolved state manifest and therefore prepares exact 15 by 15 stack storage for the shared
+pivoted local provider, without an explicit inverse, eight-component fallback or family dispatch.
 
 The example executes only:
 
