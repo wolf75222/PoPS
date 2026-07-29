@@ -358,7 +358,8 @@ def test_dynamic_boundary_lowers_to_generated_parameter_launcher() -> None:
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
     source = emit_field_boundaries(None, None, plans, "system")
-    assert 'extern "C" void pops_install_field_boundaries(void* sys)' in source
+    assert 'extern "C" void pops_install_field_boundaries(pops::System* sys)' in source
+    assert "make_program_execution_provider(sys)" in source
     assert "prepare_field_boundary_residual_route_0" in source
     assert "params[0]" in source
 
