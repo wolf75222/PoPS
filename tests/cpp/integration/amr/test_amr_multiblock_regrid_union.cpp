@@ -288,6 +288,50 @@ static void check_persistent_tagging_hysteresis_and_rollback() {
       << "retrying from the restored cycle must reproduce the same coarsening decision";
 }
 
+static void check_persistent_tagging_equality_at_inclusive_boundary() {
+  SCOPED_TRACE("persistent tagging equality at inclusive boundary");
+  constexpr int N = 16;
+  constexpr int minimum_cycles = 2;
+  constexpr Real threshold = Real(1.5);
+  auto sim = make_two_block_system(
+      N, 1.0, 1.0, +1.0, -1.0, flat(N, 2.0), flat(N, 2.0), /*stride1=*/1,
+      /*regrid_every=*/0, /*regrid_grow=*/0, /*regrid_margin=*/1, /*level_count=*/2,
+      /*explicit_bootstrap=*/true);
+  AmrRuntime& runtime = *sim->engine();
+  test::install_prepared_threshold_decisions(
+      runtime,
+      {{0, 0, threshold, test::PreparedThresholdRelation::Above},
+       {1, 0, threshold, test::PreparedThresholdRelation::Above}},
+      {{0, 0, threshold, test::PreparedThresholdRelation::Below},
+       {1, 0, threshold, test::PreparedThresholdRelation::Below}},
+      "test::persistent-hysteresis-equality@1", minimum_cycles,
+      pops::amr::TagEqualityPolicy::Coarsen);
+
+  runtime.begin_bootstrap_plan();
+  ASSERT_TRUE(runtime.bootstrap_next_level(kAmrRefRatio));
+  runtime.commit_bootstrap_level();
+  ASSERT_EQ(runtime.nlev(), 2);
+
+  // Put every materialized cell exactly on both strict thresholds. EqualityPolicy::Coarsen must
+  // still respect the same persisted minimum-cycle window as an ordinary coarsen predicate.
+  for (const char* block : {"a", "b"})
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      std::vector<double> equal = sim->block_level_state(block, level);
+      std::fill(equal.begin(), equal.end(), static_cast<double>(threshold));
+      sim->set_block_level_state(block, level, equal);
+    }
+
+  runtime.regrid();  // cycle 2: one cycle since refinement, so equality-triggered coarsening holds.
+  ASSERT_EQ(runtime.nlev(), 2);
+  const auto held = runtime.checkpoint_tagging_state();
+  ASSERT_FALSE(held.empty());
+
+  runtime.regrid();  // cycle 3: the inclusive min_cycles boundary permits equality coarsening.
+  EXPECT_EQ(runtime.nlev(), 1);
+  EXPECT_NE(runtime.checkpoint_tagging_state(), held)
+      << "the accepted equality transition must publish the new persistent decision image";
+}
+
 static void check_persistent_tagging_three_level_cycle_and_suffix_restore() {
   SCOPED_TRACE("persistent tagging three-level cycle and suffix restore");
   constexpr int N = 16;
@@ -588,6 +632,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   // finalization, which Kokkos deliberately forbids.
 
   check_persistent_tagging_hysteresis_and_rollback();
+  check_persistent_tagging_equality_at_inclusive_boundary();
   check_persistent_tagging_three_level_cycle_and_suffix_restore();
   check_three_level_bootstrap_step_regrid_and_rollback();
 
