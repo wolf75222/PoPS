@@ -46,7 +46,7 @@ class _ProgramDiagnostics(_ProgramBase):
         extrema/norm reductions, and rank-local runtime scalars are rejected. The five records are
         attempt-local: a rejected step or consumer rollback cannot leave evidence for a later sample.
         """
-        from pops.diagnostics.balance import (
+        from pops._balance_contract import (
             BALANCE_TERM_NAMES,
             BalanceLedger,
             balance_record_name,
