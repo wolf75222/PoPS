@@ -1625,7 +1625,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   SolveReport program_execution_solve_fields_from_state_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int block, MultiFab& state) const {
-    return solve_fields_from_state_at(point, provider_slot, block, state);
+    return consume_field_outcome_(
+        solve_fields_from_state_at(point, provider_slot, block, state));
   }
   MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
                                        const MultiFab& prototype, int n_comp, int n_ghost) const {
