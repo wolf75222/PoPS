@@ -23,6 +23,7 @@ SHARED_SIGNATURES = (
     "enum class ScratchKind",
     "enum class SchedulerCacheOperation",
     "struct ProgramResourceStorage",
+    "struct ProgramResourceTopology",
     "struct LogicalEvaluationInterval",
     "class LogicalEvaluationScope",
     "[[nodiscard]] auto logical_evaluation_scope(",
@@ -37,6 +38,11 @@ SHARED_SIGNATURES = (
     "GridContext grid_context(",
     "Geometry geom(",
     "MultiFab alloc_scalar_field(",
+    "ProgramResourceTopology program_resource_topology(",
+    "int level(",
+    "void set_level(",
+    "void with_program_resource_level(",
+    "void for_each_program_resource_level(",
     "const PreparedVectorDistribution& program_resource_vector_distribution(",
     "FieldDistribution program_resource_field_storage_distribution(",
     "int program_resource_field_level(",
@@ -212,6 +218,9 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_alloc_scalar_field_",
             "program_execution_apply_coupling_",
             "program_execution_cache_",
+            "program_execution_resource_topology_",
+            "program_execution_resource_level_",
+            "program_execution_select_resource_level_",
             "program_execution_resource_storage_",
             "program_execution_resource_cell_measures_",
             "program_execution_publish_axpy_",
@@ -244,17 +253,47 @@ def test_shared_service_uses_only_explicit_provider_hooks():
     assert all(call.startswith("program_execution_") for call in calls), calls
 
 
-def test_amr_topology_generation_and_scratch_lifecycle_remain_provider_owned():
+def test_resource_topology_transaction_is_shared_while_raw_topology_and_scratch_stay_provider_owned():
     shared = _read(SHARED)
+    uniform = _read(UNIFORM)
     amr = _read(AMR)
-    for topology_authority in (
+    emitter = _read(ROOT / "python" / "pops" / "codegen" / "program_emit_amr.py")
+    for shared_authority in (
+        "struct ProgramResourceTopology",
+        "ProgramResourceTopology program_resource_topology()",
+        "void with_program_resource_level(",
+        "void for_each_program_resource_level(",
+        "Program resource topology requires at least one level",
+    ):
+        assert shared_authority in shared
+        assert shared_authority not in uniform
+        assert shared_authority not in amr
+    for provider_hook in (
+        "program_execution_resource_topology_",
+        "program_execution_resource_level_",
+        "program_execution_select_resource_level_",
+    ):
+        assert shared.count(provider_hook) >= 1
+        assert uniform.count(provider_hook) == 1
+        assert amr.count(provider_hook) == 1
+    for retired_direct_surface in (
         "program_resource_topology_epoch",
         "program_resource_topology_generation",
+    ):
+        assert retired_direct_surface not in shared
+        assert retired_direct_surface not in uniform
+        assert retired_direct_surface not in amr
+        assert retired_direct_surface not in emitter
+    for provider_owned_scratch in (
         "program_scratch_topology_epoch_",
         "program_scratch_materialization_generation_",
     ):
-        assert topology_authority not in shared
-        assert topology_authority in amr
+        assert provider_owned_scratch not in shared
+        assert provider_owned_scratch in amr
+    assert "ctx.for_each_program_resource_level(" in emitter
+    assert "ctx.with_program_resource_level(" in emitter
+    assert "ctx.set_level(" not in emitter
+    assert "const int saved_level" not in emitter
     assert "topology_materialization_generation()" in amr
 
 

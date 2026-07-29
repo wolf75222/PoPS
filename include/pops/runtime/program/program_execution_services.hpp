@@ -75,6 +75,17 @@ class ProgramExecutionServices {
     int field_level;
   };
 
+  /// Immutable identity of the hierarchy on which generated persistent resources are materialized.
+  ///
+  /// ``epoch`` is checkpointed topology identity, while ``generation`` also changes after any
+  /// process-local storage rebuild.  ``levels`` is captured in the same provider read so generated
+  /// code cannot compare an epoch from one hierarchy against a level count from another.
+  struct ProgramResourceTopology {
+    std::uint64_t epoch = 0;
+    std::uint64_t generation = 0;
+    int levels = 1;
+  };
+
   /// One topology-independent subdivision of the active logical interval.
   struct LogicalEvaluationInterval {
     int iteration = 0;
@@ -232,6 +243,62 @@ class ProgramExecutionServices {
   }
 
   /// Topology-qualified metadata used by generated persistent Program resources.
+  ProgramResourceTopology program_resource_topology() const {
+    const ProgramResourceTopology topology = provider_().program_execution_resource_topology_();
+    if (topology.levels <= 0)
+      throw std::runtime_error("Program resource topology requires at least one level");
+    return topology;
+  }
+
+  /// Active provider level. The raw cursor remains provider-owned; its public access and every
+  /// generated selection go through this shared service.
+  int level() const { return provider_().program_execution_resource_level_(); }
+
+  void set_level(int selected) const {
+    const int levels = program_resource_topology().levels;
+    if (selected < 0 || selected >= levels)
+      throw std::out_of_range("Program resource level is out of range");
+    select_program_resource_level_(selected);
+  }
+
+  /// Evaluate one generated resource phase at @p selected and restore the incoming provider cursor
+  /// on success or exception. Provider selection itself is a no-throw raw topology operation.
+  template <class Body>
+  void with_program_resource_level(int selected, Body&& body) const {
+    const int levels = program_resource_topology().levels;
+    if (selected < 0 || selected >= levels)
+      throw std::out_of_range("Program resource level is out of range");
+    const int incoming = level();
+    const int restored = incoming >= 0 && incoming < levels ? incoming : 0;
+    select_program_resource_level_(selected);
+    try {
+      body();
+    } catch (...) {
+      select_program_resource_level_(restored);
+      throw;
+    }
+    select_program_resource_level_(restored);
+  }
+
+  /// Visit every level of one captured hierarchy identity and restore the incoming cursor even when
+  /// materialization fails part-way through. This replaces generated save/set/try/catch code.
+  template <class Body>
+  void for_each_program_resource_level(Body&& body) const {
+    const ProgramResourceTopology topology = program_resource_topology();
+    const int incoming = level();
+    const int restored = incoming >= 0 && incoming < topology.levels ? incoming : 0;
+    try {
+      for (int selected = 0; selected < topology.levels; ++selected) {
+        select_program_resource_level_(selected);
+        body(selected);
+      }
+    } catch (...) {
+      select_program_resource_level_(restored);
+      throw;
+    }
+    select_program_resource_level_(restored);
+  }
+
   const PreparedVectorDistribution& program_resource_vector_distribution() const {
     return provider_().program_execution_resource_storage_().vector_distribution;
   }
@@ -699,6 +766,13 @@ class ProgramExecutionServices {
   };
 
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
+
+  void select_program_resource_level_(int selected) const noexcept {
+    static_assert(
+        noexcept(std::declval<const Provider&>().program_execution_select_resource_level_(0)),
+        "Program resource-level selection must be noexcept so shared scopes can always restore");
+    provider_().program_execution_select_resource_level_(selected);
+  }
 
   void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
     const std::vector<int>& block_map = provider_().program_execution_block_map_();
