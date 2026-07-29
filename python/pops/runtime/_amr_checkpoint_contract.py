@@ -205,8 +205,8 @@ def validate_regridded_contract(sim, payload, receipt):
         "after",
         "accepted_contract_identity_before",
         "accepted_contract_identity_after",
-        "history_identity_before",
-        "history_identity_after",
+        "history_consensus_identity_before",
+        "history_consensus_identity_after",
         "composite_integrals_before",
         "composite_integrals_after",
     }
@@ -259,12 +259,20 @@ def validate_regridded_contract(sim, payload, receipt):
             "restart: RegridOnRestart accepted-contract audit identity differs from "
             "the recorded or transformed Program image"
         )
-    for key in ("history_identity_before", "history_identity_after"):
+    # These are phase-local all-rank witnesses, not a bitwise-continuity assertion across a
+    # topology change.  A scientific regrid changes the dense level-domain encoding and
+    # interpolates newly refined cells, so equality before/after would be the wrong invariant.
+    # Conservation of the accepted solution is checked independently below from the composite
+    # per-block component integrals.
+    for key in (
+        "history_consensus_identity_before",
+        "history_consensus_identity_after",
+    ):
         identity = Identity.from_token(receipt[key])
         if identity.domain != "restart-history-image" or identity.schema_version != 1:
             raise ValueError(
-                "restart: RegridOnRestart history rematerialization identity has the wrong "
-                "domain or schema version"
+                "restart: RegridOnRestart phase-local history consensus identity has the "
+                "wrong domain or schema version"
             )
     expected_program_state = recorded["program_state"]
     if transformed["program_state"] != expected_program_state:

@@ -331,16 +331,24 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
         "accepted_contract_identity_after": make_identity(
             "restart-accepted-contract", transformed_contract
         ).token,
-        "history_identity_before": make_identity(
+        # Distinct phase-local witnesses are valid: interpolation onto a changed hierarchy is not
+        # required to preserve the dense buffer bit for bit.
+        "history_consensus_identity_before": make_identity(
             "restart-history-image", {"phase": "before"}
         ).token,
-        "history_identity_after": make_identity(
+        "history_consensus_identity_after": make_identity(
             "restart-history-image", {"phase": "after"}
         ).token,
         "composite_integrals_before": [],
         "composite_integrals_after": [],
     }
 
+    assert (
+        receipt["history_consensus_identity_before"]
+        != receipt["history_consensus_identity_after"]
+    )
+    # Phase-local all-rank consensus is the contract: interpolation may legitimately change the
+    # dense history image while conserved solution components are checked independently.
     assert validate_regridded_contract(sim, payload, receipt) is None
     receipt["accepted_contract_identity_after"] = receipt["accepted_contract_identity_before"]
     with pytest.raises(ValueError, match="accepted-contract audit identity"):
@@ -348,12 +356,12 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
     receipt["accepted_contract_identity_after"] = make_identity(
         "restart-accepted-contract", transformed_contract
     ).token
-    receipt["history_identity_after"] = make_identity(
+    receipt["history_consensus_identity_after"] = make_identity(
         "restart-history-image", {"phase": "after"}, schema_version=2
     ).token
-    with pytest.raises(ValueError, match="domain or schema version"):
+    with pytest.raises(ValueError, match="wrong domain or schema version"):
         validate_regridded_contract(sim, payload, receipt)
-    receipt["history_identity_after"] = make_identity(
+    receipt["history_consensus_identity_after"] = make_identity(
         "restart-history-image", {"phase": "after"}
     ).token
     receipt["after"] = {**after, "topology_epoch": 9}

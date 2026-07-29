@@ -47,7 +47,10 @@ cardinality, exact-`MPI_COMM_WORLD` shared-interface registries are preflighted 
 rematerialized against the detached candidate hierarchy, and authenticated again before commit. A
 fault or rank-divergent identity injected after the native topology/tagging mutation must roll back
 the complete pre-restart Program image; a second successful attempt must reproduce the same
-transformed tagging bytes before continuation.
+transformed tagging bytes before continuation. Dense-history fingerprints are exact phase-local
+all-rank consensus witnesses; they are deliberately not compared across the interpolation. The
+distinct scientific invariant is native composite conservation of every accepted solution
+component before and after the regrid.
 The source validator requires that exact pytest path to remain in the manifest's
 `mpi_orchestrators` category; removing or reclassifying it invalidates `--check-only`.
 All Python checks run with native and MPI requirements forced on; a missing capability cannot turn

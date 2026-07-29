@@ -217,8 +217,9 @@ class AmrRuntimeView:
             "RegridOnRestart() supports serial and exact-MPI-world rematerializable "
             "shared-interface flux groups at unchanged MPI cardinality; it still refuses Uniform "
             "and multi-layout runtimes, elliptic field providers, and bootstrap staggered caches.",
-            "Its exact before/after history fingerprints are a cold-restart collective whose "
-            "memory and communication cost scales with every dense history slot.",
+            "Its phase-local history consensus fingerprints are cold-restart collectives whose "
+            "memory and communication cost scales with every dense history slot; they prove "
+            "all-rank agreement per hierarchy, not bitwise equality across interpolation.",
         ]
         return CheckpointReport(
             restartable=not violations, constraints=constraints, violations=violations, notes=notes

@@ -1558,10 +1558,10 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         "accepted_contract_identity_after": make_identity(
             "restart-accepted-contract", {"phase": "after"}
         ).token,
-        "history_identity_before": make_identity(
+        "history_consensus_identity_before": make_identity(
             "restart-history-image", {"phase": "before"}
         ).token,
-        "history_identity_after": make_identity(
+        "history_consensus_identity_after": make_identity(
             "restart-history-image", {"phase": "after"}
         ).token,
         "composite_integrals_before": [

@@ -813,11 +813,14 @@ def _restart_collective_phase(
 
 
 def _restart_history_identity(owner, sim, *, phase):
-    """Hash every dense accepted history slot through the collective global accessor.
+    """Hash every dense accepted history slot into one phase-local consensus witness.
 
     RegridOnRestart is a cold path, so this deliberately favors an exact all-rank proof over hot-path
-    cost.  Each slot digest is closed by a checkpoint-communicator consensus before the next
+    cost. Each slot digest is closed by a checkpoint-communicator consensus before the next
     collective starts; one rank can therefore never accept a rank-local history remap silently.
+    The witness is intentionally not compared across phases: a different hierarchy changes the
+    dense level-domain encoding and legitimately interpolates newly refined cells. Accepted-solution
+    conservation is proved separately from native composite component integrals.
     """
     plan = _restart_collective_phase(
         owner,
@@ -1097,8 +1100,8 @@ def apply_v3(owner, sim, prepared):
             "after": after_topology,
             "accepted_contract_identity_before": before_contract_identity,
             "accepted_contract_identity_after": after_contract_identity,
-            "history_identity_before": before_history_identity,
-            "history_identity_after": after_history_identity,
+            "history_consensus_identity_before": before_history_identity,
+            "history_consensus_identity_after": after_history_identity,
             "composite_integrals_before": before_integrals,
             "composite_integrals_after": after_integrals,
         }

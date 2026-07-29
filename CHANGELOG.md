@@ -32,7 +32,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   This bounded route is one AMR layout at unchanged MPI cardinality. Serial and exact
   `MPI_COMM_WORLD` shared-interface groups use the same atomic rematerialization, consensus and
   retry route; rank-changing dynamic interface rematerialization, elliptic fields, and bootstrap
-  staggered caches remain refused.
+  staggered caches remain refused. Dense-history fingerprints are phase-local all-rank consensus
+  witnesses, not a false bitwise-equality condition across interpolation; accepted solution
+  components retain their independent native composite-conservation check.
 - Native `SymbolicTagger` hysteresis is now a checkpointed accepted-state capability. The M3 gate
   executes a persisted two-rank to one-rank
   restart proof with non-empty hysteresis state, exact source-rank consensus, and byte-exact

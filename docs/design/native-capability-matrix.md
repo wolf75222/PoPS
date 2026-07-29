@@ -181,9 +181,11 @@ Explicit unsupported rows include:
   cardinality in the same transaction and execute conservatively after rollback or commit. Uniform,
   multi-layout, elliptic-field, rank-changing dynamic shared-interface, and
   bootstrap-staggered/cache cases remain explicit refusals; `bit_identical=True` is incompatible
-  with the policy. Exact before/after dense-history fingerprints are gathered only on this cold
-  restart path; their memory and collective-communication cost scales with all retained slots and
-  active level-domain cells.
+  with the policy. Exact phase-local dense-history consensus fingerprints are gathered only on this
+  cold restart path; they prove all-rank agreement per hierarchy rather than bitwise continuity
+  across interpolation. Accepted solution components retain the separate native composite
+  conservation invariant. Fingerprint memory and collective-communication cost scales with all
+  retained slots and active level-domain cells.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 - `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a

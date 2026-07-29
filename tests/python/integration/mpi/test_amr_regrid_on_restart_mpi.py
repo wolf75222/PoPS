@@ -274,11 +274,15 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
                 receipt["accepted_contract_identity_after"]
             ).domain
             == "restart-accepted-contract"
-            and Identity.from_token(receipt["history_identity_before"]).domain
+            and Identity.from_token(
+                receipt["history_consensus_identity_before"]
+            ).domain
             == "restart-history-image"
-            and Identity.from_token(receipt["history_identity_after"]).domain
+            and Identity.from_token(
+                receipt["history_consensus_identity_after"]
+            ).domain
             == "restart-history-image",
-            "receipt authenticates accepted contracts and dense history images before/after",
+            "receipt authenticates accepted contracts and each phase-local history consensus",
         )
         chk(
             np.allclose(

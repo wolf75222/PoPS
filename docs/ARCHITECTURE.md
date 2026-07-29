@@ -470,10 +470,13 @@ transform advances one tagging cycle and publishes the transformed image. The bo
 one AMR layout and unchanged MPI cardinality. Serial and exact-`MPI_COMM_WORLD` shared-interface
 flux groups participate in the same topology rematerialization, all-rank identity consensus,
 conservation check, rollback and retry. Rank-changing dynamic interface rematerialization, elliptic
-providers and bootstrap staggered caches remain refused. The exact before/after history
-fingerprints materialize each dense ring slot collectively; this is a cold-restart audit cost, not
-a hot-step operation, and scales with the total active level-domain cells times retained history
-depth. PoPS never silently changes patch geometry under `RestoreRecordedHierarchy()`.
+providers and bootstrap staggered caches remain refused. The phase-local history consensus
+fingerprints materialize each dense ring slot collectively; they prove exact all-rank agreement on
+each hierarchy, not bitwise equality across a topology-changing interpolation. Conservation is the
+separate native before/after invariant on every accepted solution component. This is a cold-restart
+audit cost, not a hot-step operation, and scales with the total active level-domain cells times
+retained history depth. PoPS never silently changes patch geometry under
+`RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
 `assemble_rhs` (limited reconstruction then numerical flux -> $R = -\mathrm{div} F + S$).
