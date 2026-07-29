@@ -134,6 +134,38 @@ target = "program_graph"
 nodeid = "tests/python/unit/time/test_field_solve_outcome.py::test_field_solve_is_unreadable_and_unconsumed_graph_is_rejected"
 
 [[check]]
+issue = "ADC-668"
+requirement = "program_only_temporal_routes"
+polarity = "positive"
+kind = "pytest"
+target = "architecture"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_system_temporal_facades_dispatch_only_through_an_installed_program"
+
+[[check]]
+issue = "ADC-668"
+requirement = "program_only_temporal_routes"
+polarity = "positive"
+kind = "pytest"
+target = "architecture"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine"
+
+[[check]]
+issue = "ADC-668"
+requirement = "program_only_temporal_routes"
+polarity = "refusal"
+kind = "pytest"
+target = "architecture"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_static_system_temporal_driver_is_test_only"
+
+[[check]]
+issue = "ADC-668"
+requirement = "program_only_temporal_routes"
+polarity = "positive"
+kind = "pytest"
+target = "architecture"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker"
+
+[[check]]
 issue = "ADC-666"
 requirement = "step_transaction"
 polarity = "positive"
@@ -177,9 +209,9 @@ test_regex = "^CheckpointHistory\\.RingRoundTripsBitEqualAcrossRestart$"
 issue = "ADC-666"
 requirement = "restart"
 polarity = "refusal"
-kind = "ctest"
-target = "test_checkpoint_history"
-test_regex = "^CheckpointHistory\\.RestartRejectsMismatchedProgramHashVerbatim$"
+kind = "pytest"
+target = "restart"
+nodeid = "tests/python/integration/io/test_time_history_checkpoint.py::test_uniform_restart_refuses_a_different_compiled_program"
 
 [[check]]
 issue = "ADC-667"
