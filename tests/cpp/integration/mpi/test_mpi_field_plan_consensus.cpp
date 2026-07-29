@@ -1,8 +1,9 @@
 // Exact collective consensus for resolved field-plan registries and level-qualified AMR stage
 // packs. Registry scenarios keep setters local/non-collective, then mark_bound compares one
 // canonical std::map-ordered sequence of (provider_slot, plan_identity). The stage-pack scenario
-// drives distributed L0/L1 storage and proves both successful publication and pre-solve rejection
-// when provider, evaluation point, or pack presence differs between ranks.
+// drives distributed L0/L1 storage and proves successful publication, the field-coupled residual
+// JVP against an independent finite difference, and pre-solve rejection when provider, evaluation
+// point, or pack presence differs between ranks.
 
 #include <gtest/gtest.h>
 
@@ -655,6 +656,118 @@ long prove_exact_distributed_stage_pack() {
       const MultiFab restored = solve_and_accept(stages);
       require(global_max_valid_scalar_diff(restored, base_phi) < Real(1e-8),
               "accepted stage pack restores provider result");
+    }
+
+    // The serial AMR oracle proves this algebra per level; repeat it here over genuinely
+    // distributed L0/L1 state and field storage.  Registering the provider in the ExB auxiliary
+    // slots makes the core residual depend on the exact perturbed field, while a level-local
+    // hierarchy keeps each active level independently observable.
+    constexpr Real c_dt = Real(0.01);
+    constexpr Real h = Real(2e-4);
+    const std::string jacvec_field = "distributed_jacvec";
+    AmrFieldSolveConfig jacvec_plan;
+    jacvec_plan.solver_options =
+        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+    jacvec_plan.plan_identity = "tests.mpi.distributed-jacvec.plan@1";
+    jacvec_plan.provider_identity = "tests.mpi.distributed-jacvec";
+    jacvec_plan.topology_provider_kind = "structured";
+    jacvec_plan.topology_provenance = "tests.mpi.periodic-cartesian";
+    jacvec_plan.topology_digest = "tests.mpi.periodic-cartesian.full-refinement@1";
+    jacvec_plan.output_owner_identity = "tests.mpi.stage-pack.a";
+    jacvec_plan.output_block = "a";
+    jacvec_plan.output_key = jacvec_field;
+    jacvec_plan.hierarchy_policy = level_local_hierarchy_policy();
+    jacvec_plan.nullspace = operator_topology_zero_mean_nullspace();
+    jacvec_plan.has_reaction = true;
+    jacvec_plan.reaction = Real(2);
+    jacvec_plan.providers.push_back(
+        FieldProviderBinding{"tests.mpi.distributed-jacvec/rhs", "a", jacvec_field, Real(1)});
+    runtime.install_field_plan(jacvec_field, jacvec_plan);
+    runtime.register_named_field("a", jacvec_field, 0, 1, 2, /*gradient_sign=*/-1);
+    runtime.set_block_named_elliptic_rhs(0, jacvec_field, [](const MultiFab& state, MultiFab& rhs) {
+      add_scaled_component(state, Real(1), 0, rhs);
+    });
+
+    {
+      SolveOutcome baseline = runtime.solve_named_fields(&jacvec_field);
+      require(baseline.report().solved(), "distributed JVP baseline report");
+      require(baseline.consume(SolveConsumption::kAccept).solved(),
+              "distributed JVP baseline consumption");
+    }
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
+          "main",
+          31 + level,
+          level,
+          level,
+          13,
+          ::pops::amr::Rational(1, 2),
+          0.01 / static_cast<double>(1 << level),
+          0.305};
+      MultiFab iterate = runtime.level_state(0, level);
+      MultiFab direction = iterate;
+      scale(direction, Real(0.75));
+
+      {
+        SolveOutcome base =
+            runtime.solve_named_fields_from_state_at(point, jacvec_field, 0, iterate);
+        require(base.report().solved(), "distributed JVP base report");
+        require(base.consume(SolveConsumption::kAccept).solved(),
+                "distributed JVP base consumption");
+      }
+      const MultiFab base_phi = runtime.provider_potential_level(jacvec_field, level);
+
+      auto residual_at = [&](Real shift, bool coupled) {
+        MultiFab state = iterate;
+        saxpy(state, shift, direction);
+        MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+        residual.set_val(Real(0));
+        if (coupled) {
+          SolveOutcome perturbed =
+              runtime.solve_named_fields_from_state_at(point, jacvec_field, 0, state);
+          require(perturbed.report().solved(), "distributed JVP perturbed report");
+          require(perturbed.consume(SolveConsumption::kAccept).solved(),
+                  "distributed JVP perturbed consumption");
+        }
+        runtime.level_rhs_core_into_at(0, level, point, state, residual, /*flux_only=*/false);
+        if (coupled) {
+          SolveOutcome restored =
+              runtime.solve_named_fields_from_state_at(point, jacvec_field, 0, iterate);
+          require(restored.report().solved(), "distributed JVP restore report");
+          require(restored.consume(SolveConsumption::kAccept).solved(),
+                  "distributed JVP restore consumption");
+        }
+        return residual;
+      };
+
+      const MultiFab r0 = residual_at(Real(0), /*coupled=*/false);
+      const MultiFab plus = residual_at(h, /*coupled=*/true);
+      const MultiFab minus = residual_at(-h, /*coupled=*/true);
+      const MultiFab stale_plus = residual_at(h, /*coupled=*/false);
+      const MultiFab restored_r0 = residual_at(Real(0), /*coupled=*/false);
+
+      MultiFab generated = direction;
+      saxpy(generated, -c_dt / h, plus);
+      saxpy(generated, c_dt / h, r0);
+      MultiFab centered = direction;
+      saxpy(centered, -c_dt / (Real(2) * h), plus);
+      saxpy(centered, c_dt / (Real(2) * h), minus);
+      const Real response = global_max_valid_scalar_diff(centered, direction);
+      require(response > Real(1e-7), "distributed field-coupled JVP response");
+      require(
+          global_max_valid_scalar_diff(generated, centered) < Real(2e-2) * response + Real(2e-7),
+          "distributed field-coupled JVP centered-difference parity");
+
+      MultiFab stale = direction;
+      saxpy(stale, -c_dt / h, stale_plus);
+      saxpy(stale, c_dt / h, r0);
+      require(global_max_valid_scalar_diff(stale, centered) > Real(1e-7),
+              "distributed field-coupled JVP rejects a frozen provider");
+      require(global_max_valid_scalar_diff(runtime.provider_potential_level(jacvec_field, level),
+                                           base_phi) < Real(1e-8),
+              "distributed field-coupled JVP restores its provider");
+      require(global_max_valid_scalar_diff(restored_r0, r0) < Real(1e-8),
+              "distributed field-coupled JVP restores its residual carrier");
     }
 
     // These request bytes are collective inputs. Keep every local request structurally valid so

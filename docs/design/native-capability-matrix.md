@@ -119,11 +119,14 @@ Supported native routes include:
   field-dependent transport-boundary JVP route. A native L0/L1 level-local oracle now places that
   dependency on a physical face of a fully refined domain and checks the complete core-plus-boundary
   `rhs_jacvec(field_coupled=True)` against an independent centered finite difference; it also proves
-  physical-face locality, provider sensitivity and restoration after every perturbation. Partially
-  refined FAC patches carrying a dynamic physical boundary must remain strictly interior; a patch
-  touching a non-periodic domain face fails closed. A selected solve with a field dependency also
-  fails closed until its complete dependency closure can share one transaction. Simultaneous
-  multi-block stage solves use one exact hierarchy-qualified multi-state request carrying the same
+  physical-face locality, provider sensitivity and restoration after every perturbation. The same
+  core field-coupled JVP has a two-rank L0/L1 oracle over genuinely distributed state and provider
+  storage, including centered-difference parity, frozen-provider sensitivity and collective
+  restoration of both the provider and its residual carrier. Partially refined FAC patches carrying
+  a dynamic physical boundary must remain strictly interior; a patch touching a non-periodic domain
+  face fails closed. A selected solve with a field dependency also fails closed until its complete
+  dependency closure can share one transaction. Simultaneous multi-block stage solves use one exact
+  hierarchy-qualified multi-state request carrying the same
   `BoundaryEvaluationPoint`, provider slot and active level; every provisional conservative state is
   restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
