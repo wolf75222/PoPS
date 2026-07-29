@@ -561,14 +561,15 @@ function backward_euler_source(model, aux, U, dt, controls, mask):
             candidate(i,j,:) <- result.candidate
             statistics(i,j,:) <- result.status et diagnostics)
     report <- reduction MPI collective des statistics
-    si report.status != solved: echouer sans modifier U
-    U <- candidate
-    return report
+    outcome <- SolveOutcome(report, candidate)
+    # le consumer choisit collectivement accept/reject/fail
+    # seul accept publie candidate dans U et les diagnostics persistants
+    return outcome
 ```
 
 **Code.** [`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp):
 `imex_euler_step(U, dt, Texpl, Simpl)` chains the in-place explicit transport then the in-place implicit
-source solve (two callables `TransportStep` / `ImplicitSourceSolve`). The implicit step lives in
+source solve (two callables `TransportStep` / `ImplicitSourceSolve`). The provider in
 [`include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp`](../include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp)
 owns the only cell-local nonlinear algorithm: immutable concrete functors, scaled stopping controls,
 finite-difference/analytic/AD Jacobian providers, partial-pivot factorization without inverse,
@@ -580,18 +581,23 @@ implicit/explicit partitioning
 goes through the `PartiallyImplicitModel` concept (trait `M::is_implicit(c)`), `model_is_implicit<Model>`
 (default: everything implicit when the trait is absent), the POD carrier `ImplicitMask<N>` (`active`, `flag[N]`,
 carried by the block, passed by value on the device) and `is_implicit_component<Model, N>` (an active mask
-with priority over the model default). `ImplicitSourceStepper` (`iters = 2`) models the concept
+with priority over the model default). `ImplicitSourceStepper` models the concept
 `ImplicitBlockStepper` for isolated numerical tests. Production `System` and `AmrSystem` do not
 schedule that helper: their normalized `ProgramGraph` must place a typed implicit primitive
 explicitly, and an unavailable lowering fails closed.
 
 **Constraints / remarks.** The implicit step is unconditionally stable for a linear relaxation
 (where a plain Picard fixed point would diverge as soon as `dt * stiffness > 1`, precisely the
-stiff regime); it is exact in one iteration if `S` is linear in `U`, quadratic convergence otherwise.
-The default finite-difference relative step is `1e-7`; default stopping is
-`||F||_inf <= 1e-12` with an iteration budget of 20. Singular pivots, exhausted budgets, NaN/Inf,
-inadmissible candidates, safeguard failures and unsupported Jacobian capabilities remain distinct
-outcomes. There is no warning-only or unchecked publication policy.
+stiff regime); an affine source is solved in one Newton iteration up to rounding. Local quadratic
+convergence requires the usual smoothness assumptions and an exact analytic/AD Jacobian; finite
+differences and safeguards retain the same outcome contract without promising that rate.
+The default finite-difference relative step is `1e-7`. `LocalNewton` defaults to an absolute
+threshold of `1e-12` and a budget of 20 iterations; the native implicit-source adapter maps its
+central runtime policy (`abs_tol=1e-12`, `rel_tol=1e-10`, 25 iterations) into the same prepared
+controls. Singular pivots, exhausted budgets, NaN/Inf, inadmissible candidates, safeguard failures
+and unsupported Jacobian capabilities remain distinct outcomes. Collective priority is independent
+of status numbering, so a fatal cell or MPI-rank failure cannot be hidden by a recoverable rejection.
+There is no warning-only or unchecked publication policy.
 Limits: `imex_euler_step` is first order in time (forward-backward Euler); the AP covers the relaxation
 limit, not the condensation of the potential-velocity-Lorentz couplings at high `omega_c`, which is the
 domain of Schur condensation (section 13). Inactive mask and a model without the `is_implicit` trait:
