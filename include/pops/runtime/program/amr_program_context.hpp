@@ -135,31 +135,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   std::uint64_t program_resource_topology_generation() const {
     return eng_->topology_materialization_generation();
   }
-  /// Exact ownership of the level whose install-time Program resources are being materialized.
-  /// Generated prepared solvers must not infer replication from rank-local DistributionMapping
-  /// metadata: a replicated level intentionally names the current rank as its local owner.
-  const PreparedVectorDistribution& program_resource_vector_distribution() const {
-    return eng_->level_is_replicated(level_) ? PreparedVectorDistribution::Replicated
-                                             : PreparedVectorDistribution::Distributed;
-  }
-  FieldDistribution program_resource_field_storage_distribution() const {
-    return eng_->level_is_replicated(level_) ? FieldDistribution::Replicated
-                                             : FieldDistribution::Distributed;
-  }
-  int program_resource_field_level() const { return level_; }
-  /// Materialize absolute hierarchy metadata for the current level's persistent prepared resource.
-  /// The generated solver remains topology-agnostic; AMR alone owns level numbering, per-level
-  /// ownership and metric resolution.
-  void configure_program_resource_field_nullspace(FieldNullspacePlan& plan) const {
-    if (level_ < 0 || level_ >= nlev())
-      throw std::out_of_range("AMR Program field-nullspace resource level is out of range");
-    const Geometry geometry = eng_->level_geom(level_);
-    const Real measure = geometry.dx() * geometry.dy();
-    for (FieldNullspaceBasis& basis : plan.bases) {
-      basis.cell_measure.assign(static_cast<std::size_t>(nlev()), Real(0));
-      basis.cell_measure[static_cast<std::size_t>(level_)] = measure;
-    }
-  }
   int nlev() const { return eng_->nlev(); }
   bool uses_prepared_krylov_fallback() const {
     return configured_hierarchy_tensor_solver_().execution_path() ==
@@ -339,9 +314,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   int history_flux_topology_rebind_count() const { return history_flux_topology_rebind_count_; }
 
   // --- state / RHS seam over the CURRENT level -------------------------------------------------------
-  MultiFab& state(int b) const {
-    return eng_->level_state(static_cast<std::size_t>(sys_block(b)), level_);
-  }
   void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel();
@@ -732,33 +704,12 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                                     stages);
   }
 
-  /// The SHARED aux of the current level (phi / grad / B_z), the channel solve_fields fills.
-  MultiFab& aux() const { return const_cast<MultiFab&>(eng_->aux(level_)); }
-  /// The current level's metric (dx/dy >> level, domain << level).
-  Geometry geom() const { return eng_->level_geom(level_); }
   /// The installed AMR route is Cartesian.  The metric queries still exist on this context so one
   /// generated Program body instantiates against both runtime contexts without geometry-specific
   /// source-stage classes.
   bool is_polar_geometry() const { return false; }
   Real radial_origin() const { return Real(0); }
   Real radial_spacing() const { return geom().dx(); }
-
-  /// The grid context of the CURRENT level (ADC-633): the AMR counterpart of System::grid_context(),
-  /// per level. It bundles the transport BC + the level geometry + the live level aux pointer, exactly
-  /// what System::grid_context() returns for the uniform mesh. Used by the emitted condensed-implicit
-  /// assembly kernels so their per-cell assembly reads the CURRENT level's geom / aux / BC as direct
-  /// body calls (they read the level_ cursor live). transport_bc() (not poisson_bc()) matches the
-  /// uniform Program's gc.bc, so the flat-hierarchy phi-ghost fill is byte-identical to the uniform
-  /// Program (the flat bit-parity gate). BY VALUE, like ProgramContext.
-  GridContext grid_context() const {
-    const Geometry g = eng_->level_geom(level_);
-    GridContext gc;
-    gc.dom = g.domain;
-    gc.bc = eng_->transport_bc();
-    gc.geom = g;
-    gc.aux = &const_cast<MultiFab&>(eng_->aux(level_));
-    return gc;
-  }
 
   std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
       const MultiFab&, const ExecutionLane& lane) const {
@@ -774,9 +725,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   // --- scratch (per-level) --------------------------------------------------------------------------
-  MultiFab alloc_scalar_field(int n_comp = 1, int n_ghost = 1) const {
-    return eng_->level_scalar_field(level_, n_comp, n_ghost);
-  }
   // --- matrix-free elliptic primitives over the CURRENT level (parity with ProgramContext) ----------
   void laplacian(MultiFab& out, MultiFab& in) const {
     count_kernel();
@@ -1774,6 +1722,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
            field.n_grow() == n_ghost;
   }
 
+  /// Provider-owned by design: a regrid, restart materialization or rejected-attempt rollback can
+  /// preserve the checkpointed epoch while replacing every hierarchy allocation.  The shared
+  /// service therefore selects scratch semantically, but only this AMR storage provider may
+  /// authenticate and invalidate slots against both topology epoch and materialization generation.
   MultiFab& program_scratch_for_(ScratchKind kind, std::int64_t value_id, int subslot,
                                  const MultiFab& prototype, int n_comp, int n_ghost) const {
     if (value_id < 0 || subslot < 0)
@@ -3704,9 +3656,37 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     amr::Rational stage{0, 1};
   };
 
-  GridContext program_execution_default_grid_context_() const { return grid_context(); }
+  GridContext program_execution_default_grid_context_() const {
+    const Geometry geometry = eng_->level_geom(level_);
+    GridContext context;
+    context.dom = geometry.domain;
+    context.bc = eng_->transport_bc();
+    context.geom = geometry;
+    context.aux = &const_cast<MultiFab&>(eng_->aux(level_));
+    return context;
+  }
   GridContext program_execution_block_grid_context_(int owner) const {
     return eng_->level_grid_context(static_cast<std::size_t>(sys_block(owner)), level_);
+  }
+  MultiFab& program_execution_state_(int runtime_block) const {
+    return eng_->level_state(static_cast<std::size_t>(runtime_block), level_);
+  }
+  MultiFab program_execution_alloc_scalar_field_(int n_comp, int n_ghost) const {
+    return eng_->level_scalar_field(level_, n_comp, n_ghost);
+  }
+  ProgramResourceStorage program_execution_resource_storage_() const {
+    const bool replicated = eng_->level_is_replicated(level_);
+    return {replicated ? PreparedVectorDistribution::Replicated
+                       : PreparedVectorDistribution::Distributed,
+            replicated ? FieldDistribution::Replicated : FieldDistribution::Distributed, level_};
+  }
+  std::vector<Real> program_execution_resource_cell_measures_() const {
+    if (level_ < 0 || level_ >= nlev())
+      throw std::out_of_range("AMR Program field-nullspace resource level is out of range");
+    const Geometry geometry = eng_->level_geom(level_);
+    std::vector<Real> measures(static_cast<std::size_t>(nlev()), Real(0));
+    measures[static_cast<std::size_t>(level_)] = geometry.dx() * geometry.dy();
+    return measures;
   }
   void program_execution_publish_axpy_(MultiFab& u, Real a, const MultiFab& r) const {
     if (!capturing())
@@ -3783,8 +3763,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   SolveReport program_execution_solve_fields_from_state_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int block, MultiFab& state) const {
-    return consume_field_outcome_(
-        solve_fields_from_state_at(point, provider_slot, block, state));
+    return consume_field_outcome_(solve_fields_from_state_at(point, provider_slot, block, state));
   }
   MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
                                        const MultiFab& prototype, int n_comp, int n_ghost) const {
