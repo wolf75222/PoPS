@@ -196,6 +196,14 @@ requirement = "accepted_state"
 polarity = "positive"
 kind = "ctest"
 target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_history_ring"
 test_regex = "^test_amr_history_ring\\.AcceptedStateRestartReconstructsReboundFluxAuthorityForNextAb2Step$"
 
 [[check]]
