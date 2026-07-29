@@ -231,6 +231,20 @@ TEST(test_prepared_boundary_plan, primitive_fixed_state_conversion_is_transactio
 }
 
 TEST(test_prepared_boundary_plan,
+     primitive_conversion_preserves_explicit_periodic_identification_validation) {
+  auto boundary = prepare_hyperbolic_boundary<2>(
+      {"periodic", "dirichlet", "foextrap", "periodic"}, {0.0, 2.0, 0.0, 0.0},
+      {"case::fluid::xlo", "case::fluid::xhi", "case::fluid::ylo", "case::fluid::yhi"}, {"Scalar"},
+      true, {"conservative", "primitive", "conservative", "conservative"},
+      {"", "case::fluid::model-p2c", "", ""});
+
+  EXPECT_TRUE(boundary.requires_fixed_state_conversion());
+  const auto converted = boundary.with_converted_fixed_states(
+      [](const double* primitive, double* conservative) { conservative[0] = primitive[0]; });
+  EXPECT_FALSE(converted.requires_fixed_state_conversion());
+}
+
+TEST(test_prepared_boundary_plan,
      model_aware_slip_wall_handles_multiple_normal_and_out_of_plane_components) {
   const Box2D domain = Box2D::from_extents(4, 4);
   MultiFab state = scalar_field(domain, 5, 2);

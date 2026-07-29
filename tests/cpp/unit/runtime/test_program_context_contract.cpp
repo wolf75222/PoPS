@@ -537,6 +537,7 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
   EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
 }
+
 TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
   ensure_kokkos();
   SystemConfig cfg;

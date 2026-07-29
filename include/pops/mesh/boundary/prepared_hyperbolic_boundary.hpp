@@ -614,8 +614,7 @@ template <int Dim>
 PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
     const std::vector<std::string>& face_types, const std::vector<double>& face_values,
     const std::vector<std::string>& face_identities,
-    const std::vector<std::string>& component_roles,
-    bool explicit_periodic_identifications = false,
+    const std::vector<std::string>& component_roles, bool explicit_periodic_identifications = false,
     const std::vector<std::string>& face_representations = {},
     const std::vector<std::string>& face_converter_identities = {}) {
   if (face_types.size() != static_cast<std::size_t>(2 * Dim) ||
