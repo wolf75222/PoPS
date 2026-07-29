@@ -620,9 +620,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     hierarchy_tensor_assembly_field_slots_ = assembly_field_slots;
     hierarchy_tensor_solution_field_slot_ = solution_field_slot;
   }
-  OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
-                                                          const MultiFab& prototype,
-                                                          OperatorFingerprint resources) const {
+
+ private:
+  OperatorFingerprint program_execution_operator_topology_(const MultiFab& prototype) const {
     if (!current_window_ || !std::isfinite(current_level_dt_) || current_level_dt_ <= 0.0)
       throw std::logic_error("AMR operator snapshot requested outside a prepared level window");
     OperatorFingerprint topology =
@@ -632,32 +632,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     ::pops::detail::fingerprint_mix(topology, "amr-level-local");
     ::pops::detail::fingerprint_mix(topology, static_cast<std::uint64_t>(level_));
     ::pops::detail::fingerprint_mix(topology, static_cast<std::uint64_t>(nlev()));
-    if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
-      throw std::overflow_error("AMR operator snapshot revision exhausted");
-    const std::uint64_t revision = ++operator_snapshot_revision_;
-    invalidate_active_operator_snapshot_();
-    OperatorEvaluationSnapshot snapshot =
-        operator_evaluation_snapshot_(authority, topology, resources, revision);
-    active_operator_snapshot_revision_ = revision;
-    return snapshot;
-  }
-
-  /// Recompute only the allocation-free dynamic identity. The requested evaluation revision is
-  /// reproduced only while it remains the context's active mint; logical-scope entry/exit clears
-  /// that authority even when the exact AMR parent window is later restored. The independent
-  /// topology revision continues to change across engine-epoch or active-level transitions.
-  OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
-                                                       OperatorFingerprint topology,
-                                                       OperatorFingerprint resources,
-                                                       std::uint64_t revision) const {
-    const std::uint64_t probe_revision =
-        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
-    return operator_evaluation_snapshot_(authority, topology, resources, probe_revision);
-  }
-
- private:
-  void invalidate_active_operator_snapshot_() const noexcept {
-    active_operator_snapshot_revision_ = 0;
+    return topology;
   }
 
   std::uint64_t operator_topology_revision_() const {
@@ -672,10 +647,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return operator_topology_revision_counter_;
   }
 
-  OperatorEvaluationSnapshot operator_evaluation_snapshot_(OperatorFingerprint authority,
-                                                           OperatorFingerprint topology,
-                                                           OperatorFingerprint resources,
-                                                           std::uint64_t revision) const {
+  OperatorEvaluationSnapshot program_execution_operator_evaluation_snapshot_(
+      OperatorFingerprint authority, OperatorFingerprint topology, OperatorFingerprint resources,
+      std::uint64_t revision) const {
     if (!current_window_ || !std::isfinite(current_level_dt_) || current_level_dt_ <= 0.0)
       throw std::logic_error("AMR operator snapshot requested outside a prepared level window");
     const amr::ClockStamp clock = evaluation_clock_();
@@ -3440,7 +3414,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     child_end.phase = child_end_phase;
     child_end.physical_time = child_end_physical_time;
 
-    invalidate_active_operator_snapshot_();
     current_window_ = amr::ClockWindow{child_begin, child_end};
     current_level_dt_ = interval.child_dt;
     stage_time_ = amr::Rational(0, 1);
@@ -3450,7 +3423,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     current_window_ = rollback.window;
     current_level_dt_ = rollback.parent_dt;
     stage_time_ = rollback.stage;
-    invalidate_active_operator_snapshot_();
   }
   SolveReport program_execution_solve_fields_from_state_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
@@ -3566,8 +3538,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   mutable int automatic_regrid_macro_step_ = -1;
   mutable std::vector<amr::ClockStamp> level_clocks_;
   mutable std::uint64_t accepted_state_revision_ = 0;
-  mutable std::uint64_t operator_snapshot_revision_ = 0;
-  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never minted
   mutable std::uint64_t operator_topology_revision_counter_ = 0;
   mutable std::uint64_t observed_operator_topology_epoch_ =
       std::numeric_limits<std::uint64_t>::max();

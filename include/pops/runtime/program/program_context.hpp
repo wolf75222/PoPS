@@ -200,81 +200,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->require_cartesian_generated_operator(sys_block(b), operation);
   }
 
-  /// Authenticate the exact operator evaluation point. Generated code supplies a canonical 256-bit
-  /// Program/operator authority plus the prepared field/resource identities; the context supplies the
-  /// monotonic evaluation revision and exact native clock values.
-  OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
-                                                          const MultiFab& prototype,
-                                                          OperatorFingerprint resources) const {
-    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
-      throw std::logic_error("operator snapshot requested outside a prepared Program step");
-    const GridContext gc = sys_->grid_context();
-    OperatorFingerprint topology =
-        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
-    if (sys_->program_is_polar())
-      ::pops::detail::fingerprint_geometry(topology, sys_->program_polar_geometry());
-    else
-      ::pops::detail::fingerprint_geometry(topology, gc.geom);
-    ::pops::detail::fingerprint_boundary(topology, gc.bc);
-    if (gc.boundary_plan) {
-      ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->identity());
-      ::pops::detail::fingerprint_mix(topology, gc.boundary_plan->state_identity());
-      ::pops::detail::fingerprint_mix(
-          topology, static_cast<std::uint64_t>(gc.boundary_plan->required_depth()));
-    } else {
-      ::pops::detail::fingerprint_mix(topology, "legacy-bcrec-boundary");
-    }
-    if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
-      throw std::overflow_error("Program operator snapshot revision exhausted");
-    const std::uint64_t revision = ++operator_snapshot_revision_;
-    invalidate_active_operator_snapshot_();
-    OperatorEvaluationSnapshot snapshot =
-        operator_evaluation_snapshot_(authority, topology, resources, revision);
-    active_operator_snapshot_revision_ = revision;
-    return snapshot;
-  }
-
-  /// Recompute the current native identity without advancing the monotonic counter. A requested
-  /// revision is reproduced only while it is the context's active mint; logical-scope entry/exit
-  /// clears that authority, so an exactly restored outer clock still probes unequal until reminted.
-  /// The uniform mesh fingerprint remains reusable, keeping the Krylov probe free of layout walks.
-  OperatorEvaluationSnapshot probe_operator_evaluation(OperatorFingerprint authority,
-                                                       OperatorFingerprint topology,
-                                                       OperatorFingerprint resources,
-                                                       std::uint64_t revision) const {
-    const std::uint64_t probe_revision =
-        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
-    return operator_evaluation_snapshot_(authority, topology, resources, probe_revision);
-  }
-
- private:
-  void invalidate_active_operator_snapshot_() const noexcept {
-    active_operator_snapshot_revision_ = 0;
-  }
-
-  OperatorEvaluationSnapshot operator_evaluation_snapshot_(OperatorFingerprint authority,
-                                                           OperatorFingerprint topology,
-                                                           OperatorFingerprint resources,
-                                                           std::uint64_t revision) const {
-    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
-      throw std::logic_error("operator snapshot requested outside a prepared Program step");
-    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
-    const double evaluation_time = static_cast<double>(physical_time()) +
-                                   logical_physical_time_offset_ +
-                                   stage_time_.value() * current_dt_;
-    return {authority,
-            revision,
-            static_cast<std::int64_t>(macro_step()),
-            evaluation_stage.numerator,
-            evaluation_stage.denominator,
-            std::bit_cast<std::uint64_t>(current_dt_),
-            std::bit_cast<std::uint64_t>(evaluation_time),
-            UINT64_C(1),
-            topology,
-            resources};
-  }
-
- public:
   /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
   /// d fy(.,c)/dy), centered FV, for every component c of @p r. @p fx and @p fy hold the n_cons x- and
   /// y-flux fields a compiled Program's named-flux kernel wrote (component c = the flux of conservative
@@ -900,6 +825,47 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   bool program_execution_owns_operator_authority_(OperatorFingerprint authority) const {
     return sys_ != nullptr && sys_->program_owns_operator_authority(authority);
   }
+  OperatorFingerprint program_execution_operator_topology_(const MultiFab& prototype) const {
+    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
+      throw std::logic_error("operator snapshot requested outside a prepared Program step");
+    const GridContext context = sys_->grid_context();
+    OperatorFingerprint topology =
+        ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
+    if (sys_->program_is_polar())
+      ::pops::detail::fingerprint_geometry(topology, sys_->program_polar_geometry());
+    else
+      ::pops::detail::fingerprint_geometry(topology, context.geom);
+    ::pops::detail::fingerprint_boundary(topology, context.bc);
+    if (context.boundary_plan) {
+      ::pops::detail::fingerprint_mix(topology, context.boundary_plan->identity());
+      ::pops::detail::fingerprint_mix(topology, context.boundary_plan->state_identity());
+      ::pops::detail::fingerprint_mix(
+          topology, static_cast<std::uint64_t>(context.boundary_plan->required_depth()));
+    } else {
+      ::pops::detail::fingerprint_mix(topology, "legacy-bcrec-boundary");
+    }
+    return topology;
+  }
+  OperatorEvaluationSnapshot program_execution_operator_evaluation_snapshot_(
+      OperatorFingerprint authority, OperatorFingerprint topology, OperatorFingerprint resources,
+      std::uint64_t revision) const {
+    if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
+      throw std::logic_error("operator snapshot requested outside a prepared Program step");
+    const amr::Rational evaluation_stage = logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const double evaluation_time = static_cast<double>(physical_time()) +
+                                   logical_physical_time_offset_ +
+                                   stage_time_.value() * current_dt_;
+    return {authority,
+            revision,
+            static_cast<std::int64_t>(macro_step()),
+            evaluation_stage.numerator,
+            evaluation_stage.denominator,
+            std::bit_cast<std::uint64_t>(current_dt_),
+            std::bit_cast<std::uint64_t>(evaluation_time),
+            UINT64_C(1),
+            topology,
+            resources};
+  }
   MultiFab& program_execution_assembly_target_(MultiFab& field, std::string_view) const {
     return field;
   }
@@ -1001,7 +967,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     const amr::Rational child_begin =
         logical_phase_begin_ + logical_phase_span_ * interval.child_begin;
 
-    invalidate_active_operator_snapshot_();
     current_dt_ = interval.child_dt;
     stage_time_ = amr::Rational(0, 1);
     logical_phase_begin_ = child_begin;
@@ -1015,7 +980,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_phase_begin_ = rollback.phase_begin;
     logical_phase_span_ = rollback.phase_span;
     logical_physical_time_offset_ = rollback.physical_time_offset;
-    invalidate_active_operator_snapshot_();
   }
   SolveReport program_execution_solve_fields_from_state_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
@@ -1060,8 +1024,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   mutable amr::Rational logical_phase_begin_{0, 1};
   mutable amr::Rational logical_phase_span_{1, 1};
   mutable double logical_physical_time_offset_ = 0.0;
-  mutable std::uint64_t operator_snapshot_revision_ = 0;
-  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never minted
   mutable std::shared_ptr<MultiFab> polar_unit_rr_;
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
