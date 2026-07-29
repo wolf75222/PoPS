@@ -443,6 +443,19 @@ def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
     assert payload["runtime"] == "uniform"
     assert payload["instance"]["bind_identity"] == plan.bind_identity.to_data()
     assert payload["instance"]["plan_identity"] == plan.artifact.plan.plan_identity.to_data()
+    assert payload["instance"]["runtime_plan"] == runtime._runtime_plan.to_data()
+    assert (
+        payload["instance"]["runtime_plan"]["communication"]["layout_plan_id"]
+        == plan.artifact.layout_plan.qualified_id
+    )
+    assert (
+        payload["instance"]["runtime_plan"]["resources"]["execution_context_identity"]
+        == plan.execution_context.identity.to_data()
+    )
+    assert (
+        payload["instance"]["runtime_plan"]["determinism"]["execution_context_identity"]
+        == plan.execution_context.identity.to_data()
+    )
     assert payload["instance"]["consumer_graph"] == runtime.consumer_graph.to_data()
     assert payload["instance"]["restart_authority"] == \
         plan.artifact.plan.restart_authority.to_data()
