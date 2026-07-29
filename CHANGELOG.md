@@ -49,6 +49,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   only the exact physical faces deliberately omitted from their paired boundary plans.
   One-sided tag propagation, deeper hierarchies, dynamic active-depth changes, dynamic refined MPI
   rematerialization, implicit JVP and historical-rate paths remain fail-closed.
+  Each interface endpoint now carries the exact projection Handle, reconstruction-provider
+  identity, operation and provider-derived trace depth into the native collective plan identity
+  `pops.multiblock.interface-plan.v2`. The
+  type-erased scheduler continues to execute only authenticated cell-average projections;
+  MUSCL/WENO face reconstruction is rejected with its retained provider/depth contract until a
+  mapped-halo reconstruction provider is installed, rather than being silently lowered.
 - Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the
   held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
   hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay

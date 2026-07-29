@@ -101,6 +101,17 @@ PopsExecutionContextV1 mpi_world_interface_execution() {
 }
 #endif
 
+void authenticate_cell_average_trace(AxisAlignedInterface& route) {
+  route.left_trace_projection_identity = route.identity + ".left-trace";
+  route.right_trace_projection_identity = route.identity + ".right-trace";
+  route.left_trace_provider_identity = "limiter.none";
+  route.right_trace_provider_identity = "limiter.none";
+  route.left_trace_operation = InterfaceTraceOperation::CellAverage;
+  route.right_trace_operation = InterfaceTraceOperation::CellAverage;
+  route.left_trace_required_depth = 1;
+  route.right_trace_required_depth = 1;
+}
+
 AxisAlignedInterface heterogeneous_route() {
   AxisAlignedInterface route;
   route.identity = "left-right.shared_flux";
@@ -116,6 +127,7 @@ AxisAlignedInterface heterogeneous_route() {
   route.affine_mapping_identity = "reverse-y-on-coincident-face";
   route.right_tangential_scale = Real(-1);
   route.right_tangential_offset = Real(3);
+  authenticate_cell_average_trace(route);
   return route;
 }
 
@@ -134,6 +146,7 @@ AxisAlignedInterface aligned_x_route(std::string identity) {
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
+  authenticate_cell_average_trace(route);
   return route;
 }
 
@@ -363,6 +376,7 @@ TEST(test_multiblock_interface_scheduler,
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
+  authenticate_cell_average_trace(route);
   const Geometry left_geometry{left_state.box_array().bounding_box(), Real(0), Real(2), Real(0),
                                Real(6)};
   const Geometry right_geometry{right_state.box_array().bounding_box(), Real(2), Real(5), Real(0),
@@ -987,6 +1001,7 @@ TEST(test_multiblock_interface_scheduler,
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
+  authenticate_cell_average_trace(route);
   const Geometry left_geometry{left_box, Real(0), Real(1), Real(0), Real(3)};
   const Geometry right_geometry{right_box, Real(1), Real(2), Real(0), Real(3)};
 
@@ -1063,8 +1078,22 @@ TEST(test_multiblock_interface_scheduler, UnsupportedOrUnauthenticatedMappingsFa
   EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
                                             serial_interface_execution(), evaluator_factory),
                std::invalid_argument);
+  route = heterogeneous_route();
+  route.identity = "missing-trace-provider";
+  route.left_trace_provider_identity.clear();
+  EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
+                                            serial_interface_execution(), evaluator_factory),
+               std::invalid_argument);
+  route = heterogeneous_route();
+  route.identity = "unavailable-reconstructed-trace";
+  route.left_trace_provider_identity = "limiter.minmod";
+  route.left_trace_operation = InterfaceTraceOperation::ReconstructedFace;
+  route.left_trace_required_depth = 2;
+  EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
+                                            serial_interface_execution(), evaluator_factory),
+               std::invalid_argument);
   EXPECT_EQ(prepare_calls, 0)
-      << "invalid topology/geometry must be rejected before component prepare";
+      << "invalid topology/geometry/trace projection must fail before component prepare";
   EXPECT_THROW(store.interface_evaluation_count("non-bijection", 0), std::out_of_range);
 
   route = heterogeneous_route();
@@ -1143,6 +1172,7 @@ TEST(test_multiblock_interface_scheduler,
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
+  authenticate_cell_average_trace(route);
   route.affine_mapping_identity = "periodic-x-translation";
   route.right_normal_translation = Real(1);
 

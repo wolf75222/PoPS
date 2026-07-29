@@ -16,6 +16,17 @@ using namespace pops::runtime::multiblock;
 
 namespace {
 
+void authenticate_cell_average_trace(AxisAlignedInterface& route) {
+  route.left_trace_projection_identity = route.identity + ".left-trace";
+  route.right_trace_projection_identity = route.identity + ".right-trace";
+  route.left_trace_provider_identity = "limiter.none";
+  route.right_trace_provider_identity = "limiter.none";
+  route.left_trace_operation = InterfaceTraceOperation::CellAverage;
+  route.right_trace_operation = InterfaceTraceOperation::CellAverage;
+  route.left_trace_required_depth = 1;
+  route.right_trace_required_depth = 1;
+}
+
 PopsExecutionContextV1 mpi_world_execution() {
   return {sizeof(PopsExecutionContextV1),
           1u,
@@ -119,6 +130,7 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       route.left_side = InterfaceSide::High;
       route.right_side = InterfaceSide::Low;
       route.right_component_for_left = {1, 0};
+      authenticate_cell_average_trace(route);
       initialize_left(left_state);
       initialize_right(right_state, route.right_component_for_left);
 
@@ -419,7 +431,8 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       // consensus before component preparation or registry mutation.
       InterfaceFluxScheduler divergent_route_scheduler;
       AxisAlignedInterface divergent_route = route;
-      divergent_route.identity = my_rank() == 0 ? "route.rank-zero" : "route.rank-one";
+      divergent_route.left_trace_projection_identity =
+          my_rank() == 0 ? "trace.rank-zero" : "trace.rank-one";
       int divergent_route_factory_calls = 0;
       bool divergent_route_rejected = false;
       try {

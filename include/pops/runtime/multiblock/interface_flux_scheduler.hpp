@@ -45,6 +45,7 @@ struct BoundaryEvaluationPoint {
 enum class InterfaceAxis { X, Y };
 enum class InterfaceSide { Low, High };
 enum class TangentialOrientation { Aligned, Reversed };
+enum class InterfaceTraceOperation { Unspecified, CellAverage, ReconstructedFace };
 
 /// The deliberately narrow first production route: two opposite, axis-aligned faces with equal
 /// normal/tangential discretisation.  right_component_for_left is an explicit bijection from the
@@ -61,6 +62,18 @@ struct AxisAlignedInterface {
   InterfaceSide right_side = InterfaceSide::Low;
   TangentialOrientation tangential_orientation = TangentialOrientation::Aligned;
   std::vector<int> right_component_for_left;
+  // Exact endpoint trace-projection contract derived from each selected reconstruction provider.
+  // The current type-erased scheduler executes only CellAverage; retaining ReconstructedFace and
+  // its provider/depth here makes unsupported higher-order routes fail closed instead of silently
+  // lowering them to boundary-cell averages.
+  std::string left_trace_projection_identity;
+  std::string right_trace_projection_identity;
+  std::string left_trace_provider_identity;
+  std::string right_trace_provider_identity;
+  InterfaceTraceOperation left_trace_operation = InterfaceTraceOperation::Unspecified;
+  InterfaceTraceOperation right_trace_operation = InterfaceTraceOperation::Unspecified;
+  int left_trace_required_depth = 0;
+  int right_trace_required_depth = 0;
   // Optional authenticated affine map from right physical coordinates into the left frame.  Empty
   // identity means the faces must coincide directly and all three values must remain their identity
   // defaults.  A non-empty identity makes a translated/reversed topology explicit rather than
@@ -183,6 +196,18 @@ class InterfaceFluxScheduler {
       if (component_count < 1 || right_state.ncomp() != component_count ||
           route.right_component_for_left.size() != static_cast<std::size_t>(component_count))
         throw std::invalid_argument("multi-block interface component spaces are not equal");
+      if (route.left_trace_projection_identity.empty() ||
+          route.right_trace_projection_identity.empty() ||
+          route.left_trace_provider_identity.empty() ||
+          route.right_trace_provider_identity.empty() || route.left_trace_required_depth < 1 ||
+          route.right_trace_required_depth < 1)
+        throw std::invalid_argument(
+            "multi-block interface trace projection contract is incomplete");
+      if (route.left_trace_operation != InterfaceTraceOperation::CellAverage ||
+          route.right_trace_operation != InterfaceTraceOperation::CellAverage)
+        throw std::invalid_argument(
+            "multi-block interface reconstructed face projection has no executable "
+            "type-erased provider");
       std::vector<char> seen(static_cast<std::size_t>(component_count), 0);
       for (const int right_component : route.right_component_for_left) {
         if (right_component < 0 || right_component >= component_count ||
@@ -764,7 +789,7 @@ class InterfaceFluxScheduler {
       const MultiFab& right_state, const Geometry& right_geometry, Real left_normal,
       Real right_normal, int face_count, int component_count, int communicator_size) {
     std::string bytes;
-    append_identity_text_(bytes, "pops.multiblock.interface-plan.v1");
+    append_identity_text_(bytes, "pops.multiblock.interface-plan.v2");
     append_identity_text_(bytes, route.identity);
     append_identity_scalar_(bytes, static_cast<std::uint64_t>(route.left_block));
     append_identity_scalar_(bytes, static_cast<std::uint64_t>(route.right_block));
@@ -778,6 +803,14 @@ class InterfaceFluxScheduler {
                             static_cast<std::uint64_t>(route.right_component_for_left.size()));
     for (const int component : route.right_component_for_left)
       append_identity_scalar_(bytes, component);
+    append_identity_text_(bytes, route.left_trace_projection_identity);
+    append_identity_text_(bytes, route.right_trace_projection_identity);
+    append_identity_text_(bytes, route.left_trace_provider_identity);
+    append_identity_text_(bytes, route.right_trace_provider_identity);
+    append_identity_scalar_(bytes, route.left_trace_operation);
+    append_identity_scalar_(bytes, route.right_trace_operation);
+    append_identity_scalar_(bytes, route.left_trace_required_depth);
+    append_identity_scalar_(bytes, route.right_trace_required_depth);
     append_identity_text_(bytes, route.affine_mapping_identity);
     append_identity_scalar_(bytes, route.right_normal_translation);
     append_identity_scalar_(bytes, route.right_tangential_scale);
@@ -872,6 +905,14 @@ class InterfaceFluxScheduler {
            lhs.right_side == rhs.right_side &&
            lhs.tangential_orientation == rhs.tangential_orientation &&
            lhs.right_component_for_left == rhs.right_component_for_left &&
+           lhs.left_trace_projection_identity == rhs.left_trace_projection_identity &&
+           lhs.right_trace_projection_identity == rhs.right_trace_projection_identity &&
+           lhs.left_trace_provider_identity == rhs.left_trace_provider_identity &&
+           lhs.right_trace_provider_identity == rhs.right_trace_provider_identity &&
+           lhs.left_trace_operation == rhs.left_trace_operation &&
+           lhs.right_trace_operation == rhs.right_trace_operation &&
+           lhs.left_trace_required_depth == rhs.left_trace_required_depth &&
+           lhs.right_trace_required_depth == rhs.right_trace_required_depth &&
            lhs.affine_mapping_identity == rhs.affine_mapping_identity &&
            lhs.right_normal_translation == rhs.right_normal_translation &&
            lhs.right_tangential_scale == rhs.right_tangential_scale &&
