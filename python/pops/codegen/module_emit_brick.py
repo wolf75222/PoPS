@@ -48,6 +48,12 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     type inside Kokkos kernels; no host-vtable execution path is emitted."""
     if not model.prim_state:
         raise ValueError("emit_cpp_brick : call set_primitive_state(...) first")
+    if len(model.prim_state) != model.n_vars:
+        raise ValueError(
+            "emit_cpp_brick : primitive and conservative states must have equal arity "
+            "(got %d primitive and %d conservative components)"
+            % (len(model.prim_state), model.n_vars)
+        )
     if model.cons_from is None or len(model.cons_from) != model.n_vars:
         raise ValueError("emit_cpp_brick : set_conservative_from([...]) expected (%d expressions)"
                          % model.n_vars)
