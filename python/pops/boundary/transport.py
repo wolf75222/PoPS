@@ -560,6 +560,8 @@ class ResolvedTransportBoundarySet:
 
     def _native_contract(self) -> tuple[Handle, int, tuple[ResolvedTransportCondition, ...], int]:
         """Validate the complete compile-time shape of the built-in native provider."""
+        from pops.mesh.boundaries import ClosureMode
+
         states = {row.state for row in self.conditions}
         if len(states) != 1:
             raise NotImplementedError(
@@ -584,6 +586,12 @@ class ResolvedTransportBoundarySet:
             face_rows[face] = condition
             depth = max(depth, condition.requirement.ghost_depth)
             dependencies = condition.provider.dependencies
+            if dependencies.characteristic.mode is not ClosureMode.NONE:
+                raise NotImplementedError(
+                    "native transport boundary lowering requires prepared model eigenstructure "
+                    "for characteristic closure; directional modes cannot fall back to "
+                    "component-wise ghost filling"
+                )
             flow = dependencies.representation
             if flow.converter is not None or flow.source != flow.target:
                 raise NotImplementedError(

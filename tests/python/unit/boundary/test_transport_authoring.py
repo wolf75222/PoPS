@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 import pops
@@ -136,6 +138,67 @@ def test_transport_conditions_require_instance_handles_and_exact_component_cover
     case.numerics(numerics, block=block)
     with pytest.raises(ValueError, match="prescribe exactly 1 components, got 2"):
         case._resolved_numerics_for("tracer")
+
+
+def test_directional_characteristic_provider_cannot_fall_back_to_native_inflow():
+    from pops.mesh.boundaries import (
+        CharacteristicClosure,
+        ClosureMode,
+        DirectionalTransport,
+        IncomingMultiplicity,
+        SignDependence,
+        SonicPolicy,
+    )
+
+    class CharacteristicInflow:
+        def __init__(self, base):
+            self.base = base
+            self.state = base.state
+
+        def inspect(self):
+            return {**self.base.inspect(), "characteristic": "directional"}
+
+        def resolve_references(self, resolver):
+            return type(self)(self.base.resolve_references(resolver))
+
+        def resolve_condition(self, **kwargs):
+            resolved = self.base.resolve_condition(**kwargs)
+            dependencies = replace(
+                resolved.provider.dependencies,
+                characteristic=CharacteristicClosure(
+                    mode=ClosureMode.DIRECTIONAL,
+                    sign_dependence=SignDependence.FIXED,
+                    sonic=SonicPolicy.NEUTRAL,
+                    incoming=IncomingMultiplicity.SINGLE,
+                    characteristics=(resolved.state,),
+                ),
+            )
+            return replace(
+                resolved,
+                provider=DirectionalTransport(
+                    handle=resolved.provider.handle,
+                    outputs=resolved.provider.outputs,
+                    dependencies=dependencies,
+                ),
+            )
+
+    frame, _, _, inlet_value, numerics, case, block, block_state = _authoring()
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: CharacteristicInflow(
+            Inflow(state=block_state, value=inlet_value)
+        ),
+        frame.boundaries.x_max: Outflow(state=block_state),
+        frame.boundaries.y_min: Inflow(state=block_state, value=inlet_value),
+        frame.boundaries.y_max: Outflow(state=block_state),
+    }))
+    case.numerics(numerics, block=block)
+
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    with pytest.raises(
+        NotImplementedError,
+        match="prepared model eigenstructure.*cannot fall back",
+    ):
+        authority.compile_boundary_data()
 
 
 def test_slip_wall_requires_roles_and_lowers_one_model_aware_face_law():
