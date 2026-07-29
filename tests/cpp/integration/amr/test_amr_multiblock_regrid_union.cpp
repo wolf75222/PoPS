@@ -156,6 +156,15 @@ static void install_regrid_state_authorities(AmrSystem& sim) {
   }
 }
 
+static void install_regrid_threshold_union(AmrSystem& sim, double threshold) {
+  test::install_prepared_threshold_union(
+      sim,
+      {{"a", "n", threshold, test::PreparedThresholdRelation::Above,
+        "test://amr-regrid-union/block/a/state/U"},
+       {"b", "n", threshold, test::PreparedThresholdRelation::Above,
+        "test://amr-regrid-union/block/b/state/U"}});
+}
+
 // Bounding box (coords du niveau FIN) de la BoxArray fine du bloc 0 (layout partage : identique pour
 // tous les blocs). Permet de verifier la couverture spatiale du layout d'union (cas b/c).
 static Box2D fine_bbox(AmrRuntime& rt) {
@@ -608,7 +617,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       sim.add_block("a", exb_spec(+1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.add_block("b", exb_spec(-1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
-      sim.set_refinement(1.5);  // tag density > 1.5 (union des deux blobs)
+      install_regrid_threshold_union(sim, 1.5);
       sim.set_density("a", r0);
       sim.set_density("b", r1);
       test::install_forward_euler_program(sim);
@@ -631,7 +640,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       sim.add_block("a", exb_spec(+1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.add_block("b", exb_spec(-1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
-      sim.set_refinement(1.5);
+      install_regrid_threshold_union(sim, 1.5);
       sim.set_density("a", r0);
       sim.set_density("b", r1);
       test::install_forward_euler_program(sim);

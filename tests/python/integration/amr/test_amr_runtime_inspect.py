@@ -19,6 +19,7 @@ import sys
 import numpy as np
 import pytest
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 pops = pytest.importorskip("pops")
 import pops.runtime._engine_descriptors as engine  # noqa: E402
@@ -59,7 +60,8 @@ def _built_amr(regrid_every=2, n=32):
         "ni", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
     )
     sim.set_temporal_relations([2], [1], ["integral_only"])
-    sim.set_refinement(threshold=0.5)
+    install_prepared_threshold_union(
+        sim, (("ne", "n", 0.5), ("ni", "n", 0.5)))
     ne = np.ones((n, n))
     ne[n // 3 : 2 * n // 3, n // 3 : 2 * n // 3] = 5.0
     sim.set_density("ne", ne)

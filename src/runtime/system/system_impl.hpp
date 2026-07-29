@@ -213,7 +213,7 @@ struct System::Impl {
   std::map<std::string, std::string> block_state_identities_;
   // Exact Handle identity -> native solved-field provider slot.  Installed from the detached
   // FieldInstallPlan before block construction; never reconstructed from local names.
-  std::map<std::string, std::string> boundary_field_routes_;
+  std::map<std::string, std::string> field_storage_routes_;
   struct BoundaryStageStateView {
     runtime::multiblock::BoundaryEvaluationPoint point;
     const std::vector<MultiFab*>* states = nullptr;
@@ -468,8 +468,8 @@ struct System::Impl {
               }
               routes->fields.reserve(required_fields.size());
               for (const auto& identity : required_fields) {
-                const auto route = boundary_field_routes_.find(identity);
-                if (route == boundary_field_routes_.end())
+                const auto route = field_storage_routes_.find(identity);
+                if (route == field_storage_routes_.end())
                   throw std::runtime_error(
                       "System boundary field dependency has no exact provider route");
                 routes->fields.push_back(&fields_.provider_potential(route->second));

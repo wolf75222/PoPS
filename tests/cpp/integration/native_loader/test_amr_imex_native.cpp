@@ -47,6 +47,8 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
+
+#include "amr_tagging_test_authority.hpp"
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -230,13 +232,13 @@ struct Snap {
   int n_patches = 0;
 };
 
-void configure_refined_execution(AmrSystem& system) {
+void configure_refined_execution(AmrSystem& system, const std::string& block) {
   // Time subcycling is independent from mesh refinement and must remain authored explicitly.
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   // The centered BackgroundDensity source has zero integral by construction, so the periodic
   // nullspace is physically compatible without any silent mean projection.
   system.set_poisson("charge_density", "geometric_mg", "periodic");
-  system.set_refinement(1.2);
+  test::install_prepared_threshold_union(system, {{block, "rho", 1.2}});
 }
 
 template <class Model>
@@ -281,7 +283,7 @@ Snap run(int n, const std::vector<double>& rho, int nsteps, double dt, Model mod
          bool implicit_source, Setup setup) {
   AmrSystem s(make_cfg(n));
   setup(s);
-  configure_refined_execution(s);
+  configure_refined_execution(s, "gas");
   s.set_density("gas", rho);
   install_single_block_test_program(s, model, implicit_source);
   for (int k = 0; k < nsteps; ++k)
@@ -349,7 +351,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
   {
     AmrSystem s(make_cfg(n));
     add_compiled_model(s, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
-    configure_refined_execution(s);
+    configure_refined_execution(s, "gas");
     s.set_density("gas", rho);
     install_single_block_test_program(s, make_pot(), /*implicit_source=*/true);
     const double m0 = s.mass();
@@ -458,7 +460,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
   {
     AmrSystem A(make_cfg(n));
     A.add_native_block("pot", so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-    configure_refined_execution(A);
+    configure_refined_execution(A, "pot");
     A.set_density("pot", rho);
     install_single_block_test_program(A, make_pot(), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
@@ -466,7 +468,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
 
     AmrSystem B(make_cfg(n));
     add_compiled_model(B, "gas", make_pot(), "minmod", "rusanov", "conservative", "imex", kGamma);
-    configure_refined_execution(B);
+    configure_refined_execution(B, "gas");
     B.set_density("gas", rho);
     install_single_block_test_program(B, make_pot(), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
@@ -482,7 +484,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     const std::string bname = "stiff:" + std::to_string(eps);
     AmrSystem A(make_cfg(n));
     A.add_native_block(bname, so, "minmod", "rusanov", "conservative", "imex", kGamma, 1);
-    configure_refined_execution(A);
+    configure_refined_execution(A, bname);
     A.set_density(bname, rho);
     install_single_block_test_program(A, make_stiff(eps), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)
@@ -491,7 +493,7 @@ static int pops_run_test_amr_imex_native(int argc, char** argv) {
     AmrSystem B(make_cfg(n));
     add_compiled_model(B, "gas", make_stiff(eps), "minmod", "rusanov", "conservative", "imex",
                        kGamma);
-    configure_refined_execution(B);
+    configure_refined_execution(B, "gas");
     B.set_density("gas", rho);
     install_single_block_test_program(B, make_stiff(eps), /*implicit_source=*/true);
     for (int k = 0; k < nsteps; ++k)

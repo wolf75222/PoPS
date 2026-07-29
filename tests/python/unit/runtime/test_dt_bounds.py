@@ -106,7 +106,6 @@ def build_amr(n=24, *, second_block=False):
     if second_block:
         amr.set_temporal_relations([2], [1], ["integral_only"])
     amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    amr.set_refinement(1e30)  # mono-niveau : le sujet est la POLITIQUE DE PAS, pas le raffinement
     amr.add_equation("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
                      time=engine.Explicit())
     amr.set_density("ions", gaussian(n))
@@ -234,7 +233,6 @@ try:
         os.path.join(tmp, "scal_dt_amr.so"), INCLUDE, backend="production", target="amr_system")
     amr_dsl = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
     amr_dsl.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    amr_dsl.set_refinement(1e30)
     amr_dsl.add_equation("s", model=cm_dt_amr, spatial=engine.Spatial(limiter=Minmod()),
                          time=engine.Explicit())
     amr_dsl.set_density("s", gaussian(16))

@@ -26,6 +26,8 @@
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/amr_system.hpp>
+
+#include "amr_tagging_test_authority.hpp"
 #include <pops/runtime/config/model_spec.hpp>
 
 #include <cmath>
@@ -95,7 +97,7 @@ Snap run(AmrSystem& s, int nsteps) {
   // deliberately chooses the same value as the spatial refinement ratio.
   s.set_temporal_relations({2}, {1}, {"integral_only"});
   s.set_poisson("charge_density", "geometric_mg");
-  s.set_refinement(1.2);
+  test::install_prepared_threshold_union(s, {{"gas", "rho", 1.2}});
   test::install_forward_euler_program(s);
   const double dt = 2e-4;
   for (int k = 0; k < nsteps; ++k)

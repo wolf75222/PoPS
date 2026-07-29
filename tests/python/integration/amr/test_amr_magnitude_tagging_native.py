@@ -89,6 +89,9 @@ def _native_hierarchy(node_type):
         regrid_every=0,
         explicit_bootstrap=True,
     )
+    # This direct-runtime fixture still consumes the resolved Case Handle. Install that exact
+    # owner-qualified identity before declaring the native block, just as pops.bind does.
+    simulation._s._install_block_state_route("tracer", subject)
     simulation.set_temporal_relations([2], [1], ["integral_only"])
     simulation.add_equation(
         "tracer",

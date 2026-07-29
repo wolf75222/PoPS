@@ -28,6 +28,15 @@ BCRec physical_bc() {
   return bc;
 }
 
+BCRec reflected_x_periodic_bc() {
+  BCRec bc;
+  bc.xlo = BCType::Periodic;
+  bc.xhi = BCType::Periodic;
+  bc.ylo = BCType::Foextrap;
+  bc.yhi = BCType::Foextrap;
+  return bc;
+}
+
 PreparedBoundaryComponentSpec linearization_spec(bool jvp, std::string target, std::string output) {
   PreparedBoundaryComponentSpec spec;
   spec.target_identity = std::move(target);
@@ -226,6 +235,90 @@ TEST(test_prepared_boundary_plan, rejects_incomplete_periodic_pairs_and_insuffic
   MultiFab state = scalar_field(domain, 1, 1);
   PreparedBoundaryPlan deep("case::deep::ghost-plan", 2, {physical_bc()});
   EXPECT_THROW(deep.fill_same_level_and_physical(state, domain), std::runtime_error);
+}
+
+TEST(test_prepared_boundary_plan, executes_reflected_periodic_ghosts_on_a_multibox_layout) {
+  const Box2D domain = Box2D::from_extents(8, 6);
+  const BoxArray boxes = BoxArray::from_domain(domain, 4);
+  MultiFab state(boxes, DistributionMapping(boxes.size(), n_ranks()), 1, 1);
+  for (int local = 0; local < state.local_size(); ++local) {
+    Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(i + 100 * j); });
+  }
+  const PeriodicIdentification2D reflected_x{0, 1, std::array<int, 2>{{0, 1}},
+                                             std::array<int, 2>{{1, -1}}};
+  PreparedBoundaryPlan plan("case::block::reflected-x", 1, {reflected_x_periodic_bc()}, {}, "", {},
+                            {reflected_x});
+
+  plan.fill_same_level_and_physical(state, domain);
+
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& field = state.fab(local);
+    const Box2D grown = field.grown_box();
+    for (int j = domain.lo[1]; j <= domain.hi[1]; ++j) {
+      if (grown.contains(domain.lo[0] - 1, j))
+        EXPECT_EQ(field(domain.lo[0] - 1, j, 0),
+                  Real(domain.hi[0] + 100 * (domain.lo[1] + domain.hi[1] - j)));
+      if (grown.contains(domain.hi[0] + 1, j))
+        EXPECT_EQ(field(domain.hi[0] + 1, j, 0),
+                  Real(domain.lo[0] + 100 * (domain.lo[1] + domain.hi[1] - j)));
+    }
+    const Box2D valid = field.box();
+    const Box2D interior_ghosts = grown.intersect(domain);
+    for (int j = interior_ghosts.lo[1]; j <= interior_ghosts.hi[1]; ++j)
+      for (int i = interior_ghosts.lo[0]; i <= interior_ghosts.hi[0]; ++i)
+        if (!valid.contains(i, j))
+          EXPECT_EQ(field(i, j, 0), Real(i + 100 * j));
+  }
+}
+
+TEST(test_prepared_boundary_plan, explicit_identity_periodicity_keeps_the_legacy_values) {
+  const Box2D domain = Box2D::from_extents(6, 5);
+  const BoxArray boxes = BoxArray::from_domain(domain, 3);
+  MultiFab legacy(boxes, DistributionMapping(boxes.size(), n_ranks()), 1, 1);
+  MultiFab explicit_identity(boxes, DistributionMapping(boxes.size(), n_ranks()), 1, 1);
+  for (int local = 0; local < legacy.local_size(); ++local) {
+    Array4 legacy_values = legacy.fab(local).array();
+    Array4 explicit_values = explicit_identity.fab(local).array();
+    for_each_cell(legacy.box(local), [=](int i, int j) {
+      const Real value = Real(17 * i - 3 * j);
+      legacy_values(i, j, 0) = value;
+      explicit_values(i, j, 0) = value;
+    });
+  }
+  const PeriodicIdentification2D identity{0, 1, std::array<int, 2>{{0, 1}},
+                                          std::array<int, 2>{{1, 1}}};
+  PreparedBoundaryPlan legacy_plan("case::block::legacy-periodic", 1, {reflected_x_periodic_bc()});
+  PreparedBoundaryPlan explicit_plan("case::block::explicit-identity-periodic", 1,
+                                     {reflected_x_periodic_bc()}, {}, "", {}, {identity});
+
+  legacy_plan.fill_same_level_and_physical(legacy, domain);
+  explicit_plan.fill_same_level_and_physical(explicit_identity, domain);
+
+  for (int local = 0; local < legacy.local_size(); ++local) {
+    const Fab2D& expected = legacy.fab(local);
+    const Fab2D& actual = explicit_identity.fab(local);
+    const Box2D grown = expected.grown_box();
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        EXPECT_EQ(actual(i, j, 0), expected(i, j, 0));
+  }
+}
+
+TEST(test_prepared_boundary_plan, axis_permutation_refuses_incompatible_rectangular_geometry) {
+  BCRec rotated;
+  rotated.xlo = BCType::Periodic;
+  rotated.xhi = BCType::Foextrap;
+  rotated.ylo = BCType::Foextrap;
+  rotated.yhi = BCType::Periodic;
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+  PreparedBoundaryPlan plan("case::block::rotated-periodic", 1, {rotated}, {}, "", {},
+                            {xlo_to_yhi});
+  const Box2D rectangular_domain = Box2D::from_extents(8, 6);
+  MultiFab state = scalar_field(rectangular_domain, 1, 1);
+
+  EXPECT_THROW(plan.fill_same_level_and_physical(state, rectangular_domain), std::invalid_argument);
 }
 
 TEST(test_prepared_boundary_plan, grid_context_routes_exact_nary_storage_registry) {

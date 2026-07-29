@@ -35,6 +35,7 @@ from tests.python.support.explicit_program import (
     install_ssprk2_program,
     install_ssprk3_program,
 )
+from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 
 def _bump(n, amp):
@@ -65,7 +66,7 @@ def _check_mono(n=32):
         time=engine.Explicit(ssprk3=True),
     )  # SSPRK3 mono-bloc (ProgramGraph, AmrRuntime spatial)
     sim.set_poisson(bc=Periodic())
-    sim.set_refinement(1.05)  # seuil bas -> le bump tague et raffine (patchs fins actifs)
+    install_prepared_threshold_union(sim, (("ne", "n", 1.05),))
     sim.set_density("ne", _bump(n, 0.40))
     install_ssprk3_program(sim)
     m0 = sim.mass()
@@ -98,7 +99,8 @@ def _check_multi(n=32):
         time=engine.Explicit(ssprk3=True),
     )  # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
     sim.set_poisson(bc=Periodic())
-    sim.set_refinement(1.05)  # union des tags -> patchs fins actifs
+    install_prepared_threshold_union(
+        sim, (("ions", "n", 1.05), ("electrons", "n", 1.05)))
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
     install_ssprk3_program(sim)

@@ -9,6 +9,7 @@
 #include <pops/runtime/program/amr_program_context.hpp>
 
 #include "component_abi_test_helpers.hpp"
+#include "amr_tagging_test_authority.hpp"
 #include "native_dso_compiler.hpp"
 
 #include <algorithm>
@@ -710,7 +711,8 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
     std::fill_n(conservative.data(), cells, 1.0);
     std::fill_n(conservative.data() + 3u * cells, cells, 2.5);
     system.set_conservative_state("gas", conservative);
-    system.set_refinement(0.5);
+    pops::test::install_prepared_threshold_union(
+        system, {{"gas", "rho", 0.5}}, "test::direct-context-tagger-provider", "amr::refinement");
     pops::runtime::amr::PreparedTaggerSpec context_tagger_spec{
         "test::direct-context-tagger-provider",
         kComponentId,
@@ -785,7 +787,8 @@ TEST(test_amr_native_loader, PreparedAmrProvidersExecuteExactTablesAndProvenance
       target.set_temporal_relations({2}, {1}, {"integral_only"});
       target.add_block("gas", model, "minmod", "rusanov", "conservative", "explicit", 1);
       target.set_conservative_state("gas", conservative);
-      target.set_refinement(0.5);
+      pops::test::install_prepared_threshold_union(target, {{"gas", "rho", 0.5}}, provider_identity,
+                                                   "amr::refinement");
       pops::runtime::amr::PreparedTaggerSpec spec{
           provider_identity,
           kComponentId,

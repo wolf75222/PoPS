@@ -134,10 +134,13 @@ class PeriodicOrientation:
     def __post_init__(self) -> None:
         if not isinstance(self.permutation, tuple) or not self.permutation:
             raise TypeError("PeriodicOrientation.permutation must be a non-empty tuple")
-        if set(self.permutation) != set(range(len(self.permutation))):
+        if any(isinstance(value, bool) or not isinstance(value, int)
+               for value in self.permutation) \
+                or set(self.permutation) != set(range(len(self.permutation))):
             raise ValueError("PeriodicOrientation.permutation must be an axis permutation")
         if not isinstance(self.signs, tuple) or len(self.signs) != len(self.permutation) \
-                or any(value not in (-1, 1) for value in self.signs):
+                or any(isinstance(value, bool) or not isinstance(value, int)
+                       or value not in (-1, 1) for value in self.signs):
             raise ValueError("PeriodicOrientation.signs must contain one -1/+1 per axis")
 
     def canonical_identity(self) -> dict[str, Any]:
@@ -166,6 +169,13 @@ class PeriodicIdentification:
         if self.orientation.permutation[self.source.orientation.axis] != \
                 self.target.orientation.axis:
             raise ValueError("periodic axis mapping does not map source normal to target normal")
+        required_normal_sign = -(
+            self.source.orientation.outward_sign
+            * self.target.orientation.outward_sign
+        )
+        if self.orientation.signs[self.source.orientation.axis] != required_normal_sign:
+            raise ValueError(
+                "periodic normal sign must map source interior to target exterior")
 
     def canonical_identity(self) -> dict[str, Any]:
         return {"schema_version": _SCHEMA_VERSION, "identification_type": "periodic",

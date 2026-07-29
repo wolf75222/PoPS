@@ -662,12 +662,17 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
     flow_bootstrap_tagging(
         native, authorities.bootstrap, params, clock_identity="case::clock")
     assert native.call is not None
-    (blocks, variables, leaf_ops, thresholds, stencil_indices, stencils,
-     refine_ops, refine_args, coarsen_ops, coarsen_args, min_cycles,
-     equality, conflict, clock, provider) = native.call
+    (subject_kinds, subject_identities, blocks, variables, field_component_indices,
+     leaf_ops, thresholds, stencil_indices, stencils, refine_ops, refine_args,
+     coarsen_ops, coarsen_args, min_cycles, equality, conflict, clock, provider) = native.call
+    assert subject_kinds == ["state", "state"]
+    assert len(subject_identities) == 2
+    assert subject_identities[0] == subject_identities[1]
+    assert subject_identities[0]
     assert blocks == ["tracer", "tracer"]
     # The runtime VM consumes the scalar component token, not the aggregate state handle.
     assert variables == ["u", "u"]
+    assert field_component_indices == [-1, -1]
     assert leaf_ops == [4, 5]
     assert thresholds == [0.10, 0.04]
     assert stencil_indices == [0, 0]

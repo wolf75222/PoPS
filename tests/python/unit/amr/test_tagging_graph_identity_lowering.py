@@ -103,7 +103,7 @@ def _lower(graph: TaggingGraph, params):
 
 
 def _changed_positions(left, right) -> set[int]:
-    assert len(left) == len(right) == 15
+    assert len(left) == len(right) == 18
     return {index for index, (a, b) in enumerate(zip(left, right, strict=True)) if a != b}
 
 
@@ -146,18 +146,18 @@ def test_every_tagging_field_survives_resolution_and_native_lowering():
         # Threshold-leaf fields and concrete leaf semantics.
         "indicator": (
             replace(graph, refine=AnyOf(changed_magnitude_indicator, negated_gradient)),
-            {0, 1, 14},
+            {1, 2, 3, 17},
         ),
         "threshold": (
             replace(graph, refine=AnyOf(changed_magnitude_threshold, negated_gradient)),
-            {3, 14},
+            {6, 17},
         ),
         "leaf_type": (
             replace(
                 graph,
                 refine=AnyOf(
                     Above(left, magnitude_threshold), negated_gradient)),
-            {2, 6, 14},
+            {5, 9, 17},
         ),
         # Every discrete-indicator context field remains authenticated.  The
         # first three are derived provenance authorities and intentionally
@@ -167,73 +167,73 @@ def test_every_tagging_field_survives_resolution_and_native_lowering():
         "context_layout": (
             replace(graph, refine=AnyOf(
                 magnitude, Not(changed_context_layout))),
-            {14},
+            {17},
         ),
         "context_discretization": (
             replace(graph, refine=AnyOf(
                 magnitude, Not(changed_context_discretization))),
-            {14},
+            {17},
         ),
         "context_stencil": (
             replace(graph, refine=AnyOf(
                 magnitude, Not(changed_context_stencil))),
-            {14},
+            {17},
         ),
         "context_lowering": (
             replace(graph, refine=AnyOf(
                 magnitude, Not(changed_context_lowering))),
-            {5, 14},
+            {8, 17},
         ),
         # Boolean-node kind, child order, and Not.child all reach bytecode.
         "children_order": (
             replace(graph, refine=AnyOf(negated_gradient, magnitude)),
-            {2, 3, 4, 6, 14},
+            {5, 6, 7, 9, 17},
         ),
         "logical_node_type": (
             replace(graph, refine=AllOf(magnitude, negated_gradient)),
-            {6, 14},
+            {9, 17},
         ),
         "not_child": (
             replace(
                 graph,
                 refine=AnyOf(
                     magnitude, Not(Above(left, gradient_threshold)))),
-            {2, 4, 5, 6, 14},
+            {5, 7, 8, 9, 17},
         ),
         # All four TaggingGraph fields and both Hysteresis fields are projected.
         "coarsen": (
             replace(graph, coarsen=None),
-            {0, 1, 2, 3, 4, 8, 9, 14},
+            {0, 1, 2, 3, 4, 5, 6, 7, 11, 12, 17},
         ),
         "coarsen_threshold": (
             replace(graph, coarsen=Below(left, alternate_threshold)),
-            {3, 14},
+            {6, 17},
         ),
         "minimum_cycles": (
             replace(graph, hysteresis=Hysteresis(1, EqualityPolicy.HOLD)),
-            {10, 14},
+            {13, 17},
         ),
         "equality_policy": (
             replace(graph, hysteresis=Hysteresis(0, EqualityPolicy.REFINE)),
-            {11, 14},
+            {14, 17},
         ),
         "conflict_policy": (
             replace(graph, conflict_policy=ConflictPolicy.HOLD),
-            {12, 14},
+            {15, 17},
         ),
     }
 
     identities = {graph.canonical_id}
     resolved_identities = {resolved.canonical_id}
-    program_identities = {lowered[14]}
+    program_identities = {lowered[17]}
     for name, (candidate, expected_positions) in cases.items():
         candidate_resolved, candidate_lowered = _lower(candidate, params)
         assert candidate.canonical_identity() != graph.canonical_identity(), name
         assert candidate.canonical_id not in identities, name
         assert candidate_resolved.canonical_identity() != resolved.canonical_identity(), name
         assert candidate_resolved.canonical_id not in resolved_identities, name
-        assert candidate_lowered[14] not in program_identities, name
+        assert candidate_lowered[17] not in program_identities, name
         assert _changed_positions(lowered, candidate_lowered) == expected_positions, name
         identities.add(candidate.canonical_id)
         resolved_identities.add(candidate_resolved.canonical_id)
-        program_identities.add(candidate_lowered[14])
+        program_identities.add(candidate_lowered[17])

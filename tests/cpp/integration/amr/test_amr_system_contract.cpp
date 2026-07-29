@@ -14,6 +14,8 @@
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 
+#include "amr_tagging_test_authority.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -339,7 +341,8 @@ TEST(test_amr_system_contract, Runs) {
         s.set_conservative_state(name, state);
       }
       s.set_magnetic_field(std::vector<double>(cells, magnetic_field));
-      s.set_refinement(1e29);  // request the deterministic central fine seed without later regrids
+      // Request the deterministic central fine seed through the prepared tagging authority.
+      test::install_prepared_threshold_union(s, {{"magnetic_0", "rho", 1e29}});
       test::install_forward_euler_program(s);
       s.advance(0.01, 1);
       std::vector<std::vector<std::vector<double>>> states;

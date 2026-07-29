@@ -15,6 +15,8 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
+#include "amr_tagging_test_authority.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -91,7 +93,7 @@ TEST(test_amr_program_diffusion, RefinedFickianFluxSmoothsAndConservesThroughPro
                      "conservative", "explicit");
   simulation.set_density("heat", periodic_mode(n));
   simulation.set_poisson("charge_density", "geometric_mg", "periodic");
-  simulation.set_refinement(1.0e29);
+  test::install_prepared_threshold_union(simulation, {{"heat", "temperature", 1.0e29}});
   simulation.set_temporal_relations({2}, {1}, {"integral_only"});
   test::install_forward_euler_program(simulation);
 

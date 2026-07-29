@@ -6,6 +6,7 @@
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 
+#include <array>
 #include <limits>
 #include <string_view>
 
@@ -235,22 +236,25 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           [](AmrSystem& system, const std::string& name, const std::string& identity,
              int required_depth, const std::vector<std::string>& face_types,
              const std::vector<double>& face_values, int ncomp,
-             const std::vector<int>& omitted_interface_faces, const std::string& state_identity) {
-            system.install_boundary_plan(name, identity, required_depth, face_types, face_values,
-                                         ncomp, omitted_interface_faces, state_identity,
-                                         PreparedBoundaryReadDependencies{});
+             const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+             const std::vector<std::array<int, 6>>& periodic_identifications) {
+            system.install_boundary_plan(
+                name, identity, required_depth, face_types, face_values, ncomp,
+                omitted_interface_faces, state_identity, PreparedBoundaryReadDependencies{},
+                decode_periodic_identification_rows(periodic_identifications));
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("ncomp"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
+          py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
           "Install one resolved per-block ghost-production plan before lazy AMR construction.")
       .def("_install_block_state_route", &AmrSystem::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
            "Bind one exact state Handle identity to native AMR block storage.")
-      .def("_install_boundary_field_route", &AmrSystem::install_boundary_field_route,
+      .def("_install_field_storage_route", &AmrSystem::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
-           "Bind one exact boundary field Handle to native provider storage.")
+           "Bind one exact solved-field Handle to native provider storage.")
       .def("_discard_boundary_plans", &AmrSystem::discard_boundary_plans,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(
@@ -351,23 +355,13 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("expected_naux"), py::arg("expected_model_identity"),
            py::arg("positivity_floor") = 0.0,
            py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
-      // Regrid criterion: refine where the SELECTED variable exceeds threshold. Default = component 0
-      // (historical density), bit-identical 1e30 no-op. ADC-296: select it PER BLOCK by NAME (variable=)
-      // or physical ROLE (role=); a block lacking it raises at build (no silent comp-0 fallback).
-      // Native and compiled runtime blocks carry the same exact VariableSet descriptor.
-      .def("set_refinement", &AmrSystem::set_refinement, py::arg("threshold"),
-           py::arg("variable") = "", py::arg("role") = "",
-           "Refine where the selected conserved variable exceeds threshold. variable=/role= pick "
-           "it per "
-           "block by name or physical role (default: component 0, the historical density). "
-           "Selecting by "
-           "name and role at once, or a name/role absent from a block, raises.")
-      .def("_set_bootstrap_refinement", &AmrSystem::set_bootstrap_refinement, py::arg("block"),
-           py::arg("variable"), py::arg("threshold"), py::arg("provider_identity"))
       .def(
           "_set_bootstrap_tagging",
-          [](AmrSystem& system, const std::vector<std::string>& leaf_blocks,
-             const std::vector<std::string>& leaf_variables, const std::vector<int>& leaf_ops,
+          [](AmrSystem& system, const std::vector<std::string>& leaf_subject_kinds,
+             const std::vector<std::string>& leaf_subject_identities,
+             const std::vector<std::string>& leaf_blocks,
+             const std::vector<std::string>& leaf_variables,
+             const std::vector<int>& leaf_field_component_indices, const std::vector<int>& leaf_ops,
              const std::vector<double>& leaf_thresholds,
              const std::vector<int>& leaf_stencil_indices, const py::list& stencil_rows,
              const std::vector<std::int32_t>& refine_ops,
@@ -380,19 +374,18 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
             stencils.reserve(stencil_rows.size());
             for (const py::handle row : stencil_rows)
               stencils.push_back(amr_tagging_stencil_from_python(py::cast<py::dict>(row)));
-            system.set_bootstrap_tagging(leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds,
-                                         leaf_stencil_indices, stencils, refine_ops, refine_args,
-                                         coarsen_ops, coarsen_args, min_cycles, equality_policy,
-                                         conflict_policy, clock_identity, provider_identity);
+            system.set_bootstrap_tagging(
+                leaf_subject_kinds, leaf_subject_identities, leaf_blocks, leaf_variables,
+                leaf_field_component_indices, leaf_ops, leaf_thresholds, leaf_stencil_indices,
+                stencils, refine_ops, refine_args, coarsen_ops, coarsen_args, min_cycles,
+                equality_policy, conflict_policy, clock_identity, provider_identity);
           },
-          py::arg("leaf_blocks"), py::arg("leaf_variables"), py::arg("leaf_ops"),
+          py::arg("leaf_subject_kinds"), py::arg("leaf_subject_identities"), py::arg("leaf_blocks"),
+          py::arg("leaf_variables"), py::arg("leaf_field_component_indices"), py::arg("leaf_ops"),
           py::arg("leaf_thresholds"), py::arg("leaf_stencil_indices"), py::arg("stencils"),
           py::arg("refine_ops"), py::arg("refine_args"), py::arg("coarsen_ops"),
           py::arg("coarsen_args"), py::arg("min_cycles"), py::arg("equality_policy"),
           py::arg("conflict_policy"), py::arg("clock_identity"), py::arg("provider_identity"))
-      // Shared-potential gradient leaf appended to the prepared regrid graph. It uses the same
-      // native Kokkos/MPI Tagger route as model-state criteria; <= 0 keeps the leaf absent.
-      .def("set_phi_refinement", &AmrSystem::set_phi_refinement, py::arg("grad_threshold"))
       .def(
           "set_poisson",
           [](AmrSystem& system, const std::string& rhs, const std::string& solver,

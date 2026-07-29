@@ -5,6 +5,7 @@
 
 #include <pops/runtime/dynamic/component_loader.hpp>
 
+#include <array>
 #include <initializer_list>
 #include <limits>
 
@@ -169,22 +170,25 @@ void bind_system_assembly(py::class_<System>& cls) {
           [](System& system, const std::string& name, const std::string& identity,
              int required_depth, const std::vector<std::string>& face_types,
              const std::vector<double>& face_values, int ncomp,
-             const std::vector<int>& omitted_interface_faces, const std::string& state_identity) {
-            system.install_boundary_plan(name, identity, required_depth, face_types, face_values,
-                                         ncomp, omitted_interface_faces, state_identity,
-                                         PreparedBoundaryReadDependencies{});
+             const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+             const std::vector<std::array<int, 6>>& periodic_identifications) {
+            system.install_boundary_plan(
+                name, identity, required_depth, face_types, face_values, ncomp,
+                omitted_interface_faces, state_identity, PreparedBoundaryReadDependencies{},
+                decode_periodic_identification_rows(periodic_identifications));
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("ncomp"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
+          py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
           "Install one resolved per-block ghost-production plan before block construction.")
       .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
            "Bind one exact state Handle identity to native block storage.")
-      .def("_install_boundary_field_route", &System::install_boundary_field_route,
+      .def("_install_field_storage_route", &System::install_field_storage_route,
            py::arg("field_identity"), py::arg("provider_slot"),
-           "Bind one exact boundary field Handle to native provider storage.")
+           "Bind one exact solved-field Handle to native provider storage.")
       .def("_discard_boundary_plans", &System::discard_boundary_plans,
            "Roll back one failed pre-block boundary authority transaction.")
       .def(

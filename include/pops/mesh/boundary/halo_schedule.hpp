@@ -11,8 +11,10 @@
 
 #pragma once
 
+#include <pops/mesh/boundary/periodicity.hpp>
 #include <pops/mesh/index/box2d.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -32,6 +34,13 @@ struct HaloJob {
   int sx = 0;
   int sy = 0;
   Box2D region{};
+  bool mapped = false;
+  // src[source_axis] = source_sign[source_axis] *
+  //                    dst[source_from_destination_axis[source_axis]]
+  //                    + source_offset[source_axis].
+  std::array<int, 2> source_from_destination_axis{{0, 1}};
+  std::array<int, 2> source_sign{{1, 1}};
+  std::array<int, 2> source_offset{{0, 0}};
 };
 
 /// Memoized schedule for ONE (Periodicity, domain, communicator rank space) over a fixed layout.
@@ -46,6 +55,7 @@ struct HaloJob {
 struct HaloSchedule {
   bool per_x = false;
   bool per_y = false;
+  std::vector<PeriodicIdentification2D> mapped_periodic;
   Box2D domain{};
   int communicator_size = 1;
   int communicator_rank = 0;
@@ -72,11 +82,13 @@ struct HaloSchedule {
 class HaloScheduleCache {
  public:
   /// Existing schedule for (px, py, dom, communicator rank space), or nullptr if none is cached.
-  std::shared_ptr<const HaloSchedule> find(bool px, bool py, const Box2D& dom,
-                                           int communicator_size, int communicator_rank) const {
+  std::shared_ptr<const HaloSchedule> find(
+      bool px, bool py, const Box2D& dom, int communicator_size, int communicator_rank,
+      const std::vector<PeriodicIdentification2D>& mapped_periodic = {}) const {
     for (const auto& s : entries_) {
       if (s->per_x == px && s->per_y == py && s->domain == dom &&
-          s->communicator_size == communicator_size && s->communicator_rank == communicator_rank) {
+          s->communicator_size == communicator_size && s->communicator_rank == communicator_rank &&
+          s->mapped_periodic == mapped_periodic) {
         return s;
       }
     }

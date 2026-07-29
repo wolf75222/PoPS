@@ -164,6 +164,9 @@ def test_topology_fails_loud_on_missing_double_extra_and_periodic_physical():
     with pytest.raises(ValueError, match="axis mapping"):
         PeriodicIdentification(
             x_min, y_max, PeriodicOrientation((0, 1), (1, 1)))
+    with pytest.raises(ValueError, match="normal sign"):
+        PeriodicIdentification(
+            x_min, x_max, PeriodicOrientation((0, 1), (-1, 1)))
 
 
 def test_ports_are_typed_owner_qualified_and_representation_explicit():
