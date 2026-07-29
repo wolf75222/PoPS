@@ -3565,7 +3565,16 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return {eng_->topology_epoch(), eng_->topology_materialization_generation(), eng_->nlev()};
   }
   int program_execution_resource_level_() const noexcept { return level_; }
-  void program_execution_select_resource_level_(int selected) const noexcept { level_ = selected; }
+  void program_execution_select_resource_level_(int selected) const noexcept {
+    level_ = selected;
+    // The provider cursor and an active exact clock window are one level-qualified identity.
+    // Recursive windows already carry this level; hierarchy-wide resource scopes select it here.
+    // Updating both endpoints also makes the shared scope's no-throw restoration exact.
+    if (current_window_) {
+      current_window_->begin.level = selected;
+      current_window_->end.level = selected;
+    }
+  }
   ProgramResourceStorage program_execution_resource_storage_() const {
     const bool replicated = eng_->level_is_replicated(level_);
     return {replicated ? PreparedVectorDistribution::Replicated
