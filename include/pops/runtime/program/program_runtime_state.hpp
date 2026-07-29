@@ -297,6 +297,10 @@ struct ProgramRuntimeState {
     bool artifact_backed = false;
   };
 
+  const std::vector<int>& block_map() const noexcept { return block_map_; }
+
+  Profiler& profiler() noexcept { return profiler_; }
+
   /// Require the whole-system Program before a public facade may start a temporal operation.
   ///
   /// This guard deliberately lives in the shared Program state so Uniform and AMR fail with the
