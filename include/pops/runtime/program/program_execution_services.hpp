@@ -17,9 +17,13 @@
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/layout/field_distribution.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
+#include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/parallel/execution_lane.hpp>
@@ -53,6 +57,12 @@ class ProgramExecutionServices {
   };
 
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
+
+  struct ProgramResourceStorage {
+    const PreparedVectorDistribution& vector_distribution;
+    FieldDistribution field_distribution;
+    int field_level;
+  };
 
   /// One topology-independent subdivision of the active logical interval.
   struct LogicalEvaluationInterval {
@@ -190,19 +200,58 @@ class ProgramExecutionServices {
                                                   n_comp, n_ghost);
   }
 
+  /// Zero-copy access to one authored block's live state through the provider's storage authority.
+  MultiFab& state(int block) const {
+    return provider_().program_execution_state_(sys_block(block));
+  }
+
+  /// Shared auxiliary field and topology-qualified mesh context of the active execution level.
+  MultiFab& aux() const {
+    MultiFab* field = grid_context().aux;
+    if (field == nullptr)
+      throw std::logic_error("Program execution context has no auxiliary field storage");
+    return *field;
+  }
+  GridContext grid_context() const { return provider_().program_execution_default_grid_context_(); }
+  Geometry geom() const { return grid_context().geom; }
+
+  /// Allocate one scalar field on the provider's active storage topology.
+  MultiFab alloc_scalar_field(int n_comp = 1, int n_ghost = 1) const {
+    return provider_().program_execution_alloc_scalar_field_(n_comp, n_ghost);
+  }
+
+  /// Topology-qualified metadata used by generated persistent Program resources.
+  const PreparedVectorDistribution& program_resource_vector_distribution() const {
+    return provider_().program_execution_resource_storage_().vector_distribution;
+  }
+  FieldDistribution program_resource_field_storage_distribution() const {
+    return provider_().program_execution_resource_storage_().field_distribution;
+  }
+  int program_resource_field_level() const {
+    return provider_().program_execution_resource_storage_().field_level;
+  }
+
+  /// Resolve physical cell measures once, then apply them to every authored basis.
+  ///
+  /// The provider owns only the topology projection: a uniform mesh returns one measure, while an
+  /// AMR level returns a hierarchy-sized vector whose active level carries the positive measure.
+  void configure_program_resource_field_nullspace(FieldNullspacePlan& plan) const {
+    const std::vector<Real> cell_measures = provider_().program_execution_resource_cell_measures_();
+    for (FieldNullspaceBasis& basis : plan.bases)
+      basis.cell_measure = cell_measures;
+  }
+
   /// Return the exact active-cell mask for one block-qualified generated pointwise operator.
   ///
   /// A provider supplies only its topology-qualified GridContext.  The shared service owns the
   /// geometry-mode interpretation, layout authentication and fail-closed missing-mask behavior.
   const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const {
-    return active_mask_from_context_(
-        provider_().program_execution_block_grid_context_(block), field,
-        "Program pointwise active-cell mask");
+    return active_mask_from_context_(provider_().program_execution_block_grid_context_(block),
+                                     field, "Program pointwise active-cell mask");
   }
 
   /// Collectively publish one pointwise status over the exact domain used by the device kernel.
-  Real pointwise_status_max(int block, const MultiFab& status,
-                            const MultiFab* active_cells) const {
+  Real pointwise_status_max(int block, const MultiFab& status, const MultiFab* active_cells) const {
     const MultiFab* expected = pointwise_active_mask(block, status);
     if (expected != active_cells)
       throw std::invalid_argument(
@@ -280,9 +329,7 @@ class ProgramExecutionServices {
   Real sum(int owner, const MultiFab& u) const { return sum_component(owner, u, 0); }
   Real max(int owner, const MultiFab& u) const { return max_component(owner, u, 0); }
   Real min(int owner, const MultiFab& u) const { return min_component(owner, u, 0); }
-  Real abs_sum(int owner, const MultiFab& u) const {
-    return abs_sum_component(owner, u, 0);
-  }
+  Real abs_sum(int owner, const MultiFab& u) const { return abs_sum_component(owner, u, 0); }
 
   /// Legacy hand-written Cartesian stages may omit the owner only when topology says that is safe.
   Real sum_component(const MultiFab& u, int comp) const {
@@ -567,8 +614,7 @@ class ProgramExecutionServices {
   }
 
   static const MultiFab* active_mask_from_context_(const GridContext& context,
-                                                   const MultiFab& field,
-                                                   const char* where) {
+                                                   const MultiFab& field, const char* where) {
     if (!embedded_domain_enabled_(context))
       return nullptr;
     if (context.domain_mask == nullptr)
