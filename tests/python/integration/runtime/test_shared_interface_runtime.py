@@ -408,7 +408,9 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
     # One-sided tag propagation across a BlockInterface is a separate capability and must not be
     # implied by this proof.
     left_initial[0, :, -1:] = 1.0
-    right_initial[0, :, :1] = 1.0
+    # Keep the two traces distinct: the shared component must publish its average flux to both
+    # consumers.  Equal traces would let a one-sided publication pass by coincidence.
+    right_initial[0, :, :1] = 3.0
     params = {
         core.case.resolve(handle, block=block): value
         for block in (core.tracer, right)
