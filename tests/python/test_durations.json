@@ -285,7 +285,7 @@
   "tests/python/unit/runtime/test_destring_finite_volume.py": 0.5,
   "tests/python/unit/runtime/test_diagnostics_driver.py": 190.7,
   "tests/python/unit/runtime/test_diagnostics_typed.py": 0.5,
-  "tests/python/unit/runtime/test_dt_bounds.py": 117.2,
+  "tests/python/unit/runtime/test_dt_bounds.py": 330.0,
   "tests/python/unit/runtime/test_dt_hotspot.py": 0.5,
   "tests/python/unit/runtime/test_env_vars.py": 0.5,
   "tests/python/unit/runtime/test_equation_not_bool.py": 0.5,

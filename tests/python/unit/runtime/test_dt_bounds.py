@@ -37,6 +37,8 @@ from tests.python.support.requirements import (
     repo_include,
     require_native_or_skip,
 )
+
+POPS_PROCESS_TIMEOUT = 600  # Five distinct production DSL artifacts are compiled below.
 INCLUDE = repo_include()
 fails = 0
 
