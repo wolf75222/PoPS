@@ -249,6 +249,14 @@ test_regex = "^test_mpi_amr_twoblock_parity_np2$"
 
 [[check]]
 issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
+kind = "ctest"
+target = "test_mpi_amr_distributed_coarse"
+test_regex = "^test_mpi_amr_distributed_coarse_np2$"
+
+[[check]]
+issue = "ADC-678"
 requirement = "restart_hierarchy_policy"
 polarity = "positive"
 kind = "pytest"
