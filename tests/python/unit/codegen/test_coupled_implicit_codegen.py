@@ -76,10 +76,13 @@ def test_coupled_implicit_uses_one_prepared_provider_with_explicit_action():
     assert "for (int it_ =" not in source
     assert "Ueval[0] - G_[0] - static_cast<pops::Real>(pops::Real(1)) * dt *" in source
     assert "pops::reduce_max(ci_status_" in source
-    assert "ctx.scalar_scratch(2, 0, u0, 10, 0)" in source
-    assert "pops::detail::encode_local_nonlinear_failure(" in source
-    assert "pops::detail::decode_local_nonlinear_failure(" in source
+    assert "ctx.scalar_scratch(2, 0, u0, 11, 0)" in source
+    assert "pops::detail::encode_ranked_local_nonlinear_failure(" in source
+    assert "pops::detail::decode_ranked_local_nonlinear_failure(" in source
+    assert "collective status/location precedence mismatch" in source
     assert "pops::reduce_sum(ci_status_" in source
+    assert "pops::local_nonlinear_status_priority(solved_.status)" in source
+    assert "pops::local_nonlinear_status_from_priority(" in source
     assert "pops::SolveAction::kRejectAttempt" in source
     assert "SolveStatus::kSingular" in source
     assert "StepAttemptRejected" in source

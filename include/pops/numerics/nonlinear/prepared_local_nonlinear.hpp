@@ -12,6 +12,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -28,6 +29,95 @@ enum class LocalNonlinearStatus : int {
   kSafeguardFailure = 4,
   kInvalidEvaluation = 5,
   kUnsupportedCapability = 6,
+  kEvaluationRetry = 7,
+  kEvaluationReject = 8,
+  kEvaluationFailed = 9,
+};
+
+/// Collective precedence is intentionally independent of the public status code. A fatal local
+/// failure must dominate a recoverable rejection when different cells or MPI ranks fail
+/// differently.
+POPS_HD inline int local_nonlinear_status_priority(LocalNonlinearStatus status) {
+  switch (status) {
+    case LocalNonlinearStatus::kConverged:
+      return 0;
+    case LocalNonlinearStatus::kIterationLimit:
+      return 1;
+    case LocalNonlinearStatus::kInadmissibleCandidate:
+      return 2;
+    case LocalNonlinearStatus::kSafeguardFailure:
+      return 3;
+    case LocalNonlinearStatus::kEvaluationRetry:
+      return 4;
+    case LocalNonlinearStatus::kEvaluationReject:
+      return 5;
+    case LocalNonlinearStatus::kSingularJacobian:
+      return 6;
+    case LocalNonlinearStatus::kInvalidEvaluation:
+      return 7;
+    case LocalNonlinearStatus::kUnsupportedCapability:
+      return 8;
+    case LocalNonlinearStatus::kEvaluationFailed:
+      return 9;
+  }
+  return 9;
+}
+
+inline LocalNonlinearStatus local_nonlinear_status_from_priority(int priority) {
+  switch (priority) {
+    case 0:
+      return LocalNonlinearStatus::kConverged;
+    case 1:
+      return LocalNonlinearStatus::kIterationLimit;
+    case 2:
+      return LocalNonlinearStatus::kInadmissibleCandidate;
+    case 3:
+      return LocalNonlinearStatus::kSafeguardFailure;
+    case 4:
+      return LocalNonlinearStatus::kEvaluationRetry;
+    case 5:
+      return LocalNonlinearStatus::kEvaluationReject;
+    case 6:
+      return LocalNonlinearStatus::kSingularJacobian;
+    case 7:
+      return LocalNonlinearStatus::kInvalidEvaluation;
+    case 8:
+      return LocalNonlinearStatus::kUnsupportedCapability;
+    case 9:
+      return LocalNonlinearStatus::kEvaluationFailed;
+    default:
+      throw std::runtime_error("unknown local nonlinear collective priority");
+  }
+}
+
+enum class LocalNonlinearEvaluationStatus : int {
+  kOk = 0,
+  kRetry = 1,
+  kReject = 2,
+  kFailed = 3,
+  kInvalid = 4,
+};
+
+struct LocalNonlinearEvaluationResult {
+  LocalNonlinearEvaluationStatus status = LocalNonlinearEvaluationStatus::kInvalid;
+  std::uint32_t reason_code = 0;
+
+  POPS_HD static constexpr LocalNonlinearEvaluationResult ok() {
+    return {LocalNonlinearEvaluationStatus::kOk, 0};
+  }
+  POPS_HD static constexpr LocalNonlinearEvaluationResult retry(std::uint32_t reason) {
+    return {LocalNonlinearEvaluationStatus::kRetry, reason};
+  }
+  POPS_HD static constexpr LocalNonlinearEvaluationResult reject(std::uint32_t reason) {
+    return {LocalNonlinearEvaluationStatus::kReject, reason};
+  }
+  POPS_HD static constexpr LocalNonlinearEvaluationResult failed(std::uint32_t reason) {
+    return {LocalNonlinearEvaluationStatus::kFailed, reason};
+  }
+  POPS_HD static constexpr LocalNonlinearEvaluationResult invalid(std::uint32_t reason) {
+    return {LocalNonlinearEvaluationStatus::kInvalid, reason};
+  }
+  POPS_HD constexpr bool succeeded() const { return status == LocalNonlinearEvaluationStatus::kOk; }
 };
 
 enum class LocalJacobianKind : int {
@@ -75,6 +165,7 @@ struct LocalNonlinearCellResult {
   Real step_norm = Real(0);
   Real condition_evidence = Real(0);
   int failing_component = -1;
+  std::uint32_t reason_code = 0;
 
   POPS_HD bool solved() const { return status == LocalNonlinearStatus::kConverged; }
 };
@@ -98,7 +189,7 @@ struct AnalyticLocalJacobian {
   static constexpr LocalJacobianKind kind = LocalJacobianKind::kAnalytic;
   Functor functor;
 
-  POPS_HD bool operator()(const Real (&x)[N], Real (&jacobian)[N][N]) const {
+  POPS_HD decltype(auto) operator()(const Real (&x)[N], Real (&jacobian)[N][N]) const {
     return functor(x, jacobian);
   }
 };
@@ -108,7 +199,7 @@ struct AutomaticDifferentiationLocalJacobian {
   static constexpr LocalJacobianKind kind = LocalJacobianKind::kAutomaticDifferentiation;
   Functor functor;
 
-  POPS_HD bool operator()(const Real (&x)[N], Real (&jacobian)[N][N]) const {
+  POPS_HD decltype(auto) operator()(const Real (&x)[N], Real (&jacobian)[N][N]) const {
     return functor(x, jacobian);
   }
 };
@@ -141,8 +232,7 @@ inline constexpr long long kLocalNonlinearFailureEncodingCeiling = 4503599627370
 /// reduction then selects the lexicographically first global cell without atomics, and keeps its
 /// component attached to that exact cell.
 POPS_HD inline Real encode_local_nonlinear_failure(int i, int j, int component) {
-  const Real cell =
-      Real(j) * Real(kLocalNonlinearFailureCellStride) + Real(i);
+  const Real cell = Real(j) * Real(kLocalNonlinearFailureCellStride) + Real(i);
   return Real(kLocalNonlinearFailureEncodingCeiling) -
          (cell * Real(kLocalNonlinearFailureComponentBase) + Real(component + 1) + Real(1));
 }
@@ -150,6 +240,41 @@ POPS_HD inline Real encode_local_nonlinear_failure(int i, int j, int component) 
 POPS_HD inline void decode_local_nonlinear_failure(Real encoded, int& i, int& j, int& component) {
   const long long packed =
       kLocalNonlinearFailureEncodingCeiling - static_cast<long long>(encoded) - 1;
+  component = static_cast<int>(packed % kLocalNonlinearFailureComponentBase) - 1;
+  const long long cell = packed / kLocalNonlinearFailureComponentBase;
+  i = static_cast<int>(cell % kLocalNonlinearFailureCellStride);
+  j = static_cast<int>(cell / kLocalNonlinearFailureCellStride);
+}
+
+/// Pack collective failure precedence together with the exact first cell/component.  Generated
+/// Program kernels reduce a single statistics field, so independently reducing precedence and
+/// location would be able to pair a fatal status with the location of an unrelated recoverable
+/// failure.  Precedence selects a disjoint power-of-two bin while the binary64 significand retains
+/// the complete 52-bit location payload, so this adds no model-size restriction.
+POPS_HD inline Real encode_ranked_local_nonlinear_failure(int priority, int i, int j,
+                                                          int component) {
+  const Real cell = Real(j) * Real(kLocalNonlinearFailureCellStride) + Real(i);
+  const Real packed = cell * Real(kLocalNonlinearFailureComponentBase) + Real(component + 1);
+  const long long location_rank =
+      kLocalNonlinearFailureEncodingCeiling - static_cast<long long>(packed) - 1;
+  Real priority_scale = Real(1);
+  for (int bit = 0; bit < priority; ++bit)
+    priority_scale *= Real(2);
+  return priority_scale *
+         (Real(1) + Real(location_rank) / Real(kLocalNonlinearFailureEncodingCeiling));
+}
+
+POPS_HD inline void decode_ranked_local_nonlinear_failure(Real encoded, int& priority, int& i,
+                                                          int& j, int& component) {
+  priority = 0;
+  Real normalized = encoded;
+  while (normalized >= Real(2)) {
+    normalized *= Real(0.5);
+    ++priority;
+  }
+  const long long location_rank =
+      static_cast<long long>((normalized - Real(1)) * Real(kLocalNonlinearFailureEncodingCeiling));
+  const long long packed = kLocalNonlinearFailureEncodingCeiling - location_rank - 1;
   component = static_cast<int>(packed % kLocalNonlinearFailureComponentBase) - 1;
   const long long cell = packed / kLocalNonlinearFailureComponentBase;
   i = static_cast<int>(cell % kLocalNonlinearFailureCellStride);
@@ -180,6 +305,71 @@ POPS_HD inline bool local_finite(Real value) {
          value >= -std::numeric_limits<Real>::max();
 }
 
+POPS_HD inline LocalNonlinearStatus local_evaluation_failure(
+    LocalNonlinearEvaluationStatus status) {
+  switch (status) {
+    case LocalNonlinearEvaluationStatus::kOk:
+      return LocalNonlinearStatus::kConverged;
+    case LocalNonlinearEvaluationStatus::kRetry:
+      return LocalNonlinearStatus::kEvaluationRetry;
+    case LocalNonlinearEvaluationStatus::kReject:
+      return LocalNonlinearStatus::kEvaluationReject;
+    case LocalNonlinearEvaluationStatus::kFailed:
+      return LocalNonlinearStatus::kEvaluationFailed;
+    case LocalNonlinearEvaluationStatus::kInvalid:
+      return LocalNonlinearStatus::kInvalidEvaluation;
+  }
+  return LocalNonlinearStatus::kInvalidEvaluation;
+}
+
+template <class Evaluation>
+POPS_HD inline LocalNonlinearEvaluationResult normalize_local_evaluation(Evaluation&& evaluation) {
+  using Result = std::remove_cvref_t<Evaluation>;
+  if constexpr (std::is_same_v<Result, LocalNonlinearEvaluationResult>) {
+    switch (evaluation.status) {
+      case LocalNonlinearEvaluationStatus::kOk:
+      case LocalNonlinearEvaluationStatus::kRetry:
+      case LocalNonlinearEvaluationStatus::kReject:
+      case LocalNonlinearEvaluationStatus::kFailed:
+      case LocalNonlinearEvaluationStatus::kInvalid:
+        return evaluation;
+    }
+    return LocalNonlinearEvaluationResult::invalid(evaluation.reason_code);
+  } else if constexpr (std::is_same_v<Result, bool>) {
+    return evaluation ? LocalNonlinearEvaluationResult::ok()
+                      : LocalNonlinearEvaluationResult::invalid(0);
+  } else {
+    static_assert(
+        std::is_same_v<Result, LocalNonlinearEvaluationResult> || std::is_same_v<Result, bool>,
+        "a fallible local evaluation must return bool or "
+        "LocalNonlinearEvaluationResult");
+  }
+}
+
+template <int N, class Residual>
+POPS_HD inline LocalNonlinearEvaluationResult invoke_local_residual(
+    const Residual& residual_provider, const Real (&x)[N], Real (&residual)[N]) {
+  using Result = decltype(residual_provider(x, residual));
+  if constexpr (std::is_void_v<Result>) {
+    residual_provider(x, residual);
+    return LocalNonlinearEvaluationResult::ok();
+  } else {
+    return normalize_local_evaluation(residual_provider(x, residual));
+  }
+}
+
+template <int N, class Jacobian>
+POPS_HD inline LocalNonlinearEvaluationResult invoke_local_jacobian(
+    const Jacobian& jacobian_provider, const Real (&x)[N], Real (&jacobian)[N][N]) {
+  using Result = decltype(jacobian_provider(x, jacobian));
+  if constexpr (std::is_void_v<Result>) {
+    jacobian_provider(x, jacobian);
+    return LocalNonlinearEvaluationResult::ok();
+  } else {
+    return normalize_local_evaluation(jacobian_provider(x, jacobian));
+  }
+}
+
 template <int N>
 POPS_HD inline void copy_local_vector(const Real (&source)[N], Real (&destination)[N]) {
   for (int i = 0; i < N; ++i)
@@ -207,11 +397,17 @@ template <int N, class Problem>
 POPS_HD inline LocalNonlinearStatus evaluate_local_residual(const Problem& problem,
                                                             const Real (&x)[N], Real (&residual)[N],
                                                             int& evaluations, int evaluation_budget,
-                                                            Real& norm, int& failing_component) {
+                                                            Real& norm, int& failing_component,
+                                                            std::uint32_t& reason_code) {
   if (evaluations >= evaluation_budget)
     return LocalNonlinearStatus::kIterationLimit;
-  problem.residual(x, residual);
+  const LocalNonlinearEvaluationResult evaluation =
+      invoke_local_residual<N>(problem.residual, x, residual);
   ++evaluations;
+  if (!evaluation.succeeded()) {
+    reason_code = evaluation.reason_code;
+    return local_evaluation_failure(evaluation.status);
+  }
   for (int i = 0; i < N; ++i) {
     if (!local_finite(residual[i])) {
       failing_component = i;
@@ -313,17 +509,18 @@ POPS_HD inline PivotedSolveEvidence<N> pivoted_dense_solve(Real (&matrix)[N][N],
     }
   }
   evidence.solved = true;
+  const Real largest_finite = std::numeric_limits<Real>::max();
   evidence.condition_evidence =
-      smallest_pivot > Real(0) ? largest_pivot / smallest_pivot : std::numeric_limits<Real>::max();
+      smallest_pivot > Real(0) && smallest_pivot >= largest_pivot / largest_finite
+          ? largest_pivot / smallest_pivot
+          : largest_finite;
   return evidence;
 }
 
 template <int N, class Problem>
-POPS_HD inline LocalNonlinearStatus build_local_jacobian(const Problem& problem, const Real (&x)[N],
-                                                         const Real (&residual)[N],
-                                                         Real (&jacobian)[N][N], int& evaluations,
-                                                         int evaluation_budget,
-                                                         int& failing_component) {
+POPS_HD inline LocalNonlinearStatus build_local_jacobian(
+    const Problem& problem, const Real (&x)[N], const Real (&residual)[N], Real (&jacobian)[N][N],
+    int& evaluations, int evaluation_budget, int& failing_component, std::uint32_t& reason_code) {
   using Jacobian = std::remove_cvref_t<decltype(problem.jacobian)>;
   if constexpr (Jacobian::kind == LocalJacobianKind::kUnsupported) {
     return LocalNonlinearStatus::kUnsupportedCapability;
@@ -331,9 +528,13 @@ POPS_HD inline LocalNonlinearStatus build_local_jacobian(const Problem& problem,
                        Jacobian::kind == LocalJacobianKind::kAutomaticDifferentiation) {
     if (evaluations >= evaluation_budget)
       return LocalNonlinearStatus::kIterationLimit;
+    const LocalNonlinearEvaluationResult evaluation =
+        invoke_local_jacobian<N>(problem.jacobian, x, jacobian);
     ++evaluations;
-    if (!problem.jacobian(x, jacobian))
-      return LocalNonlinearStatus::kInvalidEvaluation;
+    if (!evaluation.succeeded()) {
+      reason_code = evaluation.reason_code;
+      return local_evaluation_failure(evaluation.status);
+    }
   } else {
     Real perturbed[N];
     Real perturbed_residual[N];
@@ -348,9 +549,9 @@ POPS_HD inline LocalNonlinearStatus build_local_jacobian(const Problem& problem,
       perturbed[col] += step;
       Real ignored_norm = Real(0);
       int invalid_component = -1;
-      const LocalNonlinearStatus evaluated =
-          evaluate_local_residual<N>(problem, perturbed, perturbed_residual, evaluations,
-                                     evaluation_budget, ignored_norm, invalid_component);
+      const LocalNonlinearStatus evaluated = evaluate_local_residual<N>(
+          problem, perturbed, perturbed_residual, evaluations, evaluation_budget, ignored_norm,
+          invalid_component, reason_code);
       if (evaluated != LocalNonlinearStatus::kConverged) {
         failing_component = invalid_component >= 0 ? invalid_component : col;
         return evaluated;
@@ -371,15 +572,14 @@ POPS_HD inline LocalNonlinearStatus build_local_jacobian(const Problem& problem,
 template <int N, class Problem>
 POPS_HD inline bool valid_prepared_problem(const Problem& problem) {
   const PreparedLocalNonlinearControls& controls = problem.controls;
-  const bool known_safeguard =
-      controls.safeguard == LocalSafeguardKind::kExactNewton ||
-      controls.safeguard == LocalSafeguardKind::kFixedDamping ||
-      controls.safeguard == LocalSafeguardKind::kBacktrackingLineSearch;
+  const bool known_safeguard = controls.safeguard == LocalSafeguardKind::kExactNewton ||
+                               controls.safeguard == LocalSafeguardKind::kFixedDamping ||
+                               controls.safeguard == LocalSafeguardKind::kBacktrackingLineSearch;
   if (controls.max_iterations <= 0 || controls.max_evaluations < 0 || controls.max_backtracks < 0 ||
-      !known_safeguard ||
-      !local_finite(controls.absolute_tolerance) || !local_finite(controls.relative_tolerance) ||
-      !local_finite(controls.step_tolerance) || controls.absolute_tolerance < Real(0) ||
-      controls.relative_tolerance < Real(0) || controls.step_tolerance < Real(0) ||
+      !known_safeguard || !local_finite(controls.absolute_tolerance) ||
+      !local_finite(controls.relative_tolerance) || !local_finite(controls.step_tolerance) ||
+      controls.absolute_tolerance < Real(0) || controls.relative_tolerance < Real(0) ||
+      controls.step_tolerance < Real(0) ||
       (controls.absolute_tolerance == Real(0) && controls.relative_tolerance == Real(0) &&
        controls.step_tolerance == Real(0)) ||
       !local_finite(controls.finite_difference_step) ||
@@ -464,7 +664,7 @@ POPS_HD inline LocalNonlinearCellResult<N> solve_prepared_local_nonlinear(
   int failing_component = -1;
   LocalNonlinearStatus evaluated = detail::evaluate_local_residual<N>(
       problem, result.value, residual, result.evaluations, evaluation_budget, result.residual_norm,
-      failing_component);
+      failing_component, result.reason_code);
   if (evaluated != LocalNonlinearStatus::kConverged) {
     result.status = evaluated;
     result.failing_component = failing_component;
@@ -481,9 +681,9 @@ POPS_HD inline LocalNonlinearCellResult<N> solve_prepared_local_nonlinear(
 
   for (int iteration = 0; iteration < problem.controls.max_iterations; ++iteration) {
     Real jacobian[N][N];
-    evaluated =
-        detail::build_local_jacobian<N>(problem, result.value, residual, jacobian,
-                                        result.evaluations, evaluation_budget, failing_component);
+    evaluated = detail::build_local_jacobian<N>(problem, result.value, residual, jacobian,
+                                                result.evaluations, evaluation_budget,
+                                                failing_component, result.reason_code);
     if (evaluated != LocalNonlinearStatus::kConverged) {
       result.status = evaluated;
       result.failing_component = failing_component;
@@ -531,9 +731,9 @@ POPS_HD inline LocalNonlinearCellResult<N> solve_prepared_local_nonlinear(
       int candidate_component = -1;
       if (problem.admissible(trial, &candidate_component)) {
         saw_admissible = true;
-        evaluated =
-            detail::evaluate_local_residual<N>(problem, trial, trial_residual, result.evaluations,
-                                               evaluation_budget, trial_norm, failing_component);
+        evaluated = detail::evaluate_local_residual<N>(
+            problem, trial, trial_residual, result.evaluations, evaluation_budget, trial_norm,
+            failing_component, result.reason_code);
         if (evaluated != LocalNonlinearStatus::kConverged) {
           result.status = evaluated;
           result.failing_component = failing_component;
@@ -584,6 +784,32 @@ POPS_HD inline int local_nonlinear_status_code(LocalNonlinearStatus status) {
   return static_cast<int>(status);
 }
 
+inline const char* local_nonlinear_status_name(LocalNonlinearStatus status) {
+  switch (status) {
+    case LocalNonlinearStatus::kConverged:
+      return "converged";
+    case LocalNonlinearStatus::kIterationLimit:
+      return "iteration_limit";
+    case LocalNonlinearStatus::kSingularJacobian:
+      return "singular_jacobian";
+    case LocalNonlinearStatus::kInadmissibleCandidate:
+      return "inadmissible_candidate";
+    case LocalNonlinearStatus::kSafeguardFailure:
+      return "safeguard_failure";
+    case LocalNonlinearStatus::kInvalidEvaluation:
+      return "invalid_evaluation";
+    case LocalNonlinearStatus::kUnsupportedCapability:
+      return "unsupported_capability";
+    case LocalNonlinearStatus::kEvaluationRetry:
+      return "evaluation_retry";
+    case LocalNonlinearStatus::kEvaluationReject:
+      return "evaluation_reject";
+    case LocalNonlinearStatus::kEvaluationFailed:
+      return "evaluation_failed";
+  }
+  return "invalid_evaluation";
+}
+
 inline SolveStatus solve_status(LocalNonlinearStatus status) {
   switch (status) {
     case LocalNonlinearStatus::kConverged:
@@ -600,6 +826,10 @@ inline SolveStatus solve_status(LocalNonlinearStatus status) {
       return SolveStatus::kInvalidEvaluation;
     case LocalNonlinearStatus::kUnsupportedCapability:
       return SolveStatus::kCapabilityFailure;
+    case LocalNonlinearStatus::kEvaluationRetry:
+    case LocalNonlinearStatus::kEvaluationReject:
+    case LocalNonlinearStatus::kEvaluationFailed:
+      return SolveStatus::kInvalidEvaluation;
   }
   return SolveStatus::kInvalidInput;
 }
@@ -610,7 +840,7 @@ inline SolveReport local_nonlinear_solve_report(
     int failing_i = -1, int failing_j = -1, int failing_component = -1,
     SolveAction failure_action = SolveAction::kFailRun) {
   if (status_code < local_nonlinear_status_code(LocalNonlinearStatus::kConverged) ||
-      status_code > local_nonlinear_status_code(LocalNonlinearStatus::kUnsupportedCapability))
+      status_code > local_nonlinear_status_code(LocalNonlinearStatus::kEvaluationFailed))
     throw std::invalid_argument("local nonlinear provider returned an unknown status code");
   const LocalNonlinearStatus local_status = static_cast<LocalNonlinearStatus>(status_code);
   SolveReport report;
@@ -618,8 +848,12 @@ inline SolveReport local_nonlinear_solve_report(
   report.evaluations = evaluations;
   report.reference_residual_norm = reference_residual_norm;
   report.residual_norm = residual_norm;
-  report.rel_residual =
-      reference_residual_norm > Real(0) ? residual_norm / reference_residual_norm : residual_norm;
+  const Real largest_finite = std::numeric_limits<Real>::max();
+  report.rel_residual = reference_residual_norm > Real(0)
+                            ? (reference_residual_norm >= residual_norm / largest_finite
+                                   ? residual_norm / reference_residual_norm
+                                   : largest_finite)
+                            : residual_norm;
   report.step_norm = step_norm;
   report.condition_evidence = condition_evidence;
   report.safeguard_steps = safeguard_steps;
@@ -629,7 +863,8 @@ inline SolveReport local_nonlinear_solve_report(
   if (local_status == LocalNonlinearStatus::kConverged)
     report.mark_solved("local_nonlinear_converged");
   else
-    report.mark_failed(solve_status(local_status), failure_action);
+    report.mark_failed(solve_status(local_status), failure_action,
+                       std::string("local_nonlinear_") + local_nonlinear_status_name(local_status));
   return report;
 }
 
