@@ -61,6 +61,17 @@ struct AmrProgramAcceptedState {
   std::vector<AmrProgramSyncEvent> accepted_sync;
 };
 
+/// Rank ownership of the exact recorded global patch order at every active AMR level.
+///
+/// This is deliberately separate from the accepted-state byte protocol: changing only MPI
+/// cardinality must not change the scientific checkpoint image.  A caller that rematerializes a
+/// checkpoint supplies both the recorded source ownership and the already prepared target ownership;
+/// this layer never invents a rank mapping.
+struct AmrProgramRankOwnership {
+  int rank_count = 0;
+  std::vector<std::vector<int>> level_patch_owners;
+};
+
 namespace checkpoint_detail {
 
 class Writer {
@@ -501,6 +512,271 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     event = read_sync(in);
   in.finish();
   return state;
+}
+
+namespace rematerialization_detail {
+
+inline constexpr const char* kErrorPrefix = "AMR Program accepted-state rematerialization: ";
+
+[[noreturn]] inline void fail(const std::string& why) {
+  throw std::runtime_error(std::string(kErrorPrefix) + why);
+}
+
+inline void validate_ownership(const AmrProgramRankOwnership& ownership,
+                               std::size_t expected_levels, const char* role) {
+  if (ownership.rank_count <= 0)
+    fail(std::string(role) + " rank count must be positive");
+  if (ownership.level_patch_owners.size() != expected_levels)
+    fail(std::string(role) + " ownership level count differs from the accepted hierarchy");
+  for (std::size_t level = 0; level < ownership.level_patch_owners.size(); ++level) {
+    if (ownership.level_patch_owners[level].empty())
+      fail(std::string(role) + " ownership has no active patch at level " + std::to_string(level));
+    for (int owner : ownership.level_patch_owners[level])
+      if (owner < 0 || owner >= ownership.rank_count)
+        fail(std::string(role) + " ownership contains an out-of-range rank at level " +
+             std::to_string(level));
+  }
+}
+
+inline AmrProgramAcceptedState without_rank_payloads(AmrProgramAcceptedState state) {
+  for (auto& [name, ring] : state.ring_flux) {
+    (void)name;
+    for (auto& slot : ring)
+      for (EdgeFlux& flux : slot)
+        flux = EdgeFlux{};
+  }
+  for (auto& [name, ring] : state.ring_flux_contributions) {
+    (void)name;
+    for (auto& slot : ring)
+      for (auto& level : slot)
+        for (AmrProgramFluxContribution& contribution : level)
+          contribution.payload = EdgeFlux{};
+  }
+  return state;
+}
+
+using StripRole = std::vector<EdgeStrip>;
+
+inline void rematerialize_strip_role(const std::vector<const StripRole*>& source_roles,
+                                     const std::vector<StripRole*>& target_roles,
+                                     const std::vector<int>& source_owners,
+                                     const std::vector<int>& target_owners,
+                                     const std::vector<int>& target_owner_to_slot,
+                                     const std::string& context) {
+  if (source_owners.size() != target_owners.size())
+    fail(context + " source/target global patch counts differ");
+  const std::size_t patch_count = source_owners.size();
+  const std::size_t recorded_axis_size = source_roles.front()->size();
+  bool materialized_axis = false;
+  for (std::size_t rank = 0; rank < source_roles.size(); ++rank) {
+    const std::size_t size = source_roles[rank]->size();
+    if (size != 0 && size != patch_count)
+      fail(context + " rank " + std::to_string(rank) +
+           " strip axis differs from the recorded global patch count");
+    if (size != recorded_axis_size)
+      fail(context + " strip axis differs across source ranks");
+    materialized_axis = materialized_axis || size != 0;
+  }
+  for (StripRole* role : target_roles) {
+    role->clear();
+    if (materialized_axis)
+      role->resize(patch_count);
+  }
+  if (!materialized_axis)
+    return;
+
+  for (std::size_t patch = 0; patch < patch_count; ++patch) {
+    const EdgeStrip* active = nullptr;
+    int active_rank = -1;
+    for (std::size_t rank = 0; rank < source_roles.size(); ++rank) {
+      const StripRole& role = *source_roles[rank];
+      if (role.empty() || !::pops::detail::edge_strip_has_storage(role[patch]))
+        continue;
+      if (active != nullptr)
+        fail(context + " patch " + std::to_string(patch) +
+             " has duplicate active payloads on source ranks " + std::to_string(active_rank) +
+             " and " + std::to_string(rank));
+      active = &role[patch];
+      active_rank = static_cast<int>(rank);
+    }
+    if (active == nullptr)
+      continue;
+    if (source_owners[patch] != active_rank)
+      fail(context + " patch " + std::to_string(patch) + " is active on source rank " +
+           std::to_string(active_rank) + " but its recorded owner is rank " +
+           std::to_string(source_owners[patch]));
+    const int target_slot = target_owner_to_slot[static_cast<std::size_t>(target_owners[patch])];
+    if (target_slot >= 0)
+      (*target_roles[static_cast<std::size_t>(target_slot)])[patch] = *active;
+  }
+}
+
+inline void rematerialize_edge_flux(const std::vector<const EdgeFlux*>& source_fluxes,
+                                    const std::vector<EdgeFlux*>& target_fluxes, std::size_t level,
+                                    const AmrProgramRankOwnership& source_ownership,
+                                    const AmrProgramRankOwnership& target_ownership,
+                                    const std::vector<int>& target_owner_to_slot,
+                                    const std::string& context) {
+  static const std::vector<int> empty_owners;
+  const std::size_t level_count = source_ownership.level_patch_owners.size();
+  if (level >= level_count)
+    fail(context + " level axis exceeds the accepted hierarchy");
+  if (source_fluxes.size() != static_cast<std::size_t>(source_ownership.rank_count))
+    fail(context + " source payload count differs from the recorded rank count");
+  const std::vector<int>& source_coarse_owners =
+      level + 1 < level_count ? source_ownership.level_patch_owners[level + 1] : empty_owners;
+  const std::vector<int>& target_coarse_owners =
+      level + 1 < level_count ? target_ownership.level_patch_owners[level + 1] : empty_owners;
+  const std::vector<int>& source_fine_owners =
+      level > 0 ? source_ownership.level_patch_owners[level] : empty_owners;
+  const std::vector<int>& target_fine_owners =
+      level > 0 ? target_ownership.level_patch_owners[level] : empty_owners;
+
+  std::vector<const StripRole*> source_roles;
+  std::vector<StripRole*> target_roles;
+  source_roles.reserve(source_fluxes.size());
+  target_roles.reserve(target_fluxes.size());
+  for (const EdgeFlux* flux : source_fluxes)
+    source_roles.push_back(&flux->coarse);
+  for (EdgeFlux* flux : target_fluxes)
+    target_roles.push_back(&flux->coarse);
+  rematerialize_strip_role(source_roles, target_roles, source_coarse_owners, target_coarse_owners,
+                           target_owner_to_slot, context + " coarse role");
+
+  source_roles.clear();
+  target_roles.clear();
+  for (const EdgeFlux* flux : source_fluxes)
+    source_roles.push_back(&flux->fine);
+  for (EdgeFlux* flux : target_fluxes)
+    target_roles.push_back(&flux->fine);
+  rematerialize_strip_role(source_roles, target_roles, source_fine_owners, target_fine_owners,
+                           target_owner_to_slot, context + " fine role");
+}
+
+inline std::vector<AmrProgramAcceptedState> rematerialize_selected_target_ranks(
+    const std::vector<AmrProgramAcceptedState>& source_rank_states,
+    const AmrProgramRankOwnership& source_ownership,
+    const AmrProgramRankOwnership& target_ownership, const std::vector<int>& target_ranks) {
+  if (source_rank_states.empty())
+    fail("at least one source rank state is required");
+  if (source_ownership.rank_count != static_cast<int>(source_rank_states.size()))
+    fail("source state count differs from the recorded source rank count");
+
+  const std::size_t level_count = source_rank_states.front().level_clocks.size();
+  if (level_count == 0)
+    fail("accepted hierarchy has no active level");
+  validate_ownership(source_ownership, level_count, "source");
+  validate_ownership(target_ownership, level_count, "target");
+  for (std::size_t level = 0; level < level_count; ++level)
+    if (source_ownership.level_patch_owners[level].size() !=
+        target_ownership.level_patch_owners[level].size())
+      fail("source/target ownership differs from the recorded patch count at level " +
+           std::to_string(level));
+  if (target_ranks.empty())
+    fail("at least one target rank must be selected");
+  std::vector<int> target_owner_to_slot(static_cast<std::size_t>(target_ownership.rank_count), -1);
+  for (std::size_t slot = 0; slot < target_ranks.size(); ++slot) {
+    const int rank = target_ranks[slot];
+    if (rank < 0 || rank >= target_ownership.rank_count)
+      fail("selected target rank is out of range");
+    int& existing = target_owner_to_slot[static_cast<std::size_t>(rank)];
+    if (existing >= 0)
+      fail("selected target rank is duplicated");
+    existing = static_cast<int>(slot);
+  }
+
+  AmrProgramAcceptedState common = without_rank_payloads(source_rank_states.front());
+  const std::vector<std::uint8_t> common_image = serialize_amr_program_accepted_state(common);
+  for (std::size_t rank = 1; rank < source_rank_states.size(); ++rank)
+    if (serialize_amr_program_accepted_state(without_rank_payloads(source_rank_states[rank])) !=
+        common_image)
+      fail("source rank " + std::to_string(rank) +
+           " disagrees on common clocks, history metadata or accepted reports");
+
+  std::vector<AmrProgramAcceptedState> result(target_ranks.size(), common);
+  std::vector<const EdgeFlux*> source_fluxes;
+  std::vector<EdgeFlux*> target_fluxes;
+  source_fluxes.reserve(source_rank_states.size());
+  target_fluxes.reserve(result.size());
+
+  for (const auto& [name, common_ring] : common.ring_flux)
+    for (std::size_t slot = 0; slot < common_ring.size(); ++slot)
+      for (std::size_t level = 0; level < common_ring[slot].size(); ++level) {
+        source_fluxes.clear();
+        target_fluxes.clear();
+        for (const AmrProgramAcceptedState& state : source_rank_states)
+          source_fluxes.push_back(&state.ring_flux.at(name)[slot][level]);
+        for (AmrProgramAcceptedState& state : result)
+          target_fluxes.push_back(&state.ring_flux.at(name)[slot][level]);
+        rematerialize_edge_flux(source_fluxes, target_fluxes, level, source_ownership,
+                                target_ownership, target_owner_to_slot,
+                                "history '" + name + "' slot " + std::to_string(slot) + " level " +
+                                    std::to_string(level));
+      }
+
+  for (const auto& [name, common_ring] : common.ring_flux_contributions)
+    for (std::size_t slot = 0; slot < common_ring.size(); ++slot)
+      for (std::size_t level = 0; level < common_ring[slot].size(); ++level)
+        for (std::size_t contribution = 0; contribution < common_ring[slot][level].size();
+             ++contribution) {
+          source_fluxes.clear();
+          target_fluxes.clear();
+          for (const AmrProgramAcceptedState& state : source_rank_states)
+            source_fluxes.push_back(
+                &state.ring_flux_contributions.at(name)[slot][level][contribution].payload);
+          for (AmrProgramAcceptedState& state : result)
+            target_fluxes.push_back(
+                &state.ring_flux_contributions.at(name)[slot][level][contribution].payload);
+          rematerialize_edge_flux(source_fluxes, target_fluxes, level, source_ownership,
+                                  target_ownership, target_owner_to_slot,
+                                  "history '" + name + "' slot " + std::to_string(slot) +
+                                      " level " + std::to_string(level) + " contribution " +
+                                      std::to_string(contribution));
+        }
+  return result;
+}
+
+}  // namespace rematerialization_detail
+
+/// Merge rank-local accepted Program images and materialize one exact image per target rank.
+///
+/// Every source state must carry byte-identical clocks, qualified history metadata, contribution
+/// metadata and accepted audit reports.  Only the compact EdgeFlux payloads may differ by rank.
+/// Active strips are accepted exclusively from their explicit recorded owner and are copied only to
+/// their explicit target owner.  Missing strips remain missing (cold/flat histories); duplicates,
+/// non-owner payloads and topology-axis mismatches fail closed.  Element `r` of the source vector is
+/// the image recorded by source rank `r`.
+inline std::vector<AmrProgramAcceptedState> rematerialize_amr_program_accepted_states(
+    const std::vector<AmrProgramAcceptedState>& source_rank_states,
+    const AmrProgramRankOwnership& source_ownership,
+    const AmrProgramRankOwnership& target_ownership) {
+  if (target_ownership.rank_count <= 0)
+    rematerialization_detail::fail("target rank count must be positive");
+  std::vector<int> target_ranks(static_cast<std::size_t>(target_ownership.rank_count));
+  for (int rank = 0; rank < target_ownership.rank_count; ++rank)
+    target_ranks[static_cast<std::size_t>(rank)] = rank;
+  return rematerialization_detail::rematerialize_selected_target_ranks(
+      source_rank_states, source_ownership, target_ownership, target_ranks);
+}
+
+/// Byte-protocol convenience seam for a single target rank.
+///
+/// Native facades keep accepted Program state opaque, so restart orchestration can use this wrapper
+/// without duplicating either the checkpoint decoder or the ownership proof.  The selected rank is
+/// explicit and range-checked.  All source images and target ownership are validated together, while
+/// only that rank's filtered image is materialized.
+inline std::vector<std::uint8_t> rematerialize_amr_program_accepted_state_bytes(
+    const std::vector<std::vector<std::uint8_t>>& source_rank_payloads,
+    const AmrProgramRankOwnership& source_ownership,
+    const AmrProgramRankOwnership& target_ownership, int target_rank) {
+  std::vector<AmrProgramAcceptedState> source_states;
+  source_states.reserve(source_rank_payloads.size());
+  for (const std::vector<std::uint8_t>& payload : source_rank_payloads)
+    source_states.push_back(deserialize_amr_program_accepted_state(payload));
+  std::vector<AmrProgramAcceptedState> target_states =
+      rematerialization_detail::rematerialize_selected_target_ranks(
+          source_states, source_ownership, target_ownership, {target_rank});
+  return serialize_amr_program_accepted_state(target_states.front());
 }
 
 }  // namespace pops::runtime::program
