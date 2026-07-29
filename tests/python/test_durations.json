@@ -87,6 +87,7 @@
   "tests/python/unit/codegen/test_amr_artifact_metadata.py": 2.0,
   "tests/python/unit/codegen/test_amr_route_introspection.py": 2.0,
   "tests/python/unit/codegen/test_artifact_migration.py": 2.0,
+  "tests/python/unit/codegen/test_checkpoint_migration.py": 2.0,
   "tests/python/unit/codegen/test_artifact_model_metadata_protocol.py": 2.0,
   "tests/python/unit/codegen/test_bind_schema.py": 2.0,
   "tests/python/unit/codegen/test_boundary_jacvec_validation.py": 2.0,
@@ -405,7 +406,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 220,
+    "estimated_count": 221,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -460,6 +461,7 @@
       "tests/python/unit/codegen/test_amr_artifact_metadata.py",
       "tests/python/unit/codegen/test_amr_route_introspection.py",
       "tests/python/unit/codegen/test_artifact_migration.py",
+      "tests/python/unit/codegen/test_checkpoint_migration.py",
       "tests/python/unit/codegen/test_artifact_model_metadata_protocol.py",
       "tests/python/unit/codegen/test_bind_schema.py",
       "tests/python/unit/codegen/test_boundary_jacvec_validation.py",
@@ -628,6 +630,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 401
+    "total_files": 402
   }
 }
