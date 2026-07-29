@@ -369,20 +369,22 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
             assert legacy_engine_primitive not in source
 
 
-def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step():
+def test_shared_program_service_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
     shared = (
         ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     ).read_text(encoding="utf-8")
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    for source in (uniform, amr):
-        assert "apply_coupling_operators(" in source
     assert shared.count("struct CouplingStateOverride") == 1
-    assert "complete candidate pack for every System block" in uniform
-    assert "complete candidate pack for every runtime block" in amr
-    assert "cannot alias accepted live states" in uniform
-    assert "cannot alias accepted live states" in amr
+    assert shared.count("void apply_coupling_operators(") == 1
+    assert "complete candidate pack for every runtime block" in shared
+    assert "cannot alias accepted live states" in shared
+    for source in (uniform, amr):
+        assert "void apply_coupling_operators(" not in source
+        assert source.count("program_execution_apply_coupling_(") == 1
+    assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
     assert "apply_coupling_operators_at_level(" in runtime
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime

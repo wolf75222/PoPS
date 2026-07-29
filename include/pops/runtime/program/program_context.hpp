@@ -828,33 +828,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// projection is rejected. Forwards to System::block_project -- it reimplements no positivity.
   void apply_projection(int b, MultiFab& u) const { sys_->block_project(sys_block(b), u); }
 
-  /// Apply every registered coupled-source operator to a complete simultaneous candidate-state
-  /// group.  Candidates remain private Program values until the caller projects and commit_many()
-  /// publishes them, so a failed coupling cannot expose a partially committed multi-block state.
-  void apply_coupling_operators(Real dt,
-                                std::initializer_list<CouplingStateOverride> candidates) const {
-    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
-      throw std::invalid_argument("Program coupling application requires a finite non-negative dt");
-    if (coupling_workspace_.in_use)
-      throw std::logic_error("Program coupling workspace is already in use");
-    prepare_coupling_workspace_(candidates);
-    struct WorkspaceUse {
-      bool& flag;
-      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
-      ~WorkspaceUse() { flag = false; }
-    } use(coupling_workspace_.in_use);
-    const std::size_t applied =
-        sys_->apply_coupling_operators(dt, coupling_workspace_.system_states);
-    count_kernel(static_cast<std::int64_t>(applied));
-  }
-
  private:
-  struct CouplingWorkspace {
-    std::vector<int> program_to_system;
-    std::vector<MultiFab*> system_states;
-    bool in_use = false;
-  };
-
   struct FieldSolveWorkspace {
     std::vector<int> program_to_system;
     std::vector<const MultiFab*> program_stages;
@@ -908,51 +882,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     std::map<std::int64_t, FieldSolveWorkspace> generated;
     FieldPublicationTransaction publication;
   };
-
-  void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
-    const std::vector<int>& block_map = sys_->program_block_map();
-    const std::size_t system_blocks = static_cast<std::size_t>(sys_->n_blocks());
-    if (block_map.empty())
-      throw block_map_error_(
-          "ProgramContext::apply_coupling_operators has no explicit program-to-system block map");
-    if (block_map.size() != system_blocks || candidates.size() != block_map.size())
-      throw std::invalid_argument(
-          "Program coupling requires a complete candidate pack for every System block");
-
-    const bool structure_changed = coupling_workspace_.program_to_system != block_map ||
-                                   coupling_workspace_.system_states.size() != system_blocks;
-    if (structure_changed) {
-      coupling_workspace_.system_states.assign(system_blocks, nullptr);
-      for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
-        const int system_block = sys_block(static_cast<int>(program_block));
-        MultiFab*& mapped =
-            coupling_workspace_.system_states[static_cast<std::size_t>(system_block)];
-        if (mapped != nullptr)
-          throw std::invalid_argument(
-              "Program coupling block map does not cover each System block exactly once");
-        // Non-null sentinel: authenticate uniqueness without a hot-path temporary allocation.
-        mapped = &sys_->block_state(system_block);
-      }
-      coupling_workspace_.program_to_system.assign(block_map.begin(), block_map.end());
-    }
-
-    std::fill(coupling_workspace_.system_states.begin(), coupling_workspace_.system_states.end(),
-              nullptr);
-    std::size_t ordinal = 0;
-    for (const CouplingStateOverride& candidate : candidates) {
-      if (candidate.program_block != static_cast<int>(ordinal) || candidate.state == nullptr)
-        throw std::invalid_argument(
-            "Program coupling candidates must be non-null and ordered by Program block");
-      require_program_stage_layout_(candidate.program_block, *candidate.state);
-      const int system_block =
-          coupling_workspace_.program_to_system[static_cast<std::size_t>(candidate.program_block)];
-      if (candidate.state == &sys_->block_state(system_block))
-        throw std::invalid_argument(
-            "Program coupling candidates cannot alias accepted live states");
-      coupling_workspace_.system_states[static_cast<std::size_t>(system_block)] = candidate.state;
-      ++ordinal;
-    }
-  }
 
   void capture_field_publication_(FieldPublicationTransaction& transaction) const {
     // SystemFieldSolver's uniform reductions use MPI_COMM_WORLD, so this transaction must
@@ -1319,6 +1248,10 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   MultiFab program_execution_alloc_scalar_field_(int n_comp, int n_ghost) const {
     return sys_->alloc_scalar_field(n_comp, n_ghost);
   }
+  std::size_t program_execution_apply_coupling_(
+      Real dt, const std::vector<MultiFab*>& runtime_states) const {
+    return sys_->apply_coupling_operators(dt, runtime_states);
+  }
   CacheManager& program_execution_cache_(SchedulerCacheOperation /*operation*/) const {
     return sys_->program_cache();
   }
@@ -1420,7 +1353,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
       std::make_shared<FieldSolveWorkspaceRegistry>();
-  mutable CouplingWorkspace coupling_workspace_;
   mutable std::shared_ptr<ScratchRegistry> scratch_registry_ = std::make_shared<ScratchRegistry>();
   System* sys_;
 };
