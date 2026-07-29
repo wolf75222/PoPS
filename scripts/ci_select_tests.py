@@ -810,6 +810,27 @@ def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
     return shards
 
 
+def verify_cpp_duration_catalogs(args: argparse.Namespace) -> int:
+    """Authenticate the full C++ duration inventory and its exact shard partition.
+
+    This source-only command is shared by CI and the final/release preflights so
+    missing or orphaned measurements stop the workflow before an expensive native
+    build starts.
+    """
+    suites = manifest_cpp_suites(load_manifest())
+    targets = sorted(suite["name"] for suite in suites)
+    if not targets:
+        raise SystemExit("no non-MPI C++ suites found in tests/test_manifest.toml")
+
+    validate_cpp_duration_catalogs(targets)
+    shards = cpp_target_shards(targets, args.shard_total)
+    print(
+        f"verified {len(targets)} C++ targets in both duration catalogs; "
+        f"{len(shards)} shards form an exact cover"
+    )
+    return 0
+
+
 def cpp_test_regex(names: Iterable[str]) -> str:
     """Match CTest names belonging to the supplied manifest targets / standalone tests."""
     escaped = [re.escape(name) for name in names]
@@ -1710,6 +1731,10 @@ def main() -> int:
     cpp_mpi_ctests = sub.add_parser("verify-cpp-mpi-ctests")
     cpp_mpi_ctests.add_argument("--ctest-json", required=True)
     cpp_mpi_ctests.set_defaults(func=verify_cpp_mpi_ctests)
+
+    cpp_duration_catalogs = sub.add_parser("verify-cpp-duration-catalogs")
+    cpp_duration_catalogs.add_argument("--shard-total", type=int, required=True)
+    cpp_duration_catalogs.set_defaults(func=verify_cpp_duration_catalogs)
 
     py_mpi = sub.add_parser("python-mpi")
     py_mpi.add_argument("--plan-file", required=True)

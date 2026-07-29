@@ -103,10 +103,17 @@ def _static_contract(contract: Any) -> list[str]:
             {"package_version": package_version, **source}, sort_keys=True,
             separators=(",", ":"), ensure_ascii=True).encode()).hexdigest():
         raise PreflightError("generated release contract digest is not canonical")
+    _run(
+        sys.executable,
+        "scripts/ci_select_tests.py",
+        "verify-cpp-duration-catalogs",
+        "--shard-total",
+        "7",
+    )
     _run(sys.executable, "scripts/generate_release_contract.py", "--check")
     _run(sys.executable, "scripts/generate_component_catalog.py", "--check")
     return ["version", "wheel_metadata", "schemas", "abi", "matrix", "generated",
-            "final_specification", "final_examples"]
+            "cpp_duration_catalogs", "final_specification", "final_examples"]
 
 
 def _tag_contract(version: str, tag: str) -> None:
