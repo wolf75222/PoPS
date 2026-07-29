@@ -58,6 +58,35 @@ class ProgramExecutionServices {
     MultiFab* state = nullptr;
   };
 
+  struct RhsGroupRequest {
+    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
+                    int flux_only_value)
+        : block(block_value),
+          state(state_value),
+          rhs(rhs_value),
+          rate_id(rate_id_value),
+          flux_only(flux_only_value) {}
+
+    int block;
+    MultiFab* state;
+    MultiFab* rhs;
+    int rate_id;
+    int flux_only;
+  };
+
+ protected:
+  struct RhsGroupBatch {
+    int group_id = -1;
+    // Borrowed only for the synchronous provider call made before rhs_group returns.
+    std::initializer_list<RhsGroupRequest> requests;
+    std::vector<int> runtime_blocks;
+    std::vector<MultiFab*> states;
+    std::vector<MultiFab*> rhs;
+    std::vector<int> rate_ids;
+    std::vector<int> flux_only;
+  };
+
+ public:
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
   enum class SchedulerCacheOperation : std::uint8_t {
     ShouldUpdate,
@@ -191,6 +220,44 @@ class ProgramExecutionServices {
       std::rethrow_exception(failure);
     }
     restore();
+  }
+
+  /// Validate and prepare one authored simultaneous multi-block residual evaluation.
+  ///
+  /// Group/member identity, pointer and flux-mode semantics are topology-independent and therefore
+  /// live here exactly once. Providers receive only a complete, runtime-block-qualified batch and
+  /// own its spatial execution or AMR interface-ledger publication.
+  void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
+    require_group_identity_(group_id);
+    if (requests.size() == 0)
+      throw std::invalid_argument("Program RHS group cannot be empty");
+
+    RhsGroupBatch batch;
+    batch.group_id = group_id;
+    batch.requests = requests;
+    batch.runtime_blocks.reserve(requests.size());
+    batch.states.reserve(requests.size());
+    batch.rhs.reserve(requests.size());
+    batch.rate_ids.reserve(requests.size());
+    batch.flux_only.reserve(requests.size());
+    for (const auto& request : requests) {
+      require_rate_identity_(request.rate_id);
+      if (request.rate_id == group_id || std::find(batch.rate_ids.begin(), batch.rate_ids.end(),
+                                                   request.rate_id) != batch.rate_ids.end())
+        throw std::invalid_argument(
+            "Program RHS group and member rate identities must be distinct");
+      if (request.state == nullptr || request.rhs == nullptr ||
+          (request.flux_only != 0 && request.flux_only != 1))
+        throw std::invalid_argument("Program RHS group contains an invalid request");
+      batch.rate_ids.push_back(request.rate_id);
+    }
+    for (const auto& request : requests) {
+      batch.runtime_blocks.push_back(sys_block(request.block));
+      batch.states.push_back(request.state);
+      batch.rhs.push_back(request.rhs);
+      batch.flux_only.push_back(request.flux_only);
+    }
+    provider_().program_execution_rhs_group_(batch);
   }
 
   MultiFab rhs_scratch_like(const MultiFab& prototype) const {
