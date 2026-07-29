@@ -622,10 +622,25 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
     ]
 
 
-def test_python_mpi_entrypoints_are_excluded_from_serial_pytest_suites():
+def test_manifest_projects_serial_python_mpi_orchestrators():
+    """Topology-changing drivers use pytest outside MPI and launch their own worlds."""
+    sel = _load("ci_select_tests")
+    assert sel.manifest_python_mpi_orchestrators(sel.load_manifest()) == [
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_amr_rank_change_restart.py",
+        },
+    ]
+
+
+def test_python_mpi_contracts_are_excluded_from_serial_pytest_suites():
     sel = _load("ci_select_tests")
     manifest = sel.load_manifest()
-    mpi_paths = {row["path"] for row in sel.manifest_python_mpi_entrypoints(manifest)}
+    mpi_paths = {
+        row["path"] for row in sel.manifest_python_mpi_entrypoints(manifest)
+    } | {
+        row["path"] for row in sel.manifest_python_mpi_orchestrators(manifest)
+    }
     serial_paths = {
         path for suite in sel.manifest_python_suites(manifest) for path in suite["files"]
     }
@@ -637,6 +652,7 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
 
     class Args:
         plan_file = str(tmp_path / "python-mpi-plan.tsv")
+        orchestrator_plan_file = str(tmp_path / "python-mpi-orchestrators.txt")
         github_output = str(tmp_path / "github-output.txt")
         explain_file = str(tmp_path / "python-mpi-plan.json")
 
@@ -648,11 +664,37 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
         "2\ttests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py",
     ]
+    assert (
+        tmp_path / "python-mpi-orchestrators.txt"
+    ).read_text().splitlines() == [
+        "tests/python/integration/mpi/test_amr_rank_change_restart.py",
+    ]
     outputs = dict(
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "5"
+    assert outputs["python_mpi_count"] == "6"
+    assert outputs["python_mpi_entrypoint_count"] == "5"
+    assert outputs["python_mpi_orchestrator_count"] == "1"
+
+
+def test_python_mpi_orchestrator_contract_is_fail_closed():
+    sel = _load("ci_select_tests")
+    suite = {
+        "name": "pops_python_integration_mpi",
+        "path": "tests/python/integration/mpi",
+        "labels": ["integration", "python", "mpi"],
+        "mpi_orchestrators": [
+            {
+                "path": "tests/python/integration/mpi/test_amr_rank_change_restart.py",
+                "nproc": 2,
+            },
+        ],
+    }
+    with pytest.raises(SystemExit, match="expected exactly one path field"):
+        sel.manifest_python_mpi_orchestrators(
+            {"python": {"suite": [suite]}}
+        )
 
 
 @pytest.mark.parametrize(
@@ -857,6 +899,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "--ctest-groups-file build-mpi/mpi-ctest-groups.tsv" in mpi_block
     assert "scripts/ci_select_tests.py python-mpi" in mpi_block
     assert "build-mpi/python-mpi-plan.tsv" in mpi_block
+    assert "--orchestrator-plan-file build-mpi/python-mpi-orchestrators.txt" in mpi_block
     assert "--parallel 1 --target _pops" in mpi_block
     assert '--parallel 4 --target "${mpi_targets[@]}"' in mpi_block
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
@@ -872,6 +915,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "grep -Eqi 'Open MPI|OpenRTE'" in mpi_block
     assert "mpi_failfast_args+=(--mca orte_abort_on_non_zero_status 1)" in mpi_block
     assert 'run_mpi "Python MPI contract ${mpi_test}"' in mpi_block
+    assert "Running serial Python MPI orchestrator: ${mpi_orchestrator}" in mpi_block
+    assert (
+        '/usr/bin/python3 -m pytest -q -ra --maxfail=1 "$mpi_orchestrator"'
+        in mpi_block
+    )
+    assert 'run_mpi "Python MPI orchestrator' not in mpi_block
     assert 'run_mpi "collective HDF5 writer"' not in mpi_block
     assert "timeout --signal=TERM --kill-after=30s 20m" in mpi_block
     assert "timeout --signal=TERM --kill-after=30s 4m" not in mpi_block

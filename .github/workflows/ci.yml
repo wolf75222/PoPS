@@ -1707,9 +1707,11 @@ jobs:
             --explain-file build-mpi/mpi-test-plan.json
           python3 scripts/ci_select_tests.py python-mpi \
             --plan-file build-mpi/python-mpi-plan.tsv \
+            --orchestrator-plan-file build-mpi/python-mpi-orchestrators.txt \
             --github-output "$GITHUB_OUTPUT" \
             --explain-file build-mpi/python-mpi-plan.json
           test -s build-mpi/python-mpi-plan.tsv
+          test -s build-mpi/python-mpi-orchestrators.txt
           test -s build-mpi/mpi-ctest-groups.tsv
 
       - name: Configure + build (MPI + Kokkos Serial)
@@ -1923,6 +1925,14 @@ jobs:
             run_mpi "Python MPI contract ${mpi_test}" \
               -n "$mpi_ranks" /usr/bin/python3 -u "$mpi_test"
           done < build-mpi/python-mpi-plan.tsv
+          # This pytest process stays outside MPI: each manifest-owned orchestrator creates and
+          # tears down its own independent rank worlds (for example np=2 capture, then np=1 restart).
+          while IFS= read -r mpi_orchestrator; do
+            test -n "$mpi_orchestrator" && test -f "$mpi_orchestrator"
+            echo "Running serial Python MPI orchestrator: ${mpi_orchestrator}"
+            timeout --signal=TERM --kill-after=30s 25m \
+              /usr/bin/python3 -m pytest -q -ra --maxfail=1 "$mpi_orchestrator"
+          done < build-mpi/python-mpi-orchestrators.txt
       - name: ccache stats (MPI)
         if: always()
         run: ccache -s
