@@ -38,6 +38,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   reflux source. `AMRRegrid.frozen()` exposes the materialize-once public hierarchy policy, and the
   installed shared-interface route covers one or two frozen levels with exact SSPRK2/subcycling
   evaluation when both endpoint hierarchies already provide matching full-face fine coverage.
+  Level-zero interface ownership is authenticated before AMR bootstrap, so proper-nesting may cross
+  only the exact physical faces deliberately omitted from their paired boundary plans.
   One-sided tag propagation, deeper or dynamically regridded hierarchies, refined MPI, implicit JVP
   and historical-rate paths remain fail-closed.
 - Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the

@@ -8,6 +8,7 @@ import sys
 
 import numpy as np
 import pops
+import pytest
 
 from pops import interfaces
 from pops.external import build_source_package_manifest, compile_component, load
@@ -260,7 +261,7 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         for block in (core.tracer, right)
         for handle, value in (
             (core.velocity_x_param, 1.0),
-            (core.velocity_y_param, 0.25),
+            (core.velocity_y_param, 1.0e-12),
             (core.inlet_x_param, 0.0),
             (core.inlet_y_param, 0.0),
         )
@@ -416,7 +417,7 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
         for block in (core.tracer, right)
         for handle, value in (
             (core.velocity_x_param, 1.0),
-            (core.velocity_y_param, 0.0),
+            (core.velocity_y_param, 1.0e-12),
             (core.inlet_x_param, 0.0),
             (core.inlet_y_param, 0.0),
         )
@@ -435,7 +436,22 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
         params=params,
     )
     assert flat_runtime.n_levels() == 1
-    assert flat_runtime._executor._interface_authorities[interface.qualified_id]["levels"] == (0,)
+    flat_authority = flat_runtime._executor._interface_authorities[interface.qualified_id]
+    assert flat_authority["levels"] == (0,)
+    assert len(flat_authority["declaration_identity"]) == 64
+
+    # A shared hierarchy does not imply that one endpoint's boundary tags are mirrored to its peer.
+    # With only the left x-high band tagged, the materialized L1 layout cannot tile the right x-low
+    # face.  The incremental finalizer must reject that incomplete pair before bind freezes.
+    with pytest.raises(ValueError, match="does not tile its declared physical face"):
+        example._bind_artifact(
+            artifact,
+            initial_values={
+                core.tracer_state: left_initial,
+                right_state: np.zeros_like(right_initial),
+            },
+            params=params,
+        )
 
     runtime = example._bind_artifact(
         artifact,
@@ -464,7 +480,9 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
 
     pops.run(runtime, t_end=1.0e-3, max_steps=1)
 
-    assert runtime._executor._interface_authorities[interface.qualified_id]["levels"] == (0, 1)
+    refined_authority = runtime._executor._interface_authorities[interface.qualified_id]
+    assert refined_authority["levels"] == (0, 1)
+    assert refined_authority["declaration_identity"] == flat_authority["declaration_identity"]
     assert runtime._executor._s._interface_evaluation_count(
         interface.qualified_id, 0) == 2
     assert runtime._executor._s._interface_evaluation_count(

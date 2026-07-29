@@ -459,6 +459,22 @@ class InterfaceFluxScheduler {
     return false;
   }
 
+  /// Whether one exact block face is owned by an authenticated interface route on @p level.
+  /// AMR bootstrap uses this geometric authority when proper-nesting support reaches a face that
+  /// the block's physical-boundary plan deliberately omits.  Merely participating in another
+  /// interface on the level is insufficient: block, axis and side must all match.
+  bool owns_face(std::size_t block, int level, InterfaceAxis axis, InterfaceSide side) const {
+    for (const PreparedInterface& prepared : interfaces_) {
+      const AxisAlignedInterface& route = prepared.route;
+      if (route.level != level)
+        continue;
+      if ((route.left_block == block && route.left_axis == axis && route.left_side == side) ||
+          (route.right_block == block && route.right_axis == axis && route.right_side == side))
+        return true;
+    }
+    return false;
+  }
+
   std::size_t evaluation_count(const std::string& identity, int level) const {
     for (const PreparedInterface& prepared : interfaces_)
       if (prepared.route.identity == identity && prepared.route.level == level)

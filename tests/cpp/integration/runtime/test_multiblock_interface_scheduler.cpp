@@ -312,6 +312,11 @@ TEST(test_multiblock_interface_scheduler,
                         batch.shared_flux[face] = Real(face + 2);
                       }
                     });
+  EXPECT_TRUE(scheduler.owns_face(0, 0, InterfaceAxis::X, InterfaceSide::High));
+  EXPECT_TRUE(scheduler.owns_face(1, 0, InterfaceAxis::X, InterfaceSide::Low));
+  EXPECT_FALSE(scheduler.owns_face(0, 0, InterfaceAxis::X, InterfaceSide::Low));
+  EXPECT_FALSE(scheduler.owns_face(0, 0, InterfaceAxis::Y, InterfaceSide::High));
+  EXPECT_FALSE(scheduler.owns_face(0, 1, InterfaceAxis::X, InterfaceSide::High));
   const BoundaryEvaluationPoint point{"clock.multibox", 1, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
   std::vector<MultiFab*> states{&left_state, &right_state};
   std::vector<MultiFab*> rhs{&left_rhs, &right_rhs};
@@ -320,6 +325,8 @@ TEST(test_multiblock_interface_scheduler,
   EXPECT_EQ(calls, 1);
   for (int face = 0; face < 6; ++face)
     EXPECT_EQ(get_cell(left_rhs, 3, face, 0) + get_cell(right_rhs, 10, 7 + face, 0), Real(0));
+  scheduler.clear();
+  EXPECT_FALSE(scheduler.owns_face(0, 0, InterfaceAxis::X, InterfaceSide::High));
 }
 
 TEST(test_multiblock_interface_scheduler,

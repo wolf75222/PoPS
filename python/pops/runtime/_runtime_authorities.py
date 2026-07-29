@@ -398,12 +398,14 @@ def _validate_refined_shared_interface_execution(
 
 
 def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
-    """Install authorities that require materialized native block storage.
+    """Install authorities for the currently materialized native level prefix.
 
     Physical ghost plans are installed before block construction so generated closures capture them.
     A shared NumericalFlux is different: both exact endpoint MultiFabs must exist before the scheduler
-    can prove their BoxArray, DistributionMapping and face geometry.  This finalizer is therefore called
-    by the unified install seam after blocks/Program materialization and before the bind freeze.
+    can prove their BoxArray, DistributionMapping and face geometry.  AMR calls this finalizer once
+    before bootstrap to authenticate level-zero interface ownership, then again after bootstrap to
+    add any materialized fine-level route.  Repeated calls must extend the exact prefix and can never
+    reinstall or silently replace an existing route.
     """
     from pops.runtime._component_execution_context import component_execution_data
 
@@ -412,6 +414,11 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
         raise RuntimeError("post-block authority finalization lost pre-build boundary reports")
     native = getattr(engine, "_s", None)
     install = getattr(native, "_install_interface_flux_component", None)
+    previous_reports = getattr(engine, "_interface_authorities", None)
+    if previous_reports is None:
+        previous_reports = {}
+    if not isinstance(previous_reports, Mapping):
+        raise TypeError("installed shared-interface authority reports must be a mapping")
     rows: dict[str, dict[str, Any]] = {}
     owners: dict[str, set[str]] = {}
     endpoint_owners: dict[str, dict[str, set[str]]] = {}
@@ -448,6 +455,9 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
             for side in sides:
                 table[side].add(block_name)
     if not rows:
+        if previous_reports:
+            raise RuntimeError(
+                "shared-interface declarations disappeared between authority finalizations")
         engine._interface_authorities = MappingProxyType({})
         return
     if not callable(install):
@@ -490,8 +500,22 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
 
     installed_reports = {}
     jobs = []
+    if set(previous_reports) - set(rows):
+        raise RuntimeError(
+            "installed shared-interface authority has no current resolved declaration")
+    import hashlib
+    import json
+
     for identity, row in sorted(rows.items()):
         interface = row["interface"]
+        declaration_identity = hashlib.sha256(
+            json.dumps(
+                interface,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
         endpoints = []
         for side_name in ("left", "right"):
             side = interface.get(side_name)
@@ -524,6 +548,30 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
             raise ValueError(
                 "shared interface endpoint block %r was not materialized" % error.args[0]) from None
         installed = _require_interface_component(install_plan, row["component"])
+        component_id = row["component"]["component_id"]
+        previous = previous_reports.get(identity)
+        previous_levels: tuple[int, ...] = ()
+        if previous is not None:
+            if not isinstance(previous, Mapping) or set(previous) != {
+                    "left_block", "right_block", "levels", "component_id",
+                    "declaration_identity"}:
+                raise TypeError(
+                    "installed shared-interface authority report is not canonical")
+            if previous["left_block"] != left or previous["right_block"] != right \
+                    or previous["component_id"] != component_id \
+                    or previous["declaration_identity"] != declaration_identity:
+                raise RuntimeError(
+                    "shared-interface authority changed after level-zero installation")
+            raw_levels = previous["levels"]
+            if type(raw_levels) is not tuple or any(
+                    type(level) is not int for level in raw_levels):
+                raise TypeError(
+                    "installed shared-interface levels must be one exact tuple of integers")
+            previous_levels = raw_levels
+            if previous_levels != tuple(range(len(previous_levels))) \
+                    or any(level not in levels for level in previous_levels):
+                raise RuntimeError(
+                    "installed shared-interface levels are not a prefix of materialized levels")
         # Empty overrides are deliberate: LoadedComponent owns the authenticated
         # parameters/target JSON captured from the installed component manifest.
         # Boundary binding scalars travel independently in the typed invocation
@@ -531,6 +579,8 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
         parameters_json = ""
         target_json = ""
         for level in levels:
+            if level in previous_levels:
+                continue
             jobs.append((
                 left_index, right_index, level, installed.native_handle,
                 interface, row["component"], parameters_json, target_json,
@@ -540,7 +590,8 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
             "left_block": left,
             "right_block": right,
             "levels": levels,
-            "component_id": row["component"]["component_id"],
+            "component_id": component_id,
+            "declaration_identity": declaration_identity,
         })
     discard = getattr(native, "_discard_interface_flux_components", None)
     if jobs and not callable(discard):
@@ -551,6 +602,7 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
             cast(Callable[..., Any], install)(*job)
     except BaseException:
         cast(Callable[..., Any], discard)()
+        engine._interface_authorities = MappingProxyType({})
         raise
     engine._interface_authorities = MappingProxyType(installed_reports)
 
