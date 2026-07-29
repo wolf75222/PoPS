@@ -186,13 +186,13 @@ class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
   }
   void set_boundary_context_at_level(int level,
                                      const FieldBoundaryExecutionContext& context) override {
-    if (level < 0 || level >= level_count())
-      throw std::out_of_range(
-          "geometric-MG boundary context level is outside the prepared hierarchy");
     if (fac_) {
       fac_->set_boundary_context_at_level(level, context);
       return;
     }
+    if (level < 0 || level >= level_count())
+      throw std::out_of_range(
+          "geometric-MG boundary context level is outside the prepared hierarchy");
     level_solvers_.at(static_cast<std::size_t>(level))->set_boundary_context(context);
   }
   SolveReport solve() override {

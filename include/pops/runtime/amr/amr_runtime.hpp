@@ -72,6 +72,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -249,7 +250,9 @@ class AmrPreparedFieldSolver {
   /// default: only level zero can reuse the historical single-context route. Providers advertising
   /// genuine multilevel dynamic boundaries must override this seam instead of presenting coarse
   /// dependency storage to a fine-level iterate. Binary compatibility for an already-built external
-  /// provider remains a separate ABI contract.
+  /// provider remains a separate ABI contract. Every override is a collective configuration call:
+  /// all communicator ranks enter with the same level sequence and must either commit the complete
+  /// rank-consistent carrier batch or reject it on every rank without changing the accepted batch.
   virtual void set_boundary_context_at_level(int level,
                                              const FieldBoundaryExecutionContext& context) {
     if (level != 0)
@@ -3995,8 +3998,10 @@ class AmrRuntime {
             auto& carrier = prepared_contexts[static_cast<std::size_t>(level)];
             carrier.state_buffers.reserve(nf.plan.boundary_state_blocks.size());
             carrier.state_distributions.reserve(nf.plan.boundary_state_blocks.size());
+            carrier.state_identities.reserve(nf.plan.boundary_state_blocks.size());
             carrier.field_buffers.reserve(nf.plan.boundary_field_blocks.size());
             carrier.field_distributions.reserve(nf.plan.boundary_field_blocks.size());
+            carrier.field_identities.reserve(nf.plan.boundary_field_blocks.size());
             for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
               const int raw_block = block_index(nf.plan.boundary_state_blocks[index]);
               const std::size_t block = static_cast<std::size_t>(raw_block);
@@ -4012,6 +4017,11 @@ class AmrRuntime {
               carrier.state_distributions.push_back(level == 0 && replicated_coarse_
                                                         ? FieldDistribution::Replicated
                                                         : FieldDistribution::Distributed);
+              ExactContractBuilder identity;
+              identity.text("amr-boundary-state")
+                  .text(nf.plan.boundary_state_blocks[index])
+                  .scalar(static_cast<std::int32_t>(nf.plan.boundary_state_components[index]));
+              carrier.state_identities.push_back(std::move(identity).release());
             }
             for (std::size_t index = 0; index < nf.plan.boundary_field_blocks.size(); ++index) {
               const std::string* dependency_slot = unique_boundary_field_dependency_slot_(
@@ -4019,13 +4029,22 @@ class AmrRuntime {
               auto& dependency = named_fields_.at(*dependency_slot);
               carrier.field_buffers.push_back(&dependency.solver->phi_level(level));
               carrier.field_distributions.push_back(dependency.solver->level_distribution(level));
+              ExactContractBuilder identity;
+              identity.text("amr-boundary-field")
+                  .text(nf.plan.boundary_field_blocks[index])
+                  .text(nf.plan.boundary_field_keys[index])
+                  .scalar(static_cast<std::int32_t>(nf.plan.boundary_field_components[index]))
+                  .text(*dependency_slot);
+              carrier.field_identities.push_back(std::move(identity).release());
             }
             carrier.context = nf.plan.boundary_context;
             carrier.context.states = carrier.state_buffers.data();
             carrier.context.state_distributions = carrier.state_distributions.data();
+            carrier.context.state_identities = carrier.state_identities.data();
             carrier.context.state_count = static_cast<int>(carrier.state_buffers.size());
             carrier.context.fields = carrier.field_buffers.data();
             carrier.context.field_distributions = carrier.field_distributions.data();
+            carrier.context.field_identities = carrier.field_identities.data();
             carrier.context.field_count = static_cast<int>(carrier.field_buffers.size());
           }
         } catch (...) {
@@ -4051,8 +4070,10 @@ class AmrRuntime {
             auto& carrier = installation_contexts->at(static_cast<std::size_t>(level));
             carrier.context.states = carrier.state_buffers.data();
             carrier.context.state_distributions = carrier.state_distributions.data();
+            carrier.context.state_identities = carrier.state_identities.data();
             carrier.context.fields = carrier.field_buffers.data();
             carrier.context.field_distributions = carrier.field_distributions.data();
+            carrier.context.field_identities = carrier.field_identities.data();
             nf.solver->set_boundary_context_at_level(level, carrier.context);
           }
         } catch (...) {
@@ -4072,15 +4093,19 @@ class AmrRuntime {
           // provider remains stable. The previously accepted carriers stay alive until the complete
           // provider batch succeeds; a late refusal therefore cannot leave its active context
           // dangling.
+          static_assert(
+              std::is_nothrow_move_assignable_v<std::vector<NamedField::BoundaryLevelContext>>);
           nf.boundary_level_contexts = std::move(prepared_contexts);
         }
       } else if (nf.plan.has_boundary_kernel) {
         FieldBoundaryExecutionContext context = nf.plan.boundary_context;
         context.states = nullptr;
         context.state_distributions = nullptr;
+        context.state_identities = nullptr;
         context.state_count = 0;
         context.fields = nullptr;
         context.field_distributions = nullptr;
+        context.field_identities = nullptr;
         context.field_count = 0;
         nf.boundary_level_contexts.clear();
         nf.solver->set_boundary_context(context);
@@ -5457,8 +5482,10 @@ class AmrRuntime {
     struct BoundaryLevelContext {
       std::vector<const MultiFab*> state_buffers;
       std::vector<FieldDistribution> state_distributions;
+      std::vector<std::string> state_identities;
       std::vector<const MultiFab*> field_buffers;
       std::vector<FieldDistribution> field_distributions;
+      std::vector<std::string> field_identities;
       FieldBoundaryExecutionContext context{};
     };
     int phi_comp = -1;
