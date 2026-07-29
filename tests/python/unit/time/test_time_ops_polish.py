@@ -332,8 +332,11 @@ def test_record_scalar_rejects_non_scalar_and_bad_name(t):
 
 
 def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
+    from pops._balance_contract import BalanceLedger as CoreBalanceLedger
     from pops.diagnostics import BalanceLedger
     from pops.diagnostics.balance import BALANCE_TERM_NAMES, balance_record_name
+
+    assert BalanceLedger is CoreBalanceLedger
 
     P = t.Program("p")
     U = typed_state(P, "blk")
@@ -349,7 +352,8 @@ def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
     )
     route = ledger.route_identity(U.block)
     assert tuple(record.attrs["diagnostic"] for record in records) == tuple(
-        balance_record_name(route, term) for term in BALANCE_TERM_NAMES)
+        balance_record_name(route, term) for term in BALANCE_TERM_NAMES
+    )
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
     contract = _balance_due_contract(route, every(3, clock=P.clock))
@@ -360,6 +364,15 @@ def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
     assert "? (ctx.sum_component(" in source
     assert "ctx.record_scalar(" not in source
     assert route.token in source
+
+    unreachable_source = emit_cpp_program(
+        P,
+        balance_due_contract=_balance_due_contract(
+            route, every(1 << 31, clock=P.clock)
+        ),
+    )
+    assert "2147483648" not in unreachable_source
+    assert "ctx.balance_consumer_is_due(" not in unreachable_source
 
 
 def test_balance_due_contract_unions_consumers_and_ignores_static_false(t):
@@ -378,6 +391,13 @@ def test_balance_due_contract_unions_consumers_and_ignores_static_false(t):
     assert contract.route(route.token).accepted_step_periods() == (3, 5)
     false_only = _balance_due_contract(route, when(False, clock=P.clock))
     assert false_only.route(route.token).accepted_step_periods() == ()
+
+    native_boundary = _balance_due_contract(
+        route,
+        every((1 << 31) - 1, clock=P.clock),
+        every(1 << 31, clock=P.clock),
+    )
+    assert native_boundary.route(route.token).accepted_step_periods() == ((1 << 31) - 1,)
 
 
 def test_record_balance_elides_native_collectives_without_a_consumer(t):
@@ -426,13 +446,9 @@ def test_record_balance_keeps_a_shared_reduction_unconditional(t):
 
     source = emit_cpp_program(
         P,
-        balance_due_contract=_balance_due_contract(
-            route, every(4, clock=P.clock)
-        ),
+        balance_due_contract=_balance_due_contract(route, every(4, clock=P.clock)),
     )
-    reduction_line = next(
-        line for line in source.splitlines() if "ctx.sum_component(" in line
-    )
+    reduction_line = next(line for line in source.splitlines() if "ctx.sum_component(" in line)
 
     assert "? (ctx.sum_component(" not in reduction_line
     assert source.count("ctx.record_balance_term(") == 5
@@ -460,9 +476,7 @@ def test_record_balance_physical_time_cadence_stays_conservatively_due(t):
 
     source = emit_cpp_program(
         P,
-        balance_due_contract=_balance_due_contract(
-            route, every_dt(0.1, clock=P.clock)
-        ),
+        balance_due_contract=_balance_due_contract(route, every_dt(0.1, clock=P.clock)),
     )
 
     assert source.count("ctx.balance_consumer_is_due(") == 1

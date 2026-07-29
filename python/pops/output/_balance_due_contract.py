@@ -9,6 +9,9 @@ from pops.time._schedule.api import Always, Every, Schedule, When
 from pops.time._schedule.domains import AcceptedStep
 
 
+_MAX_NATIVE_ACCEPTED_STEP = (1 << 31) - 1
+
+
 def _identity(value: Any, domain: str, *, where: str) -> Identity:
     if type(value) is not Identity or value.domain != domain or value.schema_version != 1:
         raise TypeError("%s must be an exact version-1 %s Identity" % (where, domain))
@@ -94,7 +97,12 @@ class BalanceDueRoute:
                 return (1,)
             trigger = schedule.trigger
             if type(trigger) is Every:
-                periods.append(trigger.n)
+                # The native facade's public macro-step is a signed 32-bit ``int`` and rejects
+                # overflow before increment. A larger positive period can therefore never fire in
+                # any representable run; omit it instead of emitting an implementation-defined C++
+                # narrowing conversion.
+                if trigger.n <= _MAX_NATIVE_ACCEPTED_STEP:
+                    periods.append(trigger.n)
             elif type(trigger) is Always:
                 periods.append(1)
             elif type(trigger) is When and type(trigger.condition) is bool:
