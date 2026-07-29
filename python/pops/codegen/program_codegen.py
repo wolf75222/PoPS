@@ -327,7 +327,7 @@ def _emit_system_install(target: str, prelude: str, body: str) -> str:
 
 
 def _emit_dt_bound_entry(target: str, body: str) -> str:
-    """Emit one facade-typed dt-bound ABI using the shared provider factory."""
+    """Emit one allocation-free facade-typed dt-bound ABI."""
     if target == "amr_system":
         symbol = "pops_program_dt_bound_amr"
         facade = "pops::AmrSystem"
@@ -336,8 +336,7 @@ def _emit_dt_bound_entry(target: str, body: str) -> str:
         facade = "pops::System"
     return (
         f'extern "C" pops::Real {symbol}({facade}* sys, pops::Real cfl) {{\n'
-        "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
-        "  auto& ctx = *ctx_owner;\n"
+        "  auto ctx = pops::runtime::program::make_program_execution_view(sys);\n"
         "  (void)ctx; (void)cfl;\n"
         f"{body}\n"
         "}\n"

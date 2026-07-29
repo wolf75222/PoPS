@@ -130,6 +130,7 @@ def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_
     amr = _read(AMR)
     assert shared.count("struct ProgramExecutionProviderFor;") == 1
     assert shared.count("make_program_execution_provider(") == 1
+    assert shared.count("make_program_execution_view(") == 1
     assert "ProgramExecutionProviderFor<System>" in uniform
     assert "ProgramExecutionProviderFor<AmrSystem>" in amr
     assert "explicit ProgramContext(void*" not in uniform
@@ -143,6 +144,7 @@ def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_
     ):
         assert forbidden not in codegen
     assert codegen.count("make_program_execution_provider(sys)") >= 3
+    assert codegen.count("make_program_execution_view(sys)") == 1
     assert 'pops_install_program(pops::System* sys)' in codegen
     assert 'pops_install_program_amr(pops::AmrSystem* sys)' in codegen
 
