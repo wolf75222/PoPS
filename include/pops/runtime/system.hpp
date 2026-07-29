@@ -226,7 +226,7 @@ class System {
   /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
   ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
   ///                 aggregated over the substeps of each advance and available via newton_report(name).
-  ///                 OPT-IN: false (default) = historical path with no extra cost. Stays
+  ///                 OPT-IN: false (default) omits the retained diagnostic summary. Stays
   ///                 flat (a separate bool, outside the homogeneous family of convergence options).
   /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
   ///                 every exact reconstructed face-trace pair, then reuses that interval from both
