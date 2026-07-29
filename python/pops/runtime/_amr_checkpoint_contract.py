@@ -8,7 +8,7 @@ import json
 from pops.identity import make_identity
 
 
-_SCHEMA = 2
+_SCHEMA = 3
 _GUARANTEE = "bit_identical_accepted_state"
 _CONTRACT_KEYS = {
     "schema_version",

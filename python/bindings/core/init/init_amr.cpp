@@ -802,6 +802,14 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
           },
           py::arg("payload"))
       .def(
+          "restore_checkpoint_accepted_state",
+          [](AmrSystem& s, py::bytes payload) {
+            std::string bytes = payload;
+            s.restore_checkpoint_accepted_state(
+                std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+          },
+          py::arg("payload"))
+      .def(
           "materialize_program_restart_histories",
           [](AmrSystem& s, py::bytes payload, const std::vector<std::string>& names,
              const std::vector<int>& depths, const std::vector<int>& ncomps) {

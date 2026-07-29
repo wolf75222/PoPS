@@ -128,8 +128,9 @@ Explicit unsupported rows include:
 - `limiter:mc` and `limiter:superbee`: catalogued descriptors with no native C++ symbol.
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
-  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use accepted-state v5.
-- `checkpoint:amr_dynamic_regrid` is available through the strict v5 accepted-state route. The single
+  encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v5 or AMR
+  v6 accepted-state payloads.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v6 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
   per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
   non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and

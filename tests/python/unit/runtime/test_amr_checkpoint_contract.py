@@ -135,6 +135,7 @@ def _payload(sim=None):
 
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
     contract = contract_for(_Sim())
+    assert contract["schema_version"] == 3
     assert contract["guarantee"] == "bit_identical_accepted_state"
     assert contract["ledger"]["accepted_entries"] == 1
     assert contract["ledger"]["transaction_depth"] == 0

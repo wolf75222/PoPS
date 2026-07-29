@@ -1886,7 +1886,8 @@ class AmrRuntime {
   std::vector<std::uint8_t> checkpoint_tagging_state() const {
     return tagging_state_.encode(tagging_program_.min_cycles, tagging_program_.provider_identity);
   }
-  void restore_checkpoint_tagging_state(const std::vector<std::uint8_t>& payload) {
+  runtime::amr::PersistentTaggingState prepare_checkpoint_tagging_state(
+      const std::vector<std::uint8_t>& payload) const {
     std::vector<Box2D> parent_domains;
     parent_domains.reserve(max_levels() > 1 ? static_cast<std::size_t>(max_levels() - 1) : 0u);
     int configured_refinement = 1;
@@ -1897,8 +1898,14 @@ class AmrRuntime {
         throw std::runtime_error("AmrRuntime checkpoint tagging hierarchy refinement is invalid");
       configured_refinement *= ratio;
     }
-    tagging_state_ = runtime::amr::PersistentTaggingState::decode(
+    return runtime::amr::PersistentTaggingState::decode(
         payload, tagging_program_.min_cycles, tagging_program_.provider_identity, parent_domains);
+  }
+  void commit_checkpoint_tagging_state(runtime::amr::PersistentTaggingState state) noexcept {
+    tagging_state_ = std::move(state);
+  }
+  void restore_checkpoint_tagging_state(const std::vector<std::uint8_t>& payload) {
+    commit_checkpoint_tagging_state(prepare_checkpoint_tagging_state(payload));
   }
   /// Process-local identity of the currently materialized hierarchy storage. Unlike the
   /// checkpointed epoch, this generation is never restored to an older value: rebuilding a
