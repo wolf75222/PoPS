@@ -20,6 +20,8 @@ CODEGEN_CONTEXT_ROUTES = (
 SHARED_SIGNATURES = (
     "struct FieldStageOverride",
     "struct CouplingStateOverride",
+    "struct RhsGroupRequest",
+    "struct RhsGroupBatch",
     "enum class ScratchKind",
     "enum class SchedulerCacheOperation",
     "struct ProgramResourceStorage",
@@ -28,6 +30,7 @@ SHARED_SIGNATURES = (
     "class LogicalEvaluationScope",
     "[[nodiscard]] auto logical_evaluation_scope(",
     "void evaluate_with_field_state_at(",
+    "void rhs_group(",
     "MultiFab rhs_scratch_like(",
     "MultiFab scratch_state_like(",
     "MultiFab& rhs_scratch(",
@@ -151,8 +154,8 @@ def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_
         assert forbidden not in codegen
     assert codegen.count("make_program_execution_provider(sys)") >= 3
     assert codegen.count("make_program_execution_view(sys)") == 1
-    assert 'pops_install_program(pops::System* sys)' in codegen
-    assert 'pops_install_program_amr(pops::AmrSystem* sys)' in codegen
+    assert "pops_install_program(pops::System* sys)" in codegen
+    assert "pops_install_program_amr(pops::AmrSystem* sys)" in codegen
 
 
 def test_extracted_operations_have_one_source_definition():
@@ -207,6 +210,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
         assert "friend class ProgramExecutionServices<%s>;" % context in source
         for hook in (
             "program_execution_logical_parent_dt_",
+            "program_execution_rhs_group_",
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
@@ -319,8 +323,8 @@ def test_scheduler_cache_algorithm_is_shared_but_storage_lifecycle_is_provider_o
     shared = _read(SHARED)
     uniform = _read(UNIFORM)
     amr = _read(AMR)
-    assert shared.count('#include <pops/runtime/program/cache_manager.hpp>') == 1
-    assert '#include <pops/runtime/program/cache_manager.hpp>' not in uniform
+    assert shared.count("#include <pops/runtime/program/cache_manager.hpp>") == 1
+    assert "#include <pops/runtime/program/cache_manager.hpp>" not in uniform
     assert "program_execution_cache_(SchedulerCacheOperation" in uniform
     assert "return sys_->program_cache();" in uniform
     assert "program_execution_cache_(SchedulerCacheOperation operation)" in amr

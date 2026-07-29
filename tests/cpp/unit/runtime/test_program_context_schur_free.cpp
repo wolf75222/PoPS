@@ -65,6 +65,11 @@ class ExecutionServicesFixture
   pops::Real diagnostic(const std::string& name) const { return diagnostics_.at(name); }
   double logical_dt() const { return logical_dt_; }
   void fail_next_logical_apply() { fail_logical_apply_ = true; }
+  int rhs_group_identity() const { return rhs_group_identity_; }
+  const std::vector<int>& rhs_group_program_blocks() const { return rhs_group_program_blocks_; }
+  const std::vector<int>& rhs_group_runtime_blocks() const { return rhs_group_runtime_blocks_; }
+  const std::vector<int>& rhs_group_rate_ids() const { return rhs_group_rate_ids_; }
+  const std::vector<int>& rhs_group_flux_only() const { return rhs_group_flux_only_; }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
@@ -88,6 +93,15 @@ class ExecutionServicesFixture
   void program_execution_restore_logical_evaluation_(
       const LogicalRollback& rollback) const noexcept {
     logical_dt_ = rollback.dt;
+  }
+  void program_execution_rhs_group_(const typename SharedServices::RhsGroupBatch& batch) const {
+    rhs_group_identity_ = batch.group_id;
+    rhs_group_program_blocks_.clear();
+    for (const auto& request : batch.requests)
+      rhs_group_program_blocks_.push_back(request.block);
+    rhs_group_runtime_blocks_ = batch.runtime_blocks;
+    rhs_group_rate_ids_ = batch.rate_ids;
+    rhs_group_flux_only_ = batch.flux_only;
   }
   const std::vector<int>& program_execution_block_map_() const { return block_map_; }
   int program_execution_block_count_() const { return 2; }
@@ -132,6 +146,11 @@ class ExecutionServicesFixture
   mutable pops::runtime::program::Profiler profiler_;
   mutable double logical_dt_ = 0.4;
   mutable bool fail_logical_apply_ = false;
+  mutable int rhs_group_identity_ = -1;
+  mutable std::vector<int> rhs_group_program_blocks_;
+  mutable std::vector<int> rhs_group_runtime_blocks_;
+  mutable std::vector<int> rhs_group_rate_ids_;
+  mutable std::vector<int> rhs_group_flux_only_;
 };
 
 template <class Context>
@@ -199,6 +218,21 @@ void expect_shared_program_services(Context& context, bool amr) {
   EXPECT_EQ(context.macro_step(), 4);
   EXPECT_DOUBLE_EQ(static_cast<double>(context.physical_time()), 3.5);
 
+  pops::MultiFab state_a;
+  pops::MultiFab state_b;
+  pops::MultiFab rhs_a;
+  pops::MultiFab rhs_b;
+  context.profiler().enable();
+  context.rhs_group(20, {{0, &state_a, &rhs_a, 11, 0}, {1, &state_b, &rhs_b, 12, 1}});
+  EXPECT_EQ(context.profiler().counter("kernels"), 2);
+  EXPECT_EQ(context.rhs_group_identity(), 20);
+  EXPECT_EQ(context.rhs_group_program_blocks(), std::vector<int>({0, 1}));
+  EXPECT_EQ(context.rhs_group_runtime_blocks(), std::vector<int>({1, 0}));
+  EXPECT_EQ(context.rhs_group_rate_ids(), std::vector<int>({11, 12}));
+  EXPECT_EQ(context.rhs_group_flux_only(), std::vector<int>({0, 1}));
+  EXPECT_THROW(context.rhs_group(20, {{0, &state_a, &rhs_a, 11, 0}, {1, &state_b, &rhs_b, 11, 1}}),
+               std::invalid_argument);
+
   context.set_stage_time(1, 2);
   context.record_scalar("mass", pops::Real(9));
   EXPECT_EQ(context.diagnostic("mass"), pops::Real(9));
@@ -209,12 +243,11 @@ void expect_shared_program_services(Context& context, bool amr) {
   context.set_field_boundary_kernel("potential", {});
   EXPECT_EQ(context.field_update_count(), 3);
 
-  context.profiler().enable();
   EXPECT_TRUE(context.schedule_decision(3, true, true));
   EXPECT_EQ(context.profiler().counter("nodes_due"), 1);
   EXPECT_EQ(context.profiler().counter("cache_misses"), 1);
   context.count_kernel(2);
-  EXPECT_EQ(context.profiler().counter("kernels"), 2);
+  EXPECT_EQ(context.profiler().counter("kernels"), 4);
 
   EXPECT_THROW(context.set_stage_time(2, 1), std::runtime_error);
   EXPECT_THROW(
