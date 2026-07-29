@@ -484,6 +484,7 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)
 #include <pops/mesh/execution/for_each.hpp>     // for_each_cell (Phase-4b per-cell kernels)
 #include <pops/numerics/linalg/dense_eig.hpp>   // pops::detail::mat_inverse (local dense solve)
+#include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>  // one prepared local solver
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // prepared affine Krylov route
 #include <pops/core/foundation/types.hpp>
 #include <chrono>                              // std::chrono::steady_clock (per-node profiling pair, ADC-459)
