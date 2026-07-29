@@ -243,17 +243,3 @@ TEST(CheckpointHistory, RingRoundTripsBitEqualAcrossRestart) {
   EXPECT_TRUE(max_abs_diff(dst.history_global("rhs_prev", 2), A) < 1e-15)
       << "no_phantom_coldstart_lag2_kept_A";
 }
-
-TEST(CheckpointHistory, RestartRejectsMismatchedProgramHashVerbatim) {
-  // The program-hash guard (installed_program_hash) rejects a restart against a DIFFERENT compiled
-  // Program: the buffers / cadence would be meaningless. The history rings share the cache's hash
-  // guard; this pins the verbatim message shape the facade raises (no Program installed here).
-  const std::string hash_msg = "checkpoint was created with a different compiled Program hash";
-  bool threw = false;
-  try {
-    throw std::runtime_error(hash_msg);
-  } catch (const std::runtime_error& e) {
-    threw = (std::string(e.what()) == hash_msg);
-  }
-  EXPECT_TRUE(threw) << "verbatim_hash_mismatch_message";
-}
