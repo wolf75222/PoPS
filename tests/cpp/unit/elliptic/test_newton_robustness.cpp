@@ -951,6 +951,27 @@ TEST(PreparedLocalNonlinear, EveryFailureClassIsExplicitAndLeavesTheGuessUntouch
       pops::solve_prepared_local_nonlinear(unknown_safeguard_problem, safeguard_initial).status,
       pops::LocalNonlinearStatus::kUnsupportedCapability);
 
+  auto maximum_backtracks_controls = scalar_controls();
+  maximum_backtracks_controls.max_backtracks = std::numeric_limits<int>::max();
+  const auto maximum_backtracks_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, maximum_backtracks_controls);
+  const auto maximum_backtracks_result =
+      pops::solve_prepared_local_nonlinear(maximum_backtracks_problem, safeguard_initial);
+  EXPECT_TRUE(maximum_backtracks_result.solved());
+  EXPECT_NEAR(maximum_backtracks_result.value[0], Real(1), 1e-12);
+
+  auto maximum_attempts_controls = maximum_backtracks_controls;
+  maximum_attempts_controls.max_evaluations = 16;
+  maximum_attempts_controls.safeguard = pops::LocalSafeguardKind::kBacktrackingLineSearch;
+  const auto maximum_attempts_problem = pops::prepare_local_nonlinear_problem<1>(
+      LinearResidual{}, pops::FiniteDifferenceLocalJacobian<1>{},
+      pops::AcceptAllLocalCandidates<1>{}, maximum_attempts_controls);
+  const auto maximum_attempts_result =
+      pops::solve_prepared_local_nonlinear(maximum_attempts_problem, safeguard_initial);
+  EXPECT_TRUE(maximum_attempts_result.solved());
+  EXPECT_NEAR(maximum_attempts_result.value[0], Real(1), 1e-12);
+
   int decoded_i = -1;
   int decoded_j = -1;
   int decoded_component = -1;

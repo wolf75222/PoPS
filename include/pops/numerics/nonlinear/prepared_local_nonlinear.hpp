@@ -649,15 +649,16 @@ POPS_HD inline LocalNonlinearCellResult<N> solve_prepared_local_nonlinear(
     return result;
   }
 
-  const long long derived_budget_wide =
-      2LL +
-      static_cast<long long>(problem.controls.max_iterations) *
-          static_cast<long long>(
-              N + 2 + (problem.controls.max_backtracks > 0 ? problem.controls.max_backtracks : 0));
-  const int derived_budget =
-      derived_budget_wide > static_cast<long long>(std::numeric_limits<int>::max())
-          ? std::numeric_limits<int>::max()
-          : static_cast<int>(derived_budget_wide);
+  const long long maximum_budget = static_cast<long long>(std::numeric_limits<int>::max());
+  const long long backtrack_budget =
+      problem.controls.safeguard == LocalSafeguardKind::kBacktrackingLineSearch
+          ? static_cast<long long>(problem.controls.max_backtracks)
+          : 0LL;
+  const long long evaluations_per_iteration = static_cast<long long>(N) + 2LL + backtrack_budget;
+  const long long iterations = static_cast<long long>(problem.controls.max_iterations);
+  const int derived_budget = evaluations_per_iteration > (maximum_budget - 2LL) / iterations
+                                 ? std::numeric_limits<int>::max()
+                                 : static_cast<int>(2LL + iterations * evaluations_per_iteration);
   const int evaluation_budget =
       problem.controls.max_evaluations > 0 ? problem.controls.max_evaluations : derived_budget;
   Real residual[N];
@@ -717,15 +718,16 @@ POPS_HD inline LocalNonlinearCellResult<N> solve_prepared_local_nonlinear(
     Real alpha = problem.controls.safeguard == LocalSafeguardKind::kExactNewton
                      ? Real(1)
                      : problem.controls.initial_step;
-    const int attempts = problem.controls.safeguard == LocalSafeguardKind::kBacktrackingLineSearch
-                             ? problem.controls.max_backtracks + 1
-                             : 1;
+    const long long attempts =
+        problem.controls.safeguard == LocalSafeguardKind::kBacktrackingLineSearch
+            ? static_cast<long long>(problem.controls.max_backtracks) + 1LL
+            : 1LL;
     bool accepted = false;
     bool saw_admissible = false;
     Real trial[N];
     Real trial_residual[N];
     Real trial_norm = std::numeric_limits<Real>::max();
-    for (int attempt = 0; attempt < attempts; ++attempt) {
+    for (long long attempt = 0; attempt < attempts; ++attempt) {
       for (int i = 0; i < N; ++i)
         trial[i] = result.value[i] - alpha * step[i];
       int candidate_component = -1;
@@ -751,7 +753,8 @@ POPS_HD inline LocalNonlinearCellResult<N> solve_prepared_local_nonlinear(
       }
       if (problem.controls.safeguard != LocalSafeguardKind::kBacktrackingLineSearch)
         break;
-      ++result.safeguard_steps;
+      if (result.safeguard_steps < std::numeric_limits<int>::max())
+        ++result.safeguard_steps;
       alpha *= Real(0.5);
       if (alpha < problem.controls.minimum_step)
         break;
