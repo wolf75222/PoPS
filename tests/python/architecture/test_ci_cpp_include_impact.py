@@ -313,6 +313,16 @@ def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
     assert max(loads) <= lpt_bound + 1.0e-9
 
 
+def test_cpp_duration_catalog_verifier_authenticates_full_inventory(capsys):
+    class Args:
+        shard_total = 7
+
+    assert sel.verify_cpp_duration_catalogs(Args()) == 0
+    output = capsys.readouterr().out
+    assert "C++ targets in both duration catalogs" in output
+    assert "7 shards form an exact cover" in output
+
+
 @pytest.mark.parametrize(
     ("catalog", "mutation", "message"),
     (
