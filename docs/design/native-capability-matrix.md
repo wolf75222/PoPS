@@ -119,12 +119,15 @@ Supported native routes include:
   field-dependent transport-boundary JVP route. A native L0/L1 level-local oracle now places that
   dependency on a physical face of a fully refined domain and checks the complete core-plus-boundary
   `rhs_jacvec(field_coupled=True)` against an independent centered finite difference; it also proves
-  physical-face locality, provider sensitivity and restoration after every perturbation. The same
-  core field-coupled JVP has a two-rank L0/L1 oracle over genuinely distributed state and provider
-  storage, including centered-difference parity, frozen-provider sensitivity and collective
-  restoration of both the provider and its residual carrier. A second two-rank L0/L1 oracle drives
-  that solved field through an x-low physical-face residual split across both ranks, proving that its
-  JVP contribution is non-trivial, face-local, provider-sensitive and collectively restored.
+  physical-face locality, provider sensitivity and restoration after every perturbation. The core
+  field-coupled JVP has a two-rank level-local oracle over genuinely distributed L0/L1 state and
+  provider storage. Its composite-policy MPI oracle exercises the ownership topology supported by
+  the builtin FAC provider: one complete replicated L0 copy per rank and a genuinely distributed
+  L1. Both check centered-difference parity, frozen-provider sensitivity and collective restoration
+  of the complete provider hierarchy plus the active-level residual carrier. A second two-rank L0/L1
+  oracle drives the level-local solved field through an x-low physical-face residual split across
+  both ranks, proving that its JVP contribution is non-trivial, face-local, provider-sensitive and
+  collectively restored.
   Partially refined FAC patches carrying a dynamic physical boundary must remain strictly interior;
   a patch touching a non-periodic domain face fails closed. A selected solve with a field dependency
   also fails closed until its complete dependency closure can share one transaction. Simultaneous

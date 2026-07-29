@@ -1,9 +1,10 @@
 // Exact collective consensus for resolved field-plan registries and level-qualified AMR stage
 // packs. Registry scenarios keep setters local/non-collective, then mark_bound compares one
 // canonical std::map-ordered sequence of (provider_slot, plan_identity). The stage-pack scenario
-// drives distributed L0/L1 storage and proves successful publication, the field-coupled residual
-// JVP (including a solved-field physical boundary) against an independent finite difference, and
-// pre-solve rejection when provider, evaluation point, or pack presence differs between ranks.
+// drives distributed L0/L1 storage and proves successful publication, while a second supported
+// replicated-L0/distributed-L1 scenario proves the composite field-coupled residual JVP against an
+// independent finite difference. It also proves a level-local solved-field physical-boundary JVP
+// and pre-solve rejection when provider, evaluation point, or pack presence differs between ranks.
 
 #include <gtest/gtest.h>
 
@@ -549,6 +550,150 @@ bool duplicate_rejected(System& system) {
   return false;
 }
 
+long prove_field_jacvec_route(AmrRuntime& runtime, const std::string& jacvec_field,
+                              const std::string& block_name, int block_index,
+                              const AmrFieldHierarchyPolicyAuthority& hierarchy_policy,
+                              std::string_view topology_digest, std::string_view route_label) {
+  constexpr Real c_dt = Real(0.01);
+  constexpr Real h = Real(2e-4);
+  long failures = 0;
+  const auto require = [&failures, route_label](bool condition, std::string_view check) {
+    if (!condition) {
+      std::fprintf(stderr, "rank %d: %.*s failed: %.*s\n", my_rank(),
+                   static_cast<int>(route_label.size()), route_label.data(),
+                   static_cast<int>(check.size()), check.data());
+      ++failures;
+    }
+  };
+  const auto consume_solved = [route_label](SolveOutcome outcome, std::string_view check) {
+    if (!outcome.report().solved()) {
+      const SolveConsumption action = outcome.report().action == SolveAction::kRejectAttempt
+                                          ? SolveConsumption::kRejectAttempt
+                                          : SolveConsumption::kFailRun;
+      const SolveReport failed = outcome.consume(action);
+      char metrics[192];
+      std::snprintf(metrics, sizeof(metrics),
+                    " (iters=%d, residual=%.17g, reference=%.17g, relative=%.17g)", failed.iters,
+                    static_cast<double>(failed.residual_norm),
+                    static_cast<double>(failed.reference_residual_norm),
+                    static_cast<double>(failed.rel_residual));
+      throw std::runtime_error(std::string(route_label) + " " + std::string(check) +
+                               " failed: " + failed.reason + metrics);
+    }
+    return outcome.consume(SolveConsumption::kAccept);
+  };
+
+  AmrFieldSolveConfig jacvec_plan;
+  CompositeFacOptions fac_options;
+  // Preserve the production tolerance while giving the distributed partial-refinement FAC route
+  // enough outer cycles to reach it; the default 30 cycles stops near 2e-7 on this tiny hierarchy.
+  fac_options.max_iters = 80;
+  jacvec_plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, fac_options);
+  jacvec_plan.plan_identity = "tests.mpi." + jacvec_field + ".plan@1";
+  jacvec_plan.provider_identity = "tests.mpi." + jacvec_field;
+  jacvec_plan.topology_provider_kind = "structured";
+  jacvec_plan.topology_provenance = "tests.mpi.periodic-cartesian";
+  jacvec_plan.topology_digest = std::string(topology_digest);
+  jacvec_plan.output_owner_identity = "tests.mpi.stage-pack." + block_name;
+  jacvec_plan.output_block = block_name;
+  jacvec_plan.output_key = jacvec_field;
+  jacvec_plan.hierarchy_policy = hierarchy_policy;
+  jacvec_plan.nullspace = operator_topology_zero_mean_nullspace();
+  jacvec_plan.has_reaction = true;
+  jacvec_plan.reaction = Real(2);
+  jacvec_plan.providers.push_back(FieldProviderBinding{"tests.mpi." + jacvec_field + "/rhs",
+                                                       block_name, jacvec_field, Real(1)});
+  runtime.install_field_plan(jacvec_field, jacvec_plan);
+  runtime.register_named_field(block_name, jacvec_field, 0, 1, 2,
+                               /*gradient_sign=*/-1);
+  runtime.set_block_named_elliptic_rhs(
+      block_index, jacvec_field,
+      [](const MultiFab& state, MultiFab& rhs) { add_scaled_component(state, Real(1), 0, rhs); });
+
+  require(consume_solved(runtime.solve_named_fields(&jacvec_field), "baseline").solved(),
+          "baseline consumption");
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
+        "main",
+        31 + 10 * block_index + level,
+        level,
+        level,
+        13,
+        ::pops::amr::Rational(1, 2),
+        0.01 / static_cast<double>(1 << level),
+        0.305};
+    MultiFab iterate = runtime.level_state(block_index, level);
+    MultiFab direction = iterate;
+    scale(direction, Real(0.75));
+
+    require(consume_solved(
+                runtime.solve_named_fields_from_state_at(point, jacvec_field, block_index, iterate),
+                "base")
+                .solved(),
+            "base consumption");
+    std::vector<MultiFab> base_phi;
+    base_phi.reserve(static_cast<std::size_t>(runtime.nlev()));
+    for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level)
+      base_phi.emplace_back(runtime.provider_potential_level(jacvec_field, provider_level));
+
+    auto residual_at = [&](Real shift, bool coupled) {
+      MultiFab state = iterate;
+      saxpy(state, shift, direction);
+      MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+      residual.set_val(Real(0));
+      if (coupled) {
+        require(consume_solved(runtime.solve_named_fields_from_state_at(point, jacvec_field,
+                                                                        block_index, state),
+                               "perturbed")
+                    .solved(),
+                "perturbed consumption");
+      }
+      runtime.level_rhs_core_into_at(block_index, level, point, state, residual,
+                                     /*flux_only=*/false);
+      if (coupled) {
+        require(consume_solved(runtime.solve_named_fields_from_state_at(point, jacvec_field,
+                                                                        block_index, iterate),
+                               "restore")
+                    .solved(),
+                "restore consumption");
+      }
+      return residual;
+    };
+
+    const MultiFab r0 = residual_at(Real(0), /*coupled=*/false);
+    const MultiFab plus = residual_at(h, /*coupled=*/true);
+    const MultiFab minus = residual_at(-h, /*coupled=*/true);
+    const MultiFab stale_plus = residual_at(h, /*coupled=*/false);
+    const MultiFab restored_r0 = residual_at(Real(0), /*coupled=*/false);
+
+    MultiFab generated = direction;
+    saxpy(generated, -c_dt / h, plus);
+    saxpy(generated, c_dt / h, r0);
+    MultiFab centered = direction;
+    saxpy(centered, -c_dt / (Real(2) * h), plus);
+    saxpy(centered, c_dt / (Real(2) * h), minus);
+    const Real response = global_max_valid_scalar_diff(centered, direction);
+    require(response > Real(1e-7), "field-coupled response");
+    require(global_max_valid_scalar_diff(generated, centered) < Real(2e-2) * response + Real(2e-7),
+            "centered-difference parity");
+
+    MultiFab stale = direction;
+    saxpy(stale, -c_dt / h, stale_plus);
+    saxpy(stale, c_dt / h, r0);
+    require(global_max_valid_scalar_diff(stale, centered) > Real(1e-7),
+            level == 0 ? "L0 rejects a frozen provider" : "L1 rejects a frozen provider");
+    for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level)
+      require(global_max_valid_scalar_diff(
+                  runtime.provider_potential_level(jacvec_field, provider_level),
+                  base_phi[static_cast<std::size_t>(provider_level)]) < Real(1e-8),
+              "restores its complete provider hierarchy");
+    require(global_max_valid_scalar_diff(restored_r0, r0) < Real(1e-8),
+            "restores its residual carrier");
+  }
+  return failures;
+}
+
 long prove_exact_distributed_stage_pack() {
   constexpr int n = 8;
   constexpr int phi_component = kAuxNamedBase;
@@ -709,117 +854,11 @@ long prove_exact_distributed_stage_pack() {
               "accepted stage pack restores provider result");
     }
 
-    // The serial AMR oracle proves this algebra per level; repeat it here over genuinely
-    // distributed L0/L1 state and field storage.  Registering the provider in the ExB auxiliary
-    // slots makes the core residual depend on the exact perturbed field, while a level-local
-    // hierarchy keeps each active level independently observable.
-    constexpr Real c_dt = Real(0.01);
-    constexpr Real h = Real(2e-4);
-    const std::string jacvec_field = "distributed_jacvec";
-    AmrFieldSolveConfig jacvec_plan;
-    jacvec_plan.solver_options =
-        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
-    jacvec_plan.plan_identity = "tests.mpi.distributed-jacvec.plan@1";
-    jacvec_plan.provider_identity = "tests.mpi.distributed-jacvec";
-    jacvec_plan.topology_provider_kind = "structured";
-    jacvec_plan.topology_provenance = "tests.mpi.periodic-cartesian";
-    jacvec_plan.topology_digest = "tests.mpi.periodic-cartesian.full-refinement@1";
-    jacvec_plan.output_owner_identity = "tests.mpi.stage-pack.a";
-    jacvec_plan.output_block = "a";
-    jacvec_plan.output_key = jacvec_field;
-    jacvec_plan.hierarchy_policy = level_local_hierarchy_policy();
-    jacvec_plan.nullspace = operator_topology_zero_mean_nullspace();
-    jacvec_plan.has_reaction = true;
-    jacvec_plan.reaction = Real(2);
-    jacvec_plan.providers.push_back(
-        FieldProviderBinding{"tests.mpi.distributed-jacvec/rhs", "a", jacvec_field, Real(1)});
-    runtime.install_field_plan(jacvec_field, jacvec_plan);
-    runtime.register_named_field("a", jacvec_field, 0, 1, 2, /*gradient_sign=*/-1);
-    runtime.set_block_named_elliptic_rhs(0, jacvec_field, [](const MultiFab& state, MultiFab& rhs) {
-      add_scaled_component(state, Real(1), 0, rhs);
-    });
-
-    {
-      SolveOutcome baseline = runtime.solve_named_fields(&jacvec_field);
-      require(baseline.report().solved(), "distributed JVP baseline report");
-      require(baseline.consume(SolveConsumption::kAccept).solved(),
-              "distributed JVP baseline consumption");
-    }
-    for (int level = 0; level < runtime.nlev(); ++level) {
-      const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
-          "main",
-          31 + level,
-          level,
-          level,
-          13,
-          ::pops::amr::Rational(1, 2),
-          0.01 / static_cast<double>(1 << level),
-          0.305};
-      MultiFab iterate = runtime.level_state(0, level);
-      MultiFab direction = iterate;
-      scale(direction, Real(0.75));
-
-      {
-        SolveOutcome base =
-            runtime.solve_named_fields_from_state_at(point, jacvec_field, 0, iterate);
-        require(base.report().solved(), "distributed JVP base report");
-        require(base.consume(SolveConsumption::kAccept).solved(),
-                "distributed JVP base consumption");
-      }
-      const MultiFab base_phi = runtime.provider_potential_level(jacvec_field, level);
-
-      auto residual_at = [&](Real shift, bool coupled) {
-        MultiFab state = iterate;
-        saxpy(state, shift, direction);
-        MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
-        residual.set_val(Real(0));
-        if (coupled) {
-          SolveOutcome perturbed =
-              runtime.solve_named_fields_from_state_at(point, jacvec_field, 0, state);
-          require(perturbed.report().solved(), "distributed JVP perturbed report");
-          require(perturbed.consume(SolveConsumption::kAccept).solved(),
-                  "distributed JVP perturbed consumption");
-        }
-        runtime.level_rhs_core_into_at(0, level, point, state, residual, /*flux_only=*/false);
-        if (coupled) {
-          SolveOutcome restored =
-              runtime.solve_named_fields_from_state_at(point, jacvec_field, 0, iterate);
-          require(restored.report().solved(), "distributed JVP restore report");
-          require(restored.consume(SolveConsumption::kAccept).solved(),
-                  "distributed JVP restore consumption");
-        }
-        return residual;
-      };
-
-      const MultiFab r0 = residual_at(Real(0), /*coupled=*/false);
-      const MultiFab plus = residual_at(h, /*coupled=*/true);
-      const MultiFab minus = residual_at(-h, /*coupled=*/true);
-      const MultiFab stale_plus = residual_at(h, /*coupled=*/false);
-      const MultiFab restored_r0 = residual_at(Real(0), /*coupled=*/false);
-
-      MultiFab generated = direction;
-      saxpy(generated, -c_dt / h, plus);
-      saxpy(generated, c_dt / h, r0);
-      MultiFab centered = direction;
-      saxpy(centered, -c_dt / (Real(2) * h), plus);
-      saxpy(centered, c_dt / (Real(2) * h), minus);
-      const Real response = global_max_valid_scalar_diff(centered, direction);
-      require(response > Real(1e-7), "distributed field-coupled JVP response");
-      require(
-          global_max_valid_scalar_diff(generated, centered) < Real(2e-2) * response + Real(2e-7),
-          "distributed field-coupled JVP centered-difference parity");
-
-      MultiFab stale = direction;
-      saxpy(stale, -c_dt / h, stale_plus);
-      saxpy(stale, c_dt / h, r0);
-      require(global_max_valid_scalar_diff(stale, centered) > Real(1e-7),
-              "distributed field-coupled JVP rejects a frozen provider");
-      require(global_max_valid_scalar_diff(runtime.provider_potential_level(jacvec_field, level),
-                                           base_phi) < Real(1e-8),
-              "distributed field-coupled JVP restores its provider");
-      require(global_max_valid_scalar_diff(restored_r0, r0) < Real(1e-8),
-              "distributed field-coupled JVP restores its residual carrier");
-    }
+    // This runtime deliberately de-replicates both L0 and L1. The builtin composite provider
+    // refuses that ownership contract, so this route proves only the level-local policy here.
+    failures += prove_field_jacvec_route(
+        runtime, "distributed_jacvec", "a", 0, level_local_hierarchy_policy(),
+        "tests.mpi.periodic-cartesian.full-refinement@1", "distributed level-local JVP");
 
     // These request bytes are collective inputs. Keep every local request structurally valid so
     // each mismatch reaches the exact consensus, then prove no solver or publication ran.
@@ -886,6 +925,67 @@ long prove_exact_distributed_stage_pack() {
   } catch (...) {
     if (my_rank() == 0)
       std::fprintf(stderr, "exact distributed stage-pack proof failed with an unknown error\n");
+    ++failures;
+  }
+  return failures;
+}
+
+long prove_replicated_coarse_composite_jvp() {
+  constexpr int n = 8;
+  long failures = 0;
+  const auto require = [&failures](bool condition, std::string_view label) {
+    if (!condition) {
+      std::fprintf(stderr, "rank %d: replicated-coarse composite JVP failed: %.*s\n", my_rank(),
+                   static_cast<int>(label.size()), label.data());
+      ++failures;
+    }
+  };
+
+  try {
+    AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{true, true};
+    params.mesh.n = n;
+    params.mesh.regrid_every = 0;
+    params.mesh.distribute_coarse = false;
+    detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+    // CompositeFAC's current MPI contract keeps a complete coarse copy on every rank while the
+    // refined level is genuinely partitioned. Tile the central fine seed so both ranks own live
+    // pieces while uncovered L0 cells continue to exercise the coarse part of the composite solve.
+    const Box2D fine_region = layout.ba[1].boxes().front();
+    layout.ba[1] = BoxArray::from_domain(fine_region, n / 2);
+    layout.dm[1] = DistributionMapping(layout.ba[1].size(), n_ranks());
+    require(layout.replicated_coarse, "coarse ownership is explicitly replicated");
+    require(mapping_is_distributed_across_two_ranks(layout.dm[1]), "L1 mapping is distributed");
+
+    std::vector<AmrRuntimeBlock> blocks;
+    blocks.push_back(detail::dispatch_amr_block(stage_pack_model(), "minmod", "rusanov", layout,
+                                                "composite", stage_pack_density(n, 0.5),
+                                                /*has_density=*/true, 1.4, 1, false));
+    blocks.back().aux_ncomp = kAuxNamedBase + 1;
+
+    AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                       std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    test::install_second_order_amr_transfer_authorities(runtime, 1);
+    runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+        0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+    require(runtime.nlev() == 2, "composite hierarchy has L0/L1");
+    require(runtime.level_state(0, 0).local_size() > 0,
+            "each rank owns its replicated coarse copy");
+    require(runtime.level_state(0, 1).local_size() > 0, "each rank owns a fine piece");
+    failures += prove_field_jacvec_route(runtime, "replicated_coarse_composite_jacvec", "composite",
+                                         0, composite_hierarchy_policy(),
+                                         "tests.mpi.periodic-cartesian.central-refinement@1",
+                                         "replicated-coarse distributed-fine composite JVP");
+  } catch (const std::exception& error) {
+    if (my_rank() == 0)
+      std::fprintf(stderr, "replicated-coarse composite JVP proof failed: %s\n", error.what());
+    ++failures;
+  } catch (...) {
+    if (my_rank() == 0)
+      std::fprintf(stderr, "replicated-coarse composite JVP proof failed with an unknown error\n");
     ++failures;
   }
   return failures;
@@ -1129,6 +1229,7 @@ int run_field_plan_consensus(int argc, char** argv) {
   };
 
   failures += prove_exact_distributed_stage_pack();
+  failures += prove_replicated_coarse_composite_jvp();
   failures += prove_distributed_physical_boundary_jvp();
 
   // A hierarchy provider cannot split publication by returning individually valid but different
