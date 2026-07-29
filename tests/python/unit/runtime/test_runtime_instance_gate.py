@@ -158,6 +158,10 @@ class _Executor:
             self.bound_snapshot.bind_identity,
         )
 
+    def _restore_checkpoint_run_identity(self, identity):
+        assert type(identity) is Identity
+        assert identity.domain == "run"
+        self._last_run_identity = Identity.from_data(identity.to_data())
 
     def time(self):
         return self._time
@@ -1186,6 +1190,7 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
     from pops.output import _checkpoint_collective
 
     events = []
+    source_run_identity = make_identity("run", {"test": "restart-source"})
 
     class _Publisher:
         @staticmethod
@@ -1213,7 +1218,13 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         events.append("native")
         return "restored"
 
-    native = object()
+    class _Native:
+        @staticmethod
+        def _restore_checkpoint_run_identity(identity):
+            assert identity == source_run_identity
+            events.append("run")
+
+    native = _Native()
     monkeypatch.setattr(
         _checkpoint_collective,
         "decode_checkpoint_bytes",
@@ -1224,6 +1235,10 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
     )
     monkeypatch.setattr(
         _checkpoint_collective, "restore_checkpoint_payload", restore_checkpoint_payload)
+    monkeypatch.setattr(
+        "pops.runtime._checkpoint_manifest.checkpoint_run_identity",
+        lambda payload: source_run_identity,
+    )
     cursors = ConsumerCursorSet()
     owner = SimpleNamespace(
         _executor=native,
@@ -1239,7 +1254,7 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
         bit_identical=True,
     ) == "restored"
     assert owner._consumer_cursors is cursors
-    assert events == ["native", "geometry", "diagnostics"]
+    assert events == ["native", "geometry", "diagnostics", "run"]
 
 
 def test_checkpoint_restore_requires_exact_bit_identical_policy():
@@ -1334,9 +1349,12 @@ def test_checkpoint_restart_authenticates_and_restores_consumer_cursors(tmp_path
     restored = RuntimeInstance(plan, executor=_Executor(plan))
     restored.restart(checkpoint)
 
+    assert restored.last_run_identity == runtime.last_run_identity
     assert restored.consumer_cursors.for_consumer(manifest.qualified_id) == \
         runtime.consumer_cursors.for_consumer(manifest.qualified_id)
     assert restored.time() == runtime.time()
+    restarted_checkpoint = restored.checkpoint(tmp_path / "restart-after-restart")
+    assert Path(restarted_checkpoint).is_file()
     with np.load(checkpoint, allow_pickle=False) as payload:
         assert str(payload["runtime_consumer_graph"]) == runtime.consumer_graph.identity.token
         assert "runtime_consumer_cursors" in payload.files

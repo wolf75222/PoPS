@@ -1500,6 +1500,14 @@ class RuntimeInstance:
             bit_identical, where="RuntimeInstance restart"
         )
         stored = decode_checkpoint_bytes(payload)
+        from ._checkpoint_manifest import checkpoint_run_identity
+
+        source_run_identity = checkpoint_run_identity(stored)
+        restore_run_identity = getattr(
+            self._executor, "_restore_checkpoint_run_identity", None)
+        if not callable(restore_run_identity):
+            raise TypeError(
+                "restart executor lacks the authenticated source-run publication protocol")
         diagnostic_data = json.loads(str(stored["runtime_consumer_diagnostics"]))
         canonical_diagnostics = self._publisher.validate_diagnostic_restart_state(
             diagnostic_data)
@@ -1516,6 +1524,7 @@ class RuntimeInstance:
         self._snapshot_builder.invalidate_geometry_cache()
         self._consumer_cursors = cursors
         self._publisher.restore_diagnostic_restart_state(canonical_diagnostics)
+        restore_run_identity(source_run_identity)
         return result
 
     def restart(self, path: Any) -> Any:

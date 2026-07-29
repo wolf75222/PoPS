@@ -327,6 +327,17 @@ class _MultiLayoutUniformExecutor:
     def last_restart_identity(self) -> Any:
         return self._last_restart_identity
 
+    def _restore_checkpoint_run_identity(self, identity: Any) -> None:
+        from pops.identity import Identity
+
+        if type(identity) is not Identity or identity.domain != "run":
+            raise TypeError("multi-layout restart requires an authenticated run identity")
+        restored = Identity.from_data(identity.to_data())
+        self._last_run_manifest = None
+        self._last_run_identity = restored
+        for engine in self._engines.values():
+            engine._restore_checkpoint_run_identity(restored)
+
     def executor_for_layout(self, layout_id: str) -> Any:
         try:
             return self._engines[layout_id]
