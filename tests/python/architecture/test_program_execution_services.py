@@ -31,6 +31,7 @@ SHARED_SIGNATURES = (
     "[[nodiscard]] auto logical_evaluation_scope(",
     "void evaluate_with_field_state_at(",
     "void rhs_group(",
+    "void source_default_into(",
     "MultiFab rhs_scratch_like(",
     "MultiFab scratch_state_like(",
     "MultiFab& rhs_scratch(",
@@ -211,6 +212,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
         for hook in (
             "program_execution_logical_parent_dt_",
             "program_execution_rhs_group_",
+            "program_execution_source_default_into_",
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
