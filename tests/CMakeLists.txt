@@ -556,6 +556,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_roe_flux
   test_riemann_capabilities
   test_newton_robustness
+  test_variable_recovery_chain
   test_elliptic_interface
   test_field_nullspace
   test_field_context
