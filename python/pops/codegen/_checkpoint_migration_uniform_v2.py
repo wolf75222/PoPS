@@ -485,14 +485,11 @@ def _current_authority(payload: Mapping[str, Any]) -> _CurrentUniformAuthority:
     }:
         raise ValueError("Uniform v2 migration authority requires empty diagnostics")
 
-    identities = tuple(
-        _identity_from_json(manifest[key])
-        for key in (
-            "semantic_identity",
-            "artifact_identity",
-            "bind_identity",
-            "run_identity",
-        )
+    identities = (
+        _identity_from_json(manifest["semantic_identity"]),
+        _identity_from_json(manifest["artifact_identity"]),
+        _identity_from_json(manifest["bind_identity"]),
+        _identity_from_json(manifest["run_identity"]),
     )
     return _CurrentUniformAuthority(
         payload,
