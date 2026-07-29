@@ -663,7 +663,7 @@ TEST(test_multiblock_interface_scheduler,
 }
 
 TEST(test_multiblock_interface_scheduler,
-     AmrProgramPersistsInterfaceFragmentsAcrossStrictRestartAndRejectedAttempt) {
+     AmrProgramPersistsInterfaceFragmentsAcrossAcceptedStateImportAndRejectedAttempt) {
   ensure_runtime();
   constexpr int cells = 4;
   AmrBuildParams params;
@@ -886,10 +886,11 @@ TEST(test_multiblock_interface_scheduler,
     EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.2);
   }
 
-  // The accepted audit is part of the strict Program image, not a process-local report.  Decode the
-  // exact bytes published by the real interface execution, overwrite the live report with another
-  // accepted step, then restore and enter a rejected attempt.  Import plus rollback must recover the
-  // checkpoint report exactly; an unresolved accepted weight is rejected before facade publication.
+  // The accepted audit is part of the canonical Program image, not a process-local report. Decode
+  // the exact bytes published by the real interface execution, overwrite the live report with
+  // another accepted step, then import and enter a rejected attempt. Import plus rollback must
+  // recover the report exactly; an unresolved accepted weight is rejected by the canonical decoder
+  // before facade publication.
   const std::vector<std::uint8_t> checkpoint = facade.program_accepted_state();
   const auto persisted = runtime::program::deserialize_amr_program_accepted_state(checkpoint);
   ASSERT_EQ(persisted.accepted_interface_flux_ledger.size(), 2u);
@@ -909,11 +910,12 @@ TEST(test_multiblock_interface_scheduler,
   const auto malformed_bytes = runtime::program::serialize_amr_program_accepted_state(malformed);
   const auto accepted_before_malformed = facade.program_accepted_state();
   const std::uint64_t revision_before_malformed = facade.program_accepted_state_revision();
-  EXPECT_THROW(facade.restore_checkpoint_accepted_state(malformed_bytes), std::runtime_error);
+  EXPECT_THROW(runtime::program::deserialize_amr_program_accepted_state(malformed_bytes),
+               std::runtime_error);
   EXPECT_EQ(facade.program_accepted_state(), accepted_before_malformed);
   EXPECT_EQ(facade.program_accepted_state_revision(), revision_before_malformed);
 
-  facade.restore_checkpoint_accepted_state(checkpoint);
+  facade.restore_program_accepted_state(checkpoint);
   EXPECT_THROW(
       context.advance_hierarchy(0.2,
                                 [&](double) {
