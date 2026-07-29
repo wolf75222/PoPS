@@ -360,12 +360,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     eng_->level_neg_div_flux_into_at(static_cast<std::size_t>(sys_block(b)), level_,
                                      boundary_point_(rate_id), u, r);
   }
-  // --- dt bound primitives (evaluated at the COARSE level, where the AMR CFL lives) -----------------
-  Real hmin() const { return eng_->level_hmin(level_); }
-  Real max_wave_speed(int b, const MultiFab& u) const {
-    return eng_->level_max_speed(static_cast<std::size_t>(sys_block(b)), level_, u);
-  }
-
   // --- field solve (the SHARED coarse Poisson) ------------------------------------------------------
   /// The default head-of-step elliptic solve: the coarse system Poisson + coarse->fine aux injection.
   /// The AMR runtime runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard):
@@ -3464,6 +3458,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
     eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);
+  }
+  Real program_execution_hmin_() const { return eng_->level_hmin(level_); }
+  Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
+    return eng_->level_max_speed(static_cast<std::size_t>(runtime_block), level_, state);
   }
 
   struct LogicalEvaluationRollback {
