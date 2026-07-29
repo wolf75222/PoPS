@@ -242,61 +242,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j, boundary);
   }
 
-  struct RhsGroupRequest {
-    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
-                    int flux_only_value)
-        : block(block_value),
-          state(state_value),
-          rhs(rhs_value),
-          rate_id(rate_id_value),
-          flux_only(flux_only_value) {}
-
-    int block;
-    MultiFab* state;
-    MultiFab* rhs;
-    int rate_id;
-    int flux_only;
-  };
-
-  /// Simultaneous multi-block rate evaluation.  @p group_id is the exact authored identity of this
-  /// atomic evaluation and is deliberately distinct from every request's rate-node identity.  The
-  /// generated Program emits one group only for RHS nodes authenticated at the same exact StagePoint;
-  /// System then executes each installed interface once before any group result can be consumed.
-  void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
-    require_group_identity_(group_id);
-    if (requests.size() == 0)
-      throw std::invalid_argument("Program RHS group cannot be empty");
-    std::vector<int> rate_ids;
-    rate_ids.reserve(requests.size());
-    for (const auto& request : requests) {
-      require_rate_identity_(request.rate_id);
-      if (request.rate_id == group_id ||
-          std::find(rate_ids.begin(), rate_ids.end(), request.rate_id) != rate_ids.end())
-        throw std::invalid_argument(
-            "Program RHS group and member rate identities must be distinct");
-      if (request.state == nullptr || request.rhs == nullptr ||
-          (request.flux_only != 0 && request.flux_only != 1))
-        throw std::invalid_argument("Program RHS group contains an invalid request");
-      rate_ids.push_back(request.rate_id);
-    }
-    std::vector<int> blocks;
-    std::vector<MultiFab*> states;
-    std::vector<MultiFab*> rhs;
-    std::vector<int> flux_only;
-    blocks.reserve(requests.size());
-    states.reserve(requests.size());
-    rhs.reserve(requests.size());
-    flux_only.reserve(requests.size());
-    for (const auto& request : requests) {
-      count_kernel();
-      blocks.push_back(sys_block(request.block));
-      states.push_back(request.state);
-      rhs.push_back(request.rhs);
-      flux_only.push_back(request.flux_only);
-    }
-    sys_->block_rhs_group(boundary_point_(group_id), blocks, states, rhs, flux_only);
-  }
-
   /// r <- -div F(u) for block @p b -- the SAME flux divergence as @ref rhs_into but WITHOUT the model's
   /// default/composite source (Poisson frozen). Forwards to System::block_neg_div_flux_into (the block's
   /// SourceFreeModel<Model> rhs path, bit-identical to rhs_into minus the source). The codegen lowers a
@@ -1294,6 +1239,13 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                       : SolveConsumption::kFailRun));
   }
   friend class ProgramExecutionServices<ProgramContext>;
+
+  void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
+    count_kernel(static_cast<std::int64_t>(batch.requests.size()));
+    sys_->block_rhs_group(boundary_point_(batch.group_id), batch.runtime_blocks, batch.states,
+                          batch.rhs, batch.flux_only);
+  }
+
   struct LogicalEvaluationRollback {
     double parent_dt = 0.0;
     amr::Rational stage{0, 1};
