@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Process probe for the public AMR checkpoint restart rank-topology contract.
 
-The serial pytest driver starts this file in separate MPI jobs.  ``capture`` runs with two ranks
-and publishes one accepted-state checkpoint; ``restart`` runs with one rank and must rematerialize
-the recorded hierarchy ownership without changing its geometry, global state, accepted clock, or
-dense Program histories.  A second strict-policy checkpoint proves that ``bit_identical=True``
-continues to reject a two-to-one rank change before mutating the fresh runtime.
+The serial pytest driver starts this file in separate MPI jobs.  ``capture`` runs a genuinely
+transporting scalar through coarse/fine interfaces on two ranks and publishes one accepted-state
+checkpoint; ``restart`` runs with one rank and must rematerialize the recorded hierarchy ownership
+and non-zero flux history without changing its geometry, global state, accepted clock, or dense
+Program histories.  A second strict-policy checkpoint proves that ``bit_identical=True`` continues
+to reject a two-to-one rank change before mutating the fresh runtime.
 """
 
 from __future__ import annotations
@@ -71,7 +72,6 @@ N = 16
 DT = 2.0e-3
 CHECKPOINT_STEPS = 3
 CONTINUATION_STEPS = 3
-SOURCE_COEFFICIENT = 0.4
 if getattr(_pops, "__has_mpi__", False) is not True:
     require_mpi_or_skip("AMR rank-change probe requires an MPI-enabled native module")
 _COMM = _pops.mpi_world()
@@ -89,22 +89,19 @@ def _resolved(*, bit_identical: bool) -> Any:
     model = Model("amr-rank-change-%s-model" % policy, frame=frame)
     state = model.state("U", components=("rho",))
     (rho,) = state
-    zero = 0.0 * rho
     flux = model.flux(
-        "stationary-transport",
+        "nonzero-transport",
         frame=frame,
         state=state,
-        components={x_axis: (zero,), y_axis: (zero,)},
-        waves={x_axis: (zero,), y_axis: (zero,)},
-    )
-    source = model.source(
-        "linear-growth",
-        on=state,
-        value=(SOURCE_COEFFICIENT * rho,),
+        components={x_axis: (rho,), y_axis: (0.25 * rho,)},
+        waves={
+            x_axis: (1.0 + 0.0 * rho,),
+            y_axis: (0.25 + 0.0 * rho,),
+        },
     )
     rate = model.rate(
-        "growth-rate",
-        equation=ddt(state) == -div(flux) + source,
+        "transport-rate",
+        equation=ddt(state) == -div(flux),
     )
 
     case = pops.Case("amr-rank-change-%s-case" % policy)
@@ -234,6 +231,19 @@ def _capture_arrays(runtime: Any, *, prefix: str) -> tuple[dict[str, Any], dict[
                 dtype=np.float64,
             ).copy()
     report = runtime.amr.explain_regrid()
+    program = runtime.program_report()
+    if not program.flux_ledger or not any(
+        int(entry["level"]) == 1 for entry in program.flux_ledger
+    ):
+        raise AssertionError(
+            "rank-change proof requires an accepted non-zero-transport flux ledger "
+            "on the refined level"
+        )
+    synchronization = {str(event["phase"]) for event in program.synchronization}
+    if not {"reflux", "average_down"} <= synchronization:
+        raise AssertionError(
+            "rank-change proof requires accepted reflux and average-down events"
+        )
     metadata = {
         "time_hex": float(runtime.time()).hex(),
         "macro_step": int(runtime.macro_step()),
@@ -242,6 +252,8 @@ def _capture_arrays(runtime: Any, *, prefix: str) -> tuple[dict[str, Any], dict[
         "histories": histories,
         "regrid_count": int(report.regrid_count),
         "topology_epoch": int(report.topology_epoch),
+        "flux_ledger": program.flux_ledger,
+        "synchronization": program.synchronization,
     }
     return metadata, arrays
 
@@ -254,12 +266,14 @@ def _write_evidence(
     final_metadata: dict[str, Any],
     final_arrays: dict[str, Any],
     source_owners: tuple[int, ...],
+    initial_mass: float,
 ) -> None:
     metadata = {
         "schema_version": 1,
         "checkpoint": checkpoint_metadata,
         "final": final_metadata,
         "source_fine_owners": list(source_owners),
+        "initial_mass_hex": initial_mass.hex(),
     }
     payload = dict(checkpoint_arrays)
     payload.update(final_arrays)
@@ -379,12 +393,29 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
             % int(_COMM.size)
         )
     runtime = _runtime(bit_identical=bit_identical)
+    initial_state = np.asarray(
+        runtime.block_level_state_global("tracer", 0), dtype=np.float64
+    ).copy()
+    initial_mass = float(runtime.integral("tracer", levels=(0,)))
     _advance(runtime, CHECKPOINT_STEPS)
     checkpoint_metadata, checkpoint_arrays = _capture_arrays(
         runtime, prefix="checkpoint"
     )
     if checkpoint_metadata["n_levels"] != 2:
         raise AssertionError("rank-change capture did not build its second AMR level")
+    checkpoint_state = checkpoint_arrays["checkpoint_state_level_0"]
+    transport_change = float(np.max(np.abs(checkpoint_state - initial_state)))
+    if not np.isfinite(transport_change) or transport_change <= 1.0e-12:
+        raise AssertionError(
+            "rank-change proof did not observe a non-zero transport update "
+            "(max|U-U0|=%.17g)" % transport_change
+        )
+    checkpoint_mass = float(runtime.integral("tracer", levels=(0,)))
+    if abs(checkpoint_mass - initial_mass) >= 1.0e-8:
+        raise AssertionError(
+            "rank-change capture lost mass before checkpoint "
+            "(|M-M0|=%.17g)" % abs(checkpoint_mass - initial_mass)
+        )
     published = Path(runtime.checkpoint(checkpoint))
     barrier(_COMM)
     source_owners = _checkpoint_source_owners(published) if int(_COMM.rank) == 0 else ()
@@ -392,6 +423,12 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
     if not bit_identical:
         _advance(runtime, CONTINUATION_STEPS)
         final_metadata, final_arrays = _capture_arrays(runtime, prefix="final")
+        final_mass = float(runtime.integral("tracer", levels=(0,)))
+        if abs(final_mass - initial_mass) >= 1.0e-8:
+            raise AssertionError(
+                "uninterrupted two-rank continuation lost mass "
+                "(|M-M0|=%.17g)" % abs(final_mass - initial_mass)
+            )
         if evidence is None:
             raise ValueError("relaxed rank-change capture requires an evidence path")
         if int(_COMM.rank) == 0:
@@ -402,6 +439,7 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
                 final_metadata=final_metadata,
                 final_arrays=final_arrays,
                 source_owners=source_owners,
+                initial_mass=initial_mass,
             )
     barrier(_COMM)
     if int(_COMM.rank) == 0:
@@ -427,6 +465,13 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
         expected_arrays=arrays,
         prefix="checkpoint",
     )
+    initial_mass = float.fromhex(str(metadata["initial_mass_hex"]))
+    restored_mass = float(runtime.integral("tracer", levels=(0,)))
+    if abs(restored_mass - initial_mass) >= 1.0e-8:
+        raise AssertionError(
+            "one-rank restart changed the conserved mass "
+            "(|M-M0|=%.17g)" % abs(restored_mass - initial_mass)
+        )
 
     # This second public checkpoint is the observable ownership witness: every recorded
     # DistributionMapping must now contain only rank zero, without reaching into the native engine.
@@ -446,6 +491,12 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
         expected_arrays=arrays,
         prefix="final",
     )
+    continued_mass = float(runtime.integral("tracer", levels=(0,)))
+    if abs(continued_mass - initial_mass) >= 1.0e-8:
+        raise AssertionError(
+            "one-rank continuation after flux rematerialization lost mass "
+            "(|M-M0|=%.17g)" % abs(continued_mass - initial_mass)
+        )
     print(
         "PASS restart AMR checkpoint from two ranks onto one rank and continue",
         flush=True,
