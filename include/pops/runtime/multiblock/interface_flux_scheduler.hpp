@@ -114,8 +114,13 @@ class InterfaceFluxScheduler {
                const PopsExecutionContextV1& execution,
                InterfaceFluxEvaluatorFactory evaluator_factory) {
     const bool collective_world = comm_active() && n_ranks() > 1;
+    const CommunicatorView admission_communicator =
+        collective_world ? world_communicator_view() : CommunicatorView{};
     bool distributed = false;
+    CommunicatorView execution_communicator;
+    int communicator_rank = 0;
     int communicator_size = 1;
+    std::string communicator_identity = "serial";
     int component_count = 0;
     int left_faces = 0;
     Real left_normal = Real(0);
@@ -135,34 +140,63 @@ class InterfaceFluxScheduler {
       if (route.left_side == route.right_side)
         throw std::invalid_argument("multi-block interface faces do not have opposite orientation");
       component::validate_execution_context(execution);
-      const std::string communicator_identity(execution.communicator_identity);
-      if (communicator_identity == "MPI_COMM_WORLD") {
+      communicator_identity.assign(execution.communicator_identity);
+      if (communicator_identity != "serial" &&
+          communicator_identity != POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1) {
 #ifdef POPS_HAS_MPI
         if (!comm_active())
           throw std::invalid_argument(
-              "multi-block interface MPI_COMM_WORLD capability is not active");
-        int communicator_relation = MPI_UNEQUAL;
-        ::pops::detail::require_mpi_success(
-            MPI_Comm_compare(MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle)),
-                             MPI_COMM_WORLD, &communicator_relation),
-            "MPI_Comm_compare(interface execution context)");
-        if (communicator_relation != MPI_IDENT ||
+              "multi-block interface communicator capability is not active");
+        const MPI_Comm communicator =
+            MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle));
+        if (communicator == MPI_COMM_NULL ||
             MPI_Type_f2c(static_cast<MPI_Fint>(execution.communicator_datatype_f_handle)) !=
                 MPI_DOUBLE)
           throw std::invalid_argument(
-              "multi-block interface execution handles do not identify exact "
-              "MPI_COMM_WORLD/MPI_DOUBLE");
-        communicator_size = n_ranks();
+              "multi-block interface execution handles do not identify a live "
+              "communicator/MPI_DOUBLE authority");
+        int communicator_relation = MPI_UNEQUAL;
+        ::pops::detail::require_mpi_success(
+            MPI_Comm_compare(communicator, MPI_COMM_WORLD, &communicator_relation),
+            "MPI_Comm_compare(interface field rank space)");
+        if (communicator_relation != MPI_IDENT && communicator_relation != MPI_CONGRUENT)
+          throw std::invalid_argument(
+              "multi-block interface communicator must preserve the field rank space");
+        execution_communicator = CommunicatorView{communicator};
+        communicator_rank = execution_communicator.rank();
+        communicator_size = execution_communicator.size();
         distributed = communicator_size > 1;
 #else
         throw std::invalid_argument(
-            "multi-block interface scheduler received MPI_COMM_WORLD from a serial build");
+            "multi-block interface scheduler received a distributed context from a serial build");
 #endif
+      } else if (communicator_identity == POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1) {
+        throw std::invalid_argument(
+            "multi-block interface scheduler requires collective execution authority");
 #ifdef POPS_HAS_MPI
       } else if (comm_active() && n_ranks() > 1) {
         throw std::invalid_argument(
             "multi-block interface cannot use a serial execution identity in an active "
             "multi-rank MPI world");
+#endif
+      }
+      if (!interfaces_.empty()) {
+        const PreparedInterface& existing = interfaces_.front();
+        if (existing.communicator_identity != communicator_identity ||
+            existing.communicator_size != communicator_size)
+          throw std::invalid_argument(
+              "multi-block interface routes require one exact execution communicator");
+#ifdef POPS_HAS_MPI
+        if (distributed) {
+          int relation = MPI_UNEQUAL;
+          ::pops::detail::require_mpi_success(
+              MPI_Comm_compare(existing.communicator.native_handle(),
+                               execution_communicator.native_handle(), &relation),
+              "MPI_Comm_compare(installed interface communicators)");
+          if (relation != MPI_IDENT)
+            throw std::invalid_argument(
+                "multi-block interface routes require the same communicator context");
+        }
 #endif
       }
       if (left_state.box_array().size() < 1 || right_state.box_array().size() < 1)
@@ -256,21 +290,24 @@ class InterfaceFluxScheduler {
         throw std::invalid_argument(
             "multi-block interface faces do not coincide in physical space");
 
-      left_cells = boundary_cells_(left_state, route.left_axis, route.left_side, left_faces);
-      right_cells = boundary_cells_(right_state, route.right_axis, route.right_side, right_faces);
+      left_cells = boundary_cells_(left_state, route.left_axis, route.left_side, left_faces,
+                                   communicator_rank);
+      right_cells = boundary_cells_(right_state, route.right_axis, route.right_side, right_faces,
+                                    communicator_rank);
     } catch (...) {
       structural_failure = std::current_exception();
     }
-    finish_collective_preflight_(collective_world, structural_failure,
+    finish_collective_preflight_(admission_communicator, structural_failure,
                                  "route/layout/execution preflight");
-    if (distributed && !registry_agrees_across_ranks_())
+    if (distributed && !registry_agrees_across_ranks_(execution_communicator))
       throw std::runtime_error("multi-block interface prepared registry differs across MPI ranks");
     const std::string collective_identity = collective_plan_identity_(
         route, left_state, left_geometry, right_state, right_geometry, left_normal, right_normal,
-        left_faces, component_count, communicator_size);
+        left_faces, component_count, communicator_identity, communicator_size);
     if (distributed &&
         !all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view(route.identity), std::string_view(collective_identity)}}))
+            {{std::string_view(route.identity), std::string_view(collective_identity)}},
+            execution_communicator))
       throw std::runtime_error(
           "multi-block interface prepared route/layout differs across MPI ranks");
     PreparedInterface prepared;
@@ -290,7 +327,10 @@ class InterfaceFluxScheduler {
                                    left_faces,
                                    component_count,
                                    distributed,
+                                   execution_communicator,
+                                   communicator_rank,
                                    communicator_size,
+                                   communicator_identity,
                                    collective_identity,
                                    InterfaceFluxEvaluator{},
                                    0};
@@ -305,7 +345,7 @@ class InterfaceFluxScheduler {
     } catch (...) {
       materialization_failure = std::current_exception();
     }
-    finish_collective_preflight_(distributed, materialization_failure,
+    finish_collective_preflight_(execution_communicator, materialization_failure,
                                  "prepared-route materialization");
     // Component prepare may allocate resources or have observable external effects.  Invoke it only
     // after every route/layout/geometry capability has been proved, but before mutating the scheduler
@@ -321,7 +361,8 @@ class InterfaceFluxScheduler {
     } catch (...) {
       evaluator_prepare_failure = std::current_exception();
     }
-    finish_collective_preflight_(distributed, evaluator_prepare_failure, "evaluator preparation");
+    finish_collective_preflight_(execution_communicator, evaluator_prepare_failure,
+                                 "evaluator preparation");
     prepared.evaluator = std::move(evaluator);
     interfaces_.push_back(std::move(prepared));
   }
@@ -341,18 +382,26 @@ class InterfaceFluxScheduler {
   void apply(const BoundaryEvaluationPoint& point, const std::vector<MultiFab*>& states,
              const std::vector<MultiFab*>& rhs,
              InterfaceFluxFragmentPublication* publication = nullptr) {
-    const bool collective_world = comm_active() && n_ranks() > 1;
+    if (interfaces_.empty()) {
+      validate_point_(point);
+      if (publication != nullptr)
+        validate_fragment_publication_(point, *publication);
+      return;
+    }
+    const CommunicatorView execution_communicator = interfaces_.front().communicator;
+    const bool collective = execution_communicator.active() && execution_communicator.size() > 1;
     std::exception_ptr point_failure;
     try {
       validate_point_(point);
     } catch (...) {
       point_failure = std::current_exception();
     }
-    finish_collective_preflight_(collective_world, point_failure, "evaluation-point preflight");
+    finish_collective_preflight_(execution_communicator, point_failure,
+                                 "evaluation-point preflight");
     std::exception_ptr publication_failure;
     try {
       if (publication != nullptr) {
-        if (collective_world)
+        if (collective)
           throw std::runtime_error(
               "AMR interface-flux fragment publication does not yet support distributed MPI");
         validate_fragment_publication_(point, *publication);
@@ -360,13 +409,14 @@ class InterfaceFluxScheduler {
     } catch (...) {
       publication_failure = std::current_exception();
     }
-    finish_collective_preflight_(collective_world, publication_failure,
+    finish_collective_preflight_(execution_communicator, publication_failure,
                                  "interface-fragment publication preflight");
-    if (collective_world && !registry_agrees_across_ranks_())
+    if (collective && !registry_agrees_across_ranks_(execution_communicator))
       throw std::runtime_error("multi-block interface prepared registry differs across MPI ranks");
     const std::string point_identity = collective_point_identity_(point);
-    if (collective_world && !all_ranks_agree_exact_ordered_byte_pairs(
-                                {{std::string_view("point"), std::string_view(point_identity)}}))
+    if (collective && !all_ranks_agree_exact_ordered_byte_pairs(
+                          {{std::string_view("point"), std::string_view(point_identity)}},
+                          execution_communicator))
       throw std::runtime_error(
           "multi-block interface BoundaryEvaluationPoint differs across MPI ranks");
 
@@ -398,11 +448,11 @@ class InterfaceFluxScheduler {
       } catch (...) {
         active_mask_failure = std::current_exception();
       }
-      finish_collective_preflight_(prepared.distributed, active_mask_failure,
+      finish_collective_preflight_(prepared.communicator, active_mask_failure,
                                    "active-mask preflight");
       if (prepared.distributed) {
-        const long minimum_active = all_reduce_min(active ? 1L : 0L);
-        const long maximum_active = all_reduce_max(active ? 1L : 0L);
+        const long minimum_active = all_reduce_min(active ? 1L : 0L, prepared.communicator);
+        const long maximum_active = all_reduce_max(active ? 1L : 0L, prepared.communicator);
         if (minimum_active != maximum_active)
           throw std::runtime_error("multi-block interface active mask differs across MPI ranks");
       }
@@ -487,7 +537,10 @@ class InterfaceFluxScheduler {
     int face_count = 0;
     int component_count = 0;
     bool distributed = false;
+    CommunicatorView communicator;
+    int communicator_rank = 0;
     int communicator_size = 1;
+    std::string communicator_identity;
     std::string collective_identity;
     InterfaceFluxEvaluator evaluator;
     std::size_t evaluation_count = 0;
@@ -499,10 +552,12 @@ class InterfaceFluxScheduler {
   };
   static_assert(std::is_nothrow_move_constructible_v<PreparedInterface>);
 
-  static void finish_collective_preflight_(bool collective, const std::exception_ptr& local_failure,
+  static void finish_collective_preflight_(const CommunicatorView& communicator,
+                                           const std::exception_ptr& local_failure,
                                            const char* phase) {
-    const long failure_count =
-        collective ? all_reduce_sum(local_failure ? 1L : 0L) : (local_failure ? 1L : 0L);
+    const bool collective = communicator.active() && communicator.size() > 1;
+    const long failure_count = collective ? all_reduce_sum(local_failure ? 1L : 0L, communicator)
+                                          : (local_failure ? 1L : 0L);
     if (failure_count == 0)
       return;
     if (local_failure)
@@ -552,9 +607,10 @@ class InterfaceFluxScheduler {
   static std::string collective_plan_identity_(
       const AxisAlignedInterface& route, const MultiFab& left_state, const Geometry& left_geometry,
       const MultiFab& right_state, const Geometry& right_geometry, Real left_normal,
-      Real right_normal, int face_count, int component_count, int communicator_size) {
+      Real right_normal, int face_count, int component_count,
+      std::string_view communicator_identity, int communicator_size) {
     std::string bytes;
-    append_identity_text_(bytes, "pops.multiblock.interface-plan.v1");
+    append_identity_text_(bytes, "pops.multiblock.interface-plan.v2");
     append_identity_text_(bytes, route.identity);
     append_identity_scalar_(bytes, static_cast<std::uint64_t>(route.left_block));
     append_identity_scalar_(bytes, static_cast<std::uint64_t>(route.right_block));
@@ -580,6 +636,7 @@ class InterfaceFluxScheduler {
     append_identity_scalar_(bytes, right_normal);
     append_identity_scalar_(bytes, face_count);
     append_identity_scalar_(bytes, component_count);
+    append_identity_text_(bytes, communicator_identity);
     append_identity_scalar_(bytes, communicator_size);
     return bytes;
   }
@@ -599,12 +656,12 @@ class InterfaceFluxScheduler {
     return bytes;
   }
 
-  bool registry_agrees_across_ranks_() const {
+  bool registry_agrees_across_ranks_(const CommunicatorView& communicator) const {
     std::vector<std::pair<std::string_view, std::string_view>> identities;
     identities.reserve(interfaces_.size());
     for (const PreparedInterface& prepared : interfaces_)
       identities.emplace_back(prepared.route.identity, prepared.collective_identity);
-    return all_ranks_agree_exact_ordered_byte_pairs(identities);
+    return all_ranks_agree_exact_ordered_byte_pairs(identities, communicator);
   }
 
   static int tangential_count_(const Box2D& box, InterfaceAxis axis) {
@@ -652,7 +709,8 @@ class InterfaceFluxScheduler {
   }
 
   static std::vector<BoundaryCell> boundary_cells_(const MultiFab& field, InterfaceAxis axis,
-                                                   InterfaceSide side, int face_count) {
+                                                   InterfaceSide side, int face_count,
+                                                   int communicator_rank) {
     const Box2D domain = field.box_array().bounding_box();
     const int normal_axis = axis == InterfaceAxis::X ? 0 : 1;
     const int tangent_axis = 1 - normal_axis;
@@ -676,7 +734,7 @@ class InterfaceFluxScheduler {
         throw std::invalid_argument(
             "multi-block interface boundary decomposition has a gap at one face cell");
       const int local_owner = field.local_index_of(global_owner);
-      if ((field.dmap()[global_owner] == my_rank()) != (local_owner >= 0))
+      if ((field.dmap()[global_owner] == communicator_rank) != (local_owner >= 0))
         throw std::logic_error(
             "multi-block interface local ownership differs from its DistributionMapping");
       cells.push_back(BoundaryCell{local_owner, i, j});
@@ -742,32 +800,34 @@ class InterfaceFluxScheduler {
 
   static bool runtime_field_matches_(const MultiFab& field,
                                      const std::vector<Box2D>& expected_boxes,
-                                     const std::vector<int>& expected_ranks, int component_count) {
+                                     const std::vector<int>& expected_ranks, int component_count,
+                                     int communicator_rank) {
     int expected_local_size = 0;
     for (const int owner : expected_ranks)
-      if (owner == my_rank())
+      if (owner == communicator_rank)
         ++expected_local_size;
     return field.box_array().boxes() == expected_boxes && field.dmap().ranks() == expected_ranks &&
            field.local_size() == expected_local_size && field.ncomp() == component_count;
   }
 
   static void require_distributed_flux_consensus_(std::vector<Real>& flux,
-                                                  std::vector<Real>& reference) {
+                                                  std::vector<Real>& reference,
+                                                  const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
     if (reference.size() != flux.size())
       throw std::logic_error("multi-block interface consensus scratch changed size");
     std::copy(flux.begin(), flux.end(), reference.begin());
-    ::pops::detail::require_mpi_success(
-        MPI_Bcast(reference.data(), static_cast<int>(reference.size()), MPI_DOUBLE, 0,
-                  MPI_COMM_WORLD),
-        "MPI_Bcast(multi-block shared flux)");
+    broadcast_bytes_inplace(reinterpret_cast<char*>(reference.data()),
+                            reference.size() * sizeof(Real), 0, communicator);
     const bool equal = std::memcmp(reference.data(), flux.data(), flux.size() * sizeof(Real)) == 0;
-    if (all_reduce_sum(equal ? 0L : 1L) != 0)
+    if (all_reduce_sum(equal ? 0L : 1L, communicator) != 0)
       throw std::runtime_error(
           "multi-block interface evaluator returned rank-dependent shared flux");
     std::copy(reference.begin(), reference.end(), flux.begin());
 #else
     (void)flux;
+    (void)reference;
+    (void)communicator;
     throw std::logic_error(
         "distributed multi-block flux consensus is unavailable in a serial build");
 #endif
@@ -776,19 +836,22 @@ class InterfaceFluxScheduler {
   static void apply_one_(PreparedInterface& prepared, const BoundaryEvaluationPoint& point,
                          MultiFab& left_state, MultiFab& right_state, MultiFab& left_rhs,
                          MultiFab& right_rhs, InterfaceFluxFragmentPublication* publication) {
-    if (prepared.distributed && (!comm_active() || n_ranks() != prepared.communicator_size))
-      throw std::runtime_error("multi-block interface MPI world changed after route preparation");
+    if (prepared.distributed && (!prepared.communicator.active() ||
+                                 prepared.communicator.size() != prepared.communicator_size ||
+                                 prepared.communicator.rank() != prepared.communicator_rank))
+      throw std::runtime_error(
+          "multi-block interface execution communicator changed after route preparation");
     const bool layouts_match =
         runtime_field_matches_(left_state, prepared.left_boxes, prepared.left_ranks,
-                               prepared.component_count) &&
+                               prepared.component_count, prepared.communicator_rank) &&
         runtime_field_matches_(right_state, prepared.right_boxes, prepared.right_ranks,
-                               prepared.component_count) &&
+                               prepared.component_count, prepared.communicator_rank) &&
         runtime_field_matches_(left_rhs, prepared.left_boxes, prepared.left_ranks,
-                               prepared.component_count) &&
+                               prepared.component_count, prepared.communicator_rank) &&
         runtime_field_matches_(right_rhs, prepared.right_boxes, prepared.right_ranks,
-                               prepared.component_count);
+                               prepared.component_count, prepared.communicator_rank);
     if (prepared.distributed) {
-      if (all_reduce_sum(layouts_match ? 0L : 1L) != 0)
+      if (all_reduce_sum(layouts_match ? 0L : 1L, prepared.communicator) != 0)
         throw std::runtime_error(
             "multi-block interface runtime fields differ from their prepared layouts on one "
             "or more MPI ranks");
@@ -842,7 +905,7 @@ class InterfaceFluxScheduler {
       }
     }
     if (prepared.distributed)
-      all_reduce_sum_inplace(prepared.traces.data(), prepared.traces.size());
+      all_reduce_sum_inplace(prepared.traces.data(), prepared.traces.size(), prepared.communicator);
 
     const InterfaceFluxBatch batch{left, right, prepared.flux.data(), prepared.face_count,
                                    prepared.component_count};
@@ -853,7 +916,7 @@ class InterfaceFluxScheduler {
       evaluator_failure = std::current_exception();
     }
     if (prepared.distributed) {
-      if (all_reduce_sum(evaluator_failure ? 1L : 0L) != 0)
+      if (all_reduce_sum(evaluator_failure ? 1L : 0L, prepared.communicator) != 0)
         throw std::runtime_error("multi-block interface evaluator failed on one or more MPI ranks");
     } else if (evaluator_failure) {
       std::rethrow_exception(evaluator_failure);
@@ -862,10 +925,10 @@ class InterfaceFluxScheduler {
     for (const Real value : prepared.flux)
       finite_flux = finite_flux && std::isfinite(static_cast<double>(value));
     if (prepared.distributed) {
-      if (all_reduce_sum(finite_flux ? 0L : 1L) != 0)
+      if (all_reduce_sum(finite_flux ? 0L : 1L, prepared.communicator) != 0)
         throw std::runtime_error(
             "multi-block interface evaluator returned a non-finite flux on one or more MPI ranks");
-      require_distributed_flux_consensus_(prepared.flux, prepared.consensus);
+      require_distributed_flux_consensus_(prepared.flux, prepared.consensus, prepared.communicator);
     } else if (!finite_flux) {
       throw std::runtime_error("multi-block interface evaluator returned a non-finite flux");
     }
