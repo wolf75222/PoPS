@@ -2,12 +2,30 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
 from pops.runtime._runtime_authorities import install_runtime_authorities
+
+
+ROOT = Path(__file__).resolve().parents[4]
+
+
+def test_native_boundary_install_has_no_component_count_compatibility_abi():
+    old_scalar_adapter = "const std::vector<double>& face_values, int ncomp"
+    typed_roles = "const std::vector<std::string>& component_roles"
+    for relative in (
+        "include/pops/runtime/system.hpp",
+        "include/pops/runtime/amr_system.hpp",
+        "src/runtime/system/system_install.cpp",
+        "src/runtime/amr/amr_system.cpp",
+    ):
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        assert old_scalar_adapter not in source
+        assert typed_roles in source
 
 
 def _execution_context() -> ExecutionContext:

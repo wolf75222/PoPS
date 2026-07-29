@@ -1359,24 +1359,6 @@ POPS_EXPORT void AmrSystem::install_boundary_plan(
   P->boundary_plans_.emplace(name, std::move(plan));
 }
 
-POPS_EXPORT void AmrSystem::install_boundary_plan(
-    const std::string& name, const std::string& identity, int required_depth,
-    const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
-    const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-    PreparedBoundaryReadDependencies read_dependencies,
-    std::vector<PeriodicIdentification2D> periodic_identifications) {
-  if (ncomp < 1)
-    throw std::runtime_error("AmrSystem::install_boundary_plan requires at least one component");
-  std::vector<std::string> face_identities;
-  face_identities.reserve(4);
-  for (int face = 0; face < 4; ++face)
-    face_identities.push_back(identity + ".face." + std::to_string(face));
-  install_boundary_plan(name, identity, required_depth, face_types, face_values, face_identities,
-                        std::vector<std::string>(static_cast<std::size_t>(ncomp), "Scalar"),
-                        omitted_interface_faces, state_identity, std::move(read_dependencies),
-                        std::move(periodic_identifications));
-}
-
 POPS_EXPORT void AmrSystem::install_field_storage_route(const std::string& field_identity,
                                                         const std::string& provider_slot) {
   Impl* P = p_.get();
