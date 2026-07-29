@@ -198,6 +198,16 @@ class _ProgramBase:
     def _compare(self, lhs: Any, rhs: Any, cmp: Any) -> Any: ...
     def _scalar_binop(self, a: Any, b: Any, fn: Any) -> Any: ...
     def record_scalar(self, name: Any, value: Any) -> Any: ...
+    def record_balance(
+        self,
+        ledger: Any,
+        *,
+        storage_change: Any,
+        outward_boundary_flux: Any,
+        sources: Any,
+        reflux: Any,
+        projection: Any,
+    ) -> tuple[Any, ...]: ...
 
     # --- solve / commit / board sugar (_ProgramSolve) ---
     def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any, properties: Any,
