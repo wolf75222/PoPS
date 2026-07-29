@@ -141,6 +141,44 @@ class ProgramExecutionServices {
     int levels = 1;
   };
 
+  /// Field-solve operations are authored once for every Program execution topology.  Providers own
+  /// only the storage/publication transaction and hierarchy semantics behind these hooks.
+  SolveOutcome solve_fields() const {
+    return provider_().program_execution_solve_fields_outcome_();
+  }
+
+  SolveOutcome solve_fields_from_state(int block, MultiFab& state) const {
+    return provider_().program_execution_solve_fields_from_state_outcome_(block, state);
+  }
+
+  SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                          const std::string& provider_slot, int block,
+                                          MultiFab& state) const {
+    if (provider_slot.empty())
+      throw std::invalid_argument("Program field solve requires an exact provider slot");
+    return provider_().program_execution_field_solve_from_state_at_outcome_(point, provider_slot,
+                                                                            block, state);
+  }
+
+  SolveOutcome solve_fields_from_state(const std::string& field, int block, MultiFab& state) const {
+    return provider_().program_execution_solve_named_field_from_state_outcome_(field, block, state);
+  }
+
+  SolveOutcome solve_fields_from_blocks(const std::vector<const MultiFab*>& states) const {
+    return provider_().program_execution_solve_fields_from_blocks_outcome_(states);
+  }
+
+  SolveOutcome solve_fields_from_blocks(const std::string& field,
+                                        const std::vector<const MultiFab*>& states) const {
+    return provider_().program_execution_solve_named_field_from_blocks_outcome_(field, states);
+  }
+
+  SolveOutcome solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
+                                        std::initializer_list<FieldStageOverride> overrides) const {
+    return provider_().program_execution_solve_generated_field_from_blocks_outcome_(value_id, field,
+                                                                                    overrides);
+  }
+
   /// One topology-independent subdivision of the active logical interval.
   struct LogicalEvaluationInterval {
     int iteration = 0;

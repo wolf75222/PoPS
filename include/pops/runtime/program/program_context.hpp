@@ -91,7 +91,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_physical_time_offset_ = 0.0;
   }
 
-  SolveOutcome solve_fields() const {
+ private:
+  SolveOutcome program_execution_solve_fields_outcome_() const {
     // No count_kernel() here: System's private in-place default provider seam already counts it.
     // The from_state/from_blocks/named seams below do not, so those routes count explicitly.
     sys_->prepare_default_field_publication_storage_();
@@ -102,19 +103,16 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// Program's stage k reads phi solved from stage k's own state. Forwards to
   /// System::solve_fields_from_state. With b = 0 and u_stage = U^n (the first stage) it matches
   /// solve_fields(); the codegen lowers every solve_fields op to this, passing the stage's state var.
-  SolveOutcome solve_fields_from_state(int b, MultiFab& u_stage) const {
+  SolveOutcome program_execution_solve_fields_from_state_outcome_(int b, MultiFab& u_stage) const {
     count_kernel();
     sys_->prepare_default_field_publication_storage_();
     return run_field_solve_transaction_(
         [&]() { return sys_->solve_fields_from_state_in_place_(sys_block(b), u_stage); });
   }
-  SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                          const std::string& provider_slot, int b,
-                                          MultiFab& u_stage) const {
+  SolveOutcome program_execution_field_solve_from_state_at_outcome_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int b, MultiFab& u_stage) const {
     count_kernel();
-    if (provider_slot.empty())
-      throw std::invalid_argument(
-          "System::solve_fields_from_state_at requires an exact provider slot");
     sys_->prepare_named_field_publication_storage_(provider_slot);
     return run_field_solve_transaction_([&]() {
       return sys_->solve_fields_from_state_at_in_place_(point, provider_slot, sys_block(b),
@@ -127,7 +125,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// System::solve_fields_from_state(field, b, u_stage). The codegen lowers
   /// P.solve_fields(field=name, state=U) to this; a default (unnamed) solve_fields keeps the overload
   /// above, byte-identical.
-  SolveOutcome solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
+  SolveOutcome program_execution_solve_named_field_from_state_outcome_(const std::string& field,
+                                                                       int b,
+                                                                       MultiFab& u_stage) const {
     count_kernel();
     sys_->prepare_named_field_publication_storage_(field);
     return run_field_solve_transaction_(
@@ -141,7 +141,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// Manual callers may provide the historical pointer vector. Generated Programs use the exact-IR
   /// initializer-list overload below, which fills the same context-owned workspace without allocating
   /// a pointer vector in the step body. This is the multi-target counterpart of solve_fields_from_state.
-  SolveOutcome solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
+  SolveOutcome program_execution_solve_fields_from_blocks_outcome_(
+      const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
     // The codegen builds @p u_stages indexed BY PROGRAM block index (a stage state slotted at its own
     // Program index, the rest nullptr). The System solver expects it indexed by SYSTEM block index, so
@@ -171,8 +172,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
         [&]() { return solve_default_field_workspace_(workspace); });
   }
 
-  SolveOutcome solve_fields_from_blocks(const std::string& field,
-                                        const std::vector<const MultiFab*>& u_stages) const {
+  SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
+      const std::string& field, const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
     FieldSolveWorkspace& workspace = manual_named_field_solve_workspace_(field);
     fill_manual_field_stages_(workspace, u_stages, /*require_exact_size=*/true);
@@ -184,8 +185,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   /// Allocation-free generated route.  The exact IR identity owns one context-local pointer/snapshot
   /// workspace; @p field and the ordered Program block pack are authenticated on every replay.  The
   /// old vector overloads above remain available for manual C++ callers.
-  SolveOutcome solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
-                                        std::initializer_list<FieldStageOverride> overrides) const {
+  SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
+      std::int64_t value_id, std::string_view field,
+      std::initializer_list<FieldStageOverride> overrides) const {
     count_kernel();
     FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
     sys_->prepare_named_field_publication_storage_(workspace.generated_field_identity);
@@ -193,6 +195,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
     });
   }
+
+ public:
   /// Reconstruct one primary-clock retained state at an exact target-clock coordinate. The
   /// bracketing slots and every intervening accepted interval come from the native history ledger;
   /// no Python callback, current-state alias, or fixed-dt inference participates.
