@@ -19,6 +19,7 @@
 #include <pops/runtime/program/program_context.hpp>
 
 #include <map>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -73,6 +74,14 @@ class ExecutionServicesFixture
   int source_runtime_block() const { return source_runtime_block_; }
   const pops::MultiFab* source_state() const { return source_state_; }
   const pops::MultiFab* source_rhs() const { return source_rhs_; }
+  int history_register_count() const { return history_register_count_; }
+  int history_read_count() const { return history_read_count_; }
+  int history_store_count() const { return history_store_count_; }
+  int history_rotate_count() const { return history_rotate_count_; }
+  int history_runtime_owner() const { return history_runtime_owner_; }
+  bool history_initialized() const { return history_initialized_; }
+  pops::Real history_outgoing_dt() const { return history_outgoing_dt_; }
+  const std::string& history_rotation_clock() const { return history_rotation_clock_; }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
@@ -135,6 +144,45 @@ class ExecutionServicesFixture
                                            const pops::CompiledFieldBoundaryKernel&) const {
     ++field_update_count_;
   }
+  void program_execution_register_history_storage_(
+      const typename SharedServices::HistoryRegistration& registration) const {
+    ++history_register_count_;
+    history_runtime_owner_ = registration.runtime_owner;
+  }
+  pops::MultiFab& program_execution_read_history_storage_(
+      const typename SharedServices::HistoryRegistration&, int,
+      typename SharedServices::HistoryReadMode) const {
+    ++history_read_count_;
+    return history_field_;
+  }
+  bool program_execution_history_initialized_storage_(
+      const typename SharedServices::HistoryRegistration&) const {
+    return history_initialized_;
+  }
+  void program_execution_set_history_initialized_storage_(
+      const typename SharedServices::HistoryRegistration&, bool initialized) const {
+    history_initialized_ = initialized;
+  }
+  typename SharedServices::HistoryStorePlan program_execution_history_store_plan_(
+      const typename SharedServices::HistoryRegistration&) const {
+    return {true, pops::Real(0.25)};
+  }
+  void program_execution_store_history_storage_(
+      const typename SharedServices::HistoryRegistration&, const pops::MultiFab&,
+      const std::optional<pops::Real>& outgoing_dt) const {
+    ++history_store_count_;
+    history_outgoing_dt_ = outgoing_dt.value_or(pops::Real(-1));
+  }
+  bool program_execution_history_supports_selective_rotation_() const noexcept { return !Amr; }
+  typename SharedServices::HistoryRotationAction program_execution_history_rotation_action_()
+      const noexcept {
+    return SharedServices::HistoryRotationAction::Rotate;
+  }
+  void program_execution_defer_history_rotation_() const noexcept {}
+  void program_execution_rotate_history_storage_(const std::string& clock_identity) const {
+    ++history_rotate_count_;
+    history_rotation_clock_ = clock_identity;
+  }
   pops::runtime::program::Profiler& program_execution_profiler_() const { return profiler_; }
   int program_execution_macro_step_() const { return 4; }
   int program_execution_active_level_() const { return active_level_; }
@@ -153,6 +201,15 @@ class ExecutionServicesFixture
   mutable std::map<std::string, pops::Real> diagnostics_;
   mutable int last_params_block_ = -1;
   mutable int field_update_count_ = 0;
+  mutable int history_register_count_ = 0;
+  mutable int history_read_count_ = 0;
+  mutable int history_store_count_ = 0;
+  mutable int history_rotate_count_ = 0;
+  mutable int history_runtime_owner_ = -1;
+  mutable bool history_initialized_ = false;
+  mutable pops::Real history_outgoing_dt_ = pops::Real(-1);
+  mutable std::string history_rotation_clock_;
+  mutable pops::MultiFab history_field_;
   mutable pops::runtime::program::Profiler profiler_;
   mutable double logical_dt_ = 0.4;
   mutable bool fail_logical_apply_ = false;
@@ -260,6 +317,27 @@ void expect_shared_program_services(Context& context, bool amr) {
   context.set_field_boundary_parameters("potential", {1.0, 2.0});
   context.set_field_boundary_kernel("potential", {});
   EXPECT_EQ(context.field_update_count(), 3);
+
+  context.register_history("rate", 2, 1, 0, "block.U", "cell", "clock.macro", "dense.linear");
+  EXPECT_EQ(context.history_runtime_owner(), 1);
+  pops::MultiFab history_value;
+  context.store_history("rate", history_value, 0);
+  EXPECT_EQ(context.history_store_count(), 1);
+  EXPECT_EQ(context.history_outgoing_dt(), pops::Real(0.25));
+  (void)context.history("rate", 1, 0);
+  EXPECT_EQ(context.history_read_count(), 1);
+  (void)context.history_zero_start("cold", 1, 1, 0);
+  EXPECT_TRUE(context.history_initialized());
+  EXPECT_EQ(context.history_read_count(), 2);
+  context.rotate_histories("clock.macro");
+  EXPECT_EQ(context.history_rotate_count(), 1);
+  EXPECT_EQ(context.history_rotation_clock(), amr ? "" : "clock.macro");
+  const int registrations_before_drift = context.history_register_count();
+  EXPECT_THROW(
+      context.register_history("rate", 2, 1, 1, "block.U", "cell", "clock.macro", "dense.linear"),
+      std::runtime_error);
+  EXPECT_EQ(context.history_register_count(), registrations_before_drift)
+      << "shared identity validation rejects owner drift before provider storage";
 
   EXPECT_TRUE(context.schedule_decision(3, true, true));
   EXPECT_EQ(context.profiler().counter("nodes_due"), 1);
