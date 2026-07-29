@@ -2500,6 +2500,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     const std::int64_t accepted_step =
         level_clocks_.empty() ? macro_step() : level_clocks_.front().macro_step;
     state.logical_clock_ticks = clock_schedule_.accepted_ticks(accepted_step);
+    state.tagging_hysteresis_state = eng_->checkpoint_tagging_state();
     state.history_owners = history_owners_;
     state.history_states = history_state_ids_;
     state.history_spaces = history_space_ids_;
@@ -2546,6 +2547,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       throw std::runtime_error(
           "compiled AMR Program restart lacks its accepted clock/history/flux state");
     AmrProgramAcceptedState state = deserialize_amr_program_accepted_state(bytes);
+    auto tagging_state = eng_->prepare_checkpoint_tagging_state(state.tagging_hysteresis_state);
     validate_program_accepted_state_(state);
     level_clocks_ = std::move(state.level_clocks);
     const std::int64_t accepted_step =
@@ -2568,6 +2570,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     // leave a fragment report from the abandoned revision visible.
     accepted_interface_flux_report_.clear();
     accepted_sync_report_ = std::move(state.accepted_sync);
+    // Commit the already authenticated runtime-owned payload last. No throwing operation follows
+    // this point, so a rejected decode/qualification leaves the previously accepted state intact.
+    eng_->commit_checkpoint_tagging_state(std::move(tagging_state));
     accepted_state_revision_ = revision;
     // An external restart/rollback may restore the same facade macro-step that this context had
     // already visited. The restored accepted image starts a fresh public attempt and must therefore

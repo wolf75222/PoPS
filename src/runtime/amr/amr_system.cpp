@@ -3299,6 +3299,29 @@ void AmrSystem::restore_program_accepted_state(const std::vector<std::uint8_t>& 
   p_->program_accepted_state_ = state;
   ++p_->program_accepted_state_revision_;
 }
+void AmrSystem::restore_checkpoint_accepted_state(const std::vector<std::uint8_t>& state) {
+  const bool has_program =
+      !p_->program_.installed_hash_.empty() || !p_->program_accepted_state_.empty();
+  if (has_program != !state.empty())
+    throw std::runtime_error("AMR checkpoint accepted state disagrees with the installed Program");
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AMR checkpoint accepted state requires a materialized runtime hierarchy");
+  runtime::amr::PersistentTaggingState tagging_candidate;
+  if (has_program) {
+    const auto accepted = runtime::program::deserialize_amr_program_accepted_state(state);
+    tagging_candidate =
+        p_->runtime->prepare_checkpoint_tagging_state(accepted.tagging_hysteresis_state);
+  } else {
+    tagging_candidate = p_->runtime->prepare_checkpoint_tagging_state({});
+  }
+  if (p_->program_accepted_state_revision_ == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("AMR checkpoint accepted-state revision overflow");
+  std::vector<std::uint8_t> bytes_candidate = state;
+  p_->program_accepted_state_.swap(bytes_candidate);
+  p_->runtime->commit_checkpoint_tagging_state(std::move(tagging_candidate));
+  ++p_->program_accepted_state_revision_;
+}
 void AmrSystem::materialize_program_restart_histories(const std::vector<std::uint8_t>& bytes,
                                                       const std::vector<std::string>& names,
                                                       const std::vector<int>& depths,
