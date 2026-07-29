@@ -34,6 +34,10 @@ def test_runtime_object_prewarm_lanes_are_an_exact_disjoint_cover():
                 "generated_seams/amr/block/compressible/amr_block_compressible_hll.cpp.o",
                 "pops_runtime_amr",
             ),
+            _target(
+                "generated_seams/amr/compiled/base/amr_compiled_exb.cpp.o",
+                "pops_runtime_amr",
+            ),
             "python/CMakeFiles/_pops.dir/bindings.cpp.o: CXX_COMPILER___pops_Release",
         )
     )
@@ -50,6 +54,9 @@ def test_runtime_object_prewarm_lanes_are_an_exact_disjoint_cover():
         ],
         "amr-compressible": [
             "src/CMakeFiles/pops_runtime_amr.dir/generated_seams/amr/block/compressible/amr_block_compressible_hll.cpp.o",
+        ],
+        "amr-compiled": [
+            "src/CMakeFiles/pops_runtime_amr.dir/generated_seams/amr/compiled/base/amr_compiled_exb.cpp.o",
         ],
     }
 
