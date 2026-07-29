@@ -18,5 +18,7 @@ bind/run identities, temporal restart state, ConsumerGraph cursors, or
 qualified field-provider state. Tests decode the base64 without altering the
 archive bytes and must never regenerate it from a current payload. A complete
 offline migration therefore needs an explicit, version-reviewed mapping for
-those absent facts; the current runtime must continue to refuse this file
-directly.
+those absent facts. `test_checkpoint_migration.py` supplies that mapping together
+with a separately authenticated current-v5 authority and proves the resulting
+artifact passes strict restart. The current runtime must continue to refuse this
+v2 file directly.

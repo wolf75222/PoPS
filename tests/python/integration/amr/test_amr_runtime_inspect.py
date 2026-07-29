@@ -60,8 +60,7 @@ def _built_amr(regrid_every=2, n=32):
         "ni", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
     )
     sim.set_temporal_relations([2], [1], ["integral_only"])
-    install_prepared_threshold_union(
-        sim, (("ne", "n", 0.5), ("ni", "n", 0.5)))
+    install_prepared_threshold_union(sim, (("ne", "n", 0.5), ("ni", "n", 0.5)))
     ne = np.ones((n, n))
     ne[n // 3 : 2 * n // 3, n // 3 : 2 * n // 3] = 5.0
     sim.set_density("ne", ne)
@@ -246,7 +245,9 @@ def test_explain_checkpoint_supports_dynamic_regrid():
     assert any("different rank count" in n for n in rep.notes)
     assert any("history ring is Dense" in n for n in rep.notes)
     assert any("selective history replay remains same-rank" in n for n in rep.notes)
-    assert any("RegridOnRestart() is not implemented" in n for n in rep.notes)
+    assert any("explicit weaker continuation" in n for n in rep.notes)
+    assert any("unchanged MPI cardinality" in n for n in rep.notes)
+    assert any("shared-interface flux groups" in n for n in rep.notes)
 
 
 # --- inspect() (ADC-589/555 criterion #34: the unified hierarchy/patch/regrid/limitations view) --

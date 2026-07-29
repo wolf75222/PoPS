@@ -318,12 +318,11 @@ class PreparedHyperbolicBoundary {
       std::array<PreparedHyperbolicFace, 2 * Dim> faces,
       std::vector<Transform> component_transforms,
       HyperbolicCornerPolicy corner_policy = HyperbolicCornerPolicy::NotRequired,
-      bool allow_mapped_periodicity = false)
+      bool explicit_periodic_identifications = false)
       : faces_(std::move(faces)),
         component_transforms_(std::move(component_transforms)),
-        corner_policy_(corner_policy),
-        allow_mapped_periodicity_(allow_mapped_periodicity) {
-    validate();
+        corner_policy_(corner_policy) {
+    validate(explicit_periodic_identifications);
     prepare_device_tables();
   }
 
@@ -342,15 +341,16 @@ class PreparedHyperbolicBoundary {
 
   Periodicity periodicity() const {
     static_assert(Dim == 2, "the current MultiFab topology is two-dimensional");
-    if ((faces_[0].law == HyperbolicBoundaryLaw::Periodic) !=
-            (faces_[1].law == HyperbolicBoundaryLaw::Periodic) ||
-        (faces_[2].law == HyperbolicBoundaryLaw::Periodic) !=
-            (faces_[3].law == HyperbolicBoundaryLaw::Periodic))
+    const bool xlo = faces_[0].law == HyperbolicBoundaryLaw::Periodic;
+    const bool xhi = faces_[1].law == HyperbolicBoundaryLaw::Periodic;
+    const bool ylo = faces_[2].law == HyperbolicBoundaryLaw::Periodic;
+    const bool yhi = faces_[3].law == HyperbolicBoundaryLaw::Periodic;
+    if (xlo != xhi || ylo != yhi)
       throw std::logic_error(
           "axis-permuted periodic topology has no per-axis runtime Periodicity projection");
     return Periodicity{
-        faces_[0].law == HyperbolicBoundaryLaw::Periodic,
-        faces_[2].law == HyperbolicBoundaryLaw::Periodic,
+        xlo,
+        ylo,
     };
   }
 
@@ -429,7 +429,6 @@ class PreparedHyperbolicBoundary {
   std::array<PreparedHyperbolicFace, 2 * Dim> faces_{};
   std::vector<Transform> component_transforms_;
   HyperbolicCornerPolicy corner_policy_ = HyperbolicCornerPolicy::NotRequired;
-  bool allow_mapped_periodicity_ = false;
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::View<Transform*, Kokkos::SharedSpace> device_transforms_;
   Kokkos::View<Real*, Kokkos::SharedSpace> device_fixed_values_;
@@ -438,7 +437,7 @@ class PreparedHyperbolicBoundary {
   std::vector<Real> device_fixed_values_;
 #endif
 
-  void validate() const {
+  void validate(bool explicit_periodic_identifications) const {
     if (component_transforms_.empty())
       throw std::invalid_argument(
           "prepared hyperbolic boundary requires model-qualified components");
@@ -447,8 +446,8 @@ class PreparedHyperbolicBoundary {
     for (int axis = 0; axis < Dim; ++axis) {
       const auto& low = faces_[static_cast<std::size_t>(2 * axis)];
       const auto& high = faces_[static_cast<std::size_t>(2 * axis + 1)];
-      if (!allow_mapped_periodicity_ && (low.law == HyperbolicBoundaryLaw::Periodic) !=
-                                            (high.law == HyperbolicBoundaryLaw::Periodic))
+      if (!explicit_periodic_identifications && (low.law == HyperbolicBoundaryLaw::Periodic) !=
+                                                    (high.law == HyperbolicBoundaryLaw::Periodic))
         throw std::invalid_argument(
             "prepared hyperbolic periodic topology requires complete axis pairs");
     }
@@ -525,7 +524,8 @@ template <int Dim>
 PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
     const std::vector<std::string>& face_types, const std::vector<double>& face_values,
     const std::vector<std::string>& face_identities,
-    const std::vector<std::string>& component_roles, bool allow_mapped_periodicity = false) {
+    const std::vector<std::string>& component_roles,
+    bool explicit_periodic_identifications = false) {
   if (face_types.size() != static_cast<std::size_t>(2 * Dim) ||
       face_identities.size() != static_cast<std::size_t>(2 * Dim))
     throw std::invalid_argument(
@@ -556,7 +556,7 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
   }
   return PreparedHyperbolicBoundary<Dim>(std::move(faces), std::move(transforms),
                                          HyperbolicCornerPolicy::NotRequired,
-                                         allow_mapped_periodicity);
+                                         explicit_periodic_identifications);
 }
 
 }  // namespace pops

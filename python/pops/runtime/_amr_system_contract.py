@@ -11,6 +11,7 @@ base; at runtime it collapses to ``object`` (never imported, instantiated or int
 type checker), so the class layout, the MRO and every runtime behaviour are unchanged. The bodies
 are ``...`` stubs: they describe shapes, never behaviour.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -29,14 +30,17 @@ class _AmrSystem:
     _step_strategy: Any
     _step_transaction_plan: Any
     _history_persistence: dict  # ADC-631: name -> HistoryPersistence policy (forwarded at install)
-    _last_restart_report: Any   # ADC-631: HistoryReplayReport of the last restart with rings
+    _last_restart_report: Any  # ADC-631: HistoryReplayReport of the last restart with rings
+    _last_restart_regrid_receipt: Any
     _last_run_manifest: Any
     _last_run_identity: Any
+    _restart_lineage_identity: Any
     _last_restart_identity: Any
     _temporal_restart_state: Any
     _execution_context: Any
 
     def set_history_persistence(self, *args: Any, **kwargs: Any) -> Any: ...
+    def last_restart_regrid_receipt(self) -> Any: ...
 
     def add_equation(self, *args: Any, **kwargs: Any) -> Any: ...
     def add_block(self, *args: Any, **kwargs: Any) -> Any: ...

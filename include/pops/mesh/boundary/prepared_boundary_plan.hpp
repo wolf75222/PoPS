@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -206,6 +207,16 @@ class PreparedBoundaryPlan {
   const std::vector<PeriodicIdentification2D>& periodic_identifications() const noexcept {
     return periodic_identifications_;
   }
+  bool has_mapped_periodicity() const noexcept { return has_mapped_periodicity_(); }
+  std::optional<Periodicity> axis_aligned_periodicity() const noexcept {
+    const bool xlo = hyperbolic_boundary_.face(0, -1).law == HyperbolicBoundaryLaw::Periodic;
+    const bool xhi = hyperbolic_boundary_.face(0, 1).law == HyperbolicBoundaryLaw::Periodic;
+    const bool ylo = hyperbolic_boundary_.face(1, -1).law == HyperbolicBoundaryLaw::Periodic;
+    const bool yhi = hyperbolic_boundary_.face(1, 1).law == HyperbolicBoundaryLaw::Periodic;
+    if (xlo != xhi || ylo != yhi)
+      return std::nullopt;
+    return Periodicity{xlo, ylo};
+  }
   /// Validate that an already allocated state can execute this prepared plan.  Installation-time
   /// consumers use the same invariant as the fill path, without performing or probing a fill.
   void validate_state_layout(const MultiFab& state) const { validate_for(state); }
@@ -379,7 +390,11 @@ class PreparedBoundaryPlan {
 
   Periodicity periodicity() const {
     validate_topology();
-    return hyperbolic_boundary_.periodicity();
+    const auto result = axis_aligned_periodicity();
+    if (!result)
+      throw std::logic_error(
+          "axis-permuted periodic topology has no per-axis runtime Periodicity projection");
+    return *result;
   }
 
   /// Same-level/MPI and prepared periodic production are performed by the memoized native halo
@@ -627,15 +642,6 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan residual/JVP direction identities are not executable");
   }
 
-  std::array<HyperbolicBoundaryLaw, 4> face_laws_() const {
-    return {
-        hyperbolic_boundary_.face(0, -1).law,
-        hyperbolic_boundary_.face(0, 1).law,
-        hyperbolic_boundary_.face(1, -1).law,
-        hyperbolic_boundary_.face(1, 1).law,
-    };
-  }
-
   bool has_mapped_periodicity_() const noexcept {
     return std::any_of(periodic_identifications_.begin(), periodic_identifications_.end(),
                        [](const PeriodicIdentification2D& identification) {
@@ -656,7 +662,6 @@ class PreparedBoundaryPlan {
     else
       fill_boundary(state, domain, lane, periodicity());
   }
-
   void validate_base() const {
     if (identity_.empty())
       throw std::runtime_error("PreparedBoundaryPlan requires a canonical identity");
@@ -686,12 +691,13 @@ class PreparedBoundaryPlan {
   }
 
   void validate_topology() const {
-    const auto expected = face_laws_();
+    std::array<bool, 4> periodic{};
+    for (int face = 0; face < 4; ++face)
+      periodic[static_cast<std::size_t>(face)] =
+          hyperbolic_boundary_.face(face / 2, face % 2 == 0 ? -1 : 1).law ==
+          HyperbolicBoundaryLaw::Periodic;
     if (periodic_identifications_.empty()) {
-      if ((expected[0] == HyperbolicBoundaryLaw::Periodic) !=
-              (expected[1] == HyperbolicBoundaryLaw::Periodic) ||
-          (expected[2] == HyperbolicBoundaryLaw::Periodic) !=
-              (expected[3] == HyperbolicBoundaryLaw::Periodic))
+      if (periodic[0] != periodic[1] || periodic[2] != periodic[3])
         throw std::runtime_error(
             "axis-aligned PreparedBoundaryPlan requires periodic faces in complete axis pairs");
       return;
@@ -705,21 +711,27 @@ class PreparedBoundaryPlan {
           throw std::runtime_error(
               "PreparedBoundaryPlan assigns one face to multiple periodic identifications");
         claimed[static_cast<std::size_t>(face)] = true;
-        if (expected[static_cast<std::size_t>(face)] != HyperbolicBoundaryLaw::Periodic)
+        if (!periodic[static_cast<std::size_t>(face)])
           throw std::runtime_error(
               "PreparedBoundaryPlan periodic identification endpoint is not a periodic face");
       }
     }
-    for (std::size_t face = 0; face < expected.size(); ++face)
-      if ((expected[face] == HyperbolicBoundaryLaw::Periodic) != claimed[face])
+    for (std::size_t face = 0; face < periodic.size(); ++face)
+      if (periodic[face] != claimed[face])
         throw std::runtime_error(
             "PreparedBoundaryPlan periodic face table differs from explicit identifications");
     if (has_mapped_periodicity_() && periodic_identifications_.size() != 1)
       throw std::runtime_error(
           "PreparedBoundaryPlan mapped periodic topology currently requires one identification; "
           "mixed periodic corners need a composed scheduler");
+    if (has_mapped_periodicity_())
+      for (int component = 0; component < hyperbolic_boundary_.ncomp(); ++component)
+        if (hyperbolic_boundary_.component_transform(component).parity !=
+            HyperbolicComponentParity::Scalar)
+          throw std::runtime_error(
+              "mapped periodic topology currently supports scalar component transforms only; "
+              "vector and axial states require a model-aware component map");
   }
-
   void validate_for(const MultiFab& state) const {
     if (state.ncomp() != ncomp())
       throw std::runtime_error("PreparedBoundaryPlan component count does not match block state");
