@@ -60,5 +60,6 @@ protocol = "paired_ABBA"
 metric = "candidate_throughput_over_pre_cutover"
 minimum_ratio = 0.98
 requires_real_device = true
+requires_distinct_device_per_rank = true
 job_script = "benchmarks/romeo/adc700_program_cutover.sbatch"
 submit_script = "benchmarks/romeo/submit_adc700_program_cutover.sh"
