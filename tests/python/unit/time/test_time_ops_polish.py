@@ -33,13 +33,19 @@ from pops.codegen import Production
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
+from pops.identity import make_identity
 from pops.layouts import Uniform
 from pops.math import ddt, div, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.numerics.terms import DefaultSource, Flux
-from pops.time import FixedDt
+from pops.output._balance_due_contract import (
+    BalanceDueConsumer,
+    BalanceDueContract,
+    BalanceDueRoute,
+)
+from pops.time import FixedDt, every, every_dt, when
 from typed_program_support import typed_state
 
 
@@ -51,6 +57,24 @@ def t():
     import pops.time as time
 
     return time
+
+
+def _balance_due_contract(route, *schedules):
+    return BalanceDueContract(
+        make_identity("consumer-graph", {"test": "balance-due"}),
+        (
+            BalanceDueRoute(
+                route,
+                tuple(
+                    BalanceDueConsumer(
+                        make_identity("consumer-manifest", {"index": index}),
+                        schedule,
+                    )
+                    for index, schedule in enumerate(schedules)
+                ),
+            ),
+        ),
+    )
 
 
 # ---- (A.1) solve_local_nonlinear (op 10): the per-cell Newton builder (ADC-422) ----
@@ -328,10 +352,140 @@ def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
         balance_record_name(route, term) for term in BALANCE_TERM_NAMES)
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
-    source = emit_cpp_program(P)
+    contract = _balance_due_contract(route, every(3, clock=P.clock))
+    source = emit_cpp_program(P, balance_due_contract=contract)
     assert source.count("ctx.record_balance_term(") == 5
+    assert source.count("ctx.balance_consumer_is_due(") == 1
+    assert '"%s", 3)' % route.token in source
+    assert "? (ctx.sum_component(" in source
     assert "ctx.record_scalar(" not in source
     assert route.token in source
+
+
+def test_balance_due_contract_unions_consumers_and_ignores_static_false(t):
+    from pops.diagnostics import BalanceLedger
+
+    P = t.Program("balance-due-contract")
+    U = typed_state(P, "blk")
+    route = BalanceLedger("mass").route_identity(U.block)
+    contract = _balance_due_contract(
+        route,
+        every(5, clock=P.clock),
+        when(False, clock=P.clock),
+        every(3, clock=P.clock),
+    )
+
+    assert contract.route(route.token).accepted_step_periods() == (3, 5)
+    false_only = _balance_due_contract(route, when(False, clock=P.clock))
+    assert false_only.route(route.token).accepted_step_periods() == ()
+
+
+def test_record_balance_elides_native_collectives_without_a_consumer(t):
+    from pops.diagnostics import BalanceLedger
+
+    P = t.Program("balance-without-consumer")
+    U = typed_state(P, "blk")
+    total = P.sum(U)
+    P.record_balance(
+        BalanceLedger("mass"),
+        storage_change=total,
+        outward_boundary_flux=total,
+        sources=total,
+        reflux=total,
+        projection=total,
+    )
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
+
+    source = emit_cpp_program(P)
+
+    assert "ctx.balance_consumer_is_due(" not in source
+    assert "ctx.record_balance_term(" not in source
+    assert "(false) ? (ctx.sum_component(" in source
+
+
+def test_record_balance_keeps_a_shared_reduction_unconditional(t):
+    from pops.diagnostics import BalanceLedger
+
+    P = t.Program("balance-shared-reduction")
+    U = typed_state(P, "blk")
+    total = P.sum(U)
+    ledger = BalanceLedger("mass")
+    P.record_balance(
+        ledger,
+        storage_change=total,
+        outward_boundary_flux=total,
+        sources=total,
+        reflux=total,
+        projection=total,
+    )
+    P.record_scalar("mass", total)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
+    route = ledger.route_identity(U.block)
+
+    source = emit_cpp_program(
+        P,
+        balance_due_contract=_balance_due_contract(
+            route, every(4, clock=P.clock)
+        ),
+    )
+    reduction_line = next(
+        line for line in source.splitlines() if "ctx.sum_component(" in line
+    )
+
+    assert "? (ctx.sum_component(" not in reduction_line
+    assert source.count("ctx.record_balance_term(") == 5
+    assert 'ctx.record_scalar("mass"' in source
+
+
+def test_record_balance_physical_time_cadence_stays_conservatively_due(t):
+    from pops.diagnostics import BalanceLedger
+
+    P = t.Program("balance-physical-cadence")
+    U = typed_state(P, "blk")
+    total = P.sum(U)
+    ledger = BalanceLedger("mass")
+    P.record_balance(
+        ledger,
+        storage_change=total,
+        outward_boundary_flux=total,
+        sources=total,
+        reflux=total,
+        projection=total,
+    )
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
+    route = ledger.route_identity(U.block)
+
+    source = emit_cpp_program(
+        P,
+        balance_due_contract=_balance_due_contract(
+            route, every_dt(0.1, clock=P.clock)
+        ),
+    )
+
+    assert source.count("ctx.balance_consumer_is_due(") == 1
+    assert '"%s", 1)' % route.token in source
+    assert source.count("ctx.record_balance_term(") == 5
+
+
+def test_balance_consumer_without_a_program_producer_fails_before_codegen(t):
+    from pops.codegen.program_balance_due import validate_balance_due_contract
+    from pops.diagnostics import BalanceLedger
+
+    P = t.Program("balance-missing-producer")
+    U = typed_state(P, "blk")
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
+    route = BalanceLedger("mass").route_identity(U.block)
+    contract = _balance_due_contract(route, every(2, clock=P.clock))
+
+    with pytest.raises(
+        ValueError,
+        match="Balance routes have no Program.record_balance producer",
+    ):
+        validate_balance_due_contract(P, contract)
 
 
 def test_record_balance_rejects_non_reduced_or_incomplete_evidence(t):

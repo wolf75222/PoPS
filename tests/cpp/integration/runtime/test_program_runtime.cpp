@@ -117,6 +117,28 @@ static void add_diffusive_gas(System& system, double gamma) {
   add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
+TEST(ProgramRuntime, BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure) {
+  runtime::program::ProgramRuntimeState state;
+  const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '1');
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '2');
+
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 3, "test"), std::logic_error);
+  state.run_balance_due_window(2, "test", [&] {
+    EXPECT_TRUE(state.balance_consumer_is_due(contract, route, 3, "test"));
+    EXPECT_FALSE(state.balance_consumer_is_due(contract, route, 2, "test"));
+    EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 0, "test"),
+                 std::invalid_argument);
+    EXPECT_THROW((void)state.balance_consumer_is_due("forged", route, 3, "test"),
+                 std::invalid_argument);
+  });
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 3, "test"), std::logic_error);
+
+  EXPECT_THROW(
+      state.run_balance_due_window(3, "test", [] { throw std::runtime_error("attempt rejected"); }),
+      std::runtime_error);
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 4, "test"), std::logic_error);
+}
+
 TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
   runtime::program::ProgramRuntimeState state;
   state.history_replay_authorities_ = {{"gas.previous", 3}};

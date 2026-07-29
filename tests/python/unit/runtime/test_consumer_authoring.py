@@ -23,6 +23,7 @@ from pops.output import (
 )
 from pops.linalg.norms import L2
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
+from pops.output._balance_due_contract import BalanceDueContract
 from pops.representations import Conservative
 from pops.spaces import CellState
 from pops.time import Clock, FailRun as SolveFailRun, every, on_start
@@ -262,11 +263,15 @@ def test_balance_consumer_resolves_one_exact_native_ledger_route():
     resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
     quantity, = resolved.nodes[0].diagnostic_quantities
     operation, = quantity.execution["operations"]
+    contract = BalanceDueContract.from_consumer_graph(resolved)
+    route = ledger.route_identity(case.resolve(block))
     assert not schedule.consumer_may_fire_at_start()
     assert operation["reduction"] == "accepted_balance"
-    assert operation["balance_route"] == ledger.route_identity(
-        case.resolve(block)).token
+    assert operation["balance_route"] == route.token
     assert quantity.reference == case.resolve(state)
+    assert contract.consumer_graph == resolved.identity
+    assert contract.route(route.token).accepted_step_periods() == (4,)
+    assert contract.identity.domain == "balance-due-contract"
 
 
 def test_balance_consumer_refuses_a_schedule_that_can_fire_at_start():
