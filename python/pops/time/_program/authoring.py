@@ -359,6 +359,10 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         to ``ctx.record_scalar("<name>", <scalar>)``."""
         if not isinstance(name, str) or not name:
             raise ValueError("record_scalar: name must be a non-empty string")
+        if name.startswith("pops.balance-term"):
+            raise ValueError(
+                "record_scalar: pops.balance-term is reserved for Program.record_balance"
+            )
         if not (isinstance(value, ProgramValue) and value.vtype == "scalar"):
             raise ValueError("record_scalar: value must be a Scalar value (e.g. P.norm2(R)); got %r"
                              % (value,))

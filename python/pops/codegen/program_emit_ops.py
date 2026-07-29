@@ -466,6 +466,19 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("ctx.record_scalar(%s, %s);"
                      % (json.dumps(v.attrs["diagnostic"]), var[scalar_in.id]))
         var[v.id] = var[scalar_in.id]
+    elif v.op == "record_balance_term":
+        # Dedicated, non-bindable sink for a validated Program.record_balance term. Ordinary
+        # record_scalar names cannot enter the reserved native attempt mailbox.
+        (scalar_in,) = v.inputs
+        lines.append(
+            "ctx.record_balance_term(%s, %s, %s);"
+            % (
+                json.dumps(v.attrs["route"]),
+                json.dumps(v.attrs["term"]),
+                var[scalar_in.id],
+            )
+        )
+        var[v.id] = var[scalar_in.id]
     elif v.op == "rhs":
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id

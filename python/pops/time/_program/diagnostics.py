@@ -101,7 +101,18 @@ class _ProgramDiagnostics(_ProgramBase):
             )
         route = ledger.route_identity(next(iter(blocks)))
         return tuple(
-            self.record_scalar(balance_record_name(route, name), terms[name])
+            self._new(
+                "scalar",
+                "record_balance_term",
+                (terms[name],),
+                {
+                    "diagnostic": balance_record_name(route, name),
+                    "route": route.token,
+                    "term": name,
+                },
+                balance_record_name(route, name),
+                terms[name].block,
+            )
             for name in BALANCE_TERM_NAMES
         )
 

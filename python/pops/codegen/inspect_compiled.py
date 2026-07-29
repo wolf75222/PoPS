@@ -411,7 +411,7 @@ def _build_arguments(
         for value in getattr(program, "_values", []):
             if value.op == "store_history":
                 outputs[value.name or "history"] = {"kind": "history"}
-            elif value.op == "record" or value.op == "record_scalar":
+            elif value.op in {"record", "record_scalar", "record_balance_term"}:
                 outputs[value.name or "diagnostic"] = {"kind": "diagnostic"}
 
     ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
