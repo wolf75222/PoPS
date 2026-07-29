@@ -6,7 +6,9 @@
 
 #include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
+#include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/runtime/amr_system.hpp>
@@ -201,6 +203,50 @@ SolveReport make_consensus_report(SolveReportFault fault) {
     }
   }
   return report;
+}
+
+struct RankLocalFallibleSource {
+  using State = StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  ImplicitEvaluationStatus rank_one_status = ImplicitEvaluationStatus::kOk;
+  std::uint32_t reason = 0;
+
+  POPS_HD State source(const State& state, const Aux&) const { return State{-state[0]}; }
+
+  POPS_HD ImplicitEvaluationResult evaluate_source(const State& state, const Aux& aux,
+                                                   State& output) const {
+    output = State{-state[0]};
+    if (aux.phi <= Real(0.5))
+      return ImplicitEvaluationResult::ok();
+    switch (rank_one_status) {
+      case ImplicitEvaluationStatus::kOk:
+        return ImplicitEvaluationResult::ok();
+      case ImplicitEvaluationStatus::kRetry:
+        return ImplicitEvaluationResult::retry(reason);
+      case ImplicitEvaluationStatus::kReject:
+        return ImplicitEvaluationResult::reject(reason);
+      case ImplicitEvaluationStatus::kFailed:
+        return ImplicitEvaluationResult::failed(reason);
+      case ImplicitEvaluationStatus::kInvalid:
+        return ImplicitEvaluationResult::invalid(reason);
+    }
+    return ImplicitEvaluationResult::invalid(reason);
+  }
+};
+
+bool local_field_equals(const MultiFab& field, Real expected) {
+  for (int local_index = 0; local_index < field.local_size(); ++local_index) {
+    const ConstArray4 values = field.fab(local_index).const_array();
+    const Box2D box = field.box(local_index);
+    for (int component = 0; component < field.ncomp(); ++component)
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+          if (values(i, j, component) != expected)
+            return false;
+  }
+  return true;
 }
 
 class ConsensusHierarchyPrepared final : public runtime::program::PreparedHierarchyTensorSolver {
@@ -521,6 +567,57 @@ int run_field_plan_consensus(int argc, char** argv) {
     require(rejected);
     require(exact_error);
   }
+
+  // A rank-local cell failure must become one communicator-wide nonlinear decision before any
+  // locally converged candidate or diagnostics can be published. Rank zero converges each case;
+  // rank one asks for retry, reject, or fail through the device-safe source-evaluation contract.
+  {
+    const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(4, 2), 2);
+    const DistributionMapping mapping(boxes.size(), ranks);
+    struct FailureCase {
+      ImplicitEvaluationStatus status;
+      SolveAction action;
+      SolveConsumption consumption;
+      std::string_view reason_fragment;
+    };
+    const FailureCase cases[] = {
+        {ImplicitEvaluationStatus::kRetry, SolveAction::kRejectAttempt,
+         SolveConsumption::kRejectAttempt, "evaluation_retry"},
+        {ImplicitEvaluationStatus::kReject, SolveAction::kRejectAttempt,
+         SolveConsumption::kRejectAttempt, "evaluation_reject"},
+        {ImplicitEvaluationStatus::kFailed, SolveAction::kFailRun, SolveConsumption::kFailRun,
+         "evaluation_failed"},
+    };
+    constexpr std::uint32_t reason = 0x75000001u;
+    for (const FailureCase& failure : cases) {
+      MultiFab state(boxes, mapping, 1, 0);
+      state.set_val(Real(3));
+      MultiFab aux(boxes, mapping, 3, 0);
+      aux.set_val(static_cast<Real>(rank));
+      NewtonReport diagnostics;
+      diagnostics.max_residual = Real(42);
+
+      SolveOutcome outcome =
+          backward_euler_source(RankLocalFallibleSource{failure.status, reason}, aux, state,
+                                Real(0.1), NewtonOptions{}, {}, &diagnostics);
+      require(outcome.report().status == SolveStatus::kInvalidEvaluation);
+      require(outcome.report().action == failure.action);
+      require(outcome.report().reason.find(failure.reason_fragment) != std::string::npos);
+      require(outcome.report().reason.find(std::to_string(reason)) != std::string::npos);
+      ExactSolveReportConsensusScratch consensus;
+      require(consensus.agrees(outcome.report()));
+      require(local_field_equals(state, Real(3)));
+      require(!diagnostics.enabled);
+      require(diagnostics.max_residual == Real(42));
+
+      const SolveReport consumed = outcome.consume(failure.consumption);
+      require(consumed.action == failure.action);
+      require(local_field_equals(state, Real(3)));
+      require(!diagnostics.enabled);
+      require(diagnostics.max_residual == Real(42));
+    }
+  }
+
   {
     SolveReport solved;
     solved.mark_solved("rank-local-publication");
