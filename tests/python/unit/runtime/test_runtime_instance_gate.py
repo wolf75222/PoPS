@@ -1425,6 +1425,46 @@ def test_step_change_diagnostic_uses_the_native_transaction_snapshot():
     assert (value, composite) == (0.125, True)
 
 
+def test_balance_diagnostic_accepts_only_the_exact_native_five_term_tuple():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Provider:
+        def _accepted_balance_terms(self, route):
+            assert route == "pops.balance-ledger-route.v1:sha256:" + "1" * 64
+            return {
+                "storage_change": 11.0,
+                "outward_boundary_flux": 2.0,
+                "sources": 5.0,
+                "reflux": 3.0,
+                "projection": 1.0,
+            }
+
+    terms = RuntimeConsumerPublisher._native_balance_terms(
+        _Provider(), "pops.balance-ledger-route.v1:sha256:" + "1" * 64)
+    assert terms.residual == 4.0
+    assert terms.reflux == 3.0
+
+    class _Incomplete:
+        def _accepted_balance_terms(self, _route):
+            return {"storage_change": 1.0}
+
+    with pytest.raises(TypeError, match="exactly storage_change"):
+        RuntimeConsumerPublisher._native_balance_terms(_Incomplete(), "route")
+
+    class _Coerced:
+        def _accepted_balance_terms(self, _route):
+            return {
+                "storage_change": "1.0",
+                "outward_boundary_flux": 2.0,
+                "sources": 5.0,
+                "reflux": 3.0,
+                "projection": 1.0,
+            }
+
+    with pytest.raises(TypeError, match="exact floating-point"):
+        RuntimeConsumerPublisher._native_balance_terms(_Coerced(), "route")
+
+
 def test_diagnostic_restart_restores_payload_terms_and_native_inspection_registry():
     from pops.identity import make_identity
     from pops.output.data import DiagnosticKey, DiagnosticPayload

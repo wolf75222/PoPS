@@ -307,6 +307,58 @@ def test_record_scalar_rejects_non_scalar_and_bad_name(t):
         raise AssertionError("record_scalar must reject an empty name")
 
 
+def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
+    from pops.diagnostics import BalanceLedger
+    from pops.diagnostics.balance import BALANCE_TERM_NAMES, balance_record_name
+
+    P = t.Program("p")
+    U = typed_state(P, "blk")
+    total = P.sum(U)
+    ledger = BalanceLedger("mass")
+    records = P.record_balance(
+        ledger,
+        storage_change=total,
+        outward_boundary_flux=total * 2.0,
+        sources=total * 3.0,
+        reflux=total * 0.0,
+        projection=total * 0.0,
+    )
+    route = ledger.route_identity(U.block)
+    assert tuple(record.attrs["diagnostic"] for record in records) == tuple(
+        balance_record_name(route, term) for term in BALANCE_TERM_NAMES)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
+    source = emit_cpp_program(P)
+    assert source.count("ctx.record_scalar(") == 5
+    assert route.token in source
+
+
+def test_record_balance_rejects_non_reduced_or_incomplete_evidence(t):
+    from pops.diagnostics import BalanceLedger
+
+    P = t.Program("p")
+    U = typed_state(P, "blk")
+    total = P.sum(U)
+    with pytest.raises(ValueError, match="global reduction"):
+        P.record_balance(
+            BalanceLedger("mass"),
+            storage_change=P.max_wave_speed(U),
+            outward_boundary_flux=total,
+            sources=total,
+            reflux=total,
+            projection=total,
+        )
+    with pytest.raises(ValueError, match="additive sum/dot reductions"):
+        P.record_balance(
+            BalanceLedger("mass"),
+            storage_change=P.max(U),
+            outward_boundary_flux=total,
+            sources=total,
+            reflux=total,
+            projection=total,
+        )
+
+
 # ---- (A.5) IR hash sensitivity ----
 def test_ir_hash_distinguishes_new_ops(t):
     def _h(build):

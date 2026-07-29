@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 import pops
-from pops.diagnostics import Integral, StepChangeNorm
+from pops.diagnostics import Balance, BalanceLedger, Integral, StepChangeNorm
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh import LayoutPlanBuilder, normalize_layout_plan
@@ -231,6 +231,41 @@ def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
             "metric_weighted": False,
         },
     )
+
+
+def test_balance_consumer_resolves_one_exact_native_ledger_route():
+    case, block, state = _case()
+    clock = Clock("macro", owner=case.owner_path)
+    schedule = every(4, clock=clock)
+    ledger = BalanceLedger("mass")
+    graph = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(state,),
+            diagnostics=(Balance(ledger, block=block),),
+            target="state/balance",
+        ),
+    ))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    quantity, = resolved.nodes[0].diagnostic_quantities
+    operation, = quantity.execution["operations"]
+    assert operation["reduction"] == "accepted_balance"
+    assert operation["balance_route"] == ledger.route_identity(
+        case.resolve(block)).token
+    assert quantity.reference == case.resolve(state)
 
 
 def test_console_monitor_can_be_removed_at_authoring_time():
