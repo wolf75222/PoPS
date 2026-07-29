@@ -460,6 +460,15 @@ The `pops.balance-term` namespace is reserved. Ordinary `Program.record_scalar(.
 the Python runtime diagnostic binding both reject it; generated `record_balance` code reaches a
 separate native sink that validates the route and canonical term before touching the mailbox.
 
+`record_balance` is not currently gated by the matching Consumer cadence. Its five term-producing
+Program reduction paths run whenever execution reaches the call, including every cadence/substep,
+even if the `Balance` consumer is due only every N accepted steps. Use this explicit route with a
+dense (every-invocation) balance cadence unless that collective cost is intentionally acceptable:
+a sparse Consumer cadence does not save the upstream reductions. Scheduling only the five terminal
+record nodes would not fix this, because their reduction inputs would still execute. A future
+low-overhead sparse route therefore needs one typed due decision shared by the Program and
+ConsumerGraph.
+
 This route is explicit evidence, not automatic numerical instrumentation: a Program that cannot
 produce its actual reflux or projection increment cannot declare `Balance`. In particular, the
 generic automatic extraction of AMR reflux/projection contributions from the internal native
