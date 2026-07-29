@@ -1228,6 +1228,9 @@ class CompositeFacPoisson {
     const Box2D b = res_c_.box(0);
     const CoverageMaskView coverage = cov_.view();
     for_each_cell(b, detail::FacLegacyMaskedResidualKernel{R, FC, LAP, coverage});
+    if (has_boundary_kernel_)
+      for (int face = 0; face < 4; ++face)
+        boundary_kernel_.add_residual(face, phi_c_, res_c_, geom_c_, *boundary_context);
 
     // C-F FLUX CORRECTION, PER FINE PATCH. On each coarse cell BORDERING a patch (non covered,
     // covered neighbor), we REPLACE the contribution of the C-F face in div(eps grad phi_c) by the

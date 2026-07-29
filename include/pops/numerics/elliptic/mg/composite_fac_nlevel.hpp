@@ -793,6 +793,9 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
     const Box2D b = resm.box(li);
     for_each_cell(b, detail::FacMaskedResidualKernel{R, FM, LAP, coverage});
   }
+  if (m == 0 && has_boundary_kernel_)
+    for (int face = 0; face < 4; ++face)
+      boundary_kernel_.add_residual(face, phim, resm, gm, boundary_context_for_level_(0));
   add_flux_correction_(m, resm);  // += (coarse - fine) on the bordering cells
 
   Real nrm = Real(0);

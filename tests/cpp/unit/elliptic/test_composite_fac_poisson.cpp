@@ -454,6 +454,15 @@ TEST(CompositeFacPoissonTest, late_invalid_carrier_does_not_replace_committed_ba
   EXPECT_TRUE(observed_expected_boundary_state);
   EXPECT_FALSE(observed_unexpected_boundary_state)
       << "a late carrier failure changed the previously committed coarse boundary context";
+
+  fac.force_general_path_for_test(true);
+  observed_expected_boundary_state = false;
+  observed_unexpected_boundary_state = false;
+  EXPECT_NO_THROW((void)fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
+                                  /*rel_tol=*/Real(0), /*abs_tol=*/Real(0)));
+  EXPECT_TRUE(observed_expected_boundary_state);
+  EXPECT_FALSE(observed_unexpected_boundary_state)
+      << "the general FAC path did not preserve the committed coarse boundary context";
   expected_boundary_state = nullptr;
   comm_finalize();
 }
