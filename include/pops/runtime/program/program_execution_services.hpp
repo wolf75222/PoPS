@@ -291,6 +291,15 @@ class ProgramExecutionServices {
     return provider_().program_execution_max_wave_speed_(sys_block(block), state);
   }
 
+  /// Whether generated metric-aware operators execute on a polar mesh.
+  bool is_polar_geometry() const { return provider_().program_execution_is_polar_geometry_(); }
+
+  /// Physical radial origin used by generated metric-aware operators.
+  Real radial_origin() const { return provider_().program_execution_radial_origin_(); }
+
+  /// Physical radial cell spacing used by generated metric-aware operators.
+  Real radial_spacing() const { return provider_().program_execution_radial_spacing_(); }
+
   MultiFab rhs_scratch_like(const MultiFab& prototype) const {
     MultiFab scratch(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
                      prototype.n_grow());

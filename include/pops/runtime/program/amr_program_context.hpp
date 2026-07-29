@@ -573,13 +573,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                                     stages);
   }
 
-  /// The installed AMR route is Cartesian.  The metric queries still exist on this context so one
-  /// generated Program body instantiates against both runtime contexts without geometry-specific
-  /// source-stage classes.
-  bool is_polar_geometry() const { return false; }
-  Real radial_origin() const { return Real(0); }
-  Real radial_spacing() const { return geom().dx(); }
-
   std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
       const MultiFab&, const ExecutionLane& lane) const {
     return std::make_shared<PreparedGridBoundarySession>(grid_context(), lane);
@@ -3463,6 +3456,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
     return eng_->level_max_speed(static_cast<std::size_t>(runtime_block), level_, state);
   }
+  bool program_execution_is_polar_geometry_() const noexcept { return false; }
+  Real program_execution_radial_origin_() const noexcept { return Real(0); }
+  Real program_execution_radial_spacing_() const { return eng_->level_geom(level_).dx(); }
 
   struct LogicalEvaluationRollback {
     std::optional<amr::ClockWindow> window;
