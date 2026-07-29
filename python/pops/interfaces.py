@@ -170,6 +170,7 @@ FieldBoundaryClosure = resolve("field_boundary_closure")
 Tagger = resolve("tagger")
 Clustering = resolve("clustering")
 Transfer = resolve("transfer")
+Reflux = resolve("reflux")
 FieldSolver = resolve("field_solver")
 Writer = resolve("writer")
 FieldTopology = resolve("field_topology")
@@ -177,6 +178,6 @@ FieldTopology = resolve("field_topology")
 
 __all__ = [
     "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary",
-    "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer",
+    "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer", "Reflux",
     "FieldSolver", "Writer", "FieldTopology",
 ]
