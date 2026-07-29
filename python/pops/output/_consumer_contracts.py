@@ -136,6 +136,19 @@ def _observer_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
     return freeze_data(first, "%s.consumer_data" % where)
 
 
+def _is_async_scientific_observer(operation_data: Any) -> bool:
+    """Authenticate the one monitor provider allowed to carry scientific diagnostics."""
+    if not isinstance(operation_data, Mapping):
+        return False
+    observer = operation_data.get("observer")
+    return (
+        isinstance(observer, Mapping)
+        and observer.get("observer_kind") == "async_scientific_output"
+        and observer.get("provider_id")
+        == "pops.output.async-scientific-writer.v1"
+    )
+
+
 def _console_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
     """Authenticate the Python-only renderer of a rank-zero diagnostic consumer."""
     if getattr(value, "__pops_ir_immutable__", False) is not True:
@@ -553,10 +566,16 @@ class ConsumerManifest:
                 "descriptor": first,
                 "references": [value.canonical_identity() for value in resolved_references],
             }, "%s.consumer_data" % where))
+        async_scientific_monitor = (
+            self.kind is ConsumerKind.MONITOR
+            and _is_async_scientific_observer(operation_data)
+        )
         if diagnostic_rows and self.kind not in {
-                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT
+        } and not async_scientific_monitor:
             raise ValueError(
-                "only ConsoleMonitor or ScientificOutput can embed diagnostic providers")
+                "only ConsoleMonitor, ScientificOutput, or AsyncScientificOutput "
+                "can embed diagnostic providers")
         object.__setattr__(self, "diagnostics_data", tuple(diagnostic_rows))
         if not isinstance(self.diagnostic_quantities, tuple) or any(
                 type(value) is not DiagnosticQuantity
@@ -573,9 +592,11 @@ class ConsumerManifest:
             raise ValueError(
                 "ConsumerManifest must lower every diagnostic descriptor exactly once")
         if diagnostic_quantities and self.kind not in {
-                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT
+        } and not async_scientific_monitor:
             raise ValueError(
-                "only ConsoleMonitor or ScientificOutput can carry diagnostic quantities")
+                "only ConsoleMonitor, ScientificOutput, or AsyncScientificOutput "
+                "can carry diagnostic quantities")
         has_accepted_balance = any(
             operation["reduction"] == "accepted_balance"
             for quantity in diagnostic_quantities

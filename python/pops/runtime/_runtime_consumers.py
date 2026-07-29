@@ -281,6 +281,10 @@ class _PreparedDiagnostic(PreparedPublication):
     def payload_identity(self) -> Identity:
         return self._effect.payload.identity
 
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        return ()
+
     def publish(self) -> PublicationReceipt:
         if self._discarded:
             raise RuntimeError("discarded diagnostic cannot be published")
@@ -464,7 +468,10 @@ class _PreparedScientificOutput(PreparedPublication):
 
     @property
     def recoveries(self) -> tuple[Any, ...]:
-        return self._output.recoveries
+        recoveries = getattr(self._output, "recoveries", ())
+        if not isinstance(recoveries, tuple):
+            raise TypeError("prepared output recoveries must be a tuple")
+        return recoveries
 
     def publish(self) -> PublicationReceipt:
         if self._discarded:
@@ -2832,13 +2839,27 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             effect, values, publish_callback, self._discard_diagnostics, rollback
         )
 
+    def _snapshot_for_effect(
+        self,
+        effect: AcceptedSideEffect,
+        manifest: Any,
+    ) -> tuple[OutputSnapshot, OutputRequest]:
+        if not getattr(manifest, "diagnostic_quantities", ()):
+            return self._owner._output_snapshot(manifest)
+        token = effect.identity.token
+        try:
+            diagnostics = self._pending[token]
+        except KeyError as error:
+            raise RuntimeError(
+                "scientific output diagnostics were not prepared for the accepted effect"
+            ) from error
+        return self._owner._output_snapshot(manifest, diagnostics)
+
     def _resolve_output(self, effect: AcceptedSideEffect) -> OutputPreparation:
         manifest = self._manifest(effect)
         if manifest.output_format_data["provider_id"] == "pops.output.hdf5.v1":
             self._drain_post_commit_before_hdf5()
-        snapshot, request = self._owner._output_snapshot(
-            manifest, self._pending.get(effect.identity.token, ())
-        )
+        snapshot, request = self._snapshot_for_effect(effect, manifest)
         fmt = manifest.output_format
         format_name = manifest.output_format_data["format_name"]
         target = _target(
@@ -2860,7 +2881,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         effect: AcceptedSideEffect,
         manifest: Any,
     ) -> _PreparedLiveVisualization:
-        snapshot, request = self._owner._output_snapshot(manifest)
+        snapshot, request = self._snapshot_for_effect(effect, manifest)
         frame = None
         journal = None
         journal_record = None
@@ -2920,7 +2941,18 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         if manifest.kind is ConsumerKind.DIAGNOSTIC:
             return self._prepare_diagnostic(effect, manifest)
         if manifest.kind is ConsumerKind.MONITOR:
-            return self._prepare_live_visualization(effect, manifest)
+            diagnostic = (
+                self._prepare_diagnostic(effect, manifest)
+                if manifest.diagnostic_quantities
+                else None
+            )
+            try:
+                live = self._prepare_live_visualization(effect, manifest)
+            except BaseException:
+                if diagnostic is not None:
+                    diagnostic.discard()
+                raise
+            return live if diagnostic is None else _PreparedScientificOutput(live, diagnostic)
         if manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
             diagnostic = (
                 self._prepare_diagnostic(effect, manifest)
