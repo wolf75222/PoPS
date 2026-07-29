@@ -214,9 +214,9 @@ def test_codegen_emits_amr_install_wrapper():
     chk("_make_level_program" in body and "ctx.program_resource_topology()" in body
         and "ctx.for_each_program_resource_level(" in body,
         "per-level Program resources refresh after regrid, rollback, and checkpoint rebuild")
-    chk("ctx.set_level(" not in body and "ctx.with_program_resource_level(" in body
+    chk("ctx.set_level(" not in body and "ctx.for_each_program_resource_level(" in body
         and "ctx.couple_levels(" not in body,
-        "shared topology scopes select levels; native synchronization remains provider-owned")
+        "shared resource traversal selects levels; native recursion and synchronization remain provider-owned")
     chk("the per-level AMR macro-step driver" not in body
         and "is not yet available" not in body,
         "the fail-loud throw is gone (the real driver is emitted)")
