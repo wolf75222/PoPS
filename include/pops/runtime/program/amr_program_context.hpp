@@ -87,11 +87,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
 
     bool bound() const { return epoch != std::numeric_limits<std::uint64_t>::max(); }
   };
-  /// Wrap an AmrSystem passed as a flat void* (what pops_install_program_amr(void* sys) receives). The
-  /// ctor pulls the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR
-  /// blocks must be materialized -- install_program forces the build before install()).
-  explicit AmrProgramContext(void* sys)
-      : facade_(static_cast<AmrSystem*>(sys)), eng_(facade_->engine()) {
+  /// Wrap the typed AmrSystem facade selected by the shared Program provider factory. The ctor pulls
+  /// the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR blocks must
+  /// be materialized -- install_program forces the build before install()).
+  explicit AmrProgramContext(AmrSystem* facade) : facade_(facade), eng_(facade_->engine()) {
     if (eng_ == nullptr)
       throw std::runtime_error(
           "AmrProgramContext: the AMR runtime engine is not built; install_program must force the "
@@ -3827,6 +3826,11 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   // after the reflux corrects that live state, couple_levels re-copies it into slot 0 so the stored state
   // and the live state stay consistent. A ring storing a non-live buffer (AB2 stores the RHS) is absent.
   mutable std::vector<LiveStateRing> live_state_rings_;
+};
+
+template <>
+struct ProgramExecutionProviderFor<AmrSystem> {
+  using type = AmrProgramContext;
 };
 
 }  // namespace program

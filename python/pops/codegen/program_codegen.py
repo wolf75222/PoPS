@@ -123,15 +123,15 @@ def emit_cpp_program(
     Exports the stable .so ABI -- ``pops_program_abi_key`` (the ``POPS_ABI_KEY_LITERAL``
     preprocessor literal, NOT the interposable inline), ``pops_program_name``, ``pops_program_hash``,
     one target-specific install entry -- and installs the macro step as a closure built from the
-    matching native context primitives (no MultiFab / flux / solver reimplementation).
+    matching facade-selected provider (no MultiFab / flux / solver reimplementation).
 
     @p target selects the install entry the .so exports. ``"system"`` (default) emits only
     ``pops_install_program`` (the single-level ``System`` macro-step closure). ``"amr_system"``
     (epic ADC-511 / ADC-508, Spec 6) emits only ``pops_install_program_amr``, the entry
-    ``AmrSystem::install_program`` resolves: it wraps the ``AmrSystem`` in an ``AmrProgramContext``
-    and installs the real per-level synchronized macro-step. A mismatched runtime therefore rejects
-    the artifact by its missing mandatory entry instead of compiling a dead closure against the
-    wrong context type.
+    ``AmrSystem::install_program`` resolves: the shared factory selects the ``AmrSystem`` provider
+    and the wrapper installs the real per-level synchronized macro-step. A mismatched runtime
+    therefore rejects the artifact by its missing mandatory entry instead of compiling a dead
+    closure against the wrong topology provider.
 
     Lowers the Program by a topological walk of the SSA IR: each block's current state is its base
     (``ctx.state(idx)``); ``solve_fields()`` runs the elliptic solve; each RHS becomes a
@@ -204,9 +204,9 @@ def emit_cpp_program(
         program, authority, target=target, field_plans=field_plans or {}
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
-    # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
-    # expression). Without a bound, has_dt_bound() returns false and the dt_bound function returns a
-    # +inf sentinel (never reached: the loader stores the closure only when has_dt_bound() is true).
+    # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
+    # facade. The entry obtains its provider from the shared factory; codegen never selects a concrete
+    # context. Without a bound, the function returns a +inf sentinel and remains unreachable.
     has_dt_bound, dt_bound_body = _emit_dt_bound(program, authority)
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
 
@@ -219,7 +219,7 @@ def emit_cpp_program(
         history_replay_authorities=_emit_history_replay_authorities(program),
         operator_authorities=_emit_operator_authorities(operator_authorities),
         has_dt_bound=has_dt_bound,
-        dt_bound_body=dt_bound_body,
+        dt_bound=_emit_dt_bound_entry(target, dt_bound_body),
         module_metadata=_emit_module_metadata(program, authority),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
@@ -237,7 +237,6 @@ def emit_cpp_program(
             _emit_amr_hierarchy_bodies(program, authority, field_plans or {})
             if target == "amr_system"
             else None,
-            dt_bound_body if target == "amr_system" else None,
         ),
     )
 
@@ -306,8 +305,8 @@ def _emit_program_model_helpers(program: Any, authority: Any) -> str:
 def _emit_system_install(target: str, prelude: str, body: str) -> str:
     """Emit only the install entry matching the artifact's declared runtime target.
 
-    An AMR artifact owns an ``AmrProgramContext`` and may contain hierarchy-only providers.  Emitting
-    the uniform entry as well would compile the AMR prelude against the wrong context type and, more
+    An AMR artifact may contain hierarchy-only providers. Emitting the uniform entry as well would
+    compile the AMR prelude against the wrong topology provider and, more
     importantly, advertise a System route the artifact cannot execute.  The native loaders already
     resolve distinct mandatory symbols, so a mismatched target now fails by a missing entry instead
     of carrying a dead or partially compilable implementation.
@@ -315,14 +314,32 @@ def _emit_system_install(target: str, prelude: str, body: str) -> str:
     if target != "system":
         return ""
     return (
-        'extern "C" void pops_install_program(void* sys) {\n'
-        "  auto ctx_owner = std::make_shared<pops::runtime::program::ProgramContext>(sys);\n"
-        "  pops::runtime::program::ProgramContext& ctx = *ctx_owner;\n" + prelude + "\n"
+        'extern "C" void pops_install_program(pops::System* sys) {\n'
+        "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
+        "  auto& ctx = *ctx_owner;\n" + prelude + "\n"
         "  ctx.install([=](double dt) {\n"
-        "    pops::runtime::program::ProgramContext& ctx = *ctx_owner;\n"
+        "    auto& ctx = *ctx_owner;\n"
         "    (void)dt;\n"
         "    ctx.begin_step(dt);\n" + body + "\n"
         "  });\n"
+        "}\n"
+    )
+
+
+def _emit_dt_bound_entry(target: str, body: str) -> str:
+    """Emit one facade-typed dt-bound ABI using the shared provider factory."""
+    if target == "amr_system":
+        symbol = "pops_program_dt_bound_amr"
+        facade = "pops::AmrSystem"
+    else:
+        symbol = "pops_program_dt_bound"
+        facade = "pops::System"
+    return (
+        f'extern "C" pops::Real {symbol}({facade}* sys, pops::Real cfl) {{\n'
+        "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n"
+        "  auto& ctx = *ctx_owner;\n"
+        "  (void)ctx; (void)cfl;\n"
+        f"{body}\n"
         "}\n"
     )
 
@@ -357,7 +374,7 @@ def _emit_block_names(program: Any) -> str:
     ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
     ``_block_indices`` order (T.state declaration order, the order the step body's ``ctx.state(idx)``
     addresses). System::install_program reads them, matches each to the instantiated System block of
-    that name, and stores the program-index -> system-index map (read by ProgramContext), so the
+    that name, and stores the program-index -> system-index map (read by the execution provider), so the
     System blocks may be added in ANY order vs the Program's T.state declarations -- a Program block
     whose name has no System block fails loud. The block names are also part of the IR identity (the
     block_order field of _serialize feeds the IR hash), so reordering T.state changes the hash."""
@@ -370,7 +387,7 @@ def _emit_block_names(program: Any) -> str:
     return (
         "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"
         "// T.state declaration order. install_program matches each to a System block BY NAME (not\n"
-        "// add-order) and builds the program-index -> system-index map ProgramContext resolves.\n"
+        "// add-order) and builds the program-index -> system-index map the provider resolves.\n"
         'extern "C" int pops_program_block_count() { return %d; }\n'
         % len(names)
         + 'extern "C" const char* pops_program_block_name(int i) {\n'
