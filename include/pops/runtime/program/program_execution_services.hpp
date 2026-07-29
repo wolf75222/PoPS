@@ -8,6 +8,7 @@
 #include <exception>
 #include <initializer_list>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -778,5 +779,31 @@ class ProgramExecutionServices {
 
   mutable CouplingWorkspace coupling_workspace_;
 };
+
+/// Compile-time association between a public runtime facade and its topology/storage provider.
+///
+/// Generated modules name only the facade carried by their stable ABI.  The runtime headers own
+/// the concrete provider selection, so adding a Program operation never requires a second codegen
+/// dispatch table.  Each supported provider specializes this trait beside its own definition.
+template <class RuntimeFacade>
+struct ProgramExecutionProviderFor;
+
+template <class RuntimeFacade>
+using ProgramExecutionProviderForT = typename ProgramExecutionProviderFor<RuntimeFacade>::type;
+
+/// Construct the provider selected by the runtime facade and verify that it consumes the one shared
+/// Program semantic authority.  The returned shared owner is intentionally concrete: topology
+/// drivers may use provider-owned hierarchy services, while topology-independent generated
+/// operations continue to resolve through ProgramExecutionServices exactly once.
+template <class RuntimeFacade>
+std::shared_ptr<ProgramExecutionProviderForT<RuntimeFacade>> make_program_execution_provider(
+    RuntimeFacade* runtime) {
+  using Provider = ProgramExecutionProviderForT<RuntimeFacade>;
+  static_assert(std::is_base_of_v<ProgramExecutionServices<Provider>, Provider>,
+                "a Program execution provider must consume ProgramExecutionServices");
+  if (runtime == nullptr)
+    throw std::invalid_argument("Program execution provider requires a non-null runtime facade");
+  return std::make_shared<Provider>(runtime);
+}
 
 }  // namespace pops::runtime::program

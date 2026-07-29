@@ -62,9 +62,9 @@
 /// System::Impl / Array4 / fill_boundary / the elliptic solver / Kokkos / MPI / CFL / substeps.
 ///
 /// IDIOM: ProgramContext is a plain (non-template) class holding a System*. A generated .so receives
-/// the System as a flat void* across the dlopen boundary (like the native loader's `void* self`) and
-/// wraps it here; it reaches per-block storage through the System's public accessors because
-/// System::Impl is private to the _pops translation unit.
+/// the typed System facade across the authenticated dlopen boundary and asks the shared provider
+/// factory to construct this topology/storage provider; it reaches per-block storage through the
+/// System's public accessors because System::Impl is private to the _pops translation unit.
 namespace pops {
 namespace runtime {
 namespace program {
@@ -72,8 +72,6 @@ namespace program {
 class ProgramContext : public ProgramExecutionServices<ProgramContext> {
  public:
   explicit ProgramContext(System* sys) : sys_(sys) {}
-  /// Wraps a System passed as a flat void* (what pops_install_program(void* sys) receives).
-  explicit ProgramContext(void* sys) : sys_(static_cast<System*>(sys)) {}
 
   /// Register the macro-step body. @p step advances ONE macro-step over dt (it owns solve_fields,
   /// the RHS, the linear combine and the commit). An empty std::function is rejected.
@@ -1421,6 +1419,11 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       std::make_shared<FieldSolveWorkspaceRegistry>();
   mutable std::shared_ptr<ScratchRegistry> scratch_registry_ = std::make_shared<ScratchRegistry>();
   System* sys_;
+};
+
+template <>
+struct ProgramExecutionProviderFor<System> {
+  using type = ProgramContext;
 };
 
 }  // namespace program
