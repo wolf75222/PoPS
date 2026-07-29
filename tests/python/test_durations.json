@@ -8,7 +8,7 @@
   "tests/python/integration/amr/test_amr_conservative_state.py": 110.4,
   "tests/python/integration/amr/test_amr_explicit_family.py": 5.0,
   "tests/python/integration/amr/test_amr_fac_and_clustering_options.py": 5.0,
-  "tests/python/integration/amr/test_amr_history_parity.py": 136.8,
+  "tests/python/integration/amr/test_program_history_contract.py": 136.8,
   "tests/python/integration/amr/test_amr_history_regrid.py": 274.2,
   "tests/python/integration/amr/test_amr_install_program.py": 0.5,
   "tests/python/integration/amr/test_amr_introspection_endtoend.py": 60.0,
