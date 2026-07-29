@@ -617,35 +617,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
     return SolveOutcome::collective_world(*default_solve_report_);
   }
-  /// Per-stage re-solve from a stage state is currently a coarse-only capability.  A fine-level request
-  /// is rejected explicitly; it never consumes a stale injected auxiliary field.
-  SolveOutcome solve_fields_from_state(int b, MultiFab& u_stage) const {
-    if (level_ == 0) {
-      MultiFab& live = state(b);
-      MultiFab& saved = stage_state_scratch_for_(b, level_, live);
-      PureFieldAlgebra::copy_allocated(saved, live);
-      default_solve_report_.reset();
-      SolveOutcome outcome = [&]() -> SolveOutcome {
-        try {
-          PureFieldAlgebra::copy_allocated(live, u_stage);
-          SolveOutcome candidate = eng_->solve_default_field();
-          PureFieldAlgebra::copy_allocated(live, saved);
-          return candidate;
-        } catch (...) {
-          PureFieldAlgebra::copy_allocated(live, saved);
-          throw;
-        }
-      }();
-      const SolveReport report = outcome.report();
-      if (report.solved())
-        default_solve_report_ = report;
-      return outcome;
-    }
-    deferred_op(
-        "solve_fields_from_state_default",
-        "the default per-stage fine-level field re-solve requires a composite stage solver; use "
-        "OncePerStep field cadence or an exact named field provider");
-  }
   SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                           const std::string& provider_slot, int b,
                                           MultiFab& u_stage) const {
@@ -698,40 +669,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       std::rethrow_exception(failure);
     }
     restore();
-  }
-  /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
-  /// fine levels consume only that exact provider-qualified report.
-  SolveOutcome solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
-    if (level_ != 0) {
-      if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
-        throw std::logic_error(
-            "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
-      const auto cached = named_solve_reports_.find(field);
-      if (cached == named_solve_reports_.end() || !cached->second.solved())
-        throw std::runtime_error(
-            "AmrProgramContext::solve_fields_from_state(field): fine-level reuse requires an "
-            "accepted coarse SolveReport");
-      return SolveOutcome::collective_world(
-          cached->second);  // the coarse solve publishes/injects every level once per stage
-    }
-    MultiFab& live = state(b);
-    MultiFab& published = stage_state_scratch_for_(b, level_, live);
-    PureFieldAlgebra::copy_allocated(published, live);
-    SolveOutcome outcome = [&]() -> SolveOutcome {
-      try {
-        PureFieldAlgebra::copy_allocated(live, u_stage);
-        SolveOutcome candidate = eng_->solve_named_fields(&field);
-        PureFieldAlgebra::copy_allocated(live, published);
-        return candidate;
-      } catch (...) {
-        PureFieldAlgebra::copy_allocated(live, published);
-        named_solve_reports_.insert_or_assign(field, SolveReport{});
-        throw;
-      }
-    }();
-    const SolveReport report = outcome.report();
-    named_solve_reports_.insert_or_assign(field, report);
-    return outcome;
   }
   /// Retained default-provider overload: the final Program IR always carries an exact field identity,
   /// while an unqualified coupled solve has no provider authority and therefore fails loud.

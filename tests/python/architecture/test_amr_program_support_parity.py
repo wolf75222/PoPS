@@ -104,12 +104,15 @@ def test_parser_finds_only_explicit_known_deferrals():
         "cache_should_update",
         "cache_effective_dt",
         "neg_div_flux_into",
-        "solve_fields_from_state_default",
         "solve_fields_from_blocks_default",
         "refined_shared_block_interfaces",
     ):
         assert identifier in header
     assert "solve_fields_from_state_at_fine_level" not in header
+    assert "solve_fields_from_state_default" not in header
+    assert "SolveOutcome solve_fields_from_state(const std::string&" not in (
+        CONTEXT_HPP.read_text(encoding="utf-8")
+    )
     assert "fine_level_field_perturbation" not in module.DEFERRED_GROUPS
     assert "apply_projection" not in header
     assert not any(identifier.startswith("history") for identifier in header)

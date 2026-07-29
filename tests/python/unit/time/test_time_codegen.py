@@ -104,11 +104,14 @@ def test_forward_euler_abi(t):
 
 
 def test_forward_euler_algorithm(t):
-    # FE: base = ctx.state(0); solve_fields_from_state(0, base); R = rhs_into(0, base); acc += dt*R;
-    # commit via lincomb. Each solve_fields op lowers to the per-stage solve (ADC-409); for FE the
-    # stage state is the base U^n, so it matches the historical solve_fields() semantics.
+    # FE: base = ctx.state(0); solve_fields_from_state_at(point, field, 0, base);
+    # R = rhs_into(0, base); acc += dt*R; commit via lincomb. Each solve_fields op lowers to the
+    # exact provider/level/stage solve (ADC-409/ADC-759); for FE the stage state is the base U^n, so
+    # it matches the historical solve_fields() semantics.
     src = _emit(_forward_euler(t))
-    for frag in ('ctx.solve_fields_from_state("potential", 0, ',
+    for frag in ("const auto field_boundary_point_",
+                 'ctx.solve_fields_from_state_at(field_boundary_point_',
+                 '"potential", 0, ',
                  "= ctx.state(0);",
                  "ctx.rhs_scratch(",
                  "ctx.rhs_into(0, ",
@@ -118,6 +121,7 @@ def test_forward_euler_algorithm(t):
                  "ctx.commit_many("):
         assert frag in src, "generated FE body missing %r" % frag
     assert "ctx.solve_fields();" not in src, "solve_fields must lower to the per-stage solve (ADC-409)"
+    assert 'ctx.solve_fields_from_state("potential"' not in src
     assert "ctx.n_blocks()" not in src, "single-block codegen should target ctx.state(0), not a loop"
 
 

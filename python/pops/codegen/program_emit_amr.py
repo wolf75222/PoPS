@@ -30,13 +30,14 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
 
     Shape: one macro-step recursively advances each child on its declared parent/child clock relation,
     with exact stage abscissae and mandatory temporal interpolation from parent old/new snapshots, then
-    synchronizes finest-first by conservative reflux followed by average-down. The
-    body's head-of-step ``ctx.solve_fields()`` fires EXACTLY ONCE per macro-step (a level-0 / not-yet-solved
-    guard inside the context), so the coarse Poisson is OncePerStep and injected to every level -- parity
-    with the native AMR cadence. The C/F interface is now conservative to round-off: the per-level effective
-    flux is captured through the Program's own linear combination and routed through the native
-    ``route_reflux`` at level sync (ADC-639), so mass/momentum/energy are conserved across the interface on a
-    genuinely multilevel run; a coarse-only / flat Program stays bit-identical."""
+    synchronizes finest-first by conservative reflux followed by average-down. Authored single-state
+    field nodes use the exact point/provider-qualified solve at each active level; the separate
+    context ``solve_fields()`` seam retains the explicitly requested OncePerStep coarse-provider
+    cadence for legacy/manual drivers. The C/F interface is now conservative to round-off: the
+    per-level effective flux is captured through the Program's own linear combination and routed
+    through the native ``route_reflux`` at level sync (ADC-639), so mass/momentum/energy are conserved
+    across the interface on a genuinely multilevel run; a coarse-only / flat Program stays
+    bit-identical."""
     if target != "amr_system":
         return ""
     def walk(values: Any) -> Any:

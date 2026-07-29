@@ -96,15 +96,10 @@ DEFERRED_GROUPS: dict = {
     },
     "named_field_solve": {
         "issue": None,
-        "op_source": "Program IR solve_fields -> program_emit_ops ctx.solve_fields_from_state",
+        "op_source": "Program IR solve_fields -> program_emit_ops "
+                     "ctx.solve_fields_from_state_at",
         "ir_ops": frozenset({"solve_fields"}),
         "header_methods": frozenset(),
-    },
-    "unqualified_field_solve": {
-        "issue": None,
-        "op_source": "not representable in final Program IR (field identity is mandatory)",
-        "ir_ops": frozenset(),
-        "header_methods": frozenset({"solve_fields_from_state_default"}),
     },
     "unqualified_coupled_solve": {
         "issue": None,
@@ -214,7 +209,7 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         if op == "rhs" and _has_named_fluxes(attrs):
             used.add("named_flux")
         # The canonical IR op is solve_fields; code generation alone lowers that operation to the
-        # C++ AmrProgramContext::solve_fields_from_state seam.
+        # exact C++ AmrProgramContext::solve_fields_from_state_at seam.
         if op == "solve_fields" and attrs.get("field"):
             used.add("named_field_solve")
         # A held / scheduled node lowers to the deferred scheduler cache seams.

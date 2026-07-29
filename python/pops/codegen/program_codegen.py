@@ -134,10 +134,10 @@ def emit_cpp_program(
     wrong context type.
 
     Lowers the Program by a topological walk of the SSA IR: each block's current state is its base
-    (``ctx.state(idx)``); ``solve_fields()`` runs the elliptic solve; each RHS becomes a
-    scratch + ``rhs_into``; each intermediate ``linear_combine`` becomes a zero scratch accumulated
-    with ``axpy``; the committed combine writes the block state via ``lincomb``. Forward Euler,
-    SSPRK2/SSPRK3 and RK4 all lower this way -- no per-scheme class.
+    (``ctx.state(idx)``); each field node runs its exact point/provider-qualified solve; each RHS
+    becomes a scratch + ``rhs_into``; each intermediate ``linear_combine`` becomes a zero scratch
+    accumulated with ``axpy``; the committed combine writes the block state via ``lincomb``.
+    Forward Euler, SSPRK2/SSPRK3 and RK4 all lower this way -- no per-scheme class.
 
     Multi-block (ADC-426): N typed ``T.state(block[U])`` declarations + N ``T.commit``
     are lowered -- each op routes to its own block's runtime index (``_block_indices``, in the order
@@ -177,12 +177,14 @@ def emit_cpp_program(
     block lowers per block; a SIMULTANEOUS multi-target coupled field solve
     (``solve_fields_from_blocks([Ua, Ub])``) lowers to ``ctx.solve_fields_from_blocks`` (see below).
 
-    Each ``solve_fields(state=...)`` op lowers to ``ctx.solve_fields_from_state(idx, <stage state>)``
-    (ADC-409): the elliptic fields are re-solved -- and the shared aux re-filled -- from THAT stage's
-    state, not the block's current state. So a field-coupled multi-stage scheme (Poisson feedback
-    into the flux) is exact: stage k's RHS reads phi solved from stage k's own state. For the first
-    stage the stage state is U^n, so this is identical to the historical ``solve_fields()``; for an
-    uncoupled model the field solve is inert either way. This is already a COUPLED multi-block solve:
+    Each ``solve_fields(state=...)`` op lowers to the owner-qualified
+    ``ctx.solve_fields_from_state_at(point, field, idx, <stage state>)`` route (ADC-409/ADC-759):
+    the exact provider is re-solved at the active hierarchy level and logical stage time from THAT
+    stage's state, not the block's current state. So a field-coupled multi-stage scheme (Poisson
+    feedback into the flux) is exact: stage k's RHS reads phi solved from stage k's own state. For
+    the first stage the stage state is U^n, so this is identical to the historical
+    ``solve_fields()``; for an uncoupled model the field solve is inert either way. This is already a
+    COUPLED multi-block solve:
     the system Poisson RHS is ``Sum_s elliptic_rhs_s(U_s)`` (``assemble_poisson_rhs``), so block
     ``idx`` reads its stage state while every OTHER block contributes its LIVE state into the one
     shared phi/aux. A per-block callable field operator therefore sees all blocks' charge. A
