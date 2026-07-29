@@ -26,7 +26,29 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 35
+    assert len(data["check"]) == 36
+
+
+def test_m3_gate_pins_three_level_subcycled_reflux_proof():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "positive",
+        "kind": "ctest",
+        "target": "test_amr_history_ring",
+        "test_regex": (
+            "^test_amr_history_ring\\."
+            "ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"
+        ),
+    } in data["check"]
+
+    source = ROOT / "tests/cpp/integration/amr/test_amr_history_ring.cpp"
+    assert (
+        "TEST(test_amr_history_ring, "
+        "ThreeLevelProgramSynchronizesEachRecursiveCatchUp)"
+    ) in source.read_text(encoding="utf-8")
 
 
 def test_m3_final_gate_has_no_deferred_requirement():
