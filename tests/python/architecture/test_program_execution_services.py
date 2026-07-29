@@ -9,6 +9,10 @@ PROGRAM_DIR = ROOT / "include" / "pops" / "runtime" / "program"
 SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
+BINDINGS = (
+    ROOT / "python" / "bindings" / "core" / "init" / "init_system.cpp",
+    ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp",
+)
 CODEGEN = ROOT / "python" / "pops" / "codegen"
 CODEGEN_CONTEXT_ROUTES = (
     CODEGEN / "program_codegen.py",
@@ -129,6 +133,11 @@ def test_uniform_and_amr_inherit_the_same_execution_service():
         r"ProgramExecutionServices<AmrProgramContext>",
         amr,
     )
+
+
+def test_balance_attempt_sink_is_not_python_bound():
+    for binding in BINDINGS:
+        assert "record_program_balance_term" not in _read(binding)
 
 
 def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_dispatch():
