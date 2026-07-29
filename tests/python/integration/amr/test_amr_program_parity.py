@@ -192,7 +192,7 @@ def _init_density():
 
 def test_codegen_emits_amr_install_wrapper():
     """The AMR export installs the recursive, clock-qualified hierarchy driver."""
-    print("== codegen emits the recursive AmrProgramContext install wrapper ==")
+    print("== codegen emits the recursive facade-selected AMR provider wrapper ==")
     model = _euler_model("adc508_wrapper_amr")
     plan = _ssprk2_program(model, target="amr_system")
     src = emit_cpp_program(
@@ -203,8 +203,10 @@ def test_codegen_emits_amr_install_wrapper():
     )
     chk("pops_install_program_amr" in src, "the AMR .so exports pops_install_program_amr")
     body = src.split("pops_install_program_amr", 1)[1]
-    chk("make_shared<pops::runtime::program::AmrProgramContext>(sys)" in body,
-        "the AMR install constructs an AmrProgramContext over the AmrSystem")
+    chk("make_program_execution_provider(sys)" in body,
+        "the AMR install selects its execution provider from the typed AmrSystem facade")
+    chk("AmrProgramContext& ctx" not in body,
+        "generated code does not select the concrete AMR context")
     chk("ctx.advance_hierarchy(dt, _advance_level)" in body,
         "the wrapper delegates to the explicit parent/child clock driver")
     chk("ctx.set_stage_time(0, 1)" in body and "ctx.set_stage_time(1, 1)" in body,

@@ -9,6 +9,13 @@ PROGRAM_DIR = ROOT / "include" / "pops" / "runtime" / "program"
 SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
+CODEGEN = ROOT / "python" / "pops" / "codegen"
+CODEGEN_CONTEXT_ROUTES = (
+    CODEGEN / "program_codegen.py",
+    CODEGEN / "program_emit_amr.py",
+    CODEGEN / "program_emit_field_boundaries.py",
+    CODEGEN / "program_emit_kernels.py",
+)
 
 SHARED_SIGNATURES = (
     "struct FieldStageOverride",
@@ -115,6 +122,29 @@ def test_uniform_and_amr_inherit_the_same_execution_service():
         r"ProgramExecutionServices<AmrProgramContext>",
         amr,
     )
+
+
+def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_dispatch():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert shared.count("struct ProgramExecutionProviderFor;") == 1
+    assert shared.count("make_program_execution_provider(") == 1
+    assert "ProgramExecutionProviderFor<System>" in uniform
+    assert "ProgramExecutionProviderFor<AmrSystem>" in amr
+    assert "explicit ProgramContext(void*" not in uniform
+    assert "explicit AmrProgramContext(void*" not in amr
+
+    codegen = "\n".join(_read(path) for path in CODEGEN_CONTEXT_ROUTES)
+    for forbidden in (
+        "AmrProgramContext",
+        "ProgramContext& ctx",
+        "make_shared<pops::runtime::program::ProgramContext>",
+    ):
+        assert forbidden not in codegen
+    assert codegen.count("make_program_execution_provider(sys)") >= 3
+    assert 'pops_install_program(pops::System* sys)' in codegen
+    assert 'pops_install_program_amr(pops::AmrSystem* sys)' in codegen
 
 
 def test_extracted_operations_have_one_source_definition():
