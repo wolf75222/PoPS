@@ -375,25 +375,6 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
     gpu = bool(_flag_value(flags, "supports_gpu"))
     return [
         _row(
-            "amr:field_coupled_rhs_jacvec",
-            layout="amr",
-            backend="none",
-            platform="host",
-            mpi=mpi,
-            gpu=gpu,
-            status="unavailable",
-            limitation=(
-                "field-coupled rhs_jacvec has no level-qualified tangent-field provider ABI "
-                "for AMR level > 0"
-            ),
-            requested="field_coupled rhs_jacvec on AMR level > 0",
-            available_route="field_coupled rhs_jacvec on AMR level 0",
-            alternative=(
-                "use the level-0 route or implement a level-qualified tangent-field provider ABI"
-            ),
-            source=source,
-        ),
-        _row(
             "amr:source_implicit_program",
             layout="amr",
             backend="none",

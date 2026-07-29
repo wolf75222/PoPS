@@ -281,16 +281,11 @@ def test_inspect_before_build_reports_unbuilt_patches_honestly():
     assert report.regrid.frozen is True
 
 
-def test_inspect_explicitly_refuses_field_coupled_rhs_jacvec_above_level_zero():
+def test_inspect_no_longer_lists_the_served_fine_level_field_jacvec_as_a_limitation():
     report = AmrSystem(n=16, L=1.0, periodicity=(True, True)).amr.inspect()
     rows = [row for row in report.limitations if row["feature"] == "amr:field_coupled_rhs_jacvec"]
 
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["status"] == "unavailable"
-    assert "level > 0" in row["limitation"]
-    assert "AMR level > 0" in row["error_message"]
-    assert row["available_route"] == "field_coupled rhs_jacvec on AMR level 0"
+    assert rows == []
 
 
 # --- compiled static delegation ------------------------------------------------
