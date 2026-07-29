@@ -66,9 +66,9 @@ class AMRProgramSupportContext:
     def supports_shared_interface_fragments(self) -> bool:
         """Whether the installed ledger route serves this resolved hierarchy policy."""
         if self.frozen_hierarchy:
-            return self.hierarchy_level_count <= 2
+            return True
         # Resolve validation admits only the exact scheduled-regrid policy on this branch.
-        return self.hierarchy_level_count == 2
+        return self.hierarchy_level_count >= 2
 
 # --- Capability groups: the ONE mirror of the AmrProgramContext deferral surface ----------------
 # Each group names (a) the AmrProgramContext C++ methods that FAIL LOUD for it -- the header-derived
@@ -129,12 +129,6 @@ DEFERRED_GROUPS: dict = {
         "op_source": "not representable in final Program IR (field identity is mandatory)",
         "ir_ops": frozenset(),
         "header_methods": frozenset({"solve_fields_from_blocks_default"}),
-    },
-    "refined_shared_block_interfaces": {
-        "issue": None,
-        "op_source": "captured rhs_group with shared block interfaces on a refined hierarchy",
-        "ir_ops": frozenset(),
-        "header_methods": frozenset({"refined_shared_block_interfaces"}),
     },
     "fine_level_field_perturbation": {
         "issue": None,
@@ -251,8 +245,6 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         if op == "rhs_jacvec" and attrs.get("field_coupled") is True \
                 and context.refined_hierarchy:
             used.add("fine_level_field_perturbation")
-    if context.shared_block_interfaces and not context.supports_shared_interface_fragments:
-        used.add("refined_shared_block_interfaces")
     return used
 
 

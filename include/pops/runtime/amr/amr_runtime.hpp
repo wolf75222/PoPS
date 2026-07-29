@@ -2760,6 +2760,12 @@ class AmrRuntime {
   /// Discard every shared-interface route after a failed pre-bind transaction.
   void discard_interface_fluxes() { interface_scheduler_.clear(); }
 
+  std::size_t interface_flux_installation_checkpoint() const { return interface_scheduler_.size(); }
+
+  void rollback_interface_flux_installations(std::size_t accepted_size) {
+    interface_scheduler_.rollback_installations(accepted_size);
+  }
+
   /// Bind the detached qualified Handle routes to the exact per-level native storages.  The tables
   /// are authenticated by Python before hierarchy construction; no block/field name is parsed here.
   void install_boundary_storage_routes(const std::map<std::string, std::string>& field_routes) {
@@ -3086,21 +3092,20 @@ class AmrRuntime {
   /// transaction. The scheduler still applies the one shared flux to both blocks with opposite
   /// signs. Local flux-materialising residuals must already have omitted the prepared face. The
   /// Program resolves each current fragment's exact contribution weight from both consumer states
-  /// before the outer transaction may commit. This route remains restricted to a serial hierarchy
-  /// with exactly two active levels; dynamic replacement rematerializes its face plans atomically.
+  /// before the outer transaction may commit. Every materialized level must have its own
+  /// authenticated prepared route; distributed publication uses the scheduler's exact
+  /// MPI_COMM_WORLD collective plan and fragment identity.
   void publish_level_interface_flux_fragments(
       int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
       const std::vector<int>& requested_blocks, const std::vector<MultiFab*>& requested_states,
       const std::vector<MultiFab*>& requested_rhs,
       runtime::multiblock::InterfaceFluxFragmentPublication& publication) {
-    if (n_ranks() != 1)
-      throw std::runtime_error(
-          "AMR interface-flux fragment publication is not yet available on multiple MPI ranks");
-    if (nlev_ != 2 || k < 0 || k >= nlev_ || point.level != k || requested_blocks.empty() ||
+    if (nlev_ < 2 || publication.active_level_count != nlev_ || k < 0 || k >= nlev_ ||
+        point.level != k || requested_blocks.empty() ||
         requested_blocks.size() != requested_states.size() ||
         requested_blocks.size() != requested_rhs.size())
       throw std::invalid_argument(
-          "AMR interface-flux fragment publication requires one valid two-active-level group");
+          "AMR interface-flux fragment publication requires one valid refined active-level group");
     std::vector<MultiFab*> states(blocks_.size(), nullptr);
     std::vector<MultiFab*> rhs(blocks_.size(), nullptr);
     for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
@@ -3120,11 +3125,11 @@ class AmrRuntime {
   std::size_t interface_evaluation_count(const std::string& identity, int level) const {
     return interface_scheduler_.evaluation_count(identity, level);
   }
-  void require_complete_fixed_two_level_interfaces() const {
-    if (nlev_ != 2)
+  void require_complete_active_level_interfaces() const {
+    if (nlev_ < 1)
       throw std::logic_error(
-          "fixed two-level interface registry validation requires exactly two levels");
-    interface_scheduler_.require_complete_fixed_two_level_registry();
+          "active interface registry validation requires a materialized hierarchy");
+    interface_scheduler_.require_complete_active_level_registry(nlev_);
   }
   bool has_level_interfaces(int level) const { return interface_scheduler_.has_interfaces(level); }
   /// R <- -div F(U) only (NO default source) for block @p b on level @p k (SourceFreeModel path). Same
@@ -4182,6 +4187,7 @@ class AmrRuntime {
     if (bootstrap_pending_)
       throw std::runtime_error("AmrRuntime::begin_bootstrap_plan already has a transaction");
     capture_step_snapshot(bootstrap_snapshot_);
+    bootstrap_interface_registry_size_ = interface_scheduler_.size();
     bootstrap_pending_ = true;
   }
 
@@ -4343,13 +4349,18 @@ class AmrRuntime {
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +
                                  "' contains inconsistent initialization/fill metadata");
     }
+    bootstrap_interface_registry_size_ = 0;
     bootstrap_pending_ = false;
   }
 
   void rollback_bootstrap_level() {
     if (!bootstrap_pending_)
       throw std::runtime_error("AmrRuntime::rollback_bootstrap_level : no pending transaction");
+    // Fine routes are installed incrementally so the next bootstrap transition can authenticate
+    // proper nesting on its parent. They remain provisional until the whole bootstrap commits.
+    interface_scheduler_.rollback_installations(bootstrap_interface_registry_size_);
     restore_step_snapshot(bootstrap_snapshot_);
+    bootstrap_interface_registry_size_ = 0;
     bootstrap_pending_ = false;
   }
 
@@ -4417,10 +4428,6 @@ class AmrRuntime {
             continue;
           for (const int side : {-1, 1})
             if (block.boundary_plan->omits_face(axis, side)) {
-              if (level != 0)
-                throw std::runtime_error(
-                    "AMR regrid interface-owned physical support is limited to the level-zero "
-                    "parent of a two-active-level hierarchy");
               if (!interface_owns(axis, side))
                 throw std::runtime_error(
                     "AMR regrid boundary omission has no authenticated shared-interface owner");
@@ -5803,6 +5810,7 @@ class AmrRuntime {
   std::map<std::string, BootstrapCacheState> bootstrap_caches_;
   StepSnapshot bootstrap_snapshot_;
   StepSnapshot regrid_snapshot_;
+  std::size_t bootstrap_interface_registry_size_ = 0;
   bool bootstrap_pending_ = false;
   int step_rollback_scope_depth_ = 0;
   // Externally supplied static aux fields: canonical B_z and model-named components -> coarse

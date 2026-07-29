@@ -108,14 +108,14 @@ using InterfaceFluxFragmentPayload = std::vector<Real>;
 using InterfaceFluxFragmentLedger =
     ::pops::amr::TransactionalInterfaceFluxLedger<InterfaceFluxFragmentPayload>;
 
-/// Exact Program-owned transaction context for publishing one scheduler evaluation as the
-/// level-qualified contribution of a fixed two-level interface. The scheduler owns the canonical
-/// flux batch; the Program owns the temporal/topology identity and enclosing attempt transaction.
+/// Exact Program-owned transaction context for publishing one scheduler evaluation on an active
+/// hierarchy prefix. The scheduler owns the canonical flux batch; the Program owns the
+/// temporal/topology identity and enclosing attempt transaction. An interior hierarchy level
+/// contributes the same evaluated flux to both adjacent coarse/fine audit pairs.
 struct InterfaceFluxFragmentPublication {
   InterfaceFluxFragmentLedger* ledger = nullptr;
   std::uint64_t topology_epoch = 0;
-  int coarse_level = 0;
-  int fine_level = 1;
+  int active_level_count = 0;
   ::pops::amr::ClockStamp clock;
   std::string stage_identity;
   ::pops::amr::ClockWindow interval;
@@ -457,6 +457,15 @@ class InterfaceFluxScheduler {
 
   std::size_t size() const { return interfaces_.size(); }
 
+  /// Restore one exact pre-install registry prefix. Routes are append-only during bind/bootstrap,
+  /// so a size checkpoint is sufficient and does not copy evaluator state or layout scratch.
+  void rollback_installations(std::size_t accepted_size) {
+    if (accepted_size > interfaces_.size())
+      throw std::runtime_error(
+          "multi-block interface rollback lost part of the accepted registry prefix");
+    interfaces_.resize(accepted_size);
+  }
+
   /// Roll back a failed pre-bind installation transaction.  Prepared evaluator ownership is
   /// released together with every route; no partially installed interface remains executable.
   void clear() { interfaces_.clear(); }
@@ -552,11 +561,13 @@ class InterfaceFluxScheduler {
 
   void swap(InterfaceFluxScheduler& other) noexcept { interfaces_.swap(other.interfaces_); }
 
-  /// Boundary plans are shared across levels. A fixed two-level Program must therefore schedule the
-  /// same interface on both levels instead of omitting a touching face on one level with no canonical
-  /// flux to put back.
-  void require_complete_fixed_two_level_registry() const {
-    require_complete_active_level_registry_(2);
+  /// Boundary plans are shared across levels. A refined Program must therefore schedule the same
+  /// interface on every materialized level instead of silently falling back to a flat/coarse route.
+  void require_complete_active_level_registry(int active_level_count) const {
+    if (active_level_count < 1)
+      throw std::invalid_argument(
+          "multi-block interface registry validation requires a positive active level count");
+    require_complete_active_level_registry_(active_level_count);
   }
 
   bool participates(std::size_t block, int level) const {
@@ -856,10 +867,9 @@ class InterfaceFluxScheduler {
     // collective accumulation make replicated entry equality inductive; these coordinates prove
     // that every rank appends at the same position in the same transaction.
     std::string bytes;
-    append_identity_text_(bytes, "pops.multiblock.interface-fragment-publication.v1");
+    append_identity_text_(bytes, "pops.multiblock.interface-fragment-publication.v2");
     append_identity_scalar_(bytes, publication.topology_epoch);
-    append_identity_scalar_(bytes, publication.coarse_level);
-    append_identity_scalar_(bytes, publication.fine_level);
+    append_identity_scalar_(bytes, publication.active_level_count);
     append_identity_clock_(bytes, publication.clock);
     append_identity_text_(bytes, publication.stage_identity);
     append_identity_clock_(bytes, publication.interval.begin);
@@ -991,10 +1001,8 @@ class InterfaceFluxScheduler {
         point.stage_fraction.value() *
             (publication.interval.end.physical_time - publication.interval.begin.physical_time);
     if (publication.ledger->topology_epoch() != publication.topology_epoch ||
-        publication.coarse_level != 0 || publication.fine_level != 1 ||
-        publication.clock.level != point.level ||
-        (point.level != publication.coarse_level && point.level != publication.fine_level) ||
-        publication.interval.begin.level != point.level ||
+        publication.active_level_count < 2 || point.level >= publication.active_level_count ||
+        publication.clock.level != point.level || publication.interval.begin.level != point.level ||
         publication.interval.end.level != point.level ||
         publication.interval.begin.macro_step != point.tick ||
         publication.interval.end.macro_step != point.tick ||
@@ -1009,20 +1017,23 @@ class InterfaceFluxScheduler {
   static void publish_fragment_(const PreparedInterface& prepared,
                                 const BoundaryEvaluationPoint& point,
                                 const InterfaceFluxFragmentPublication& publication) {
-    const auto orientation = publication.clock.level == publication.coarse_level
-                                 ? ::pops::amr::InterfaceFluxOrientation::CoarseOutward
-                                 : ::pops::amr::InterfaceFluxOrientation::FineOutward;
-    ::pops::amr::InterfaceFluxFragmentKey key{
-        prepared.route.identity,   publication.topology_epoch,
-        publication.coarse_level,  publication.fine_level,
-        publication.clock,         publication.stage_identity,
-        publication.interval,      orientation,
-        prepared.route.left_block, prepared.route.right_block};
     const ::pops::amr::InterfaceFluxFragmentMeasure measure{publication.stage_weight,
                                                             prepared.face_measure, point.dt,
                                                             publication.stage_weight_resolved};
-    InterfaceFluxFragmentPayload payload(prepared.flux.begin(), prepared.flux.end());
-    publication.ledger->accumulate(std::move(key), measure, std::move(payload));
+    const auto accumulate = [&](int coarse_level, int fine_level,
+                                ::pops::amr::InterfaceFluxOrientation orientation) {
+      ::pops::amr::InterfaceFluxFragmentKey key{
+          prepared.route.identity,   publication.topology_epoch, coarse_level,         fine_level,
+          publication.clock,         publication.stage_identity, publication.interval, orientation,
+          prepared.route.left_block, prepared.route.right_block};
+      InterfaceFluxFragmentPayload payload(prepared.flux.begin(), prepared.flux.end());
+      publication.ledger->accumulate(std::move(key), measure, std::move(payload));
+    };
+    if (point.level > 0)
+      accumulate(point.level - 1, point.level, ::pops::amr::InterfaceFluxOrientation::FineOutward);
+    if (point.level + 1 < publication.active_level_count)
+      accumulate(point.level, point.level + 1,
+                 ::pops::amr::InterfaceFluxOrientation::CoarseOutward);
   }
 
   static bool runtime_field_matches_(const MultiFab& field,

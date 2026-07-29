@@ -336,7 +336,8 @@ class _AmrSystemInstall(_AmrSystem):
         # Authenticate and install the level-zero shared-interface routes before bootstrap.  The
         # clustering proper-nesting proof may reach a face deliberately omitted from a block's
         # physical-boundary plan; only an already prepared exact interface route may own that face.
-        # The same incremental finalizer runs again below to add a materialized fine-level route.
+        # The same incremental finalizer runs after every successful level creation so each newly
+        # materialized parent owns its exact shared-face route before the next transition is tagged.
         if install_plan is not None:
             from pops.runtime._runtime_authorities import finalize_runtime_authorities
             finalize_runtime_authorities(self, install_plan)
@@ -352,6 +353,11 @@ class _AmrSystemInstall(_AmrSystem):
                     name: field_plan.native_options["provider_slot"]
                     for name, field_plan in field_plans.items()
                 },
+                on_level_materialized=(
+                    None
+                    if install_plan is None
+                    else lambda: finalize_runtime_authorities(self, install_plan)
+                ),
             )
 
         # Extend the already authenticated interface registry to the complete materialized level

@@ -32,23 +32,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   rematerialization. MPI capture now validates common accepted-state bytes on every producer before
   sealing, so a divergent tagging payload fails collectively without a partial file; external
   Tagger components remain fail-closed for non-zero hysteresis.
-- Internal frozen two-level AMR shared-interface transactions now retain endpoint-qualified
+- Internal refined AMR shared-interface transactions now retain endpoint-qualified
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
-  reflux source. `AMRRegrid.frozen()` exposes the materialize-once public hierarchy policy, and the
-  installed shared-interface route covers one or two frozen levels, plus a serial dynamic
-  two-level hierarchy whose complete depth is active at bind, with exact SSPRK2/subcycling
-  evaluation when both endpoint hierarchies provide matching full-face fine coverage. A
-  depth-preserving regrid transaction now rematerializes face cells, ownership, scratch and
-  collective layout identity before the next Program stage; a missing face or active-depth change
-  fails closed and restores the accepted interface registry. Frozen refined `MPI_COMM_WORLD`
+  reflux source. `AMRRegrid.frozen()` now exposes the materialize-once public hierarchy policy, and
+  the installed shared-interface route covers every materialized level of a frozen hierarchy, plus
+  a serial dynamic hierarchy whose complete configured depth is active at bind, with exact
+  SSPRK2/subcycling evaluation when both endpoint hierarchies provide matching full-face coverage.
+  Every interior level contributes its canonical evaluation to both adjacent, level-qualified
+  coarse/fine audit pairs. A depth-preserving finest-transition regrid rematerializes face cells,
+  ownership, scratch and collective layout identity before the next Program stage; a missing face,
+  active-depth change, or deeper regrid that transiently removes descendants fails closed and
+  restores the accepted interface registry. Frozen refined `MPI_COMM_WORLD`
   publication now authenticates the publication identity and ledger transaction coordinates
   collectively before every rank appends the same canonical shared-flux fragment; a rank-local
   append failure reaches consensus before either endpoint residual is scattered.
-  Level-zero interface ownership is authenticated before AMR bootstrap, so proper-nesting may cross
-  only the exact physical faces deliberately omitted from their paired boundary plans.
-  One-sided tag propagation, deeper hierarchies, dynamic active-depth changes, dynamic refined MPI
-  rematerialization, implicit JVP and historical-rate paths remain fail-closed.
+  Level-zero interface ownership is authenticated before AMR bootstrap, and each newly created
+  level route is installed before it becomes the parent of another transition, so proper-nesting
+  may cross only the exact physical faces deliberately omitted from their paired boundary plans.
+  One-sided tag propagation, dynamic active-depth changes, non-finest dynamic replacements at depth
+  greater than two, dynamic refined MPI rematerialization, implicit JVP and historical-rate paths
+  remain fail-closed.
   Each interface endpoint now carries the exact projection Handle, reconstruction-provider
   identity, operation and provider-derived trace depth into the native collective plan identity
   `pops.multiblock.interface-plan.v2`. The

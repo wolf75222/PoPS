@@ -337,6 +337,10 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("identity"), py::arg("level") = 0)
       .def("_discard_interface_flux_components", &AmrSystem::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
+      .def("_interface_flux_installation_checkpoint",
+           &AmrSystem::interface_flux_installation_checkpoint)
+      .def("_rollback_interface_flux_installations",
+           &AmrSystem::rollback_interface_flux_installations, py::arg("accepted_size"))
       // Private production-package seam. Parameters are fixed before AMR closures are built.
       .def("_install_native_block", &AmrSystem::add_native_block, py::arg("name"),
            py::arg("so_path"), py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",

@@ -20,7 +20,7 @@ from pops.mesh.boundaries import (
 from pops.model import ComponentManifest
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
-from pops.time import FixedDt, StagePoint, TimePoint
+from pops.time import FixedDt, StagePoint, TimePoint, every
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -309,7 +309,7 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     )
 
 
-def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
+def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     from pops.amr import (
         AMRClockRelation,
         AMRExecution,
@@ -397,11 +397,14 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
         pops.validate(core.case),
         layout=AMR(
             grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
-            hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+            hierarchy=AMRHierarchy(max_levels=3, ratios=(2, 2)),
             tagging=tagging,
-            regrid=AMRRegrid.frozen(),
+            regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
             transfer=transfer,
-            execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+            execution=AMRExecution.subcycled((
+                AMRClockRelation(0, 1, 2),
+                AMRClockRelation(1, 2, 2),
+            )),
         ),
         components=(component,),
         compile_options={"include": str(ROOT / "include")},
@@ -432,18 +435,19 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
         core.case.resolve(core.coarsen_threshold): 0.04,
     })
     interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
-    flat_runtime = example._bind_artifact(
-        artifact,
-        initial_values={
-            core.tracer_state: np.zeros_like(left_initial),
-            right_state: np.zeros_like(right_initial),
-        },
-        params=params,
-    )
-    assert flat_runtime.n_levels() == 1
-    flat_authority = flat_runtime._executor._interface_authorities[interface.qualified_id]
-    assert flat_authority["levels"] == (0,)
-    assert len(flat_authority["declaration_identity"]) == 64
+    # Dynamic shared interfaces cannot create a missing route after bind: the complete configured
+    # prefix must already be materialized by the authenticated bootstrap transaction.
+    with pytest.raises(
+        NotImplementedError, match="complete configured prefix materialized at bind"
+    ):
+        example._bind_artifact(
+            artifact,
+            initial_values={
+                core.tracer_state: np.zeros_like(left_initial),
+                right_state: np.zeros_like(right_initial),
+            },
+            params=params,
+        )
 
     # A shared hierarchy does not imply that one endpoint's boundary tags are mirrored to its peer.
     # With only the left x-high band tagged, the materialized L1 layout cannot tile the right x-low
@@ -467,7 +471,7 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
         params=params,
     )
 
-    assert runtime.n_levels() == 2
+    assert runtime.n_levels() == 3
     fine_boxes = tuple(row for row in runtime.patch_boxes() if int(row[0]) == 1)
     assert fine_boxes
     assert any(
@@ -486,12 +490,14 @@ def test_runtime_instance_executes_frozen_two_level_shared_flux(tmp_path):
     pops.run(runtime, t_end=1.0e-3, max_steps=1)
 
     refined_authority = runtime._executor._interface_authorities[interface.qualified_id]
-    assert refined_authority["levels"] == (0, 1)
-    assert refined_authority["declaration_identity"] == flat_authority["declaration_identity"]
+    assert refined_authority["levels"] == (0, 1, 2)
+    assert len(refined_authority["declaration_identity"]) == 64
     assert runtime._executor._s._interface_evaluation_count(
         interface.qualified_id, 0) == 2
     assert runtime._executor._s._interface_evaluation_count(
         interface.qualified_id, 1) == 4
+    assert runtime._executor._s._interface_evaluation_count(
+        interface.qualified_id, 2) == 8
     final_left = runtime.integral("tracer")
     final_right = runtime.integral("right")
     lost_by_left = initial_left - final_left

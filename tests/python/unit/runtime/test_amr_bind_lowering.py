@@ -34,17 +34,17 @@ def test_native_regrid_lowering_preserves_explicit_frozen_and_scheduled_policies
     assert _regrid_every({"regrid": scheduled.to_data()}) == 3
 
 
-def test_frozen_two_level_capacity_installs_only_the_materialized_coarse_level() -> None:
+def test_frozen_capacity_installs_exact_materialized_prefix() -> None:
     class NativeHierarchyProbe:
         @staticmethod
         def n_levels() -> int:
-            return 1
+            return 3
 
     class ResolvedHierarchyProbe:
-        level_count = 2
+        level_count = 4
 
     assert _materialized_shared_interface_levels(
-        NativeHierarchyProbe(), ResolvedHierarchyProbe()) == (0,)
+        NativeHierarchyProbe(), ResolvedHierarchyProbe()) == (0, 1, 2)
 
 
 def test_refined_shared_interface_bind_accepts_exact_mpi_world() -> None:
@@ -52,12 +52,20 @@ def test_refined_shared_interface_bind_accepts_exact_mpi_world() -> None:
     _validate_refined_shared_interface_execution((0,), mpi, 2)
     _validate_refined_shared_interface_execution((0, 1), mpi, 1)
     _validate_refined_shared_interface_execution((0, 1), mpi, 2)
+    _validate_refined_shared_interface_execution((0, 1, 2), mpi, 1)
+    _validate_refined_shared_interface_execution((0, 1, 2), mpi, 2)
 
 
 def test_dynamic_refined_shared_interface_bind_remains_serial() -> None:
+    _validate_refined_shared_interface_execution(
+        (0, 1, 2),
+        {"communicator_identity": "serial"},
+        1,
+        dynamic_regrid=True,
+    )
     with pytest.raises(NotImplementedError, match="rematerialization"):
         _validate_refined_shared_interface_execution(
-            (0, 1),
+            (0, 1, 2),
             {"communicator_identity": "MPI_COMM_WORLD"},
             2,
             dynamic_regrid=True,

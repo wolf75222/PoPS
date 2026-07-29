@@ -131,42 +131,40 @@ def test_amr_shared_interface_accepts_two_frozen_levels() -> None:
     )
 
 
-def test_amr_shared_interface_accepts_dynamic_two_level_regrid() -> None:
+@pytest.mark.parametrize("levels", [2, 3, 4])
+def test_amr_shared_interface_accepts_dynamic_refined_regrid(levels: int) -> None:
     program = _paired_flux_program()
     _validate(
         program,
         target="amr_system",
         resolved_hierarchy=_resolved_amr_hierarchy(
-            levels=2, program=program, frozen=False
+            levels=levels, program=program, frozen=False
         ),
     )
 
 
-@pytest.mark.parametrize("levels", [1, 3])
-def test_amr_shared_interface_rejects_dynamic_hierarchy_outside_two_levels(
-    levels: int,
-) -> None:
+def test_amr_shared_interface_rejects_dynamic_single_level_hierarchy() -> None:
     program = _paired_flux_program()
     with pytest.raises(
-        NotImplementedError, match="dynamic two-level hierarchy"
+        NotImplementedError, match="dynamic regrid requires at least two configured levels"
     ):
         _validate(
             program,
             target="amr_system",
             resolved_hierarchy=_resolved_amr_hierarchy(
-                levels=levels, program=program, frozen=False
+                levels=1, program=program, frozen=False
             ),
         )
 
 
-def test_amr_shared_interface_rejects_three_level_hierarchy() -> None:
+@pytest.mark.parametrize("levels", [3, 4])
+def test_amr_shared_interface_accepts_deep_frozen_hierarchy(levels: int) -> None:
     program = _paired_flux_program()
-    with pytest.raises(NotImplementedError, match="supports one or two frozen levels"):
-        _validate(
-            program,
-            target="amr_system",
-            resolved_hierarchy=_resolved_amr_hierarchy(levels=3, program=program),
-        )
+    _validate(
+        program,
+        target="amr_system",
+        resolved_hierarchy=_resolved_amr_hierarchy(levels=levels, program=program),
+    )
 
 
 def test_shared_interface_rejects_default_flux_rhs_nested_in_branch() -> None:

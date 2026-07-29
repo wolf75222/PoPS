@@ -1549,6 +1549,22 @@ POPS_EXPORT void AmrSystem::discard_interface_flux_components() {
     P->runtime->discard_interface_fluxes();
 }
 
+POPS_EXPORT std::size_t AmrSystem::interface_flux_installation_checkpoint() const {
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem interface installation checkpoint requires a built runtime engine");
+  return p_->runtime->interface_flux_installation_checkpoint();
+}
+
+POPS_EXPORT void AmrSystem::rollback_interface_flux_installations(std::size_t accepted_size) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "rollback_interface_flux_installations");
+  if (!P->runtime)
+    throw std::runtime_error(
+        "AmrSystem interface installation rollback requires a built runtime engine");
+  P->runtime->rollback_interface_flux_installations(accepted_size);
+}
+
 POPS_EXPORT void AmrSystem::set_compiled_block(
     int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
     const std::string& name, bool recon_prim, const std::string& time, int stride,
