@@ -121,7 +121,12 @@ Supported native routes include:
   child payloads are decoded and replayed in memory without shared child files. AMR preserves
   multi-block/multi-level accepted state under active regridding, including topology ownership,
   clocks, the held cadence window, the last accepted Program interval, histories and transfer
-  provenance.
+  provenance. Native `SymbolicTagger` temporal hysteresis is part of that accepted image: non-zero
+  `Hysteresis.min_cycles` is supported, restored transactionally, and rematerialized exactly across
+  MPI rank-count changes. External Tagger components still refuse non-zero hysteresis before
+  artifact creation until their adapter contract owns the same persistent-state route. MPI capture
+  validates the rank-independent accepted-state image on every producer before sealing or
+  publication; disagreement fails collectively and cannot leave a partial checkpoint.
 
 Explicit unsupported rows include:
 
@@ -135,8 +140,9 @@ Explicit unsupported rows include:
   per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
   non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and
   the rank-owned accepted Program image onto a different MPI rank count only when every persisted
-  history ring is Dense. Selective history replay remains same-rank. Recorded patch boxes and
-  refinement topology are not regridded or inferred from opaque local publications.
+  history ring is Dense. The rematerialized image includes the exact runtime-owned persistent
+  tagging payload after source-rank consensus. Selective history replay remains same-rank. Recorded
+  patch boxes and refinement topology are not regridded or inferred from opaque local publications.
 - `checkpoint:regrid_on_restart` has an explicit typed `RegridOnRestart()` identity and the weaker
   `accepted_state_after_regrid` guarantee, but the builtin accepted-state-v5 provider refuses it before
   artifact creation. No complete hierarchy/history/field remap route currently implements that
