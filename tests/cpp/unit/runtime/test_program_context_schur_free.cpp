@@ -111,6 +111,15 @@ class ExecutionServicesFixture
       throw std::logic_error("fixture has no installed Program step");
     installed_step_(dt);
   }
+  bool exclusive_workspace_in_use() const { return exclusive_workspace_in_use_; }
+  void exercise_exclusive_workspace(bool reenter, bool fail_after_enter) const {
+    typename SharedServices::ExclusiveUseGuard use(exclusive_workspace_in_use_,
+                                                   "fixture exclusive workspace is already in use");
+    if (reenter)
+      exercise_exclusive_workspace(false, false);
+    if (fail_after_enter)
+      throw std::runtime_error("fixture operation failed after acquiring its workspace");
+  }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
@@ -413,6 +422,7 @@ class ExecutionServicesFixture
   mutable int install_count_ = 0;
   mutable std::function<void(double)> installed_step_;
   mutable std::vector<std::string> field_solve_dispatches_;
+  mutable bool exclusive_workspace_in_use_ = false;
 };
 
 template <class Context>
@@ -577,6 +587,15 @@ void expect_shared_install_and_field_services(Context& context) {
                std::invalid_argument);
   EXPECT_EQ(context.field_solve_dispatch_count(), calls_before_invalid_provider)
       << "shared provider identity validation must run before topology dispatch";
+
+  EXPECT_THROW(context.exercise_exclusive_workspace(true, false), std::logic_error);
+  EXPECT_FALSE(context.exclusive_workspace_in_use())
+      << "the outer guard must release after a nested-use rejection";
+  EXPECT_THROW(context.exercise_exclusive_workspace(false, true), std::runtime_error);
+  EXPECT_FALSE(context.exclusive_workspace_in_use())
+      << "the guard must release after an operation failure";
+  EXPECT_NO_THROW(context.exercise_exclusive_workspace(false, false));
+  EXPECT_FALSE(context.exclusive_workspace_in_use());
 }
 
 template <class Context>
