@@ -1041,13 +1041,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
   };
 
-  static bool program_scratch_layout_matches_(const MultiFab& field, const MultiFab& prototype,
-                                              int n_comp, int n_ghost) {
-    return field.box_array().boxes() == prototype.box_array().boxes() &&
-           field.dmap().ranks() == prototype.dmap().ranks() && field.ncomp() == n_comp &&
-           field.n_grow() == n_ghost;
-  }
-
   /// Provider-owned by design: a regrid, restart materialization or rejected-attempt rollback can
   /// preserve the checkpointed epoch while replacing every hierarchy allocation.  The shared
   /// service therefore selects scratch semantically, but only this AMR storage provider may
@@ -1071,7 +1064,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     auto [entry, inserted] = program_scratch_.try_emplace(key);
     ProgramScratchSlot& slot = entry->second;
     if (inserted || slot.materialization_generation != generation ||
-        !program_scratch_layout_matches_(slot.field, prototype, n_comp, n_ghost)) {
+        !field_layout_matches_(slot.field, prototype, n_comp, n_ghost)) {
       slot.field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
       slot.materialization_generation = generation;
       count_scratch(slot.field);
