@@ -1546,9 +1546,18 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
     hierarchy = RegridOnRestart()
     receipt = {
         "schema_version": 1,
+        "policy_identity": hierarchy.identity.token,
         "changed": True,
+        "accepted_time": 0.5,
+        "accepted_macro_step": 7,
         "before": {"topology_epoch": 3},
         "after": {"topology_epoch": 4},
+        "composite_integrals_before": [
+            {"block": "tracer", "component": 0, "value": 1.25}
+        ],
+        "composite_integrals_after": [
+            {"block": "tracer", "component": 0, "value": 1.25}
+        ],
     }
     published = []
 
@@ -1630,6 +1639,18 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
     assert len(published) == 1
     assert published[0].domain == "run"
     assert published[0] != source_run_identity
+    receipt_identity = {
+        **receipt,
+        "accepted_time": receipt["accepted_time"].hex(),
+        "composite_integrals_before": [
+            {**row, "value": row["value"].hex()}
+            for row in receipt["composite_integrals_before"]
+        ],
+        "composite_integrals_after": [
+            {**row, "value": row["value"].hex()}
+            for row in receipt["composite_integrals_after"]
+        ],
+    }
     expected = make_identity(
         "run",
         {
@@ -1637,7 +1658,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
             "source_run_identity": source_run_identity.to_data(),
             "restart_identity": restart_identity.to_data(),
             "hierarchy_policy_identity": hierarchy.identity.to_data(),
-            "regrid_receipt": receipt,
+            "regrid_receipt": receipt_identity,
         },
     )
     assert published[0] == expected
