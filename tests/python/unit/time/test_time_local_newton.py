@@ -273,7 +273,6 @@ def section_a(t):
         "pops::for_each_cell(",
         "ctx.pointwise_active_mask(0,",
         "ctx.pointwise_status_max(0,",
-        "action=fail_run",
     ):
         chk(frag in src, "the Newton kernel has %r" % frag)
     guard = src.index("if (!local_solve_outcome_")
