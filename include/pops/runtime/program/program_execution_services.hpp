@@ -1117,7 +1117,7 @@ class ProgramExecutionServices {
     if (!has_aliased_source) {
       for (const auto& [target, source] : commits)
         if (target != source)
-          provider_().program_execution_commit_copy_(*target, *source);
+          lincomb(*target, Real(0), *target, Real(1), *source);
       return;
     }
 
@@ -1134,7 +1134,7 @@ class ProgramExecutionServices {
     }
     for (const auto& [target, source] : prepared) {
       if (target != source) {
-        provider_().program_execution_commit_copy_(*target, *source);
+        lincomb(*target, Real(0), *target, Real(1), *source);
         // Aliased snapshots are function-local. Complete their consumers before destruction.
         device_fence();
       }
