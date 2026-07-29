@@ -1422,7 +1422,9 @@ Le contrat `Reflux` v1 est volontairement livré avant son branchement dans
 `PreparedAmrProgramRefluxTransition` : catalogue, manifest, loader et consumer typé peuvent qualifier
 un conformer, mais le runtime AMR continue d'utiliser son kernel interne tant qu'un adaptateur préparé
 ne peut pas fournir les vues locales sans dupliquer le ledger ni transférer l'autorité collective. Une
-configuration AMR ne prétend donc pas encore avoir sélectionné un provider `Reflux` externe.
+configuration AMR ne prétend donc pas encore avoir sélectionné un provider `Reflux` externe. Cette
+première qualification est limitée à la cible 2D, `float64`, CPU déjà admise par le loader de
+composants ; elle ne constitue pas une promesse GPU.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.
