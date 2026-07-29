@@ -1367,6 +1367,8 @@ class System {
   /// private to ProgramContext and is deliberately absent from Python bindings.
   POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
                                                Real value);
+  POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
+                                                   const std::string& route, int every_n) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.

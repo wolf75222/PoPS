@@ -552,6 +552,11 @@ class ProgramExecutionServices {
     return profiler().schedule_decision(due, cache_backed);
   }
 
+  bool balance_consumer_is_due(const std::string& contract, const std::string& route,
+                               int every_n) const {
+    return provider_().program_execution_balance_consumer_is_due_(contract, route, every_n);
+  }
+
   /// Scheduler cache semantics shared by every capable Program storage provider.
   ///
   /// The service owns cadence, profiling and value movement.  A provider supplies only the

@@ -264,6 +264,11 @@ struct ProgramRuntimeState {
   /// consumers read it while the facade's outer transaction still retains U^n, so a missing term
   /// cannot silently reuse the preceding step.
   std::map<std::string, Real> step_balance_terms_;
+  /// Attempt-local outer accepted-step target used by ConsumerGraph-fused balance guards. Program
+  /// substeps temporarily publish their window-start macro step through the facade, so generated
+  /// balance code must not infer the public target from `macro_step()+1`.
+  bool balance_due_window_active_ = false;
+  int balance_due_target_step_ = 0;
   /// Attempt-local identities of ProjectAndRecheck branches that actually executed. This report
   /// mailbox is cleared at attempt entry and consumed by the Python transaction coordinator before
   /// commit or rollback; it is deliberately not checkpoint or accepted scientific state.
@@ -694,6 +699,19 @@ struct ProgramRuntimeState {
       throw std::invalid_argument(runtime + " requires a canonical balance-ledger-route identity");
   }
 
+  static void require_balance_due_contract(const std::string& contract,
+                                           const std::string& runtime) {
+    static constexpr std::string_view kContractPrefix = "pops.balance-due-contract.v1:sha256:";
+    if (contract.size() != kContractPrefix.size() + 64 ||
+        contract.compare(0, kContractPrefix.size(), kContractPrefix.data(),
+                         kContractPrefix.size()) != 0 ||
+        !std::all_of(contract.begin() + static_cast<std::ptrdiff_t>(kContractPrefix.size()),
+                     contract.end(), [](unsigned char value) {
+                       return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+                     }))
+      throw std::invalid_argument(runtime + " requires a canonical balance-due-contract identity");
+  }
+
   static void require_balance_term(const std::string& term, const std::string& runtime) {
     static constexpr std::array<std::string_view, 5> kTerms{
         "storage_change", "outward_boundary_flux", "sources", "reflux", "projection"};
@@ -743,6 +761,8 @@ struct ProgramRuntimeState {
   void begin_step_projection_report() {
     step_projections_.clear();
     step_balance_terms_.clear();
+    balance_due_window_active_ = false;
+    balance_due_target_step_ = 0;
   }
 
   /// Return exactly the five native Program scalars recorded for one typed balance route during the
@@ -769,6 +789,44 @@ struct ProgramRuntimeState {
       result.emplace(term, found->second);
     }
     return result;
+  }
+
+  void begin_balance_due_window(int accepted_macro_step, const std::string& runtime) {
+    if (balance_due_window_active_)
+      throw std::logic_error(runtime + " balance due window is already active");
+    if (accepted_macro_step < 0 || accepted_macro_step == std::numeric_limits<int>::max())
+      throw std::overflow_error(runtime + " balance due target step is not representable");
+    balance_due_target_step_ = accepted_macro_step + 1;
+    balance_due_window_active_ = true;
+  }
+
+  void end_balance_due_window() noexcept {
+    balance_due_window_active_ = false;
+    balance_due_target_step_ = 0;
+  }
+
+  template <class Body>
+  void run_balance_due_window(int accepted_macro_step, const std::string& runtime, Body&& body) {
+    begin_balance_due_window(accepted_macro_step, runtime);
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      end_balance_due_window();
+      throw;
+    }
+    end_balance_due_window();
+  }
+
+  bool balance_consumer_is_due(const std::string& contract, const std::string& route, int every_n,
+                               const std::string& runtime) const {
+    require_balance_due_contract(contract, runtime + "::balance_consumer_is_due");
+    require_balance_route(route, runtime + "::balance_consumer_is_due");
+    if (every_n <= 0)
+      throw std::invalid_argument(runtime + "::balance_consumer_is_due requires a positive period");
+    if (!balance_due_window_active_ || balance_due_target_step_ <= 0)
+      throw std::logic_error(runtime +
+                             "::balance_consumer_is_due requires an active public-step window");
+    return balance_due_target_step_ % every_n == 0;
   }
 
   void note_step_projection(const std::string& name) {

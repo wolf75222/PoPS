@@ -181,24 +181,26 @@ class SystemProgramDriver {
         throw std::logic_error("System Program cadence window starts before macro-step zero");
       const int window_start_macro_step = accepted_macro_step - held_before_due;
       try {
-        for (int sub = 0; sub < n; ++sub) {
-          const auto partition = P->program_.prepare_cadence_substep(cadence, sub, n, "System");
-          // Publish the exact accepted start of this Program substep. ProgramContext derives every
-          // stage/boundary physical coordinate from System::time(); leaving the facade at the outer
-          // macro-step start would stamp every substep with the same time and would start a stride
-          // catch-up window one held step too late.
-          P->t = partition.start;
-          // A due stride is one logical public window, irrespective of the number of internal
-          // substeps. Publish its accepted start tick for every Program invocation; schedules and
-          // contexts must not mistake internal calls for additional public macro-steps.
-          P->macro_step_ = window_start_macro_step;
-          // Record the dt handed to the program BEFORE the call so the runtime's store_history can tag
-          // the slot it produces with the exact dt (ADC-626 variable-dt replay). Shared by step() and
-          // step_cfl() (both route here), so no call site is missed. A plain data assignment.
-          P->program_.last_dt_ = static_cast<Real>(partition.dt);
-          P->program_.step_(partition.dt);
-          P->t = partition.end;
-        }
+        P->program_.run_balance_due_window(accepted_macro_step, "System", [&] {
+          for (int sub = 0; sub < n; ++sub) {
+            const auto partition = P->program_.prepare_cadence_substep(cadence, sub, n, "System");
+            // Publish the exact accepted start of this Program substep. ProgramContext derives every
+            // stage/boundary physical coordinate from System::time(); leaving the facade at the outer
+            // macro-step start would stamp every substep with the same time and would start a stride
+            // catch-up window one held step too late.
+            P->t = partition.start;
+            // A due stride is one logical public window, irrespective of the number of internal
+            // substeps. Publish its accepted start tick for every Program invocation; schedules and
+            // contexts must not mistake internal calls for additional public macro-steps.
+            P->macro_step_ = window_start_macro_step;
+            // Record the dt handed to the program BEFORE the call so the runtime's store_history can
+            // tag the slot it produces with the exact dt (ADC-626 variable-dt replay). Shared by
+            // step() and step_cfl() (both route here), so no call site is missed.
+            P->program_.last_dt_ = static_cast<Real>(partition.dt);
+            P->program_.step_(partition.dt);
+            P->t = partition.end;
+          }
+        });
       } catch (...) {
         P->t = accepted_time;
         P->macro_step_ = accepted_macro_step;

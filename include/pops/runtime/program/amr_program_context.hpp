@@ -3691,6 +3691,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                                               Real value) const {
     facade_->record_program_balance_term(route, term, value);
   }
+  bool program_execution_balance_consumer_is_due_(const std::string& contract,
+                                                  const std::string& route, int every_n) const {
+    return facade_->program_balance_consumer_is_due(contract, route, every_n);
+  }
   void program_execution_note_step_projection_(const std::string& name) const {
     facade_->note_step_projection(name);
   }

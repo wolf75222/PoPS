@@ -117,6 +117,7 @@ def emit_cpp_program(
     *,
     model_graph: Any = None,
     field_plans: Any = None,
+    balance_due_contract: Any = None,
 ) -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
@@ -198,10 +199,21 @@ def emit_cpp_program(
     authority = model_graph if model_graph is not None else model
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
+    from pops.output._balance_due_contract import BalanceDueContract
+    if balance_due_contract is None:
+        balance_due_contract = BalanceDueContract.from_consumer_graph(None)
+    if type(balance_due_contract) is not BalanceDueContract:
+        raise TypeError(
+            "emit_cpp_program balance_due_contract must be an exact BalanceDueContract"
+        )
     program.validate()
     _check_lowerable(program, authority, field_plans or {}, target=target)
     prelude, body, operator_authorities = _emit_body(
-        program, authority, target=target, field_plans=field_plans or {}
+        program,
+        authority,
+        target=target,
+        field_plans=field_plans or {},
+        balance_due_contract=balance_due_contract,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime

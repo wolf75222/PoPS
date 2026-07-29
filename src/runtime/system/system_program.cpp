@@ -415,6 +415,10 @@ void System::record_program_balance_term(const std::string& route, const std::st
                                          Real value) {
   p_->program_.record_balance_term(route, term, value, "System");
 }
+bool System::program_balance_consumer_is_due(const std::string& contract, const std::string& route,
+                                             int every_n) const {
+  return p_->program_.balance_consumer_is_due(contract, route, every_n, "System");
+}
 Real System::program_diagnostic(const std::string& name) const {
   return p_->program_.diagnostic(name, "System");
 }

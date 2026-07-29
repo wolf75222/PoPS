@@ -409,24 +409,27 @@ struct AmrSystem::Impl {
         throw std::logic_error("AmrSystem Program cadence window starts before macro-step zero");
       const int window_start_macro_step = accepted_macro_step - held_before_due;
       try {
-        for (int s = 0; s < program_.substeps_; ++s) {
-          const auto partition =
-              program_.prepare_cadence_substep(cadence, s, program_.substeps_, "AmrSystem");
-          // AmrProgramContext reads the facade clock at Program entry. Move it to the exact accepted
-          // start of this substep so stage/tagger coordinates cover the whole catch-up window instead
-          // of repeating the outer macro-step time.
-          t = partition.start;
-          // All internal calls belong to one public stride window. Publish the accepted start tick
-          // so schedules, regridding and AmrProgramContext never count Program substeps as facade
-          // macro-steps.
-          macro_step_ = window_start_macro_step;
-          // ADC-626/ADC-631: expose this interval before the Program stores its pre-commit history
-          // sample. The ring ledger then records the outgoing dt from that sample toward the next
-          // accepted sample (variable-dt replay). Parity with SystemProgramDriver::run_program_cadence.
-          program_.last_dt_ = static_cast<Real>(partition.dt);
-          program_.step_(partition.dt);
-          t = partition.end;
-        }
+        program_.run_balance_due_window(accepted_macro_step, "AmrSystem", [&] {
+          for (int s = 0; s < program_.substeps_; ++s) {
+            const auto partition =
+                program_.prepare_cadence_substep(cadence, s, program_.substeps_, "AmrSystem");
+            // AmrProgramContext reads the facade clock at Program entry. Move it to the exact
+            // accepted start of this substep so stage/tagger coordinates cover the whole catch-up
+            // window instead of repeating the outer macro-step time.
+            t = partition.start;
+            // All internal calls belong to one public stride window. Publish the accepted start tick
+            // so schedules, regridding and AmrProgramContext never count Program substeps as facade
+            // macro-steps.
+            macro_step_ = window_start_macro_step;
+            // ADC-626/ADC-631: expose this interval before the Program stores its pre-commit history
+            // sample. The ring ledger then records the outgoing dt from that sample toward the next
+            // accepted sample (variable-dt replay). Parity with
+            // SystemProgramDriver::run_program_cadence.
+            program_.last_dt_ = static_cast<Real>(partition.dt);
+            program_.step_(partition.dt);
+            t = partition.end;
+          }
+        });
       } catch (...) {
         t = accepted_time;
         macro_step_ = accepted_macro_step;
@@ -3533,6 +3536,10 @@ void AmrSystem::record_program_diagnostic(const std::string& name, double value)
 void AmrSystem::record_program_balance_term(const std::string& route, const std::string& term,
                                             double value) {
   p_->program_.record_balance_term(route, term, value, "AmrSystem");
+}
+bool AmrSystem::program_balance_consumer_is_due(const std::string& contract,
+                                                const std::string& route, int every_n) const {
+  return p_->program_.balance_consumer_is_due(contract, route, every_n, "AmrSystem");
 }
 double AmrSystem::program_diagnostic(const std::string& name) const {
   // AMR keeps its historical LENIENT read (missing name -> 0.0), distinct from System's fail-loud
