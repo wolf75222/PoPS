@@ -21,6 +21,7 @@
 #include <pops/runtime/program/program_context.hpp>
 
 #include <bit>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -100,6 +101,16 @@ class ExecutionServicesFixture
   bool boundary_dispatch_has_session() const { return boundary_dispatch_has_session_; }
   bool boundary_dispatch_flux_only() const { return boundary_dispatch_flux_only_; }
   int operator_topology_count() const { return operator_topology_count_; }
+  int install_count() const { return install_count_; }
+  int field_solve_dispatch_count() const {
+    return static_cast<int>(field_solve_dispatches_.size());
+  }
+  const std::vector<std::string>& field_solve_dispatches() const { return field_solve_dispatches_; }
+  void run_installed_step(double dt) const {
+    if (!installed_step_)
+      throw std::logic_error("fixture has no installed Program step");
+    installed_step_(dt);
+  }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
@@ -109,6 +120,39 @@ class ExecutionServicesFixture
   };
 
   double program_execution_logical_parent_dt_() const noexcept { return logical_dt_; }
+  void program_execution_install_(std::function<void(double)> step) const {
+    ++install_count_;
+    installed_step_ = std::move(step);
+  }
+  pops::SolveOutcome program_execution_solve_fields_outcome_() const {
+    return solved_field_outcome_("default");
+  }
+  pops::SolveOutcome program_execution_solve_fields_from_state_outcome_(int,
+                                                                        pops::MultiFab&) const {
+    return solved_field_outcome_("default-state");
+  }
+  pops::SolveOutcome program_execution_field_solve_from_state_at_outcome_(
+      const pops::runtime::multiblock::BoundaryEvaluationPoint&, const std::string&, int,
+      pops::MultiFab&) const {
+    return solved_field_outcome_("qualified-state-at");
+  }
+  pops::SolveOutcome program_execution_solve_named_field_from_state_outcome_(
+      const std::string&, int, pops::MultiFab&) const {
+    return solved_field_outcome_("named-state");
+  }
+  pops::SolveOutcome program_execution_solve_fields_from_blocks_outcome_(
+      const std::vector<const pops::MultiFab*>&) const {
+    return solved_field_outcome_("default-blocks");
+  }
+  pops::SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
+      const std::string&, const std::vector<const pops::MultiFab*>&) const {
+    return solved_field_outcome_("named-blocks");
+  }
+  pops::SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
+      std::int64_t, std::string_view,
+      std::initializer_list<typename SharedServices::FieldStageOverride>) const {
+    return solved_field_outcome_("generated-blocks");
+  }
   LogicalRollback program_execution_capture_logical_evaluation_() const noexcept {
     return {logical_dt_};
   }
@@ -319,6 +363,12 @@ class ExecutionServicesFixture
     boundary_dispatch_has_session_ = has_session;
     boundary_dispatch_flux_only_ = flux_only;
   }
+  pops::SolveOutcome solved_field_outcome_(std::string operation) const {
+    field_solve_dispatches_.push_back(std::move(operation));
+    pops::SolveReport report;
+    report.mark_solved("shared-field-dispatch-fixture");
+    return pops::SolveOutcome::serial(std::move(report));
+  }
 
   int active_level_ = -1;
   mutable int resource_level_ = Amr ? 1 : 0;
@@ -360,6 +410,9 @@ class ExecutionServicesFixture
   mutable bool boundary_dispatch_has_session_ = false;
   mutable bool boundary_dispatch_flux_only_ = false;
   mutable int operator_topology_count_ = 0;
+  mutable int install_count_ = 0;
+  mutable std::function<void(double)> installed_step_;
+  mutable std::vector<std::string> field_solve_dispatches_;
 };
 
 template <class Context>
@@ -490,6 +543,40 @@ void expect_shared_program_services(Context& context, bool amr) {
       std::runtime_error);
   EXPECT_THROW(context.sys_block(2), std::runtime_error);
   EXPECT_THROW(context.scheduler_error("stale value"), std::runtime_error);
+}
+
+template <class Context>
+void expect_shared_install_and_field_services(Context& context) {
+  double installed_dt = 0.0;
+  context.install([&](double dt) { installed_dt = dt; });
+  EXPECT_EQ(context.install_count(), 1);
+  context.run_installed_step(0.125);
+  EXPECT_DOUBLE_EQ(installed_dt, 0.125);
+
+  pops::MultiFab state;
+  const std::vector<const pops::MultiFab*> states{&state};
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{};
+  auto accept = [](pops::SolveOutcome outcome) {
+    return outcome.consume(pops::SolveConsumption::kAccept);
+  };
+
+  EXPECT_TRUE(accept(context.solve_fields()).solved());
+  EXPECT_TRUE(accept(context.solve_fields_from_state(0, state)).solved());
+  EXPECT_TRUE(accept(context.solve_fields_from_state_at(point, "field", 0, state)).solved());
+  EXPECT_TRUE(accept(context.solve_fields_from_state("field", 0, state)).solved());
+  EXPECT_TRUE(accept(context.solve_fields_from_blocks(states)).solved());
+  EXPECT_TRUE(accept(context.solve_fields_from_blocks("field", states)).solved());
+  EXPECT_TRUE(accept(context.solve_fields_from_blocks(17, "field", {{0, &state}})).solved());
+  EXPECT_EQ(
+      context.field_solve_dispatches(),
+      std::vector<std::string>({"default", "default-state", "qualified-state-at", "named-state",
+                                "default-blocks", "named-blocks", "generated-blocks"}));
+
+  const int calls_before_invalid_provider = context.field_solve_dispatch_count();
+  EXPECT_THROW((void)context.solve_fields_from_state_at(point, "", 0, state),
+               std::invalid_argument);
+  EXPECT_EQ(context.field_solve_dispatch_count(), calls_before_invalid_provider)
+      << "shared provider identity validation must run before topology dispatch";
 }
 
 template <class Context>
@@ -711,6 +798,13 @@ TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameContractFixture) 
   ExecutionServicesFixture<true> amr(1);
   expect_shared_program_services(uniform, false);
   expect_shared_program_services(amr, true);
+}
+
+TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameInstallAndFieldFixture) {
+  ExecutionServicesFixture<false> uniform(0);
+  ExecutionServicesFixture<true> amr(1);
+  expect_shared_install_and_field_services(uniform);
+  expect_shared_install_and_field_services(amr);
 }
 
 TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameSpatialFixture) {
