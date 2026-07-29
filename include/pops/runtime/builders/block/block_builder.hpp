@@ -899,8 +899,9 @@ std::function<void(const MultiFab&, MultiFab&)> make_poisson_rhs(const Model& m)
 /// primitives), second = conservative -> primitive (M.to_primitive, diagnostic). Captures the model by
 /// value (frozen when the block is added). For a model WITHOUT a conversion (pure scalar, no
 /// hyperbolic brick) both are the IDENTITY -- exact for a scalar transport (prim == cons).
-/// Model::Prim shares the Model::n_vars width of State (HyperbolicPhysicalModel contract), so the flat
-/// arrays align component by component. Shared by add_block (native) and add_compiled_model (compiled):
+/// This flat ABI requires Model::Prim to share the Model::n_vars width of State; make_cell_convert
+/// enforces that additional constraint at compile time because HyperbolicPhysicalModel itself only
+/// types the forward/inverse maps. Shared by add_block (native) and add_compiled_model (compiled):
 /// the SAME conversion serves both paths.
 template <class Model>
 std::pair<std::function<void(const double*, double*)>, std::function<void(const double*, double*)>>
