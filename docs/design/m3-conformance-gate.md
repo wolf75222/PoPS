@@ -35,7 +35,11 @@ capability is therefore a failure, never an optional skip.
 
 The rank-change restart proof is a serial pytest orchestrator registered in the same manifest. It
 launches an independent two-rank capture and one-rank restore, so the gate proves persisted
-rematerialization across MPI worlds rather than rebuilding ownership inside one communicator.
+rematerialization across MPI worlds rather than rebuilding ownership inside one communicator. Its
+native tagger uses non-zero hysteresis; both source ranks must publish the same non-empty tagging
+payload, and the one-rank checkpoint after restore must retain those bytes exactly. A separate
+two-rank process injects a byte-level producer disagreement and proves collective refusal leaves no
+published or temporary checkpoint.
 The source validator requires that exact pytest path to remain in the manifest's
 `mpi_orchestrators` category; removing or reclassifying it invalidates `--check-only`.
 All Python checks run with native and MPI requirements forced on; a missing capability cannot turn

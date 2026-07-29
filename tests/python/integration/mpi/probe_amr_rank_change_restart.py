@@ -4,14 +4,16 @@
 The serial pytest driver starts this file in separate MPI jobs.  ``capture`` runs a genuinely
 transporting scalar through coarse/fine interfaces on two ranks and publishes one accepted-state
 checkpoint; ``restart`` runs with one rank and must rematerialize the recorded hierarchy ownership
-and non-zero flux history without changing its geometry, global state, accepted clock, or dense
-Program histories.  A second strict-policy checkpoint proves that ``bit_identical=True`` continues
-to reject a two-to-one rank change before mutating the fresh runtime.
+and non-zero flux history plus persistent tagging hysteresis without changing its geometry, global
+state, accepted clock, or dense Program histories.  A second strict-policy checkpoint proves that
+``bit_identical=True`` continues to reject a two-to-one rank change before mutating the fresh
+runtime.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -32,7 +34,7 @@ try:
 
     import pops
     from pops import _pops
-    from pops._native_collectives import barrier
+    from pops._native_collectives import allgather_value, barrier
     from pops.amr import (
         AMRExecution,
         AMRHierarchy,
@@ -40,6 +42,7 @@ try:
         AMRTagging,
         AMRTransfer,
         Buffer,
+        Coarsen,
         ConflictPolicy,
         EqualityPolicy,
         Hysteresis,
@@ -72,6 +75,7 @@ N = 16
 DT = 2.0e-3
 CHECKPOINT_STEPS = 3
 CONTINUATION_STEPS = 3
+HYSTERESIS_CYCLES = 4
 if getattr(_pops, "__has_mpi__", False) is not True:
     require_mpi_or_skip("AMR rank-change probe requires an MPI-enabled native module")
 _COMM = _pops.mpi_world()
@@ -144,6 +148,9 @@ def _resolved(*, bit_identical: bool) -> Any:
     )
 
     threshold = case.param(RuntimeParam("rank_change_refine_threshold", default=1.12))
+    coarsen_threshold = case.param(
+        RuntimeParam("rank_change_coarsen_threshold", default=1.10)
+    )
     transfer = AMRTransfer()
     transfer.state(block_state, StateTransfer())
     layout = AMR(
@@ -156,9 +163,10 @@ def _resolved(*, bit_identical: bool) -> Any:
         tagging=AMRTagging(
             rules=(
                 Tag(ValueExpr(block_state) > case.value(threshold)),
+                Coarsen(ValueExpr(block_state) < case.value(coarsen_threshold)),
                 Buffer(cells=1),
             ),
-            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            hysteresis=Hysteresis(HYSTERESIS_CYCLES, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),
         regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
@@ -266,6 +274,7 @@ def _write_evidence(
     final_metadata: dict[str, Any],
     final_arrays: dict[str, Any],
     source_owners: tuple[int, ...],
+    tagging_hysteresis: bytes,
     initial_mass: float,
 ) -> None:
     metadata = {
@@ -273,10 +282,14 @@ def _write_evidence(
         "checkpoint": checkpoint_metadata,
         "final": final_metadata,
         "source_fine_owners": list(source_owners),
+        "tagging_hysteresis_sha256": hashlib.sha256(tagging_hysteresis).hexdigest(),
         "initial_mass_hex": initial_mass.hex(),
     }
     payload = dict(checkpoint_arrays)
     payload.update(final_arrays)
+    payload["checkpoint_tagging_hysteresis"] = np.frombuffer(
+        tagging_hysteresis, dtype=np.uint8
+    ).copy()
     payload["metadata"] = np.asarray(
         json.dumps(metadata, sort_keys=True, separators=(",", ":"))
     )
@@ -320,7 +333,67 @@ def _assert_snapshot(
             )
 
 
-def _checkpoint_source_owners(checkpoint: Path) -> tuple[int, ...]:
+def _accepted_tagging_hysteresis(payload: Any) -> bytes:
+    """Extract the opaque persistent-tagging bytes from accepted-state v3."""
+    encoded = (
+        bytes(payload)
+        if isinstance(payload, (bytes, bytearray, memoryview))
+        else np.asarray(payload, dtype=np.uint8).reshape(-1).tobytes()
+    )
+    cursor = 0
+
+    def read_size() -> int:
+        nonlocal cursor
+        if cursor + 8 > len(encoded):
+            raise AssertionError("accepted-state payload is truncated before a size field")
+        value = int.from_bytes(encoded[cursor : cursor + 8], "little")
+        cursor += 8
+        return value
+
+    if encoded[:8] != b"POPSAST3":
+        raise AssertionError("checkpoint does not contain accepted-state v3")
+    cursor = 8
+    level_count = read_size()
+    clock_bytes = level_count * 40
+    if cursor + clock_bytes > len(encoded):
+        raise AssertionError("accepted-state level clocks are truncated")
+    cursor += clock_bytes
+    logical_clock_count = read_size()
+    for _ in range(logical_clock_count):
+        name_size = read_size()
+        if cursor + name_size + 8 > len(encoded):
+            raise AssertionError("accepted-state logical-clock map is truncated")
+        cursor += name_size + 8
+    tagging_size = read_size()
+    if cursor + tagging_size > len(encoded):
+        raise AssertionError("accepted-state persistent-tagging payload is truncated")
+    return encoded[cursor : cursor + tagging_size]
+
+
+def _assert_active_tagging_hysteresis(encoded: bytes) -> None:
+    """Require a real accepted transition window, not only an empty schema envelope."""
+    if encoded[:8] != b"POPSHYS1" or len(encoded) < 36:
+        raise AssertionError("checkpoint persistent-tagging payload is malformed")
+    minimum_cycles = int.from_bytes(encoded[8:12], "little")
+    cycle = int.from_bytes(encoded[12:20], "little")
+    identity_size = int.from_bytes(encoded[20:28], "little")
+    count_offset = 28 + identity_size
+    if count_offset + 8 > len(encoded):
+        raise AssertionError("checkpoint persistent-tagging identity is truncated")
+    active_entries = int.from_bytes(encoded[count_offset : count_offset + 8], "little")
+    if (
+        minimum_cycles != HYSTERESIS_CYCLES
+        or cycle == 0
+        or active_entries == 0
+    ):
+        raise AssertionError(
+            "rank-change proof requires an active persistent-tagging window "
+            "(min_cycles=%d, cycle=%d, entries=%d)"
+            % (minimum_cycles, cycle, active_entries)
+        )
+
+
+def _checkpoint_source_authorities(checkpoint: Path) -> tuple[tuple[int, ...], bytes]:
     with np.load(checkpoint, allow_pickle=False) as payload:
         if int(payload["n_ranks"]) != 2 or int(payload["n_levels"]) != 2:
             raise AssertionError("capture checkpoint must record exactly two ranks and two levels")
@@ -362,10 +435,27 @@ def _checkpoint_source_owners(checkpoint: Path) -> tuple[int, ...]:
                         "source rank %d records a divergent level-%d ownership map"
                         % (rank, level)
                     )
-    return owners
+        tagging = tuple(
+            _accepted_tagging_hysteresis(
+                payload["program_accepted_state_rank_%d" % rank]
+            )
+            for rank in range(2)
+        )
+        if not tagging[0]:
+            raise AssertionError(
+                "rank-change proof requires non-empty persistent tagging state"
+            )
+        _assert_active_tagging_hysteresis(tagging[0])
+        if tagging[1] != tagging[0]:
+            raise AssertionError(
+                "source MPI ranks published divergent persistent tagging state"
+            )
+    return owners, tagging[0]
 
 
-def _assert_single_rank_checkpoint(checkpoint: Path) -> None:
+def _assert_single_rank_checkpoint(
+    checkpoint: Path, *, expected_tagging_hysteresis: bytes
+) -> None:
     with np.load(checkpoint, allow_pickle=False) as payload:
         if int(payload["n_ranks"]) != 1 or int(payload["n_levels"]) != 2:
             raise AssertionError(
@@ -384,6 +474,13 @@ def _assert_single_rank_checkpoint(checkpoint: Path) -> None:
                     "level-%d ownership was not rematerialized entirely onto rank 0: %r"
                     % (level, owners)
                 )
+        actual_tagging = _accepted_tagging_hysteresis(
+            payload["program_accepted_state_rank_0"]
+        )
+        if actual_tagging != expected_tagging_hysteresis:
+            raise AssertionError(
+                "persistent tagging state changed during two-to-one rematerialization"
+            )
 
 
 def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) -> None:
@@ -418,7 +515,10 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
         )
     published = Path(runtime.checkpoint(checkpoint))
     barrier(_COMM)
-    source_owners = _checkpoint_source_owners(published) if int(_COMM.rank) == 0 else ()
+    if int(_COMM.rank) == 0:
+        source_owners, tagging_hysteresis = _checkpoint_source_authorities(published)
+    else:
+        source_owners, tagging_hysteresis = (), b""
 
     if not bit_identical:
         _advance(runtime, CONTINUATION_STEPS)
@@ -439,6 +539,7 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
                 final_metadata=final_metadata,
                 final_arrays=final_arrays,
                 source_owners=source_owners,
+                tagging_hysteresis=tagging_hysteresis,
                 initial_mass=initial_mass,
             )
     barrier(_COMM)
@@ -457,6 +558,14 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
             % int(_COMM.size)
         )
     metadata, arrays = _load_evidence(evidence)
+    expected_tagging_hysteresis = np.asarray(
+        arrays["checkpoint_tagging_hysteresis"], dtype=np.uint8
+    ).reshape(-1).tobytes()
+    if (
+        hashlib.sha256(expected_tagging_hysteresis).hexdigest()
+        != metadata["tagging_hysteresis_sha256"]
+    ):
+        raise AssertionError("rank-change evidence persistent-tagging digest is corrupt")
     runtime = _runtime(bit_identical=False)
     runtime.restart(checkpoint)
     _assert_snapshot(
@@ -476,7 +585,10 @@ def _restart_relaxed(checkpoint: Path, evidence: Path, rematerialized: Path) -> 
     # This second public checkpoint is the observable ownership witness: every recorded
     # DistributionMapping must now contain only rank zero, without reaching into the native engine.
     post_restart = Path(runtime.checkpoint(rematerialized))
-    _assert_single_rank_checkpoint(post_restart)
+    _assert_single_rank_checkpoint(
+        post_restart,
+        expected_tagging_hysteresis=expected_tagging_hysteresis,
+    )
     _assert_snapshot(
         runtime,
         expected_metadata=metadata["checkpoint"],
@@ -542,11 +654,74 @@ def _restart_strict(checkpoint: Path) -> None:
     print("PASS bit_identical=True refuses AMR two-to-one restart atomically", flush=True)
 
 
+def _capture_divergent(checkpoint: Path) -> None:
+    """Prove source-rank tagging disagreement aborts collectively before publication."""
+    if int(_COMM.size) != 2:
+        require_mpi_or_skip(
+            "AMR divergent capture requires exactly two MPI ranks (observed %d)"
+            % int(_COMM.size)
+        )
+    runtime = _runtime(bit_identical=False)
+    _advance(runtime, CHECKPOINT_STEPS)
+    executor = getattr(runtime, "_executor", None)
+    native = getattr(executor, "_s", None)
+    if native is None:
+        raise AssertionError("rank-change probe cannot reach its bound native AMR engine")
+    original = bytes(native.program_accepted_state())
+    tagging = _accepted_tagging_hysteresis(original)
+    _assert_active_tagging_hysteresis(tagging)
+    tagging_offset = original.find(tagging)
+    if tagging_offset < 0:
+        raise AssertionError("accepted-state image lost its nested persistent-tagging payload")
+    if int(_COMM.rank) == 1:
+        divergent = bytearray(original)
+        divergent[tagging_offset + len(tagging) - 1] ^= 1
+        native.restore_program_accepted_state(bytes(divergent))
+
+    caught = False
+    message = ""
+    try:
+        runtime.checkpoint(checkpoint)
+    except Exception as exc:  # noqa: BLE001 -- exact collective refusal is asserted below
+        caught = True
+        message = str(exc)
+    rows = allgather_value(
+        _COMM,
+        {"caught": caught, "message": message},
+    )
+    if len(rows) != 2 or any(
+        row.get("caught") is not True
+        or "collective checkpoint AMR accepted-state capture sealed payload failed"
+        not in row.get("message", "")
+        or "tagging hysteresis" not in row.get("message", "")
+        for row in rows
+    ):
+        raise AssertionError(
+            "persistent-tagging producer disagreement did not fail identically "
+            "on every rank: %r" % (rows,)
+        )
+    residue = tuple(sorted(path.name for path in checkpoint.parent.iterdir()))
+    if residue:
+        raise AssertionError(
+            "collectively rejected checkpoint left partial publication: %r" % (residue,)
+        )
+    print(
+        "PASS divergent source tagging payload refuses collective publication atomically",
+        flush=True,
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "mode",
-        choices=("capture-relaxed", "capture-strict", "restart-relaxed", "restart-strict"),
+        choices=(
+            "capture-relaxed",
+            "capture-strict",
+            "capture-divergent",
+            "restart-relaxed",
+            "restart-strict",
+        ),
     )
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--evidence", type=Path)
@@ -560,6 +735,8 @@ def main() -> None:
         _capture(args.checkpoint, args.evidence, bit_identical=False)
     elif args.mode == "capture-strict":
         _capture(args.checkpoint, None, bit_identical=True)
+    elif args.mode == "capture-divergent":
+        _capture_divergent(args.checkpoint)
     elif args.mode == "restart-relaxed":
         if args.evidence is None or args.rematerialized_checkpoint is None:
             raise ValueError(

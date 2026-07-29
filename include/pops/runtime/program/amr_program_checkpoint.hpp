@@ -708,7 +708,8 @@ inline std::vector<AmrProgramAcceptedState> rematerialize_selected_target_ranks(
     if (serialize_amr_program_accepted_state(without_rank_payloads(source_rank_states[rank])) !=
         common_image)
       fail("source rank " + std::to_string(rank) +
-           " disagrees on common clocks, history metadata or accepted reports");
+           " disagrees on common clocks, tagging hysteresis, history metadata or "
+           "accepted reports");
 
   std::vector<AmrProgramAcceptedState> result(target_ranks.size(), common);
   std::vector<const EdgeFlux*> source_fluxes;
