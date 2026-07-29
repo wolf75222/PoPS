@@ -372,6 +372,36 @@ class ProgramExecutionServices {
                                                              rate_id);
   }
 
+  /// Assemble the centered divergence of authored named fluxes.
+  ///
+  /// The public overload set, scratch contract and kernel accounting are Program semantics. The
+  /// provider receives only complete fields plus an optional execution lane and either executes its
+  /// topology-qualified stencil or fails closed before touching storage.
+  void neg_div_flux_into(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y,
+                         MultiFab& divergence_scratch) const {
+    count_kernel();
+    provider_().program_execution_neg_div_named_flux_into_(rhs, flux_x, flux_y, divergence_scratch,
+                                                           nullptr);
+  }
+
+  void neg_div_flux_into(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y) const {
+    MultiFab divergence_scratch(rhs.box_array(), rhs.dmap(), 1, 0);
+    neg_div_flux_into(rhs, flux_x, flux_y, divergence_scratch);
+  }
+
+  void neg_div_flux_into(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y,
+                         MultiFab& divergence_scratch, const ExecutionLane& lane) const {
+    count_kernel();
+    provider_().program_execution_neg_div_named_flux_into_(rhs, flux_x, flux_y, divergence_scratch,
+                                                           &lane);
+  }
+
+  void neg_div_flux_into(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y,
+                         const ExecutionLane& lane) const {
+    MultiFab divergence_scratch(rhs.box_array(), rhs.dmap(), 1, 0);
+    neg_div_flux_into(rhs, flux_x, flux_y, divergence_scratch, lane);
+  }
+
   /// r <- S(u, aux) for one Program block, without any flux divergence.
   ///
   /// Profiling and Program-to-runtime block qualification are topology-independent. The provider

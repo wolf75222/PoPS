@@ -158,6 +158,11 @@ class ExecutionServicesFixture
                                                     int rate_id) const {
     record_boundary_dispatch_("neg_div_flux", program_block, runtime_block, rate_id, false, true);
   }
+  void program_execution_neg_div_named_flux_into_(pops::MultiFab&, pops::MultiFab&, pops::MultiFab&,
+                                                  pops::MultiFab&,
+                                                  const pops::ExecutionLane* lane) const {
+    record_boundary_dispatch_("named_flux", -1, -1, -1, lane != nullptr, true);
+  }
   pops::OperatorFingerprint program_execution_operator_topology_(const pops::MultiFab&) const {
     ++operator_topology_count_;
     return {UINT64_C(9), UINT64_C(10), UINT64_C(11), UINT64_C(12)};
@@ -641,11 +646,22 @@ void expect_shared_boundary_dispatch_services(Context& context) {
   EXPECT_TRUE(context.boundary_dispatch_flux_only());
   EXPECT_EQ(context.profiler().counter("kernels"), 8);
 
+  pops::MultiFab divergence_scratch;
+  context.neg_div_flux_into(rhs, state, direction, divergence_scratch);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "named_flux");
+  EXPECT_FALSE(context.boundary_dispatch_has_session());
+  EXPECT_TRUE(context.boundary_dispatch_flux_only());
+  context.neg_div_flux_into(rhs, state, direction, divergence_scratch,
+                            pops::ExecutionLane::world());
+  EXPECT_EQ(context.boundary_dispatch_operation(), "named_flux");
+  EXPECT_TRUE(context.boundary_dispatch_has_session());
+  EXPECT_EQ(context.profiler().counter("kernels"), 10);
+
   EXPECT_THROW(context.rhs_into(0, state, rhs, -1), std::invalid_argument);
   EXPECT_THROW(context.neg_div_flux_default_into(0, state, rhs, -1), std::invalid_argument);
-  EXPECT_EQ(context.boundary_dispatch_operation(), "neg_div_flux");
-  EXPECT_EQ(context.boundary_dispatch_rate(), 15);
-  EXPECT_EQ(context.profiler().counter("kernels"), 8)
+  EXPECT_EQ(context.boundary_dispatch_operation(), "named_flux");
+  EXPECT_EQ(context.boundary_dispatch_rate(), -1);
+  EXPECT_EQ(context.profiler().counter("kernels"), 10)
       << "invalid stable identities must fail before provider dispatch or profiling";
 }
 
