@@ -28,6 +28,22 @@ def _authoring():
     return block[declaration], declaration, explicit, implicit
 
 
+def _manual_forward_euler(state, rate):
+    program = Program("ForwardEuler")
+    temporal = program.state(state)
+    u0 = temporal.n
+    point0 = StagePoint(
+        "forward_euler_stage_0", {"main": TimePoint(program.clock, 0)})
+    k0 = program.value("forward_euler_k_0", rate(u0), at=point0)
+    out = program.value(
+        "forward_euler_step",
+        u0 + program.dt * 1 * k0,
+        at=temporal.next.point,
+    )
+    program.commit(temporal.next, out)
+    return program
+
+
 def _manual_ssprk2(state, rate):
     program = Program("SSPRK2")
     temporal = program.state(state)
@@ -41,6 +57,38 @@ def _manual_ssprk2(state, rate):
     out = program.value(
         "ssprk2_step",
         u0 + (program.dt * half) * k0 + (program.dt * half) * k1,
+        at=temporal.next.point,
+    )
+    program.commit(temporal.next, out)
+    return program
+
+
+def _manual_ssprk3(state, rate):
+    program = Program("SSPRK3")
+    temporal = program.state(state)
+    u0 = temporal.n
+    point0 = StagePoint("ssprk3_stage_0", {"main": TimePoint(program.clock, 0)})
+    k0 = program.value("ssprk3_k_0", rate(u0), at=point0)
+    point1 = StagePoint("ssprk3_stage_1", {"main": TimePoint(program.clock, 1)})
+    u1 = program.value("ssprk3_U1", u0 + program.dt * k0, at=point1)
+    k1 = program.value("ssprk3_k_1", rate(u1), at=point1)
+    quarter = Fraction(1, 4)
+    point2 = StagePoint(
+        "ssprk3_stage_2", {"main": TimePoint(program.clock, Fraction(1, 2))})
+    u2 = program.value(
+        "ssprk3_U2",
+        u0 + (program.dt * quarter) * k0 + (program.dt * quarter) * k1,
+        at=point2,
+    )
+    k2 = program.value("ssprk3_k_2", rate(u2), at=point2)
+    sixth = Fraction(1, 6)
+    two_thirds = Fraction(2, 3)
+    out = program.value(
+        "ssprk3_step",
+        u0
+        + (program.dt * sixth) * k0
+        + (program.dt * sixth) * k1
+        + (program.dt * two_thirds) * k2,
         at=temporal.next.point,
     )
     program.commit(temporal.next, out)
@@ -75,6 +123,21 @@ def _manual_imex_euler(state, explicit, implicit):
     return program
 
 
+def test_forward_euler_factory_matches_manual_graph_identity_and_certificate():
+    state, _, rate, _ = _authoring()
+    preset = libtime.ForwardEuler(state, rate=rate)
+    manual = _manual_forward_euler(state, rate)
+
+    assert type(preset) is Program
+    assert preset.validate() is True
+    assert preset.to_graph().to_data() == manual.to_graph().to_data()
+    assert preset.to_graph().graph_hash == manual.to_graph().graph_hash
+    assert program_semantic_data(preset) == program_semantic_data(manual)
+    assert semantic_identity_of(program=preset) == semantic_identity_of(program=manual)
+    certificate = certify_program_graph(preset.to_graph())
+    assert certificate.properties.order == 1
+
+
 def test_ssprk2_factory_matches_manual_graph_identity_and_certificate():
     state, _, rate, _ = _authoring()
     preset = libtime.SSPRK2(state, rate=rate)
@@ -88,6 +151,22 @@ def test_ssprk2_factory_matches_manual_graph_identity_and_certificate():
     assert semantic_identity_of(program=preset) == semantic_identity_of(program=manual)
     certificate = certify_program_graph(preset.to_graph())
     assert certificate.properties.order == 2
+    assert certificate.properties.ssp.coefficient == 1
+
+
+def test_ssprk3_factory_matches_manual_graph_identity_and_certificate():
+    state, _, rate, _ = _authoring()
+    preset = libtime.SSPRK3(state, rate=rate)
+    manual = _manual_ssprk3(state, rate)
+
+    assert type(preset) is Program
+    assert preset.validate() is True
+    assert preset.to_graph().to_data() == manual.to_graph().to_data()
+    assert preset.to_graph().graph_hash == manual.to_graph().graph_hash
+    assert program_semantic_data(preset) == program_semantic_data(manual)
+    assert semantic_identity_of(program=preset) == semantic_identity_of(program=manual)
+    certificate = certify_program_graph(preset.to_graph())
+    assert certificate.properties.order == 3
     assert certificate.properties.ssp.coefficient == 1
 
 
