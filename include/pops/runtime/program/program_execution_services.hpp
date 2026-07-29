@@ -311,6 +311,14 @@ class ProgramExecutionServices {
     return provider_().program_execution_has_boundary_linearization_(sys_block(block));
   }
 
+  /// Fail before a generated pointwise operator touches storage when the selected runtime block
+  /// cannot provide Cartesian cell semantics. The shared Program surface owns block qualification;
+  /// providers own only the terminal topology capability check.
+  void require_cartesian_generated_operator(int block, const std::string& operation) const {
+    provider_().program_execution_require_cartesian_generated_operator_(sys_block(block),
+                                                                        operation);
+  }
+
   void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int block,
                         MultiFab& state, MultiFab& rhs, bool flux_only) const {
     count_kernel();

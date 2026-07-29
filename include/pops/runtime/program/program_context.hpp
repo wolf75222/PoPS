@@ -193,13 +193,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
     });
   }
-  /// Fail before a generated pointwise operator touches storage when an embedded boundary is active.
-  /// Default-source and transport residuals have native geometry-aware providers; arbitrary generated
-  /// expressions and local solves do not yet, and cannot be repaired by post-zeroing their outputs.
-  void require_cartesian_generated_operator(int b, const std::string& operation) const {
-    sys_->require_cartesian_generated_operator(sys_block(b), operation);
-  }
-
   /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
   /// d fy(.,c)/dy), centered FV, for every component c of @p r. @p fx and @p fy hold the n_cons x- and
   /// y-flux fields a compiled Program's named-flux kernel wrote (component c = the flux of conservative
@@ -733,6 +726,10 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
   bool program_execution_has_boundary_linearization_(int runtime_block) const {
     return sys_->block_has_boundary_linearization(runtime_block);
+  }
+  void program_execution_require_cartesian_generated_operator_(int runtime_block,
+                                                               const std::string& operation) const {
+    sys_->require_cartesian_generated_operator(runtime_block, operation);
   }
   void program_execution_rhs_core_into_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
