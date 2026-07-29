@@ -37,6 +37,7 @@ SHARED_SIGNATURES = (
     "struct ProgramResourceStorage",
     "struct ProgramResourceTopology",
     "class ExclusiveUseGuard",
+    "static bool field_layout_matches_(",
     "void install(std::function<void(double)> step)",
     "SolveOutcome solve_fields()",
     "SolveOutcome solve_fields_from_state_at(",
