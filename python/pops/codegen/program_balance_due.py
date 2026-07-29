@@ -9,7 +9,7 @@ from typing import Any
 
 from pops._balance_contract import BALANCE_TERM_NAMES
 from pops.identity import Identity
-from pops.output._balance_due_contract import BalanceDueContract
+from pops._balance_due_contract import BalanceDueContract
 from pops.time.values import ProgramValue
 
 

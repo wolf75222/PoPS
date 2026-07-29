@@ -199,7 +199,7 @@ def emit_cpp_program(
     authority = model_graph if model_graph is not None else model
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
-    from pops.output._balance_due_contract import BalanceDueContract
+    from pops._balance_due_contract import BalanceDueContract
     if balance_due_contract is None:
         balance_due_contract = BalanceDueContract.from_consumer_graph(None)
     if type(balance_due_contract) is not BalanceDueContract:

@@ -336,7 +336,7 @@ def compile(plan: Any) -> Any:
     from pops.codegen._compiled_artifact import CompiledLayoutProgram
     from pops.codegen.program_models import ProgramModelGraph
     from pops.codegen.program_balance_due import validate_balance_due_contract
-    from pops.output._balance_due_contract import BalanceDueContract
+    from pops._balance_due_contract import BalanceDueContract
 
     program = None
     options = dict(plan.compile_options)

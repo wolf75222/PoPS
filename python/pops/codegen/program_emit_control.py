@@ -248,7 +248,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         prepare_balance_due_lowering,
     )
     if balance_due_contract is None:
-        from pops.output._balance_due_contract import BalanceDueContract
+        from pops._balance_due_contract import BalanceDueContract
         balance_due_contract = BalanceDueContract.from_consumer_graph(None)
     emit_balance_due_guards(
         prepare_balance_due_lowering(program, balance_due_contract),

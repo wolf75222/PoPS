@@ -234,7 +234,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     from pops.time._program.detach import detach_compiled_program
     time = detach_compiled_program(time)
     program_graph = time.to_graph()
-    from pops.output._balance_due_contract import BalanceDueContract
+    from pops._balance_due_contract import BalanceDueContract
     if balance_due_contract is None:
         balance_due_contract = BalanceDueContract.from_consumer_graph(None)
     if type(balance_due_contract) is not BalanceDueContract:
