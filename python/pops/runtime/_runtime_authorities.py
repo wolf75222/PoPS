@@ -357,6 +357,46 @@ def _require_interface_component(install_plan: Any, binding: dict[str, Any]) -> 
     return installed
 
 
+def _materialized_shared_interface_levels(native: Any, hierarchy: Any) -> tuple[int, ...]:
+    """Return the bootstrap-materialized prefix, never the configured level capacity."""
+    provider = getattr(native, "n_levels", None)
+    if not callable(provider):
+        raise TypeError("native AMR shared-interface provider must expose n_levels()")
+    materialized = provider()
+    configured = hierarchy.level_count
+    if type(materialized) is not int or materialized < 1:
+        raise RuntimeError(
+            "native AMR shared-interface provider returned an invalid materialized level count")
+    if type(configured) is not int or configured < 1 or materialized > configured:
+        raise RuntimeError(
+            "materialized AMR shared-interface levels exceed the resolved hierarchy capacity")
+    return tuple(range(materialized))
+
+
+def _validate_refined_shared_interface_execution(
+    levels: tuple[int, ...],
+    execution_data: dict[str, Any],
+    rank_count: int,
+) -> None:
+    """Keep bind honest while refined interface-fragment publication is serial-only."""
+    if levels not in ((0,), (0, 1)):
+        raise ValueError("shared-interface materialized levels must be the prefix L0 or L0/L1")
+    if type(rank_count) is not int or rank_count < 1:
+        raise RuntimeError("native shared-interface rank count must be a positive integer")
+    communicator = execution_data.get("communicator_identity")
+    if communicator == "serial":
+        if rank_count != 1:
+            raise RuntimeError(
+                "serial shared-interface execution cannot run in a multi-rank native world")
+        return
+    if communicator != "MPI_COMM_WORLD":
+        raise TypeError("shared-interface execution requires serial or exact MPI_COMM_WORLD")
+    if len(levels) > 1 and rank_count > 1:
+        raise NotImplementedError(
+            "refined AMR shared-interface fragment publication is currently serial-only; "
+            "MPI_COMM_WORLD with multiple ranks is rejected during bind")
+
+
 def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
     """Install authorities that require materialized native block storage.
 
@@ -433,10 +473,18 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
     adaptive = {row.adaptive for row in install_plan.artifact.layout_plan.layouts}
     levels = (0,)
     if adaptive == {True}:
+        from pops.mesh._amr import FrozenHierarchy
+
         hierarchy = install_plan.resolved_hierarchy.plan
-        if hierarchy.level_count != 1:
+        if hierarchy.level_count not in (1, 2) \
+                or type(hierarchy.regrid) is not FrozenHierarchy:
             raise NotImplementedError(
-                "shared interface runtime finalization requires one frozen AMR level")
+                "shared interface runtime finalization requires one or two frozen AMR levels")
+        levels = _materialized_shared_interface_levels(native, hierarchy)
+        from pops import _pops
+
+        _validate_refined_shared_interface_execution(
+            levels, execution_data, _pops.n_ranks())
     elif adaptive != {False}:
         raise ValueError("shared interface finalization requires one coherent layout capability")
 

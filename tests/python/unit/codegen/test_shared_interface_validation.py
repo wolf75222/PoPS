@@ -111,8 +111,16 @@ def test_amr_shared_interface_accepts_one_frozen_level() -> None:
     )
 
 
+def test_amr_shared_interface_accepts_two_frozen_levels() -> None:
+    _validate(
+        _paired_flux_program(),
+        target="amr_system",
+        resolved_hierarchy=_resolved_amr_hierarchy(levels=2),
+    )
+
+
 def test_amr_shared_interface_rejects_dynamic_regrid_before_codegen() -> None:
-    with pytest.raises(NotImplementedError, match="supports only one frozen level"):
+    with pytest.raises(NotImplementedError, match="supports one or two frozen levels"):
         _validate(
             _paired_flux_program(),
             target="amr_system",
@@ -120,13 +128,12 @@ def test_amr_shared_interface_rejects_dynamic_regrid_before_codegen() -> None:
         )
 
 
-@pytest.mark.parametrize("levels", (2, 3))
-def test_amr_shared_interface_rejects_refined_hierarchy(levels: int) -> None:
-    with pytest.raises(NotImplementedError, match="supports only one frozen level"):
+def test_amr_shared_interface_rejects_three_level_hierarchy() -> None:
+    with pytest.raises(NotImplementedError, match="supports one or two frozen levels"):
         _validate(
             _paired_flux_program(),
             target="amr_system",
-            resolved_hierarchy=_resolved_amr_hierarchy(levels=levels),
+            resolved_hierarchy=_resolved_amr_hierarchy(levels=3),
         )
 
 

@@ -84,12 +84,15 @@ Supported native routes include:
   `MPI_COMM_WORLD` layouts may distribute the two face decompositions independently: native C++
   collectives reconstruct both traces, require a finite bit-identical shared flux on every rank,
   then scatter only into locally owned residual cells.
-  Internal serial two-level work retains endpoint-qualified canonical fragments with exact Program
-  weights and authoritative local substep duration. Those fragments authenticate the paired RHS
-  update; they are not injected again into reflux because that would duplicate the same face flux.
+  A public serial `AMRRegrid.frozen()` hierarchy may contain one or two levels. The two-level route
+  installs both level-qualified evaluators and retains endpoint-qualified canonical fragments with
+  exact Program weights and authoritative local substep duration. Those fragments authenticate the
+  paired RHS update; they are not injected again into reflux because that would duplicate the same
+  face flux. Both endpoint hierarchies must already expose matching full-tangential fine-face
+  coverage; this route does not mirror one endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
-  refined or dynamically regridded public AMR interfaces, historical shared-interface rates, and
-  refined MPI publication remain unavailable; the public AMR route accepts only one frozen level.
+  three-or-more-level or dynamically regridded public AMR interfaces, historical shared-interface
+  rates, and refined MPI publication remain unavailable.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes

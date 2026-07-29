@@ -342,7 +342,8 @@ def test_field_handle_is_the_sole_public_field_solve_route():
     assert amr_program_op_support(
         program,
         context=AMRProgramSupportContext(
-            refined_hierarchy=False,
+            hierarchy_level_count=1,
+            frozen_hierarchy=True,
             shared_block_interfaces=False,
             field_routes_validated=True,
         ),
