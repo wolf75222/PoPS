@@ -23,12 +23,19 @@ SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
 STATIC_SYSTEM_ASSEMBLER = ROOT / "include/pops/coupling/system/system_coupler.hpp"
 REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
+REFERENCE_TIME_SCHEDULER = ROOT / "tests/cpp/support/reference_time_scheduler.hpp"
+LEGACY_PUBLIC_TIME_SCHEDULER = (
+    ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
+)
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
 AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
+PROGRAM_EXECUTION_SERVICES = (
+    ROOT / "include/pops/runtime/program/program_execution_services.hpp"
+)
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
@@ -139,6 +146,32 @@ def test_static_system_temporal_driver_is_test_only():
     assert REFERENCE_SYSTEM_DRIVER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
 
 
+def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
+    """The old TimePolicy scheduler remains only as a test oracle."""
+    assert not LEGACY_PUBLIC_TIME_SCHEDULER.exists()
+    assert (
+        "pops/numerics/time/schemes/scheduler.hpp"
+        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    )
+
+    public_sources = tuple((ROOT / "include/pops").rglob("*.hpp"))
+    violations = {
+        path.relative_to(ROOT).as_posix()
+        for path in public_sources
+        if "advance_subcycled(" in _cpp_without_comments(path.read_text(encoding="utf-8"))
+    }
+    assert violations == set()
+
+    reference_scheduler = REFERENCE_TIME_SCHEDULER.read_text(encoding="utf-8")
+    reference_driver = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
+    assert "namespace pops::test_support" in reference_scheduler
+    assert "void advance_subcycled(" in reference_scheduler
+    assert '#include "reference_time_scheduler.hpp"' in reference_driver
+    assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith(
+        "tests/cpp/support/"
+    )
+
+
 def test_public_coupling_headers_are_spatial_only():
     """Public coupling services may prepare fields/residuals, never select a time method."""
     public_headers = []
@@ -181,7 +214,7 @@ def test_public_coupling_headers_are_spatial_only():
 
 def test_local_implicit_solve_has_one_typed_options_route():
     source = IMPLICIT_STEPPER.read_text(encoding="utf-8")
-    assert "const NewtonOptions& opts" in source
+    assert "const NewtonOptions& options" in source
     assert "int iters = 2" not in source
     assert "Legacy signature with a bare iteration budget" not in source
 
@@ -384,17 +417,24 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
 
 
 def test_amr_pointwise_status_reduces_every_valid_level_cell():
-    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    services = PROGRAM_EXECUTION_SERVICES.read_text(encoding="utf-8")
 
     pointwise = _function_body(
-        context,
+        services,
         "  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const",
     )
-    assert "if (context.domain_mask == nullptr)" in pointwise
-    assert "return context.domain_mask;" in pointwise
+    assert "active_mask_from_context_(" in pointwise
+    assert "program_execution_block_grid_context_(block)" in pointwise
+
+    active_mask = _function_body(
+        services,
+        "  static const MultiFab* active_mask_from_context_(",
+    )
+    assert "if (context.domain_mask == nullptr)" in active_mask
+    assert "return context.domain_mask;" in active_mask
 
     status = _function_body(
-        context,
+        services,
         "  Real pointwise_status_max(int block, const MultiFab& status,",
     )
     assert "const MultiFab* expected = pointwise_active_mask(block, status)" in status
@@ -413,20 +453,22 @@ def test_program_contexts_do_not_claim_missing_coupling_or_implicit_primitives()
             assert legacy_engine_primitive not in source
 
 
-def test_program_contexts_expose_candidate_state_coupling_not_a_live_state_step():
+def test_shared_program_service_owns_candidate_state_coupling_not_a_live_state_step():
     uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
     amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
     shared = (
         ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     ).read_text(encoding="utf-8")
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
-    for source in (uniform, amr):
-        assert "apply_coupling_operators(" in source
     assert shared.count("struct CouplingStateOverride") == 1
-    assert "complete candidate pack for every System block" in uniform
-    assert "complete candidate pack for every runtime block" in amr
-    assert "cannot alias accepted live states" in uniform
-    assert "cannot alias accepted live states" in amr
+    assert shared.count("void apply_coupling_operators(") == 1
+    assert "complete candidate pack for every runtime block" in shared
+    assert "cannot alias accepted live states" in shared
+    for source in (uniform, amr):
+        assert "void apply_coupling_operators(" not in source
+        assert source.count("program_execution_apply_coupling_(") == 1
+    assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
+    assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
     assert "apply_coupling_operators_at_level(" in runtime
     assert "void coupled_source_step(" not in runtime
     assert "void step(Real dt)" not in runtime
