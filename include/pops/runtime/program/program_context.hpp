@@ -193,66 +193,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
     });
   }
-  /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
-  /// d fy(.,c)/dy), centered FV, for every component c of @p r. @p fx and @p fy hold the n_cons x- and
-  /// y-flux fields a compiled Program's named-flux kernel wrote (component c = the flux of conservative
-  /// component c). REUSES pops::apply_divergence component-by-component (the SAME centered stencil as
-  /// @ref divergence, the inverse of @ref gradient -- no new differencing): the ghosts are filled once
-  /// per field, then each component's divergence lands in a 1-component scratch and is copied with a
-  /// sign flip into @p r. @p fx / @p fy are non-const because the ghost fill writes their halos (the
-  /// valid cells are unchanged). This semi-discrete -div F is LINEAR in the flux, so the -div of a SUM
-  /// of named fluxes equals the sum of their -div (the named-flux parity guarantee).
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, MultiFab& divc) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(fx, gc.geom.domain, gc.bc);
-    fill_ghosts(fy, gc.geom.domain, gc.bc);
-    if (!scratch_layout_matches_(divc, r, 1, 0))
-      throw std::invalid_argument(
-          "Program named-flux divergence scratch must match the RHS distributed layout");
-    for (int c = 0; c < r.ncomp(); ++c) {
-      apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);  // divc(.,0) = div(fx_c, fy_c)
-      for (int li = 0; li < r.local_size(); ++li) {
-        const ConstArray4 d = divc.fab(li).const_array();
-        Array4 rv = r.fab(li).array();
-        const int comp = c;
-        for_each_cell(r.box(li), [=] POPS_HD(int i, int j) { rv(i, j, comp) = -d(i, j, 0); });
-      }
-    }
-  }
-
-  /// Historical/manual C++ convenience overload. Generated Programs pass a context-owned persistent
-  /// divergence scratch through the overload above, so their per-step path performs no allocation.
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy) const {
-    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
-    neg_div_flux_into(r, fx, fy, divc);
-  }
-
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, MultiFab& divc,
-                         const ExecutionLane& lane) const {
-    count_kernel();
-    const GridContext gc = sys_->grid_context();
-    fill_ghosts(fx, gc.geom.domain, gc.bc, lane);
-    fill_ghosts(fy, gc.geom.domain, gc.bc, lane);
-    if (!scratch_layout_matches_(divc, r, 1, 0))
-      throw std::invalid_argument(
-          "Program named-flux divergence scratch must match the RHS distributed layout");
-    for (int c = 0; c < r.ncomp(); ++c) {
-      apply_divergence(fx, fy, gc.geom, divc, /*cx=*/c, /*cy=*/c);
-      for (int li = 0; li < r.local_size(); ++li) {
-        const ConstArray4 d = divc.fab(li).const_array();
-        Array4 rv = r.fab(li).array();
-        const int comp = c;
-        for_each_cell(r.box(li), [=] POPS_HD(int i, int j) { rv(i, j, comp) = -d(i, j, 0); });
-      }
-    }
-  }
-
-  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy, const ExecutionLane& lane) const {
-    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
-    neg_div_flux_into(r, fx, fy, divc, lane);
-  }
-
   /// Reconstruct one primary-clock retained state at an exact target-clock coordinate. The
   /// bracketing slots and every intervening accepted interval come from the native history ledger;
   /// no Python callback, current-state alias, or fixed-dt inference participates.
@@ -760,6 +700,32 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                                     MultiFab& state, MultiFab& rhs,
                                                     int rate_id) const {
     sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+  }
+  void program_execution_neg_div_named_flux_into_(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y,
+                                                  MultiFab& divergence_scratch,
+                                                  const ExecutionLane* lane) const {
+    const GridContext context = sys_->grid_context();
+    if (lane == nullptr) {
+      fill_ghosts(flux_x, context.geom.domain, context.bc);
+      fill_ghosts(flux_y, context.geom.domain, context.bc);
+    } else {
+      fill_ghosts(flux_x, context.geom.domain, context.bc, *lane);
+      fill_ghosts(flux_y, context.geom.domain, context.bc, *lane);
+    }
+    if (!scratch_layout_matches_(divergence_scratch, rhs, 1, 0))
+      throw std::invalid_argument(
+          "Program named-flux divergence scratch must match the RHS distributed layout");
+    for (int component = 0; component < rhs.ncomp(); ++component) {
+      apply_divergence(flux_x, flux_y, context.geom, divergence_scratch, component, component);
+      for (int local = 0; local < rhs.local_size(); ++local) {
+        const ConstArray4 divergence = divergence_scratch.fab(local).const_array();
+        Array4 result = rhs.fab(local).array();
+        const int output_component = component;
+        for_each_cell(rhs.box(local), [=] POPS_HD(int i, int j) {
+          result(i, j, output_component) = -divergence(i, j, 0);
+        });
+      }
+    }
   }
   void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
     count_kernel(static_cast<std::int64_t>(batch.requests.size()));

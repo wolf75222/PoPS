@@ -681,17 +681,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return solve_prepared_hierarchy_tensor_collectively(solver, controls);
   }
 
-  // --- named-flux primitive: DEFERRED on AMR, fail loud ----------------------------------------------
-  // The named-flux divergence is a ProgramContext method the codegen can lower for a named-flux (ADC-419)
-  // Program. The AMR named-flux -div path is NOT wired (out of ADC-633 scope); it fails loud so the SAME
-  // lowered body compiles on target='amr_system' and throws only when the op is REACHED at run.
-  void neg_div_flux_into(MultiFab& /*r*/, MultiFab& /*fx*/, MultiFab& /*fy*/) const {
-    deferred_op(
-        "neg_div_flux_into",
-        "a named-flux (-div F) Program on AMR is deferred; use System, or a native AMR block "
-        "whose flux IR runs through the level RHS.");
-  }
-
  private:
   enum class ResidualCapture { FullRate, FluxOnly };
   /// The normal Berger-Oliger driver synchronizes each child as soon as it catches its parent.
@@ -3125,6 +3114,14 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     }
     eng_->level_neg_div_flux_into_at(static_cast<std::size_t>(runtime_block), level_,
                                      boundary_point_(rate_id), state, rhs);
+  }
+  [[noreturn]] void program_execution_neg_div_named_flux_into_(
+      MultiFab& /*rhs*/, MultiFab& /*flux_x*/, MultiFab& /*flux_y*/,
+      MultiFab& /*divergence_scratch*/, const ExecutionLane* /*lane*/) const {
+    deferred_op(
+        "neg_div_flux_into",
+        "a named-flux (-div F) Program on AMR is deferred; use System, or a native AMR block "
+        "whose flux IR runs through the level RHS.");
   }
   void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
     if (capturing()) {
