@@ -217,6 +217,31 @@ static void boundary_carrier_residual_noop(int face, const MultiFab& iterate, Mu
   (void)context;
 }
 
+static void require_composite_boundary_carriers(const MultiFab& iterate,
+                                                const FieldBoundaryExecutionContext& context) {
+  if (context.state_count != 1 || context.states == nullptr ||
+      context.state_distributions == nullptr || context.states[0] == nullptr ||
+      context.field_count != 1 || context.fields == nullptr ||
+      context.field_distributions == nullptr || context.fields[0] == nullptr)
+    throw std::runtime_error(
+        "composite boundary launcher did not receive its state and field carriers");
+  for (const MultiFab* dependency : {context.states[0], context.fields[0]})
+    if (dependency->box_array().boxes() != iterate.box_array().boxes() ||
+        dependency->dmap().ranks() != iterate.dmap().ranks())
+      throw std::runtime_error(
+          "composite boundary launcher received a carrier from the wrong AMR level");
+}
+
+static void composite_boundary_prepare(int, const MultiFab& iterate, MultiFab&, const Geometry&,
+                                       const FieldBoundaryExecutionContext& context) {
+  require_composite_boundary_carriers(iterate, context);
+}
+
+static void composite_boundary_residual(int, const MultiFab& iterate, MultiFab&, const Geometry&,
+                                        const FieldBoundaryExecutionContext& context) {
+  require_composite_boundary_carriers(iterate, context);
+}
+
 class ExternalLevelBoundaryPrepared final : public AmrPreparedFieldSolver {
  public:
   ExternalLevelBoundaryPrepared(const AmrFieldSolverBuildRequest& request, std::string contract)
@@ -797,6 +822,116 @@ TEST(test_amr_named_field, ExternalProviderReceivesSolvedFieldDependencyOnEveryL
   SolveOutcome regridded_outcome = runtime.solve_named_fields();
   const SolveReport regridded_report = consume_expected_solved(std::move(regridded_outcome));
   ASSERT_TRUE(regridded_report.solved()) << regridded_report.reason;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("z_driver", level)), Real(0));
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("a_potential", level)), Real(0));
+  }
+}
+
+TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenciesOnEveryLevel) {
+  constexpr int n = 16;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{false, false};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc.xlo = params.poisson.bc.xhi = BCType::Dirichlet;
+  params.poisson.bc.ylo = params.poisson.bc.yhi = BCType::Dirichlet;
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks[0].state_identity = "test://amr-named-field/plasma/state/U";
+  blocks[0].aux_ncomp = kAuxNamedBase + 2;
+
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+
+  auto plan = [&](const std::string& field, int component) {
+    AmrFieldSolveConfig result;
+    result.solver_options =
+        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+    result.plan_identity = "tests:plasma/" + field + ":composite-plan@1";
+    result.provider_identity = "tests:plasma/" + field;
+    result.topology_provider_kind = "tests.composite-level-qualified-topology";
+    result.topology_provenance = "tests:composite-level-qualified-boundary";
+    result.topology_digest = "tests:composite-level-qualified-boundary:layout@1";
+    result.output_owner_identity = "tests:plasma";
+    result.output_block = "plasma";
+    result.output_key = field;
+    result.hierarchy_policy = composite_hierarchy_policy();
+    result.nullspace = operator_topology_zero_mean_nullspace();
+    result.has_reaction = true;
+    result.reaction = Real(1);
+    result.providers.push_back(
+        FieldProviderBinding{"tests:plasma/" + field + "/rhs", "plasma", field, Real(1)});
+    runtime.install_field_plan(field, result);
+    runtime.register_named_field("plasma", field, component, -1, -1, /*gradient_sign=*/1);
+    runtime.set_block_named_elliptic_rhs(0, field, [](const MultiFab& state, MultiFab& rhs) {
+      add_scaled_component(state, Real(1), 0, rhs);
+    });
+  };
+
+  // The dependency sorts after its consumer. Exact graph traversal must still solve z_driver first,
+  // because the composite consumer refuses an unpublished dependency before installing any level
+  // carrier.
+  plan("z_driver", kAuxNamedBase);
+
+  AmrFieldSolveConfig dependent;
+  dependent.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  dependent.plan_identity = "tests:plasma/a_potential:composite-plan@1";
+  dependent.provider_identity = "tests:plasma/a_potential";
+  dependent.topology_provider_kind = "tests.composite-level-qualified-topology";
+  dependent.topology_provenance = "tests:composite-level-qualified-boundary";
+  dependent.topology_digest = "tests:composite-level-qualified-boundary:layout@1";
+  dependent.output_owner_identity = "tests:plasma";
+  dependent.output_block = "plasma";
+  dependent.output_key = "a_potential";
+  dependent.hierarchy_policy = composite_hierarchy_policy();
+  dependent.nullspace = operator_topology_zero_mean_nullspace();
+  dependent.has_reaction = true;
+  dependent.reaction = Real(1);
+  dependent.has_boundary_kernel = true;
+  dependent.boundary_kernel = CompiledFieldBoundaryKernel{
+      "tests:a_potential/composite-field-dependent-boundary@1",
+      "tests:a_potential/composite-field-dependent-boundary-residual@1",
+      "",
+      composite_boundary_prepare,
+      nullptr,
+      composite_boundary_residual,
+      nullptr,
+      false,
+  };
+  dependent.boundary_state_blocks = {"plasma"};
+  dependent.boundary_state_components = {0};
+  dependent.boundary_field_blocks = {"plasma"};
+  dependent.boundary_field_keys = {"z_driver"};
+  dependent.boundary_field_components = {0};
+  dependent.providers.push_back(
+      FieldProviderBinding{"tests:plasma/a_potential/rhs", "plasma", "a_potential", Real(1)});
+  runtime.install_field_plan("a_potential", dependent);
+  runtime.register_named_field("plasma", "a_potential", kAuxNamedBase + 1, -1, -1,
+                               /*gradient_sign=*/1);
+  runtime.set_block_named_elliptic_rhs(0, "a_potential", [](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(0.5), 0, rhs);
+  });
+  runtime.set_field_logical_timepoint(
+      "a_potential", FieldLogicalTimePoint{Real(0.25), Real(0.01), 1, 0, 2, 3, 1, 0});
+
+  const std::string selected = "a_potential";
+  EXPECT_THROW((void)runtime.solve_named_fields(&selected), std::runtime_error)
+      << "a selected transaction must not reuse a stale field dependency";
+
+  const SolveReport report = consume_expected_solved(runtime.solve_named_fields());
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_EQ(runtime.nlev(), 2);
+  ASSERT_EQ(runtime.provider_potential_levels("z_driver"), runtime.nlev());
+  ASSERT_EQ(runtime.provider_potential_levels("a_potential"), runtime.nlev());
   for (int level = 0; level < runtime.nlev(); ++level) {
     EXPECT_GT(norm_inf(runtime.provider_potential_level("z_driver", level)), Real(0));
     EXPECT_GT(norm_inf(runtime.provider_potential_level("a_potential", level)), Real(0));

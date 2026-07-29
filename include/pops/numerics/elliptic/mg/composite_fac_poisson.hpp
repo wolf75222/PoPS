@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -500,6 +501,13 @@ class CompositeFacPoisson {
     boundary_kernel_ = kernel;
     boundary_context_ = context;
     boundary_context_.failure = &boundary_failure_;
+    boundary_level_contexts_.assign(static_cast<std::size_t>(n_levels_), {});
+    boundary_level_context_present_.assign(static_cast<std::size_t>(n_levels_), false);
+    pending_boundary_level_contexts_.assign(static_cast<std::size_t>(n_levels_), {});
+    pending_boundary_level_context_present_.assign(static_cast<std::size_t>(n_levels_), false);
+    has_level_qualified_boundary_contexts_ = false;
+    has_pending_level_qualified_boundary_contexts_ = false;
+    level_qualified_boundary_contexts_required_ = false;
     has_boundary_kernel_ = true;
     mg_.set_boundary_kernel(boundary_kernel_, boundary_context_);
     if (fully_refined_solver_)
@@ -513,9 +521,109 @@ class CompositeFacPoisson {
     boundary_context_.failure = &boundary_failure_;
     if (!boundary_kernel_.observes_iteration)
       boundary_context_.point.iteration = 0;
+    std::fill(boundary_level_contexts_.begin(), boundary_level_contexts_.end(),
+              FieldBoundaryExecutionContext{});
+    std::fill(boundary_level_context_present_.begin(), boundary_level_context_present_.end(),
+              false);
+    reset_pending_boundary_contexts_();
+    has_level_qualified_boundary_contexts_ = false;
+    level_qualified_boundary_contexts_required_ = false;
     mg_.set_boundary_context(boundary_context_);
     if (fully_refined_solver_)
       fully_refined_solver_->set_boundary_context(boundary_context_);
+  }
+
+  /// Install the exact state/field dependency carrier for one physical AMR level. Calling this seam
+  /// opts the composite solve into a fail-closed level-qualified contract: every materialized level
+  /// must be installed before solve(), even when only the coarse or fully refined physical boundary
+  /// is active for a particular hierarchy shape.
+  void set_boundary_context_at_level(int level, const FieldBoundaryExecutionContext& context) {
+    if (!has_boundary_kernel_)
+      throw std::runtime_error(
+          "CompositeFacPoisson level boundary context has no installed kernel");
+    if (level < 0 || level >= n_levels_)
+      throw std::out_of_range(
+          "CompositeFacPoisson boundary context level is outside the prepared hierarchy");
+
+    level_qualified_boundary_contexts_required_ = true;
+    long validation_error = all_reduce_max(validate_level_boundary_context_local_(level, context));
+    if (validation_error != 0) {
+      reset_pending_boundary_contexts_();
+      throw std::invalid_argument(
+          "CompositeFacPoisson rejected an invalid level-qualified boundary carrier collectively "
+          "(code " +
+          std::to_string(validation_error) + ")");
+    }
+
+    FieldBoundaryExecutionContext staged = context;
+    staged.failure = &boundary_failure_;
+    if (!boundary_kernel_.observes_iteration)
+      staged.point.iteration = 0;
+    pending_boundary_level_contexts_[static_cast<std::size_t>(level)] = staged;
+    pending_boundary_level_context_present_[static_cast<std::size_t>(level)] = true;
+    has_pending_level_qualified_boundary_contexts_ = true;
+
+    bool candidate_complete = true;
+    for (bool present : pending_boundary_level_context_present_)
+      candidate_complete = candidate_complete && present;
+    if (!candidate_complete)
+      return;
+
+    long candidate_error = 0;
+    for (int candidate_level = 0; candidate_level < n_levels_; ++candidate_level)
+      candidate_error = std::max(
+          candidate_error,
+          validate_level_boundary_context_local_(
+              candidate_level,
+              pending_boundary_level_contexts_[static_cast<std::size_t>(candidate_level)]));
+    const long unsupported_geometry = unsupported_level_boundary_geometry_local_();
+    if (unsupported_geometry != 0)
+      candidate_error = std::max(candidate_error, 100L + unsupported_geometry);
+    candidate_error = all_reduce_max(candidate_error);
+    if (candidate_error != 0) {
+      reset_pending_boundary_contexts_();
+      throw std::invalid_argument(
+          "CompositeFacPoisson rejected the complete level-qualified boundary carrier batch "
+          "collectively (code " +
+          std::to_string(candidate_error) + ")");
+    }
+
+    const FieldBoundaryExecutionContext previous_coarse =
+        has_level_qualified_boundary_contexts_ ? boundary_context_for_level_(0) : boundary_context_;
+    const FieldBoundaryExecutionContext previous_finest =
+        has_level_qualified_boundary_contexts_ ? boundary_context_for_level_(n_levels_ - 1)
+                                               : boundary_context_;
+    bool finest_updated = false;
+    bool coarse_updated = false;
+    try {
+      // Refresh the two solvers only after every carrier has passed one immutable batch preflight.
+      // Each GeometricMG setter stages allocations collectively and rolls itself back on failure.
+      if (fully_refined_solver_) {
+        fully_refined_solver_->set_boundary_context(
+            pending_boundary_level_contexts_[static_cast<std::size_t>(n_levels_ - 1)]);
+        finest_updated = true;
+      }
+      mg_.set_boundary_context(pending_boundary_level_contexts_.front());
+      coarse_updated = true;
+    } catch (...) {
+      const std::exception_ptr refresh_error = std::current_exception();
+      try {
+        if (coarse_updated)
+          mg_.set_boundary_context(previous_coarse);
+        if (finest_updated)
+          fully_refined_solver_->set_boundary_context(previous_finest);
+      } catch (...) {
+        std::terminate();
+      }
+      reset_pending_boundary_contexts_();
+      std::rethrow_exception(refresh_error);
+    }
+
+    boundary_level_contexts_.swap(pending_boundary_level_contexts_);
+    boundary_level_context_present_.swap(pending_boundary_level_context_present_);
+    boundary_context_ = boundary_level_contexts_.front();
+    has_level_qualified_boundary_contexts_ = true;
+    reset_pending_boundary_contexts_();
   }
 
   void set_field_nonlinear_options(const FieldNewtonOptions& options) {
@@ -569,6 +677,8 @@ class CompositeFacPoisson {
     if (abs_tol < Real(0) || !std::isfinite(static_cast<double>(abs_tol)))
       throw std::invalid_argument("CompositeFacPoisson abs_tol must be finite and nonnegative");
 
+    require_complete_level_boundary_contexts_();
+    require_supported_level_boundary_geometry_();
     last_solve_report_ = {};
     diagnostics_.clear();
     if (fully_refined_solver_)
@@ -839,6 +949,8 @@ class CompositeFacPoisson {
   SolveReport solve_boundary_fas(const FieldNewtonOptions& nonlinear) {
     if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration)
       return SolveReport::capability_failure();
+    require_complete_level_boundary_contexts_();
+    require_supported_level_boundary_geometry_();
     validate_field_newton_options(nonlinear);
     for (int level = 0; level < n_levels_; ++level) {
       MultiFab& phi = phi_level(level);
@@ -853,8 +965,7 @@ class CompositeFacPoisson {
     Real base = Real(1);
     try {
       for (int iteration = 0; iteration < nonlinear.max_iterations; ++iteration) {
-        boundary_context_.point.iteration = iteration;
-        mg_.set_boundary_context(boundary_context_);
+        set_boundary_iteration_(iteration);
         boundary_failure_.reset();
         const Real residual =
             solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol, options_.abs_tol);
@@ -1050,10 +1161,11 @@ class CompositeFacPoisson {
   /// Composite coarse residual: r_c = f_c - div(eps grad phi_c) (non covered), 0 (covered), + C-F
   /// FLUX correction on the cells bordering the patch. @return ||r_c||_inf (NON covered cells).
   Real composite_coarse_residual() {
+    const FieldBoundaryExecutionContext* boundary_context =
+        has_boundary_kernel_ ? &boundary_context_for_level_(0) : nullptr;
     MultiFab& operator_view = prepare_field_residual_view(
         phi_c_, has_boundary_kernel_ ? &boundary_view_c_ : nullptr, geom_c_, bc_,
-        has_boundary_kernel_ ? &boundary_kernel_ : nullptr,
-        has_boundary_kernel_ ? &boundary_context_ : nullptr);
+        has_boundary_kernel_ ? &boundary_kernel_ : nullptr, boundary_context);
     // r_c = f_c - div(A grad phi_c) (apply_laplacian reads the already-filled ghosts; eps + cross if active).
     // The cross terms are read also on the COVERED cells (= fine average after average_down) -> the
     // 9-point stencil stays consistent at the interface; only the NORMAL flux is explicitly joined C-F
@@ -1135,6 +1247,13 @@ class CompositeFacPoisson {
   bool has_boundary_kernel_ = false;
   CompiledFieldBoundaryKernel boundary_kernel_{};
   FieldBoundaryExecutionContext boundary_context_{};
+  std::vector<FieldBoundaryExecutionContext> boundary_level_contexts_;
+  std::vector<bool> boundary_level_context_present_;
+  std::vector<FieldBoundaryExecutionContext> pending_boundary_level_contexts_;
+  std::vector<bool> pending_boundary_level_context_present_;
+  bool has_level_qualified_boundary_contexts_ = false;
+  bool has_pending_level_qualified_boundary_contexts_ = false;
+  bool level_qualified_boundary_contexts_required_ = false;
   FieldBoundaryFailure boundary_failure_{};
   std::vector<MultiFab> phi_probe_snapshot_;  ///< persistent full-state snapshots for exact R(0)
   MultiFab boundary_probe_snapshot_;          ///< persistent generated-boundary view snapshot
@@ -1184,6 +1303,135 @@ class CompositeFacPoisson {
   std::unique_ptr<FluxRegister> coarse_average_register_;
   std::vector<MultiFab> correction_residual_replicated_, correction_eps_replicated_,
       correction_eps_y_replicated_, correction_axy_replicated_, correction_ayx_replicated_;
+
+  [[nodiscard]] const FieldBoundaryExecutionContext& boundary_context_for_level_(int level) const {
+    if (!has_level_qualified_boundary_contexts_)
+      return boundary_context_;
+    if (level < 0 || level >= n_levels_ ||
+        boundary_level_contexts_.size() != static_cast<std::size_t>(n_levels_) ||
+        boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_) ||
+        !boundary_level_context_present_[static_cast<std::size_t>(level)])
+      throw std::runtime_error(
+          "CompositeFacPoisson is missing a level-qualified boundary carrier for level " +
+          std::to_string(level));
+    return boundary_level_contexts_[static_cast<std::size_t>(level)];
+  }
+
+  [[nodiscard]] long validate_level_boundary_context_local_(
+      int level, const FieldBoundaryExecutionContext& context) const {
+    long validation_error = 0;
+    const auto validate_dependency_pack =
+        [&](const MultiFab* const* fields, const FieldDistribution* distributions, int count,
+            long incomplete_code, long layout_code, long distribution_code) {
+          if (count < 0 || (count > 0 && (fields == nullptr || distributions == nullptr))) {
+            validation_error = std::max(validation_error, incomplete_code);
+            return;
+          }
+          const MultiFab& layout = phi_level(level);
+          for (int index = 0; index < count; ++index) {
+            const MultiFab* dependency = fields[index];
+            if (dependency == nullptr ||
+                dependency->box_array().boxes() != layout.box_array().boxes() ||
+                dependency->dmap().ranks() != layout.dmap().ranks())
+              validation_error = std::max(validation_error, layout_code);
+            if (!field_distribution_is_valid(distributions[index]))
+              validation_error = std::max(validation_error, distribution_code);
+          }
+        };
+    validate_dependency_pack(context.states, context.state_distributions, context.state_count,
+                             /*incomplete_code=*/1, /*layout_code=*/2,
+                             /*distribution_code=*/3);
+    validate_dependency_pack(context.fields, context.field_distributions, context.field_count,
+                             /*incomplete_code=*/4, /*layout_code=*/5,
+                             /*distribution_code=*/6);
+    if (context.parameter_count < 0 ||
+        (context.parameter_count > 0 && context.parameters == nullptr) ||
+        (context.parameters != nullptr &&
+         static_cast<std::size_t>(context.parameter_count) > context.parameters->size()))
+      validation_error = std::max(validation_error, 7L);
+    if (boundary_level_contexts_.size() != static_cast<std::size_t>(n_levels_) ||
+        boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_) ||
+        pending_boundary_level_contexts_.size() != static_cast<std::size_t>(n_levels_) ||
+        pending_boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_))
+      validation_error = std::max(validation_error, 8L);
+    return validation_error;
+  }
+
+  void reset_pending_boundary_contexts_() {
+    std::fill(pending_boundary_level_contexts_.begin(), pending_boundary_level_contexts_.end(),
+              FieldBoundaryExecutionContext{});
+    std::fill(pending_boundary_level_context_present_.begin(),
+              pending_boundary_level_context_present_.end(), false);
+    has_pending_level_qualified_boundary_contexts_ = false;
+  }
+
+  void require_complete_level_boundary_contexts_() const {
+    if (!level_qualified_boundary_contexts_required_)
+      return;
+    long missing_level = 0;
+    if (has_pending_level_qualified_boundary_contexts_)
+      for (int level = 0; level < n_levels_; ++level)
+        if (!pending_boundary_level_context_present_[static_cast<std::size_t>(level)]) {
+          missing_level = level + 1;
+          break;
+        }
+    if (missing_level == 0 && !has_level_qualified_boundary_contexts_)
+      missing_level = n_levels_ + 1;
+    for (int level = 0; level < n_levels_ && missing_level == 0; ++level)
+      if (boundary_level_contexts_.size() != static_cast<std::size_t>(n_levels_) ||
+          boundary_level_context_present_.size() != static_cast<std::size_t>(n_levels_) ||
+          !boundary_level_context_present_[static_cast<std::size_t>(level)]) {
+        missing_level = level + 1;
+        break;
+      }
+    missing_level = all_reduce_max(missing_level);
+    if (missing_level > n_levels_)
+      throw std::runtime_error(
+          "CompositeFacPoisson has no committed level-qualified boundary carrier batch");
+    if (missing_level != 0)
+      throw std::runtime_error(
+          "CompositeFacPoisson is missing a level-qualified boundary carrier for level " +
+          std::to_string(missing_level - 1));
+  }
+
+  [[nodiscard]] long unsupported_level_boundary_geometry_local_() const {
+    if (fully_refined_solver_)
+      return 0;
+    for (int level = 1; level < n_levels_; ++level) {
+      const Box2D domain = geom_level(level).domain;
+      for (const Box2D& patch : phi_level(level).box_array().boxes()) {
+        const bool touches_physical_boundary =
+            (bc_.xlo != BCType::Periodic && patch.lo[0] <= domain.lo[0]) ||
+            (bc_.xhi != BCType::Periodic && patch.hi[0] >= domain.hi[0]) ||
+            (bc_.ylo != BCType::Periodic && patch.lo[1] <= domain.lo[1]) ||
+            (bc_.yhi != BCType::Periodic && patch.hi[1] >= domain.hi[1]);
+        if (touches_physical_boundary)
+          return level + 1;
+      }
+    }
+    return 0;
+  }
+
+  void require_supported_level_boundary_geometry_() const {
+    if (!level_qualified_boundary_contexts_required_)
+      return;
+    const long unsupported_level = all_reduce_max(unsupported_level_boundary_geometry_local_());
+    if (unsupported_level != 0)
+      throw std::runtime_error(
+          "CompositeFacPoisson level-qualified dynamic boundaries require partially refined "
+          "patches to remain strictly inside each physical domain; unsupported level " +
+          std::to_string(unsupported_level - 1));
+  }
+
+  void set_boundary_iteration_(int iteration) {
+    boundary_context_.point.iteration = iteration;
+    if (has_level_qualified_boundary_contexts_)
+      for (auto& context : boundary_level_contexts_)
+        context.point.iteration = iteration;
+    mg_.set_boundary_context(boundary_context_for_level_(0));
+    if (fully_refined_solver_)
+      fully_refined_solver_->set_boundary_context(boundary_context_for_level_(n_levels_ - 1));
+  }
 
   // ADC-636: the general FAC (N levels / adjacent patches / MPI). Declared here; DEFINED out-of-line
   // in composite_fac_nlevel.hpp (tail-included below) so composite_fac_poisson.hpp keeps the legacy

@@ -293,19 +293,6 @@ def _resolve(
         )
     hierarchy_authority = hierarchy_resolution.authority()
     policy = hierarchy_resolution.policy_id
-    if (
-        target == "amr_system"
-        and layout_contract.levels > 1
-        and (dependencies["states"] or dependencies["fields"])
-        and policy != "pops.field-hierarchy.level-local"
-    ):
-        _reject(
-            rows, "field:%s:boundaries" % name,
-            "field.boundary.amr_composite_state_dependency_not_native",
-            "field %r has a state/field-dependent boundary law on a multilevel composite "
-            "hierarchy; select LevelByLevelSolve for exact per-level dependency views"
-            % name,
-        )
     rows.append(LoweringCoverageRow(
         "field:%s:hierarchy" % name,
         "derived",

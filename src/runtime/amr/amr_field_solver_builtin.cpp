@@ -189,9 +189,10 @@ class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
     if (level < 0 || level >= level_count())
       throw std::out_of_range(
           "geometric-MG boundary context level is outside the prepared hierarchy");
-    if (fac_)
-      throw std::runtime_error(
-          "composite FAC has no level-qualified dynamic-boundary context route");
+    if (fac_) {
+      fac_->set_boundary_context_at_level(level, context);
+      return;
+    }
     level_solvers_.at(static_cast<std::size_t>(level))->set_boundary_context(context);
   }
   SolveReport solve() override {
@@ -306,11 +307,6 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
     if (level_local && request.hierarchy.nlev() > 1 && request.plan.has_newton)
       return PreparedProviderSupport::reject(
           15, "multi-level local hierarchy has no qualified nonlinear-boundary transaction");
-    if (composite && request.hierarchy.nlev() > 1 &&
-        (!request.plan.boundary_state_blocks.empty() ||
-         !request.plan.boundary_field_blocks.empty()))
-      return PreparedProviderSupport::reject(
-          16, "composite hierarchy has no level-qualified boundary state/field carrier");
     return PreparedProviderSupport::accept();
   }
   [[nodiscard]] std::string expected_prepared_contract(
