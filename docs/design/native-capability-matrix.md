@@ -111,7 +111,7 @@ Supported native routes include:
   exact provider route only on AMR level 0.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v5 for Uniform and AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v5 for Uniform and v6 for AMR. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
   authority is resolved into the compiled plan, including the builtin v5 manual route. Restart reads
@@ -147,8 +147,10 @@ Explicit unsupported rows include:
   `accepted_state_after_regrid` guarantee. The builtin accepted-state-v5 provider supports one
   artifact-backed AMR layout at unchanged MPI cardinality: exact accepted replay precedes one real
   tagger/clustering regrid, history/flux topology is rebound, composite conservation is checked, and
-  a global transform receipt derives a distinct run identity. Uniform, multi-layout, elliptic-field,
-  shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
+  a global transform receipt derives a distinct run identity. Persistent tagging state is restored
+  and rolled back with the accepted image, then advanced exactly once by a successful transform.
+  Uniform, multi-layout, elliptic-field, shared-interface, and bootstrap-staggered/cache cases remain
+  explicit refusals;
   `bit_identical=True` is incompatible with the policy.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.

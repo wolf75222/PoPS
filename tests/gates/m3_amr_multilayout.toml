@@ -193,10 +193,10 @@ nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_rank_c
 [[check]]
 issue = "ADC-678"
 requirement = "accepted_state"
-polarity = "refusal"
+polarity = "positive"
 kind = "pytest"
 target = "accepted_state"
-nodeid = "tests/python/unit/amr/test_public_amr_resolution.py::test_tagging_resolution_refuses_unimplemented_persistent_hysteresis"
+nodeid = "tests/python/integration/amr/test_amr_regrid_on_restart.py::test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault"
 
 [[check]]
 issue = "ADC-678"
@@ -293,7 +293,7 @@ requirement = "restart_hierarchy_policy"
 polarity = "positive"
 kind = "pytest"
 target = "restart_hierarchy_policy"
-nodeid = "tests/python/integration/amr/test_amr_regrid_on_restart.py::test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault"
+nodeid = "tests/python/unit/runtime/test_amr_checkpoint_contract.py::test_regridded_contract_authenticates_transformed_topology_and_level_axes"
 
 [[check]]
 issue = "ADC-678"

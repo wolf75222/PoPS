@@ -22,8 +22,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
   `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one
   artifact-owned scientific regrid, emits a global before/after receipt, and derives a distinct
-  continuation run identity. This first operational slice is one AMR layout, unchanged MPI
-  cardinality, and refuses fields, shared interfaces, and bootstrap staggered caches.
+  continuation run identity. Its rollback boundary includes the runtime-owned tagging hysteresis,
+  and the M3 proof requires the successful transform to advance that persistent cycle exactly once.
+  This first operational slice is one AMR layout, unchanged MPI cardinality, and refuses fields,
+  shared interfaces, and bootstrap staggered caches.
 - Native `SymbolicTagger` hysteresis is now a checkpointed accepted-state capability. The M3 gate
   executes a persisted two-rank to one-rank
   restart proof with non-empty hysteresis state, exact source-rank consensus, and byte-exact
