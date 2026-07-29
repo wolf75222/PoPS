@@ -1182,6 +1182,9 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_scientific_output_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py", nproc = 2 },
 ]
+mpi_orchestrators = [
+  { path = "tests/python/integration/mpi/test_amr_rank_change_restart.py" },
+]
 
 [[python.suite]]
 name = "pops_python_integration_native_loader"

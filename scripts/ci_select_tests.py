@@ -493,6 +493,68 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
     return sorted(entries, key=lambda item: (item["path"], item["nproc"]))
 
 
+def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
+    """Return serial pytest drivers that create and tear down their own MPI worlds.
+
+    These tests need the MPI-enabled module and launcher from the dedicated MPI job, but the
+    pytest process itself must not belong to a long-lived MPI world.  Rank-topology restart tests,
+    for example, launch an ``np=2`` producer and a later independent ``np=1`` consumer.
+    """
+    orchestrators: list[dict] = []
+    seen_paths: set[str] = set()
+    entrypoint_paths = {
+        entry["path"] for entry in manifest_python_mpi_entrypoints(manifest)
+    }
+    for suite in manifest.get("python", {}).get("suite", []):
+        name = str(suite.get("name", ""))
+        suite_path = normalize(str(suite.get("path", ""))).rstrip("/")
+        labels = {str(label) for label in suite.get("labels", [])}
+        raw_orchestrators = suite.get("mpi_orchestrators", [])
+        if not isinstance(raw_orchestrators, list):
+            raise SystemExit(
+                f"Python suite {name or '<unnamed>'} has invalid mpi_orchestrators; "
+                "expected a TOML array"
+            )
+        if raw_orchestrators and "mpi" not in labels:
+            raise SystemExit(
+                f"Python suite {name or '<unnamed>'} declares mpi_orchestrators "
+                "without an mpi label"
+            )
+        for raw in raw_orchestrators:
+            if not isinstance(raw, dict) or set(raw) != {"path"}:
+                raise SystemExit(
+                    f"Python suite {name or '<unnamed>'} has an invalid mpi_orchestrator; "
+                    "expected exactly one path field"
+                )
+            path = normalize(str(raw["path"]))
+            candidate = Path(path)
+            if (
+                not path
+                or candidate.is_absolute()
+                or ".." in candidate.parts
+                or "\t" in path
+                or "\n" in path
+                or candidate.suffix != ".py"
+                or not candidate.name.startswith("test_")
+            ):
+                raise SystemExit(
+                    f"Python suite {name or '<unnamed>'} has invalid MPI orchestrator "
+                    f"path {path!r}"
+                )
+            if not suite_path or not path.startswith(suite_path + "/"):
+                raise SystemExit(
+                    f"Python MPI orchestrator {path!r} is outside owning suite "
+                    f"{suite_path!r}"
+                )
+            if not (ROOT / path).is_file():
+                raise SystemExit(f"Python MPI orchestrator does not exist: {path}")
+            if path in seen_paths or path in entrypoint_paths:
+                raise SystemExit(f"duplicate Python MPI contract: {path}")
+            seen_paths.add(path)
+            orchestrators.append({"suite": name, "path": path})
+    return sorted(orchestrators, key=lambda item: item["path"])
+
+
 def manifest_python_suites(manifest: dict) -> list[dict]:
     # CI selects the repository snapshot, not arbitrary untracked scratch files in a developer
     # checkout.  This also keeps local plans stable when editors create suffixed copies beside a
@@ -508,9 +570,13 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
         }
     except (FileNotFoundError, subprocess.CalledProcessError, UnicodeDecodeError):
         tracked = None
-    mpi_entrypoint_paths = {
+    dedicated_mpi_paths = {
         entry["path"] for entry in manifest_python_mpi_entrypoints(manifest)
     }
+    dedicated_mpi_paths.update(
+        orchestrator["path"]
+        for orchestrator in manifest_python_mpi_orchestrators(manifest)
+    )
     suites: list[dict] = []
     for suite in manifest.get("python", {}).get("suite", []):
         name = str(suite.get("name", ""))
@@ -528,7 +594,7 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
             str(p.relative_to(ROOT))
             for p in suite_path.rglob("test_*.py")
             if (tracked is None or str(p.relative_to(ROOT)) in tracked)
-            and str(p.relative_to(ROOT)) not in mpi_entrypoint_paths
+            and str(p.relative_to(ROOT)) not in dedicated_mpi_paths
         )
         if not files:
             raise SystemExit(f"Python suite {name} has no test_*.py files under {path}")
@@ -1403,24 +1469,40 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
 
 def plan_python_mpi(args: argparse.Namespace) -> int:
     """Write the manifest-owned real-MPI Python launch plan for the dedicated CI job."""
-    entries = manifest_python_mpi_entrypoints(load_manifest())
-    if not entries:
-        raise SystemExit("no Python MPI entrypoints declared in tests/test_manifest.toml")
+    manifest = load_manifest()
+    entries = manifest_python_mpi_entrypoints(manifest)
+    orchestrators = manifest_python_mpi_orchestrators(manifest)
+    if not entries and not orchestrators:
+        raise SystemExit("no Python MPI contracts declared in tests/test_manifest.toml")
     plan_path = Path(args.plan_file)
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(
         "".join(f"{entry['nproc']}\t{entry['path']}\n" for entry in entries),
         encoding="utf-8",
     )
-    summary = f"{len(entries)} manifest-owned Python MPI entrypoints"
+    orchestrator_plan_path = Path(args.orchestrator_plan_file)
+    orchestrator_plan_path.parent.mkdir(parents=True, exist_ok=True)
+    orchestrator_plan_path.write_text(
+        "".join(f"{entry['path']}\n" for entry in orchestrators),
+        encoding="utf-8",
+    )
+    summary = (
+        f"{len(entries)} manifest-owned Python MPI entrypoints, "
+        f"{len(orchestrators)} serial MPI orchestrators"
+    )
     print(summary)
     for entry in entries:
         print(f"np={entry['nproc']} {entry['path']}")
+    for entry in orchestrators:
+        print(f"serial-pytest {entry['path']}")
     write_github_outputs(
         getattr(args, "github_output", None),
         {
-            "python_mpi_count": str(len(entries)),
+            "python_mpi_count": str(len(entries) + len(orchestrators)),
+            "python_mpi_entrypoint_count": str(len(entries)),
+            "python_mpi_orchestrator_count": str(len(orchestrators)),
             "python_mpi_plan_file": str(plan_path),
+            "python_mpi_orchestrator_plan_file": str(orchestrator_plan_path),
             "python_mpi_summary": summary,
         },
     )
@@ -1428,8 +1510,9 @@ def plan_python_mpi(args: argparse.Namespace) -> int:
         getattr(args, "explain_file", None),
         {
             "kind": "python-mpi",
-            "selected_count": len(entries),
-            "selected": entries,
+            "selected_count": len(entries) + len(orchestrators),
+            "entrypoints": entries,
+            "orchestrators": orchestrators,
         },
     )
     return 0
@@ -1713,6 +1796,7 @@ def main() -> int:
 
     py_mpi = sub.add_parser("python-mpi")
     py_mpi.add_argument("--plan-file", required=True)
+    py_mpi.add_argument("--orchestrator-plan-file", required=True)
     py_mpi.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     py_mpi.add_argument("--explain-file")
     py_mpi.set_defaults(func=plan_python_mpi)
