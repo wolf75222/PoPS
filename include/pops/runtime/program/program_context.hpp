@@ -441,7 +441,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
 
   void require_program_stage_layout_(int program_block, const MultiFab& stage) const {
     const MultiFab& live = sys_->block_state(sys_block(program_block));
-    if (!scratch_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
+    if (!field_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
       throw std::invalid_argument(
           "Program simultaneous field solve requires each stage state to match its block's exact "
           "distributed layout");
@@ -599,13 +599,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     std::map<ScratchKey, MultiFab> fields;
   };
 
-  static bool scratch_layout_matches_(const MultiFab& field, const MultiFab& prototype, int n_comp,
-                                      int n_ghost) {
-    return field.box_array().boxes() == prototype.box_array().boxes() &&
-           field.dmap().ranks() == prototype.dmap().ranks() && field.ncomp() == n_comp &&
-           field.n_grow() == n_ghost;
-  }
-
   MultiFab& program_scratch_for_(ScratchKind kind, std::int64_t value_id, int subslot,
                                  const MultiFab& prototype, int n_comp, int n_ghost) const {
     if (value_id < 0 || subslot < 0)
@@ -616,7 +609,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     const ScratchKey key{kind, value_id, subslot};
     auto [entry, inserted] = scratch_registry_->fields.try_emplace(key);
     MultiFab& field = entry->second;
-    if (inserted || !scratch_layout_matches_(field, prototype, n_comp, n_ghost)) {
+    if (inserted || !field_layout_matches_(field, prototype, n_comp, n_ghost)) {
       field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
       count_scratch(field);
     }
@@ -702,7 +695,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       fill_ghosts(flux_x, context.geom.domain, context.bc, *lane);
       fill_ghosts(flux_y, context.geom.domain, context.bc, *lane);
     }
-    if (!scratch_layout_matches_(divergence_scratch, rhs, 1, 0))
+    if (!field_layout_matches_(divergence_scratch, rhs, 1, 0))
       throw std::invalid_argument(
           "Program named-flux divergence scratch must match the RHS distributed layout");
     for (int component = 0; component < rhs.ncomp(); ++component) {
@@ -749,8 +742,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     if (a_xx == nullptr) {
       if (a_yy != nullptr || a_xy != nullptr || a_yx != nullptr)
         throw std::logic_error("isotropic polar Program Laplacian received a partial tensor");
-      if (!polar_unit_rr_ || !scratch_layout_matches_(*polar_unit_rr_, in, 1, 1) ||
-          !polar_unit_tt_ || !scratch_layout_matches_(*polar_unit_tt_, in, 1, 1)) {
+      if (!polar_unit_rr_ || !field_layout_matches_(*polar_unit_rr_, in, 1, 1) || !polar_unit_tt_ ||
+          !field_layout_matches_(*polar_unit_tt_, in, 1, 1)) {
         polar_unit_rr_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
         polar_unit_tt_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
         polar_unit_rr_->set_val(Real(1));

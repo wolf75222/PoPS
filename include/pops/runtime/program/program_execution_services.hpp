@@ -165,6 +165,14 @@ class ProgramExecutionServices {
     bool* in_use_;
   };
 
+  /// Exact distributed storage/layout compatibility used by every prepared Program workspace.
+  static bool field_layout_matches_(const MultiFab& field, const MultiFab& prototype, int n_comp,
+                                    int n_ghost) {
+    return field.box_array().boxes() == prototype.box_array().boxes() &&
+           field.dmap().ranks() == prototype.dmap().ranks() && field.ncomp() == n_comp &&
+           field.n_grow() == n_ghost;
+  }
+
  public:
   /// Install one compiled macro-step through the execution provider's lifecycle authority.
   void install(std::function<void(double)> step) const {
