@@ -44,7 +44,7 @@ TEST(ProgramContextSchurFree, HeaderIsSelfContainedAndBuilds) {
   // Reaching this TEST means program_context.hpp compiled standalone (no Schur/MG/Lorentz headers).
   // Constructing a ProgramContext from a null System* is well-defined here: we never dereference it,
   // we only exercise that the type is instantiable from the facade header by itself.
-  pops::runtime::program::ProgramContext ctx(static_cast<void*>(nullptr));
+  pops::runtime::program::ProgramContext ctx(static_cast<pops::System*>(nullptr));
   (void)ctx;
   SUCCEED() << "program_context.hpp builds without any coupling/schur/** dependency";
 }
