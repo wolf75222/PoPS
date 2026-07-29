@@ -157,6 +157,12 @@ struct ProgramRuntimeState {
   /// closure lets the facade ask that persistent context to republish its level-qualified clocks and
   /// histories before committing each hierarchy transition. Uniform leaves it empty.
   std::function<void()> hierarchy_refresh_;
+  /// Artifact-owned accepted-boundary hooks used only by the strict AMR restart transaction.
+  /// `restart_regrid_` performs one scientific tag/regrid pass after exact recorded-state replay;
+  /// `restart_resync_` force-imports the facade bytes after rollback, even when their restored
+  /// revision equals the context's last observed revision. Uniform leaves both empty.
+  std::function<void()> restart_regrid_;
+  std::function<void()> restart_resync_;
   /// Monotone witness incremented only by install_unverified_step. Dynamic artifact loaders use it to
   /// prove that one installer invocation actually replaced the whole-system Program step.
   std::uint64_t step_install_generation_ = 0;
@@ -284,6 +290,8 @@ struct ProgramRuntimeState {
   struct ArtifactStepInstallSnapshot {
     std::function<void(double)> step;
     std::function<void()> hierarchy_refresh;
+    std::function<void()> restart_regrid;
+    std::function<void()> restart_resync;
     std::function<Real(Real)> dt_bound;
     std::uint64_t generation = 0;
     std::string installed_hash;
@@ -322,6 +330,8 @@ struct ProgramRuntimeState {
       throw std::overflow_error("Program step-install generation overflow");
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
+    restart_regrid_ = nullptr;
+    restart_resync_ = nullptr;
     dt_bound_ = nullptr;
     installed_hash_.clear();
     operator_authorities_.clear();
@@ -335,6 +345,8 @@ struct ProgramRuntimeState {
   ArtifactStepInstallSnapshot capture_artifact_step_install() const {
     return ArtifactStepInstallSnapshot{step_,
                                        hierarchy_refresh_,
+                                       restart_regrid_,
+                                       restart_resync_,
                                        dt_bound_,
                                        step_install_generation_,
                                        installed_hash_,
@@ -362,6 +374,8 @@ struct ProgramRuntimeState {
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
+    restart_regrid_ = std::move(snapshot.restart_regrid);
+    restart_resync_ = std::move(snapshot.restart_resync);
     dt_bound_ = std::move(snapshot.dt_bound);
     step_install_generation_ = snapshot.generation;
     installed_hash_ = std::move(snapshot.installed_hash);
@@ -394,6 +408,38 @@ struct ProgramRuntimeState {
       throw std::invalid_argument(runtime +
                                   "::install_program_hierarchy_refresh requires a non-empty hook");
     hierarchy_refresh_ = std::move(refresh);
+  }
+
+  /// Attach the two restart-only callbacks emitted by the same authenticated AMR artifact.
+  /// They participate in artifact-install rollback, so a failed DSO candidate cannot leave a
+  /// callable stale context behind.
+  void install_restart_hooks(std::function<void()> regrid, std::function<void()> resync,
+                             const std::string& runtime) {
+    if (!step_)
+      throw std::logic_error(runtime +
+                             "::install_program_restart_hooks requires an installed Program");
+    if (!regrid || !resync)
+      throw std::invalid_argument(runtime +
+                                  "::install_program_restart_hooks requires two non-empty hooks");
+    restart_regrid_ = std::move(regrid);
+    restart_resync_ = std::move(resync);
+  }
+
+  void regrid_on_restart(const std::string& runtime) const {
+    if (!artifact_backed_)
+      throw std::logic_error(runtime +
+                             " RegridOnRestart requires an authenticated artifact-backed Program");
+    if (!restart_regrid_ || !restart_resync_)
+      throw std::logic_error(runtime + " artifact lacks its restart regrid/resync hooks");
+    restart_regrid_();
+  }
+
+  void resync_after_restart_rollback(const std::string& runtime) const {
+    if (!artifact_backed_)
+      return;
+    if (!restart_resync_)
+      throw std::logic_error(runtime + " artifact lacks its restart rollback resync hook");
+    restart_resync_();
   }
 
   /// Requalify Program-owned accepted state for the hierarchy currently exposed by the AMR engine.

@@ -18,6 +18,8 @@ from pops.runtime._amr_checkpoint_contract import (
     contract_for,
     encode_contract,
     preflight_contract,
+    restart_topology_image,
+    validate_regridded_contract,
     validate_restored_contract,
 )
 from pops.runtime._amr_checkpoint_v3 import (
@@ -198,6 +200,60 @@ def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section)
     preflight_contract(_Sim(), payload)
     with pytest.raises(ValueError, match="restored AMR accepted-state image differs"):
         validate_restored_contract(_Sim(), payload)
+
+
+def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
+    class _RegriddedSim(_Sim):
+        def time(self):
+            return 0.4
+
+        def macro_step(self):
+            return 4
+
+        def checkpoint_topology_epoch(self):
+            return 8
+
+        def checkpoint_regrid_count(self):
+            return 5
+
+        def patch_boxes(self):
+            return [(1, 4, 4, 11, 11), (2, 10, 10, 17, 17)]
+
+        def level_owner_ranks(self, level):
+            return [[0], [0], [0]][level]
+
+        def program_clock_manifest(self):
+            return [["level", str(level), "4", "0", "1", "0.400000"] for level in range(3)] + [
+                ["logical", "clock.macro", "4"]
+            ]
+
+        def program_flux_ledger_manifest(self):
+            return []
+
+        def program_sync_manifest(self):
+            return []
+
+    sim = _RegriddedSim()
+    payload = _payload()
+    payload["t"] = np.array(0.4)
+    payload["macro_step"] = np.array(4)
+    after = restart_topology_image(sim)
+    receipt = {
+        "schema_version": 1,
+        "policy_identity": "pops.restart-hierarchy.v1:sha256:" + "0" * 64,
+        "changed": True,
+        "accepted_time": 0.4,
+        "accepted_macro_step": 4,
+        "before": {**after, "topology_epoch": 7, "regrid_count": 4},
+        "after": after,
+        "composite_integrals_before": [],
+        "composite_integrals_after": [],
+    }
+
+    assert validate_regridded_contract(sim, payload, receipt) is None
+    receipt["after"] = {**after, "topology_epoch": 9}
+    with pytest.raises(ValueError, match="receipt differs"):
+        validate_regridded_contract(sim, payload, receipt)
 
 
 def test_native_route_requires_no_program_blob_and_compiled_route_requires_one():
@@ -509,9 +565,7 @@ def test_rank_change_restart_rolls_back_after_hierarchy_rebuild_failure(monkeypa
         fail_after_rebuild,
     )
 
-    with pytest.raises(
-        RuntimeError, match="injected failure after rank-change hierarchy rebuild"
-    ):
+    with pytest.raises(RuntimeError, match="injected failure after rank-change hierarchy rebuild"):
         restore_checkpoint_payload(
             runtime,
             runtime,

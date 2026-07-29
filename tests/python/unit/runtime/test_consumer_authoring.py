@@ -107,7 +107,7 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
         "guarantee": "accepted_state_with_recorded_hierarchy",
     }
     assert checkpoint.operation_data["guarantee"] == "bit_identical_accepted_state"
-    assert checkpoint.operation_data["supports_regrid_on_restart"] is False
+    assert checkpoint.operation_data["supports_regrid_on_restart"] is True
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
 
 
@@ -153,10 +153,10 @@ def test_checkpoint_hierarchy_policies_have_distinct_exact_identities_and_guaran
     assert operation["hierarchy"] == regrid.to_data()
     assert operation["hierarchy_identity"] == regrid.identity.token
     assert operation["guarantee"] == "accepted_state_after_regrid"
-    assert operation["supports_regrid_on_restart"] is False
+    assert operation["supports_regrid_on_restart"] is True
 
 
-def test_regrid_on_restart_refuses_bit_identity_and_unsupported_builtin_provider():
+def test_regrid_on_restart_refuses_bit_identity_but_resolves_explicit_policy():
     case, _, _ = _case()
     schedule = every(10, clock=Clock("macro", owner=case.owner_path))
     with pytest.raises(ValueError, match="bit_identical=True with RegridOnRestart"):
@@ -182,11 +182,10 @@ def test_regrid_on_restart_refuses_bit_identity_and_unsupported_builtin_provider
         blocks=subjects.blocks,
         handle_resolver=case.resolve,
     )
-    with pytest.raises(
-        NotImplementedError,
-        match=r"accepted-state-v5 does not implement RegridOnRestart",
-    ):
-        graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    assert resolved.is_resolved
+    (node,) = resolved.nodes
+    assert node.operation_data["hierarchy"]["mode"] == "regrid_on_restart"
 
 
 def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():

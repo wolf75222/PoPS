@@ -338,11 +338,13 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           "AMR Program hierarchy refresh owner must be the installed context");
     install(std::move(step));
     facade_->install_program_hierarchy_refresh(
-        [owner = std::move(owner), refresh_resources = std::move(refresh_resources)]() {
+        [owner, refresh_resources = std::move(refresh_resources)]() {
           if (refresh_resources)
             refresh_resources();
           owner->refresh_accepted_hierarchy_state_();
         });
+    facade_->install_program_restart_hooks([owner]() { owner->regrid_on_restart_(); },
+                                           [owner]() { owner->resync_after_restart_rollback_(); });
   }
 
   // --- inter-level coupling -------------------------------------------------------------------------
@@ -2537,9 +2539,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return state;
   }
 
-  void import_program_accepted_state_() const {
+  void import_program_accepted_state_(bool force = false) const {
     const std::uint64_t revision = facade_->program_accepted_state_revision();
-    if (revision == accepted_state_revision_)
+    if (!force && revision == accepted_state_revision_)
       return;
     const std::vector<std::uint8_t> bytes = facade_->program_accepted_state();
     if (bytes.empty())
@@ -2573,6 +2575,56 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     // already visited. The restored accepted image starts a fresh public attempt and must therefore
     // be allowed to run its head-of-step regrid again.
     automatic_regrid_macro_step_ = -1;
+  }
+
+  void require_restart_regrid_boundary_() const {
+    if (attempt_snapshot_active_ || active_parent_ || current_window_ ||
+        conservative_ledger_.in_transaction() || !conservative_ledger_.empty() ||
+        (interface_flux_ledger_ &&
+         (interface_flux_ledger_->in_transaction() || !interface_flux_ledger_->empty())))
+      throw std::logic_error("AMR RegridOnRestart requires a clean accepted Program boundary");
+    if (!interface_flux_group_rates_.empty())
+      throw std::runtime_error(
+          "AMR RegridOnRestart does not yet support shared-interface flux groups");
+  }
+
+  /// Transform one exactly restored accepted hierarchy through the runtime's real scientific
+  /// tagging/clustering/regrid path. This is deliberately not cadence-gated: the restart policy
+  /// requests exactly one regrid at the restored accepted `(macro_step,time)` coordinate.
+  void regrid_on_restart_() const {
+    require_restart_regrid_boundary_();
+    import_program_accepted_state_(true);
+    const HistoryFluxTopology before = history_flux_topology_snapshot_();
+    const std::int64_t accepted_step = macro_step();
+    const double accepted_time = facade_->time();
+    if (accepted_step < 0 || accepted_step > std::numeric_limits<int>::max() ||
+        !std::isfinite(accepted_time))
+      throw std::runtime_error("AMR RegridOnRestart requires a representable accepted clock");
+    eng_->require_restart_regrid_supported();
+    eng_->set_component_logical_time(accepted_step, accepted_time);
+    eng_->regrid();
+    materialize_capture_flux_scratch_();
+    const HistoryFluxTopology after = history_flux_topology_snapshot_();
+    if (!same_history_flux_layout_(before, after))
+      rebind_history_flux_topology_(before, after);
+    history_flux_topology_ = after;
+    ensure_level_clocks_();
+    accepted_flux_report_.clear();
+    accepted_interface_flux_report_.clear();
+    accepted_sync_report_.clear();
+    automatic_regrid_macro_step_ = static_cast<int>(accepted_step);
+    publish_program_accepted_state_();
+  }
+
+  /// A failed restart may restore facade bytes with the same revision this context already saw.
+  /// Rebuild every topology-bound workspace and bypass the revision fast-path immediately so the
+  /// next step cannot observe a post-regrid context over the rolled-back native hierarchy.
+  void resync_after_restart_rollback_() const {
+    require_restart_regrid_boundary_();
+    materialize_capture_flux_scratch_();
+    import_program_accepted_state_(true);
+    history_flux_topology_ = history_flux_topology_snapshot_();
+    ensure_level_clocks_();
   }
 
   void publish_program_accepted_state_() const {

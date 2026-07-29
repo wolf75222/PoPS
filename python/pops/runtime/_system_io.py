@@ -254,8 +254,15 @@ class _SystemIO(_System):
         payload: bytes,
         *,
         bit_identical: bool,
+        hierarchy_mode: str = "restore_recorded_hierarchy",
+        hierarchy_identity: str | None = None,
     ) -> _PreparedUniformRestart:
         """Authenticate and validate every byte before the first native state write."""
+        del hierarchy_identity
+        if hierarchy_mode != "restore_recorded_hierarchy":
+            raise NotImplementedError(
+                "Uniform restart does not support RegridOnRestart; use an AMR layout"
+            )
         import numpy as np
         from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
         from pops.output._checkpoint_collective import (

@@ -34,6 +34,8 @@ class _PreparedAMRRestart:
     aux_payload: tuple[Any, ...]
     potential_payload: tuple[Any, ...]
     field_payload: tuple[Any, ...]
+    hierarchy_mode: str
+    hierarchy_identity: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,7 +409,17 @@ def write_v3(owner, sim, path, lengths, lower, regrid_every, persistence=None):
     )
 
 
-def prepare_v3(owner, sim, d, lengths, lower, *, bit_identical=False):
+def prepare_v3(
+    owner,
+    sim,
+    d,
+    lengths,
+    lower,
+    *,
+    bit_identical=False,
+    hierarchy_mode="restore_recorded_hierarchy",
+    hierarchy_identity=None,
+):
     """Validate an accepted-state v5 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
@@ -432,6 +444,27 @@ def prepare_v3(owner, sim, d, lengths, lower, *, bit_identical=False):
             "restart: bit_identical=True requires the recorded MPI rank topology "
             "(checkpoint=%d, current=%d)" % (checkpoint_ranks, current_ranks)
         )
+    if hierarchy_mode not in {"restore_recorded_hierarchy", "regrid_on_restart"}:
+        raise ValueError("restart: unsupported hierarchy policy %r" % hierarchy_mode)
+    if hierarchy_mode == "regrid_on_restart":
+        from pops.output.restart import RegridOnRestart
+
+        expected_identity = RegridOnRestart().identity.token
+        if hierarchy_identity != expected_identity:
+            raise ValueError(
+                "restart: RegridOnRestart hierarchy identity differs from its built-in policy"
+            )
+        if bit_identical:
+            raise ValueError("restart: RegridOnRestart cannot provide bit-identical continuation")
+        if checkpoint_ranks != current_ranks:
+            raise ValueError(
+                "restart: bounded RegridOnRestart requires the checkpoint MPI cardinality "
+                "(checkpoint=%d, current=%d)" % (checkpoint_ranks, current_ranks)
+            )
+        if not sim.installed_program_hash():
+            raise ValueError(
+                "restart: RegridOnRestart requires an artifact-backed compiled AMR Program"
+            )
     checkpoint_levels, checkpoint_configured_levels = _checkpoint_amr_level_envelope(sim, d)
     from pops.runtime._amr_checkpoint_topology import recorded_rank_topology
 
@@ -448,9 +481,7 @@ def prepare_v3(owner, sim, d, lengths, lower, *, bit_identical=False):
         )
     d = selected
     preflight_program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
-    program_state = (
-        preflight_program_state if checkpoint_ranks == current_ranks else b""
-    )
+    program_state = preflight_program_state if checkpoint_ranks == current_ranks else b""
     cadence = prepare_program_cadence(
         sim,
         d,
@@ -534,6 +565,10 @@ def prepare_v3(owner, sim, d, lengths, lower, *, bit_identical=False):
         raise ValueError(
             "restart : checkpoint qualified field providers %r != installed providers %r"
             % (checkpoint_slots, current_slots)
+        )
+    if hierarchy_mode == "regrid_on_restart" and checkpoint_slots:
+        raise NotImplementedError(
+            "restart: bounded RegridOnRestart does not yet support elliptic field providers"
         )
     field_payload = []
     for index, slot in enumerate(checkpoint_slots):
@@ -706,7 +741,45 @@ def prepare_v3(owner, sim, d, lengths, lower, *, bit_identical=False):
         aux_payload=tuple(aux_payload),
         potential_payload=tuple(phi_payload),
         field_payload=tuple((slot, tuple(levels)) for slot, levels in field_payload),
+        hierarchy_mode=hierarchy_mode,
+        hierarchy_identity=hierarchy_identity,
     )
+
+
+def _restart_topology_image(sim):
+    from pops.runtime._amr_checkpoint_contract import restart_topology_image
+
+    return restart_topology_image(sim)
+
+
+def _restart_composite_integrals(sim):
+    rows = []
+    for block in sim.block_names():
+        for component in range(int(sim.block_n_vars(block))):
+            rows.append(
+                {
+                    "block": str(block),
+                    "component": component,
+                    "value": float(sim.composite_reduce(block, "sum", component)),
+                }
+            )
+    return rows
+
+
+def _require_restart_conservation(before, after):
+    import math
+
+    if [(row["block"], row["component"]) for row in before] != [
+        (row["block"], row["component"]) for row in after
+    ]:
+        raise RuntimeError("restart: RegridOnRestart changed the conservative component registry")
+    for old, new in zip(before, after, strict=True):
+        scale = max(1.0, abs(old["value"]), abs(new["value"]))
+        if not math.isclose(old["value"], new["value"], rel_tol=2.0e-12, abs_tol=2.0e-13 * scale):
+            raise RuntimeError(
+                "restart: RegridOnRestart violated composite conservation for "
+                "%s[%d] (%r -> %r)" % (old["block"], old["component"], old["value"], new["value"])
+            )
 
 
 def apply_v3(owner, sim, prepared):
@@ -825,7 +898,6 @@ def apply_v3(owner, sim, prepared):
     sim.restore_program_accepted_state(program_state)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
 
-    validate_restored_contract(sim, d)
     sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
 
     # (8) Clock last: the next cadence decision is identical to the uninterrupted run.
@@ -836,6 +908,31 @@ def apply_v3(owner, sim, prepared):
         accepted_time=float(d["t"]),
     )
     sim.set_clock(float(d["t"]), macro_step)
+    validate_restored_contract(sim, d)
+
+    owner._last_restart_regrid_receipt = None
+    if prepared.hierarchy_mode == "regrid_on_restart":
+        before_topology = _restart_topology_image(sim)
+        before_integrals = _restart_composite_integrals(sim)
+        sim.regrid_on_restart()
+        after_topology = _restart_topology_image(sim)
+        after_integrals = _restart_composite_integrals(sim)
+        _require_restart_conservation(before_integrals, after_integrals)
+        receipt = {
+            "schema_version": 1,
+            "policy_identity": prepared.hierarchy_identity,
+            "changed": before_topology != after_topology,
+            "accepted_time": float(d["t"]),
+            "accepted_macro_step": macro_step,
+            "before": before_topology,
+            "after": after_topology,
+            "composite_integrals_before": before_integrals,
+            "composite_integrals_after": after_integrals,
+        }
+        from pops.runtime._amr_checkpoint_contract import validate_regridded_contract
+
+        validate_regridded_contract(sim, d, receipt)
+        owner._last_restart_regrid_receipt = receipt
     owner._temporal_restart_state = prepared.temporal_state
     owner._step_controller = None
     return report
