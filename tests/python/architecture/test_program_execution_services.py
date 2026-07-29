@@ -41,6 +41,10 @@ SHARED_SIGNATURES = (
     "[[nodiscard]] auto logical_evaluation_scope(",
     "void evaluate_with_field_state_at(",
     "void rhs_group(",
+    "void rhs_into(",
+    "runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(",
+    "bool has_boundary_linearization(",
+    "void neg_div_flux_default_into(",
     "void source_default_into(",
     "void apply_projection(",
     "Real hmin(",
@@ -124,6 +128,9 @@ SHARED_SIGNATURES = (
 )
 
 SHARED_OVERLOAD_COUNTS = {
+    "void rhs_core_into_at(": 2,
+    "void boundary_residual_into_at(": 2,
+    "void boundary_jvp_into_at(": 2,
     "void laplacian(": 4,
     "void tensor_laplacian(": 4,
     "void gradient(": 4,
@@ -243,6 +250,13 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
         assert "friend class ProgramExecutionServices<%s>;" % context in source
         for hook in (
             "program_execution_logical_parent_dt_",
+            "program_execution_boundary_point_",
+            "program_execution_rhs_into_",
+            "program_execution_has_boundary_linearization_",
+            "program_execution_rhs_core_into_at_",
+            "program_execution_boundary_residual_into_at_",
+            "program_execution_boundary_jvp_into_at_",
+            "program_execution_neg_div_flux_default_into_",
             "program_execution_rhs_group_",
             "program_execution_source_default_into_",
             "program_execution_apply_projection_",

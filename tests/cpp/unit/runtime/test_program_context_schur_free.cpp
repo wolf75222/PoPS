@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 // The facade type is complete and usable from program_context.hpp alone (a self-contained TU). If the
@@ -91,6 +92,12 @@ class ExecutionServicesFixture
   int authority_check_count() const { return authority_check_count_; }
   const std::string& assembly_target_slot() const { return assembly_target_slot_; }
   const std::string& assembly_source_slot() const { return assembly_source_slot_; }
+  const std::string& boundary_dispatch_operation() const { return boundary_dispatch_operation_; }
+  int boundary_dispatch_program_block() const { return boundary_dispatch_program_block_; }
+  int boundary_dispatch_runtime_block() const { return boundary_dispatch_runtime_block_; }
+  int boundary_dispatch_rate() const { return boundary_dispatch_rate_; }
+  bool boundary_dispatch_has_session() const { return boundary_dispatch_has_session_; }
+  bool boundary_dispatch_flux_only() const { return boundary_dispatch_flux_only_; }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
@@ -114,6 +121,40 @@ class ExecutionServicesFixture
   void program_execution_restore_logical_evaluation_(
       const LogicalRollback& rollback) const noexcept {
     logical_dt_ = rollback.dt;
+  }
+  pops::runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
+      int stage_id) const {
+    return {"fixture.clock", 0, Amr ? active_level_ : 0, 0, stage_id};
+  }
+  void program_execution_rhs_into_(int program_block, int runtime_block, pops::MultiFab&,
+                                   pops::MultiFab&, int rate_id) const {
+    record_boundary_dispatch_("rhs", program_block, runtime_block, rate_id, false, false);
+  }
+  bool program_execution_has_boundary_linearization_(int runtime_block) const {
+    record_boundary_dispatch_("has_linearization", -1, runtime_block, -1, false, false);
+    return runtime_block == 1;
+  }
+  void program_execution_rhs_core_into_at_(
+      const pops::runtime::multiblock::BoundaryEvaluationPoint&, int runtime_block, pops::MultiFab&,
+      pops::MultiFab&, bool flux_only, const pops::PreparedGridBoundarySession* boundary) const {
+    record_boundary_dispatch_("rhs_core", -1, runtime_block, -1, boundary != nullptr, flux_only);
+  }
+  void program_execution_boundary_residual_into_at_(
+      const pops::runtime::multiblock::BoundaryEvaluationPoint&, int runtime_block, pops::MultiFab&,
+      pops::MultiFab&, const pops::PreparedGridBoundarySession* boundary) const {
+    record_boundary_dispatch_("boundary_residual", -1, runtime_block, -1, boundary != nullptr,
+                              false);
+  }
+  void program_execution_boundary_jvp_into_at_(
+      const pops::runtime::multiblock::BoundaryEvaluationPoint&, int runtime_block, pops::MultiFab&,
+      const pops::MultiFab&, pops::MultiFab&,
+      const pops::PreparedGridBoundarySession* boundary) const {
+    record_boundary_dispatch_("boundary_jvp", -1, runtime_block, -1, boundary != nullptr, false);
+  }
+  void program_execution_neg_div_flux_default_into_(int program_block, int runtime_block,
+                                                    pops::MultiFab&, pops::MultiFab&,
+                                                    int rate_id) const {
+    record_boundary_dispatch_("neg_div_flux", program_block, runtime_block, rate_id, false, true);
   }
   void program_execution_rhs_group_(const typename SharedServices::RhsGroupBatch& batch) const {
     this->count_kernel(static_cast<std::int64_t>(batch.requests.size()));
@@ -244,6 +285,15 @@ class ExecutionServicesFixture
   void program_execution_select_resource_level_(int selected) const noexcept {
     resource_level_ = selected;
   }
+  void record_boundary_dispatch_(std::string operation, int program_block, int runtime_block,
+                                 int rate_id, bool has_session, bool flux_only) const {
+    boundary_dispatch_operation_ = std::move(operation);
+    boundary_dispatch_program_block_ = program_block;
+    boundary_dispatch_runtime_block_ = runtime_block;
+    boundary_dispatch_rate_ = rate_id;
+    boundary_dispatch_has_session_ = has_session;
+    boundary_dispatch_flux_only_ = flux_only;
+  }
 
   int active_level_ = -1;
   mutable int resource_level_ = Amr ? 1 : 0;
@@ -278,6 +328,12 @@ class ExecutionServicesFixture
   mutable int authority_check_count_ = 0;
   mutable std::string assembly_target_slot_;
   mutable std::string assembly_source_slot_;
+  mutable std::string boundary_dispatch_operation_;
+  mutable int boundary_dispatch_program_block_ = -1;
+  mutable int boundary_dispatch_runtime_block_ = -1;
+  mutable int boundary_dispatch_rate_ = -1;
+  mutable bool boundary_dispatch_has_session_ = false;
+  mutable bool boundary_dispatch_flux_only_ = false;
 };
 
 template <class Context>
@@ -505,6 +561,73 @@ void expect_shared_prepared_operator_services(Context& context) {
       << "the shared prepared Krylov route remains part of both provider facades";
 }
 
+template <class Context>
+void expect_shared_boundary_dispatch_services(Context& context) {
+  pops::MultiFab state;
+  pops::MultiFab rhs;
+  pops::MultiFab direction;
+
+  context.profiler().enable();
+
+  context.rhs_into(0, state, rhs, 13);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "rhs");
+  EXPECT_EQ(context.boundary_dispatch_program_block(), 0);
+  EXPECT_EQ(context.boundary_dispatch_runtime_block(), 1);
+  EXPECT_EQ(context.boundary_dispatch_rate(), 13);
+  EXPECT_EQ(context.profiler().counter("kernels"), 1);
+
+  const auto point = context.boundary_evaluation_point(14);
+  EXPECT_EQ(point.stage, 14);
+  EXPECT_TRUE(context.has_boundary_linearization(0));
+  EXPECT_EQ(context.boundary_dispatch_operation(), "has_linearization");
+  EXPECT_EQ(context.boundary_dispatch_runtime_block(), 1);
+  EXPECT_EQ(context.profiler().counter("kernels"), 1)
+      << "a linearization capability query must not count as a kernel";
+
+  const pops::PreparedGridBoundarySession boundary(context.grid_context(),
+                                                   pops::ExecutionLane::world());
+
+  context.rhs_core_into_at(point, 0, state, rhs, false);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "rhs_core");
+  EXPECT_EQ(context.boundary_dispatch_runtime_block(), 1);
+  EXPECT_FALSE(context.boundary_dispatch_has_session());
+  EXPECT_FALSE(context.boundary_dispatch_flux_only());
+
+  context.rhs_core_into_at(point, 0, state, rhs, true, boundary);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "rhs_core");
+  EXPECT_TRUE(context.boundary_dispatch_has_session());
+  EXPECT_TRUE(context.boundary_dispatch_flux_only());
+
+  context.boundary_residual_into_at(point, 0, state, rhs);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "boundary_residual");
+  EXPECT_FALSE(context.boundary_dispatch_has_session());
+  context.boundary_residual_into_at(point, 0, state, rhs, boundary);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "boundary_residual");
+  EXPECT_TRUE(context.boundary_dispatch_has_session());
+
+  context.boundary_jvp_into_at(point, 0, state, direction, rhs);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "boundary_jvp");
+  EXPECT_FALSE(context.boundary_dispatch_has_session());
+  context.boundary_jvp_into_at(point, 0, state, direction, rhs, boundary);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "boundary_jvp");
+  EXPECT_TRUE(context.boundary_dispatch_has_session());
+
+  context.neg_div_flux_default_into(0, state, rhs, 15);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "neg_div_flux");
+  EXPECT_EQ(context.boundary_dispatch_program_block(), 0);
+  EXPECT_EQ(context.boundary_dispatch_runtime_block(), 1);
+  EXPECT_EQ(context.boundary_dispatch_rate(), 15);
+  EXPECT_TRUE(context.boundary_dispatch_flux_only());
+  EXPECT_EQ(context.profiler().counter("kernels"), 8);
+
+  EXPECT_THROW(context.rhs_into(0, state, rhs, -1), std::invalid_argument);
+  EXPECT_THROW(context.neg_div_flux_default_into(0, state, rhs, -1), std::invalid_argument);
+  EXPECT_EQ(context.boundary_dispatch_operation(), "neg_div_flux");
+  EXPECT_EQ(context.boundary_dispatch_rate(), 15);
+  EXPECT_EQ(context.profiler().counter("kernels"), 8)
+      << "invalid stable identities must fail before provider dispatch or profiling";
+}
+
 }  // namespace
 
 TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameContractFixture) {
@@ -526,4 +649,11 @@ TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSamePreparedOperatorF
   ExecutionServicesFixture<true> amr(1);
   expect_shared_prepared_operator_services(uniform);
   expect_shared_prepared_operator_services(amr);
+}
+
+TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameBoundaryDispatchFixture) {
+  ExecutionServicesFixture<false> uniform(-1);
+  ExecutionServicesFixture<true> amr(1);
+  expect_shared_boundary_dispatch_services(uniform);
+  expect_shared_boundary_dispatch_services(amr);
 }
