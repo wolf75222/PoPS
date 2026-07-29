@@ -20,6 +20,7 @@ from pops.mesh.boundaries import (
 from pops.model import ComponentManifest
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
+from pops.output import Checkpoint, ConsumerGraph, RegridOnRestart
 from pops.time import FixedDt, StagePoint, TimePoint, every
 
 
@@ -191,6 +192,34 @@ def _ssprk2_program(left_state, right_state, rate):
     return program
 
 
+def _shared_interface_accepted_image(runtime):
+    native = runtime._executor._s
+    levels = int(runtime.n_levels())
+    return {
+        "time": float(runtime.time()),
+        "step": int(runtime.macro_step()),
+        "boxes": tuple(tuple(int(value) for value in row) for row in runtime.patch_boxes()),
+        "regrid_count": int(native.checkpoint_regrid_count()),
+        "topology_epoch": int(native.checkpoint_topology_epoch()),
+        "program_state": bytes(native.program_accepted_state()),
+        "states": tuple(
+            np.asarray(runtime.block_level_state_global(block, level), dtype=np.float64).copy()
+            for block in ("tracer", "right")
+            for level in range(levels)
+        ),
+    }
+
+
+def _assert_same_shared_interface_image(runtime, expected):
+    actual = _shared_interface_accepted_image(runtime)
+    assert {key: value for key, value in actual.items() if key != "states"} == {
+        key: value for key, value in expected.items() if key != "states"
+    }
+    assert len(actual["states"]) == len(expected["states"])
+    for current, recorded in zip(actual["states"], expected["states"], strict=True):
+        np.testing.assert_array_equal(current, recorded)
+
+
 def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     example = _load_example()
     core = example.build_authoring(output_root=tmp_path / "unused")
@@ -309,7 +338,7 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     )
 
 
-def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
+def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
     from pops.amr import (
         AMRClockRelation,
         AMRExecution,
@@ -380,6 +409,17 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     ))
     program = _ssprk2_program(core.tracer_state, right_state, core.rate)
     core.case.program(program)
+    core.case.consumers(
+        ConsumerGraph.from_consumers(
+            (
+                Checkpoint(
+                    schedule=every(10_000, clock=program.clock),
+                    target="unused/shared-interface-restart",
+                    hierarchy=RegridOnRestart(),
+                ),
+            )
+        )
+    )
 
     transfer = AMRTransfer()
     transfer.state(core.tracer_state, StateTransfer())
@@ -507,3 +547,143 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     np.testing.assert_allclose(gained_by_right, lost_by_left, rtol=0.0, atol=2.0e-13)
     final_integral = final_left + final_right
     np.testing.assert_allclose(final_integral, initial_integral, rtol=0.0, atol=2.0e-13)
+
+    # The three-level route above proves arbitrary-depth execution. Use the independently compiled
+    # two-level route for the restart transaction: replacing its only fine transition is the exact
+    # dynamic topology capability currently authenticated by the interface scheduler.
+    restart_resolved = pops.resolve(
+        pops.validate(core.case),
+        layout=AMR(
+            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
+            hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+            tagging=tagging,
+            regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
+            transfer=transfer,
+            execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+        ),
+        components=(component,),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    restart_artifact = pops.compile(restart_resolved)
+    restart_interface = restart_resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+    restart_source = example._bind_artifact(
+        restart_artifact,
+        initial_values={
+            core.tracer_state: left_initial,
+            right_state: right_initial,
+        },
+        params=params,
+    )
+    assert restart_source.n_levels() == 2
+    restart_initial_integral = restart_source.integral("tracer") + restart_source.integral("right")
+    source_report = pops.run(
+        restart_source,
+        t_end=1.0e-3,
+        max_steps=1,
+        console=False,
+        output_dir=tmp_path / "restart-source-output",
+    )
+    assert source_report.accepted_steps == 1
+    assert restart_source._executor._s._interface_evaluation_count(
+        restart_interface.qualified_id, 0) == 2
+    assert restart_source._executor._s._interface_evaluation_count(
+        restart_interface.qualified_id, 1) == 4
+    checkpoint_time = float(restart_source.time())
+    checkpoint_step = int(restart_source.macro_step())
+    checkpoint_integral = (
+        restart_source.integral("tracer") + restart_source.integral("right")
+    )
+    np.testing.assert_allclose(
+        checkpoint_integral,
+        restart_initial_integral,
+        rtol=0.0,
+        atol=2.0e-13,
+    )
+    checkpoint = restart_source.checkpoint(tmp_path / "accepted-shared-interface")
+
+    # RegridOnRestart must enter the serial native tag/cluster/regrid boundary; a deliberately
+    # rejected post-transform validation must restore the fresh runtime exactly before the same
+    # restart is retried and committed.
+    restarted = example._bind_artifact(
+        restart_artifact,
+        initial_values={
+            core.tracer_state: left_initial,
+            right_state: right_initial,
+        },
+        params=params,
+    )
+    priming_report = pops.run(
+        restarted,
+        t_end=1.0e-3,
+        max_steps=1,
+        console=False,
+        output_dir=tmp_path / "restart-candidate-output",
+    )
+    assert priming_report.accepted_steps == 1
+    rollback_image = _shared_interface_accepted_image(restarted)
+    from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
+
+    original_conservation_check = checkpoint_codec._require_restart_conservation
+    transformed_images = []
+
+    def fail_after_native_regrid(before, after):
+        del before, after
+        transformed_images.append(_shared_interface_accepted_image(restarted))
+        raise RuntimeError("injected shared-interface restart validation failure")
+
+    monkeypatch.setattr(
+        checkpoint_codec,
+        "_require_restart_conservation",
+        fail_after_native_regrid,
+    )
+    with pytest.raises(RuntimeError, match="injected shared-interface restart validation failure"):
+        restarted.restart(checkpoint)
+    assert transformed_images
+    assert transformed_images[0]["boxes"] != rollback_image["boxes"]
+    _assert_same_shared_interface_image(restarted, rollback_image)
+
+    monkeypatch.setattr(
+        checkpoint_codec,
+        "_require_restart_conservation",
+        original_conservation_check,
+    )
+    restarted.restart(checkpoint)
+    receipt = restarted._executor.last_restart_regrid_receipt()
+    assert receipt is not None
+    assert receipt["changed"] is True
+    assert float(restarted.time()) == checkpoint_time
+    assert int(restarted.macro_step()) == checkpoint_step
+    assert tuple(restarted.patch_boxes()) == tuple(transformed_images[0]["boxes"])
+    np.testing.assert_allclose(
+        [row["value"] for row in receipt["composite_integrals_after"]],
+        [row["value"] for row in receipt["composite_integrals_before"]],
+        rtol=2.0e-12,
+        atol=2.0e-13,
+    )
+    restarted_integral = restarted.integral("tracer") + restarted.integral("right")
+    np.testing.assert_allclose(
+        restarted_integral,
+        checkpoint_integral,
+        rtol=2.0e-12,
+        atol=2.0e-13,
+    )
+
+    counts_before_continuation = tuple(
+        restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
+        for level in range(2)
+    )
+    pops.run(restarted, t_end=2.0e-3, max_steps=1, console=False)
+    counts_after_continuation = tuple(
+        restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
+        for level in range(2)
+    )
+    assert tuple(
+        after - before
+        for before, after in zip(counts_before_continuation, counts_after_continuation, strict=True)
+    ) == (2, 4)
+    np.testing.assert_allclose(
+        restarted.integral("tracer") + restarted.integral("right"),
+        checkpoint_integral,
+        rtol=0.0,
+        atol=2.0e-13,
+    )

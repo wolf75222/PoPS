@@ -464,8 +464,10 @@ accepted coordinate. It verifies composite conservation, publishes a rank-consen
 topology receipt and derives a new continuation run identity. The restored tagging hysteresis enters
 that same transaction: a failed transform restores its exact accepted bytes, while a successful
 transform advances one tagging cycle and publishes the transformed image. The bounded route requires
-one AMR layout, unchanged MPI cardinality and no elliptic provider, shared-interface flux group, or
-bootstrap staggered cache. PoPS never silently changes patch geometry under
+one AMR layout and unchanged MPI cardinality. Serial shared-interface flux groups participate in the
+same topology rematerialization, conservation check, rollback and retry; distributed dynamic
+interface rematerialization, elliptic providers and bootstrap staggered caches remain refused. PoPS
+never silently changes patch geometry under
 `RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then

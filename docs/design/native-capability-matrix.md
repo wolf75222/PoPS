@@ -174,8 +174,9 @@ Explicit unsupported rows include:
   tagger/clustering regrid, history/flux topology is rebound, composite conservation is checked, and
   a global transform receipt derives a distinct run identity. Persistent tagging state is restored
   and rolled back with the accepted image, then advanced exactly once by a successful transform.
-  Uniform, multi-layout, elliptic-field, shared-interface, and bootstrap-staggered/cache cases remain
-  explicit refusals;
+  Serial shared-interface groups are rematerialized in the same transaction and execute
+  conservatively after rollback or commit. Uniform, multi-layout, elliptic-field, distributed
+  dynamic shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
   `bit_identical=True` is incompatible with the policy.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.

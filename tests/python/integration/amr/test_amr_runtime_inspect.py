@@ -247,7 +247,8 @@ def test_explain_checkpoint_supports_dynamic_regrid():
     assert any("selective history replay remains same-rank" in n for n in rep.notes)
     assert any("explicit weaker continuation" in n for n in rep.notes)
     assert any("unchanged MPI cardinality" in n for n in rep.notes)
-    assert any("shared-interface flux groups" in n for n in rep.notes)
+    assert any("serial rematerializable shared-interface flux groups" in n for n in rep.notes)
+    assert any("distributed dynamic shared-interface routes" in n for n in rep.notes)
 
 
 # --- inspect() (ADC-589/555 criterion #34: the unified hierarchy/patch/regrid/limitations view) --
