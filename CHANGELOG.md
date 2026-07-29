@@ -18,6 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Strict AMR checkpoint payload v7 now persists the accepted shared-interface flux audit together
+  with Program clocks, histories, tagging state, conservative ledger and synchronization report.
+  Restart validates every fragment's topology epoch, level pair, exact clock window, resolved
+  rational stage weight, geometry and duration before publishing the image; rejected restart or
+  Program attempts leave the previous accepted report byte-exact.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
   `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one

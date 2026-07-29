@@ -12,6 +12,7 @@
 
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
+#include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
 #include <pops/runtime/amr/amr_program_reflux.hpp>
 
 namespace pops::runtime::program {
@@ -30,6 +31,11 @@ struct AmrProgramFluxContribution {
 struct AmrProgramFluxAuditEntry {
   amr::FluxLedgerKey key;
   amr::FluxMeasure measure;
+};
+
+struct AmrProgramInterfaceFluxAuditEntry {
+  amr::InterfaceFluxFragmentKey key;
+  amr::InterfaceFluxFragmentMeasure measure;
 };
 
 struct AmrProgramSyncEvent {
@@ -61,6 +67,7 @@ struct AmrProgramAcceptedState {
       ring_flux_contributions;
   std::map<std::string, std::vector<char>> ring_flux_initialized;
   std::vector<AmrProgramFluxAuditEntry> accepted_flux_ledger;
+  std::vector<AmrProgramInterfaceFluxAuditEntry> accepted_interface_flux_ledger;
   std::vector<AmrProgramSyncEvent> accepted_sync;
 };
 
@@ -332,6 +339,71 @@ inline AmrProgramFluxAuditEntry read_flux_audit(Reader& in) {
   return value;
 }
 
+inline void write_interface_flux_audit(Writer& out,
+                                       const AmrProgramInterfaceFluxAuditEntry& value) {
+  out.string(value.key.interface_identity);
+  out.u64(value.key.topology_epoch);
+  out.i32(value.key.coarse_level);
+  out.i32(value.key.fine_level);
+  write_clock(out, value.key.clock);
+  out.string(value.key.stage_identity);
+  write_clock(out, value.key.interval.begin);
+  write_clock(out, value.key.interval.end);
+  out.i32(static_cast<int>(value.key.orientation));
+  out.u64(static_cast<std::uint64_t>(value.key.left_block));
+  out.u64(static_cast<std::uint64_t>(value.key.right_block));
+  write_rational(out, value.measure.stage_weight);
+  out.real(value.measure.face_measure);
+  out.real(value.measure.substep_duration);
+  out.u64(value.measure.stage_weight_resolved ? 1 : 0);
+}
+
+inline AmrProgramInterfaceFluxAuditEntry read_interface_flux_audit(Reader& in) {
+  AmrProgramInterfaceFluxAuditEntry value;
+  value.key.interface_identity = in.string();
+  value.key.topology_epoch = in.u64();
+  value.key.coarse_level = in.i32();
+  value.key.fine_level = in.i32();
+  value.key.clock = read_clock(in);
+  value.key.stage_identity = in.string();
+  value.key.interval.begin = read_clock(in);
+  value.key.interval.end = read_clock(in);
+  const int orientation = in.i32();
+  if (orientation < static_cast<int>(amr::InterfaceFluxOrientation::CoarseOutward) ||
+      orientation > static_cast<int>(amr::InterfaceFluxOrientation::FineOutward))
+    throw std::runtime_error(
+        "invalid AMR Program accepted-state payload: invalid interface-flux orientation");
+  value.key.orientation = static_cast<amr::InterfaceFluxOrientation>(orientation);
+  const std::uint64_t left_block = in.u64();
+  const std::uint64_t right_block = in.u64();
+  if (left_block > std::numeric_limits<std::size_t>::max() ||
+      right_block > std::numeric_limits<std::size_t>::max())
+    throw std::runtime_error(
+        "invalid AMR Program accepted-state payload: interface-flux block index overflows size_t");
+  value.key.left_block = static_cast<std::size_t>(left_block);
+  value.key.right_block = static_cast<std::size_t>(right_block);
+  value.measure.stage_weight = read_rational(in);
+  value.measure.face_measure = in.real();
+  value.measure.substep_duration = in.real();
+  const std::uint64_t resolved = in.u64();
+  if (resolved > 1)
+    throw std::runtime_error(
+        "invalid AMR Program accepted-state payload: invalid interface-flux resolved flag");
+  value.measure.stage_weight_resolved = resolved != 0;
+  try {
+    amr::validate_interface_flux_fragment(value.key, value.measure, value.key.topology_epoch);
+  } catch (const std::exception& error) {
+    throw std::runtime_error(
+        std::string("invalid AMR Program accepted-state payload: invalid interface flux: ") +
+        error.what());
+  }
+  if (!value.measure.stage_weight_resolved)
+    throw std::runtime_error(
+        "invalid AMR Program accepted-state payload: accepted interface flux has unresolved "
+        "Program stage weight");
+  return value;
+}
+
 inline void write_sync(Writer& out, const AmrProgramSyncEvent& value) {
   out.i32(value.parent_level);
   out.i32(value.child_level);
@@ -377,7 +449,7 @@ inline std::vector<std::uint8_t> serialize_amr_program_accepted_state(
     const AmrProgramAcceptedState& state) {
   using namespace checkpoint_detail;
   Writer out;
-  out.u64(0x3354534153504f50ULL);  // "POPSAST3", little-endian bytes
+  out.u64(0x3454534153504f50ULL);  // "POPSAST4", little-endian bytes
   out.size(state.level_clocks.size());
   for (const auto& clock : state.level_clocks)
     write_clock(out, clock);
@@ -435,6 +507,9 @@ inline std::vector<std::uint8_t> serialize_amr_program_accepted_state(
   out.size(state.accepted_flux_ledger.size());
   for (const auto& entry : state.accepted_flux_ledger)
     write_flux_audit(out, entry);
+  out.size(state.accepted_interface_flux_ledger.size());
+  for (const auto& entry : state.accepted_interface_flux_ledger)
+    write_interface_flux_audit(out, entry);
   out.size(state.accepted_sync.size());
   for (const auto& event : state.accepted_sync)
     write_sync(out, event);
@@ -445,7 +520,7 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     const std::vector<std::uint8_t>& bytes) {
   using namespace checkpoint_detail;
   Reader in(bytes);
-  if (in.u64() != 0x3354534153504f50ULL)
+  if (in.u64() != 0x3454534153504f50ULL)
     throw std::runtime_error(
         "invalid AMR Program accepted-state payload: unsupported magic/version");
   AmrProgramAcceptedState state;
@@ -524,6 +599,9 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
   state.accepted_flux_ledger.resize(in.size());
   for (auto& entry : state.accepted_flux_ledger)
     entry = read_flux_audit(in);
+  state.accepted_interface_flux_ledger.resize(in.size());
+  for (auto& entry : state.accepted_interface_flux_ledger)
+    entry = read_interface_flux_audit(in);
   state.accepted_sync.resize(in.size());
   for (auto& event : state.accepted_sync)
     event = read_sync(in);

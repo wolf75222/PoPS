@@ -76,10 +76,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     SyncPhase phase = SyncPhase::Reflux;
     amr::ClockStamp clock;
   };
-  struct InterfaceFluxFragmentAuditEntry {
-    amr::InterfaceFluxFragmentKey key;
-    amr::InterfaceFluxFragmentMeasure measure;
-  };
+  using InterfaceFluxFragmentAuditEntry = AmrProgramInterfaceFluxAuditEntry;
   struct HistoryFluxTopology {
     std::uint64_t epoch = std::numeric_limits<std::uint64_t>::max();
     std::vector<std::vector<Box2D>> boxes;
@@ -2485,6 +2482,21 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           !std::isfinite(entry.measure.substep_duration) ||
           !std::isfinite(entry.key.clock.physical_time))
         throw std::runtime_error("AMR Program accepted state has an invalid flux-ledger report");
+    for (const AmrProgramInterfaceFluxAuditEntry& entry : state.accepted_interface_flux_ledger) {
+      if (entry.key.topology_epoch != eng_->topology_epoch() || entry.key.fine_level >= nlev() ||
+          entry.key.left_block >= eng_->n_blocks() || entry.key.right_block >= eng_->n_blocks() ||
+          !entry.measure.stage_weight_resolved)
+        throw std::runtime_error(
+            "AMR Program accepted state has an interface-flux report outside the restored "
+            "hierarchy");
+      try {
+        amr::validate_interface_flux_fragment(entry.key, entry.measure, eng_->topology_epoch());
+      } catch (const std::exception& error) {
+        throw std::runtime_error(
+            std::string("AMR Program accepted state has an invalid interface-flux report: ") +
+            error.what());
+      }
+    }
     for (const AmrProgramSyncEvent& event : state.accepted_sync)
       if (event.parent_level < 0 || event.child_level != event.parent_level + 1 ||
           event.block < 0 || (event.phase != 0 && event.phase != 1) ||
@@ -2511,6 +2523,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     state.ring_flux_contributions = ring_flux_contributions_;
     state.ring_flux_initialized = ring_flux_init_;
     state.accepted_flux_ledger = accepted_flux_report_;
+    state.accepted_interface_flux_ledger = accepted_interface_flux_report_;
     state.accepted_sync = accepted_sync_report_;
     // A flat hierarchy captures no C/F flux strips, and a declared ring may still be cold. Persist
     // those cases as explicit zero/empty axes rather than omitting semantic registry entries: strict
@@ -2564,10 +2577,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     ring_flux_init_ = std::move(state.ring_flux_initialized);
     history_flux_topology_ = history_flux_topology_snapshot_();
     accepted_flux_report_ = std::move(state.accepted_flux_ledger);
-    // Raw shared-interface fragments are a process-local audit seam in this bounded slice, not
-    // checkpoint state. An outer facade rollback/restart changes the accepted revision and must not
-    // leave a fragment report from the abandoned revision visible.
-    accepted_interface_flux_report_.clear();
+    accepted_interface_flux_report_ = std::move(state.accepted_interface_flux_ledger);
     accepted_sync_report_ = std::move(state.accepted_sync);
     // Commit the already authenticated runtime-owned payload last. No throwing operation follows
     // this point, so a rejected decode/qualification leaves the previously accepted state intact.

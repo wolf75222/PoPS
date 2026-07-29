@@ -826,6 +826,8 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
       .def("program_flux_ledger_manifest", &AmrSystem::program_flux_ledger_manifest)
+      .def("program_interface_flux_ledger_manifest",
+           &AmrSystem::program_interface_flux_ledger_manifest)
       .def("program_sync_manifest", &AmrSystem::program_sync_manifest)
       // ADC-631: True on the multi-block AmrRuntime engine (a compiled Program forces it even for ONE
       // block), False on the single-block coupler. The v3 checkpoint routes per-block vs mono state I/O

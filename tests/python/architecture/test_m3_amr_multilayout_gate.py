@@ -26,7 +26,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 39
+    assert len(data["check"]) == 40
 
 
 def test_m3_gate_pins_three_level_subcycled_reflux_proof():
@@ -66,6 +66,28 @@ def test_m3_gate_pins_metric_weighted_composite_diagnostic_proof():
     )
     assert "runtime::amr::composite_reduce_fields" in source
     assert "std::fabs(integral - 1.25)" in source
+
+
+def test_m3_gate_pins_accepted_interface_ledger_restart_proof():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "positive",
+        "kind": "ctest",
+        "target": "test_program_reflux_ledger",
+        "test_regex": (
+            "^test_program_reflux_ledger\\."
+            "accepted_checkpoint_state_round_trips_canonically$"
+        ),
+    } in data["check"]
+
+    source = ROOT / "tests/cpp/integration/amr/test_program_reflux_ledger.cpp"
+    assert (
+        "TEST(test_program_reflux_ledger, "
+        "accepted_checkpoint_state_round_trips_canonically)"
+    ) in source.read_text(encoding="utf-8")
 
 
 def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():

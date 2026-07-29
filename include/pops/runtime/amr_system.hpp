@@ -852,6 +852,7 @@ class AmrSystem {
   POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_clock_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_flux_ledger_manifest() const;
+  POPS_EXPORT std::vector<std::vector<std::string>> program_interface_flux_ledger_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_sync_manifest() const;
 
   /// @name Runtime freeze lifecycle (ADC-592, parity with System)

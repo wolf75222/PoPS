@@ -159,15 +159,17 @@ Explicit unsupported rows include:
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v5 or AMR
-  v6 accepted-state payloads.
-- `checkpoint:amr_dynamic_regrid` is available through the strict v6 accepted-state route. The single
+  v7 accepted-state payloads.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v7 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
   per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
   non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and
   the rank-owned accepted Program image onto a different MPI rank count only when every persisted
   history ring is Dense. The rematerialized image includes the exact runtime-owned persistent
-  tagging payload after source-rank consensus. Selective history replay remains same-rank. Recorded
-  patch boxes and refinement topology are not regridded or inferred from opaque local publications.
+  tagging payload and the rank-consensus accepted shared-interface flux audit. Every restored
+  fragment is authenticated against the live topology, exact clock window, resolved Program weight,
+  face measure and local duration. Selective history replay remains same-rank. Recorded patch boxes
+  and refinement topology are not regridded or inferred from opaque local publications.
 - `checkpoint:regrid_on_restart` has an explicit typed `RegridOnRestart()` identity and the weaker
   `accepted_state_after_regrid` guarantee. The builtin accepted-state-v5 provider supports one
   artifact-backed AMR layout at unchanged MPI cardinality: exact accepted replay precedes one real

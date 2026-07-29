@@ -663,7 +663,7 @@ TEST(test_multiblock_interface_scheduler,
 }
 
 TEST(test_multiblock_interface_scheduler,
-     AmrProgramPublishesExactFixedHierarchyFragmentsAndRestoresReportOnRejectedAttempt) {
+     AmrProgramPersistsInterfaceFragmentsAcrossStrictRestartAndRejectedAttempt) {
   ensure_runtime();
   constexpr int cells = 4;
   AmrBuildParams params;
@@ -882,6 +882,52 @@ TEST(test_multiblock_interface_scheduler,
     EXPECT_EQ(entry.key.stage_identity, "program.group.node.44");
     EXPECT_EQ(entry.key.interval.begin.level, entry.key.clock.level);
     EXPECT_EQ(entry.key.interval.end.level, entry.key.clock.level);
+    EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 2));
+    EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.2);
+  }
+
+  // The accepted audit is part of the strict Program image, not a process-local report.  Decode the
+  // exact bytes published by the real interface execution, overwrite the live report with another
+  // accepted step, then restore and enter a rejected attempt.  Import plus rollback must recover the
+  // checkpoint report exactly; an unresolved accepted weight is rejected before facade publication.
+  const std::vector<std::uint8_t> checkpoint = facade.program_accepted_state();
+  const auto persisted = runtime::program::deserialize_amr_program_accepted_state(checkpoint);
+  ASSERT_EQ(persisted.accepted_interface_flux_ledger.size(), 2u);
+  for (const auto& entry : persisted.accepted_interface_flux_ledger) {
+    EXPECT_EQ(entry.key.stage_identity, "program.group.node.44");
+    EXPECT_TRUE(entry.measure.stage_weight_resolved);
+  }
+
+  evaluate_group(false);
+  ASSERT_EQ(context.accepted_interface_flux_fragments().size(), 3u);
+  EXPECT_EQ(context.accepted_interface_flux_fragments().front().key.stage_identity,
+            "program.group.node.42");
+  EXPECT_NE(facade.program_accepted_state(), checkpoint);
+
+  auto malformed = persisted;
+  malformed.accepted_interface_flux_ledger.front().measure.stage_weight_resolved = false;
+  const auto malformed_bytes = runtime::program::serialize_amr_program_accepted_state(malformed);
+  const auto accepted_before_malformed = facade.program_accepted_state();
+  const std::uint64_t revision_before_malformed = facade.program_accepted_state_revision();
+  EXPECT_THROW(facade.restore_checkpoint_accepted_state(malformed_bytes), std::runtime_error);
+  EXPECT_EQ(facade.program_accepted_state(), accepted_before_malformed);
+  EXPECT_EQ(facade.program_accepted_state_revision(), revision_before_malformed);
+
+  facade.restore_checkpoint_accepted_state(checkpoint);
+  EXPECT_THROW(
+      context.advance_hierarchy(0.2,
+                                [&](double) {
+                                  throw std::runtime_error(
+                                      "reject after strict interface-ledger restart import");
+                                }),
+      std::runtime_error);
+  EXPECT_EQ(facade.program_accepted_state(), checkpoint);
+  const auto& restored_fragments = context.accepted_interface_flux_fragments();
+  ASSERT_EQ(restored_fragments.size(), 2u);
+  for (const auto& entry : restored_fragments) {
+    EXPECT_EQ(entry.key.stage_identity, "program.group.node.44");
+    EXPECT_EQ(entry.key.topology_epoch, runtime.topology_epoch());
+    EXPECT_TRUE(entry.measure.stage_weight_resolved);
     EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 2));
     EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.2);
   }

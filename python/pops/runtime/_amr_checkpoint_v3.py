@@ -440,7 +440,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v6 AMR payload without mutating the native engine.
+    """Validate an accepted-state v7 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -557,7 +557,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v6 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v7 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -1156,7 +1156,7 @@ def _preflight_histories_v3(sim, d, current_ranks):
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore accepted-state v6 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v7 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function

@@ -243,7 +243,7 @@ def _accepted_tagging_hysteresis(payload):
         cursor += 8
         return value
 
-    assert encoded[:8] == b"POPSAST3"
+    assert encoded[:8] == b"POPSAST4"
     cursor = 8
     level_count = read_size()
     cursor += level_count * 40

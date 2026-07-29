@@ -3466,6 +3466,53 @@ std::vector<std::vector<std::string>> AmrSystem::program_flux_ledger_manifest() 
                     std::to_string(entry.measure.substep_duration)});
   return rows;
 }
+std::vector<std::vector<std::string>> AmrSystem::program_interface_flux_ledger_manifest() const {
+  std::vector<std::vector<std::string>> rows;
+  if (p_->program_accepted_state_.empty())
+    return rows;
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state(p_->program_accepted_state_);
+  const auto orientation = [](amr::InterfaceFluxOrientation value) {
+    switch (value) {
+      case amr::InterfaceFluxOrientation::CoarseOutward:
+        return "coarse_outward";
+      case amr::InterfaceFluxOrientation::FineOutward:
+        return "fine_outward";
+    }
+    return "invalid";
+  };
+  rows.reserve(state.accepted_interface_flux_ledger.size());
+  for (const auto& entry : state.accepted_interface_flux_ledger)
+    rows.push_back({entry.key.interface_identity,
+                    std::to_string(entry.key.topology_epoch),
+                    std::to_string(entry.key.coarse_level),
+                    std::to_string(entry.key.fine_level),
+                    std::to_string(entry.key.clock.level),
+                    std::to_string(entry.key.clock.macro_step),
+                    std::to_string(entry.key.clock.phase.numerator),
+                    std::to_string(entry.key.clock.phase.denominator),
+                    std::to_string(entry.key.clock.physical_time),
+                    entry.key.stage_identity,
+                    std::to_string(entry.key.interval.begin.level),
+                    std::to_string(entry.key.interval.begin.macro_step),
+                    std::to_string(entry.key.interval.begin.phase.numerator),
+                    std::to_string(entry.key.interval.begin.phase.denominator),
+                    std::to_string(entry.key.interval.begin.physical_time),
+                    std::to_string(entry.key.interval.end.level),
+                    std::to_string(entry.key.interval.end.macro_step),
+                    std::to_string(entry.key.interval.end.phase.numerator),
+                    std::to_string(entry.key.interval.end.phase.denominator),
+                    std::to_string(entry.key.interval.end.physical_time),
+                    orientation(entry.key.orientation),
+                    std::to_string(entry.key.left_block),
+                    std::to_string(entry.key.right_block),
+                    std::to_string(entry.measure.stage_weight.numerator),
+                    std::to_string(entry.measure.stage_weight.denominator),
+                    std::to_string(entry.measure.face_measure),
+                    std::to_string(entry.measure.substep_duration),
+                    entry.measure.stage_weight_resolved ? "resolved" : "unresolved"});
+  return rows;
+}
 std::vector<std::vector<std::string>> AmrSystem::program_sync_manifest() const {
   std::vector<std::vector<std::string>> rows;
   if (p_->program_accepted_state_.empty())
