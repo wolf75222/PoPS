@@ -1403,8 +1403,9 @@ class RuntimeInstance:
                     "max_steps exhausted before t_end: "
                     f"accepted {steps} step(s), reached t={native.time()!r}, "
                     f"requested t_end={t_end!r}")
-            if steps == 0:
-                self._fire_consumers(at_end=True)
+            # A zero-step run has no accepted final occurrence. Its start consumers were already
+            # fired above; do not fabricate an AtEnd/Always/When/Every transaction at that same
+            # native state.
             close_live = getattr(self._publisher, "close_live_visualizations", None)
             if callable(close_live):
                 close_live(manifest.run_identity)

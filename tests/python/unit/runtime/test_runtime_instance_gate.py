@@ -43,12 +43,15 @@ from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import (
     AcceptedStep,
     AdaptiveCFL,
+    Always,
     AtEnd,
+    AtStart,
     Clock,
     Every,
     ExternalTimeGrid,
     FixedDt,
     Schedule,
+    When,
     every_dt,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -1122,6 +1125,48 @@ def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):
     cursor = runtime.consumer_cursors.for_consumer(manifest.qualified_id)
     assert cursor.committed_samples == 0
     assert tuple(tmp_path.glob("*.npz")) == ()
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    (
+        lambda clock: Schedule(Always(AcceptedStep(clock))),
+        lambda clock: Schedule(Every(AcceptedStep(clock), 1)),
+        lambda clock: Schedule(AtEnd(AcceptedStep(clock))),
+        lambda clock: Schedule(When(AcceptedStep(clock), True)),
+    ),
+)
+def test_zero_step_run_does_not_fabricate_an_accepted_consumer_occurrence(
+    tmp_path, schedule
+):
+    plan, _, manifest = _with_graph(tmp_path, schedule=schedule)
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=0.0, max_steps=0)
+
+    assert report.accepted_steps == 0
+    assert (
+        runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples
+        == 0
+    )
+    assert tuple(tmp_path.glob("*.npz")) == ()
+
+
+def test_zero_step_run_keeps_exactly_one_start_occurrence(tmp_path):
+    plan, _, manifest = _with_graph(
+        tmp_path,
+        schedule=lambda clock: Schedule(AtStart(AcceptedStep(clock))),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=0.0, max_steps=0)
+
+    assert report.accepted_steps == 0
+    assert (
+        runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples
+        == 1
+    )
+    assert _published_times(tmp_path) == [0.0]
 
 
 def test_scientific_format_is_a_structural_provider_without_name_dispatch(tmp_path):
