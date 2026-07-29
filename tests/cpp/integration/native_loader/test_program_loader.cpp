@@ -3,7 +3,7 @@
 //
 // We compile AT RUNTIME a stub problem.so -- the role the codegen (Phase 2c-ii) will fill -- that
 // exports pops_program_abi_key(), the required block-identity table, and
-// pops_install_program(void* sys); the installer wraps the System in a ProgramContext and installs the
+// pops_install_program(System* sys); the installer selects the System provider and installs the
 // SAME Forward-Euler closure as the in-process test_program_runtime.
 // We then sim.install_program(so) + sim.step(dt) and check bit-parity against a reference Forward-Euler
 // step computed from the same primitives (solve_fields + eval_rhs + U + dt*R). This validates the
@@ -120,7 +120,7 @@ extern "C" bool pops_program_has_dt_bound() { return true; }
   }
   if (install_step) {
     source += R"CPP(
-extern "C" void pops_install_program(void* sys) {
+extern "C" void pops_install_program(pops::System* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
 )CPP";
     if (register_history) {
@@ -147,7 +147,7 @@ extern "C" void pops_install_program(void* sys) {
 )CPP";
   } else {
     source += R"CPP(
-extern "C" void pops_install_program(void* sys) {
+extern "C" void pops_install_program(pops::System* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
   ctx.register_history("poison", 1, 1, 0, "test:poison/state", "test:poison/space",
                        "clock.macro", "test:poison/interp");
@@ -162,7 +162,7 @@ void prepare_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, cons
 void add_boundary_residual(int, const pops::MultiFab&, pops::MultiFab&, const pops::Geometry&,
                            const pops::FieldBoundaryExecutionContext&) {}
 }  // namespace
-extern "C" void pops_install_field_boundaries(void* sys) {
+extern "C" void pops_install_field_boundaries(pops::System* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
   ctx.set_field_boundary_kernel(
 )CPP";

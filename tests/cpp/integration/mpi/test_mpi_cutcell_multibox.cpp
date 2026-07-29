@@ -20,7 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/validation/numerics/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -49,7 +49,7 @@ static double solve_l2(const Geometry& geom, const BoxArray& ba, int nc) {
                  level_set);
   mg.rhs().set_val(-4.0);
   mg.phi().set_val(0.0);
-  mg.solve_robust(1e-10, 300);
+  validation::GeometricMGValidationAccess::solve_robust(mg, 1e-10, 300);
 
   const double dx = 1.0 / nc;
   double s = 0;

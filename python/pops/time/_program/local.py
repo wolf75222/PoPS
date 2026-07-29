@@ -27,6 +27,59 @@ else:
     _ProgramBase = object
 
 
+def _prepared_local_nonlinear_controls(prepared: Any, *, where: str) -> dict[str, Any]:
+    """Validate the small immutable provider protocol and return canonical IR controls."""
+    def positive(name: str) -> Any:
+        return positive_scalar_literal(getattr(prepared, name, None), where=where + " " + name)
+
+    def nonnegative(name: str) -> Any:
+        value = getattr(prepared, name, None)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ValueError("%s %s must be a non-negative scalar" % (where, name))
+        return value if value == 0 else positive_scalar_literal(
+            value, where=where + " " + name)
+
+    def integer(name: str, *, positive_only: bool) -> int:
+        value = getattr(prepared, name, None)
+        minimum = 1 if positive_only else 0
+        if isinstance(value, bool) or not isinstance(value, int) \
+                or value < minimum or value > (1 << 31) - 1:
+            qualifier = "positive" if positive_only else "non-negative"
+            raise ValueError("%s %s must be a %s int" % (where, name, qualifier))
+        return value
+
+    safeguard = getattr(prepared, "safeguard", None)
+    if safeguard not in ("exact", "damped", "backtracking"):
+        raise ValueError("%s safeguard is not a supported prepared policy" % where)
+    damping = getattr(prepared, "damping", None)
+    minimum_step = getattr(prepared, "minimum_step", None)
+    armijo = getattr(prepared, "armijo", None)
+    if not isinstance(damping, (int, float)) or isinstance(damping, bool) \
+            or damping <= 0 or damping > 1:
+        raise ValueError("%s damping must be in (0, 1]" % where)
+    if safeguard == "exact" and damping != 1:
+        raise ValueError("%s safeguard='exact' requires damping=1" % where)
+    if not isinstance(minimum_step, (int, float)) or isinstance(minimum_step, bool) \
+            or minimum_step <= 0 or minimum_step > damping:
+        raise ValueError("%s minimum_step must be in (0, damping]" % where)
+    if not isinstance(armijo, (int, float)) or isinstance(armijo, bool) \
+            or armijo <= 0 or armijo >= 1:
+        raise ValueError("%s armijo must be in (0, 1)" % where)
+    return {
+        "tol": positive("tolerance"),
+        "relative_tol": nonnegative("relative_tolerance"),
+        "step_tol": nonnegative("step_tolerance"),
+        "max_iter": integer("max_iterations", positive_only=True),
+        "max_evaluations": integer("max_evaluations", positive_only=False),
+        "fd_eps": positive("finite_difference_step"),
+        "safeguard": safeguard,
+        "damping": positive("damping"),
+        "max_backtracks": integer("max_backtracks", positive_only=False),
+        "minimum_step": positive("minimum_step"),
+        "armijo": positive("armijo"),
+    }
+
+
 class _ProgramLocal(_ProgramConstants, _ProgramBase):
     """Local solves, matrix-free operators, laplacian/gradient/divergence and the coefficiented apply."""
 
@@ -150,14 +203,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         op = resolve_operator_handle(
             self, operator, where="solve", expected_kinds="coupled_rate", values=values)
         self._check_call_args(op, values)
-        tol_literal = positive_scalar_literal(
-            getattr(prepared, "tolerance", None), where="solve: solver tolerance")
-        fd_eps_literal = positive_scalar_literal(
-            getattr(prepared, "finite_difference_step", None),
-            where="solve: solver finite_difference_step")
-        max_iter = getattr(prepared, "max_iterations", None)
-        if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
-            raise ValueError("solve solver max_iterations must be a positive int")
+        controls = _prepared_local_nonlinear_controls(
+            prepared, where="solve: solver")
         bundle = op.signature.output
         by_name = {block_name(value.block): value for value in values}
         missing = tuple(output for output in bundle.keys() if output not in by_name)
@@ -186,8 +233,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
              "method": "newton", "solver_identity": prepared.identity.token,
              "problem_kind": "coupled_implicit_euler",
              "coefficient": coefficient,
-             "tol": tol_literal, "max_iter": int(max_iter),
-             "fd_eps": fd_eps_literal, "output_count": len(blocks)},
+             **controls, "output_count": len(blocks)},
             token_name, blocks[0], point=result_points[0])
 
         def project(outcome: Any) -> Any:
@@ -226,23 +272,15 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         kernel re-evaluates at ``U`` and at the finite-difference perturbations ``U + eps*e_j``. A
         two-argument ``residual_fn(P, U)`` (ignoring the guess) is also accepted.
 
-        @p initial_guess is the start State ``U0`` (typically ``U^n``); it seeds the Newton iterate and
-        the residual reads it as a frozen per-cell constant. @p method is ``"newton"`` (the only
-        method). @p tol is the convergence threshold on ``max_c |r_c|`` (per cell) and @p max_iter the
-        iteration budget (the kernel runs a fixed C++ ``for`` bounded by @p max_iter, breaking early
-        once ``|r| < tol``).
+        @p initial_guess is the start State ``U0`` (typically ``U^n``); it seeds the immutable
+        prepared problem and the residual reads it as a frozen per-cell constant.  The solver
+        descriptor contributes explicit tolerances, evaluation/iteration budgets, scaling-free
+        finite-difference controls and a safeguard policy.  Those controls are hashed on the IR.
 
-        @p fd_eps (ADC-617) is the RELATIVE finite-difference step of the in-kernel Jacobian columns:
-        the perturbation is ``fd_eps * max(|U_j|, 1)``. ``None`` keeps the historical ``1e-7``. Because
-        the value is EMITTED into the C++ kernel, it is stored on the IR node and so participates in
-        the program hash / compile cache key -- two programs differing only in ``fd_eps`` never share a
-        cached ``.so``. Must be a positive number when given.
-
-        The Jacobian is formed in-kernel by finite differences (``J_ij = (r_i(U+eps e_j) - r_i(U))/eps``)
-        and the Newton step ``J dU = -r`` is solved with the SAME stack-only dense inverse
-        (``pops::detail::mat_inverse<N>``) `solve_local_linear` uses -- so the kernel is heap-free
-        / allocation-free / dispatch-free (no ``std::function`` / Eigen / ``std::vector``). Its dense
-        storage is specialized to the model manifest's exact component count."""
+        Generated code contributes only the residual functor.  The shared native provider owns the
+        iterations, finite-difference/analytic Jacobian contract, pivoted linear solve and outcome.
+        It returns a transaction-local candidate plus diagnostics; no candidate is publishable until
+        the collective ``SolveReport`` has been consumed."""
         if not callable(residual):
             raise ValueError(
                 "solve_local_nonlinear: residual must be an IR-building callable "
@@ -251,15 +289,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError(
                 "solve_local_nonlinear: initial_guess must be a State value (initial_guess=...)")
         require_top_level(self, initial_guess, "solve_local_nonlinear")
-        tol_literal = positive_scalar_literal(
-            getattr(prepared, "tolerance", None), where="LocalNewton tolerance")
-        max_iter = getattr(prepared, "max_iterations", None)
-        if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
-            raise ValueError(
-                "LocalNewton max_iterations must be a positive int (got %r)" % (max_iter,))
-        fd_eps_literal = positive_scalar_literal(
-            getattr(prepared, "finite_difference_step", None),
-            where="LocalNewton finite_difference_step")
+        controls = _prepared_local_nonlinear_controls(
+            prepared, where="LocalNewton")
         if self._recording:
             raise NotImplementedError(
                 "solve_local_nonlinear: recording a residual inside another sub-block (apply / while "
@@ -300,12 +331,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             "state", "solve_local_nonlinear", (initial_guess,),
             {"residual_block": sub, "residual_region": residual_region,
              "residual": r, "iterate": iterate, "guess": guess_ph,
-             "tol": tol_literal, "max_iter": int(max_iter), "method": "newton",
+             **controls, "method": "newton",
              "problem_kind": "local_residual",
              "solver_identity": prepared.identity.token,
-             # ADC-617: the FD Jacobian relative step. None -> the historical 1e-7 literal. Stored on
-             # the node so the generic attrs hash (_ir_hash) busts the compile cache when it changes.
-            "fd_eps": fd_eps_literal}, name, block,
+            }, name, block,
             space=initial_guess.space)
         from pops.time.solve_outcome import SolveOutcome
 

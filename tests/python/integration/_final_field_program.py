@@ -48,7 +48,7 @@ from pops.params import RuntimeParam
 from pops.physics import Model
 from pops.projection import ConservativeCellAverage
 from pops.solvers.elliptic import GeometricMG
-from pops.time import every
+from pops.time import every, on_start
 
 
 ProgramFactory = Callable[[Any, Any, Any], Any]
@@ -188,6 +188,7 @@ def resolve_periodic_field_program(
     components: tuple[Any, ...] = (),
     cxx: str | None = None,
     include: str | None = None,
+    strict_restart: bool = False,
 ) -> Any:
     """Return the exact public resolved plan consumed by one native integration compile."""
     if target not in {"system", "amr_system"}:
@@ -228,6 +229,20 @@ def resolve_periodic_field_program(
     )
     program = factory(state_instance, rate, field_instance)
     case.program(program)
+    if strict_restart:
+        from pops.output import Checkpoint, ConsumerGraph
+
+        case.consumers(
+            ConsumerGraph.from_consumers(
+                (
+                    Checkpoint(
+                        schedule=on_start(clock=program.clock),
+                        target="checkpoints/strict",
+                        bit_identical=True,
+                    ),
+                )
+            )
+        )
 
     if target == "system":
         grid_frame = _frame("%s-uniform-grid" % name)

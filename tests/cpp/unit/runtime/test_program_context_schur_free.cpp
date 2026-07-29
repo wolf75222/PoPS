@@ -44,7 +44,7 @@ TEST(ProgramContextSchurFree, HeaderIsSelfContainedAndBuilds) {
   // Reaching this TEST means program_context.hpp compiled standalone (no Schur/MG/Lorentz headers).
   // Constructing a ProgramContext from a null System* is well-defined here: we never dereference it,
   // we only exercise that the type is instantiable from the facade header by itself.
-  pops::runtime::program::ProgramContext ctx(static_cast<void*>(nullptr));
+  pops::runtime::program::ProgramContext ctx(static_cast<pops::System*>(nullptr));
   (void)ctx;
   SUCCEED() << "program_context.hpp builds without any coupling/schur/** dependency";
 }
@@ -55,15 +55,40 @@ template <bool Amr>
 class ExecutionServicesFixture
     : public pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>> {
  public:
+  using SharedServices =
+      pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
+
   explicit ExecutionServicesFixture(int active_level) : active_level_(active_level) {}
 
   int last_params_block() const { return last_params_block_; }
   int field_update_count() const { return field_update_count_; }
   pops::Real diagnostic(const std::string& name) const { return diagnostics_.at(name); }
+  double logical_dt() const { return logical_dt_; }
+  void fail_next_logical_apply() { fail_logical_apply_ = true; }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
 
+  struct LogicalRollback {
+    double dt = 0.0;
+  };
+
+  double program_execution_logical_parent_dt_() const noexcept { return logical_dt_; }
+  LogicalRollback program_execution_capture_logical_evaluation_() const noexcept {
+    return {logical_dt_};
+  }
+  void program_execution_apply_logical_evaluation_(
+      const typename SharedServices::LogicalEvaluationInterval& interval) const {
+    logical_dt_ = interval.child_dt;
+    if (fail_logical_apply_) {
+      fail_logical_apply_ = false;
+      throw std::runtime_error("injected logical projection failure");
+    }
+  }
+  void program_execution_restore_logical_evaluation_(
+      const LogicalRollback& rollback) const noexcept {
+    logical_dt_ = rollback.dt;
+  }
   const std::vector<int>& program_execution_block_map_() const { return block_map_; }
   int program_execution_block_count_() const { return 2; }
   pops::Real program_execution_physical_time_() const { return pops::Real(3.5); }
@@ -89,13 +114,24 @@ class ExecutionServicesFixture
   pops::runtime::program::Profiler& program_execution_profiler_() const { return profiler_; }
   int program_execution_macro_step_() const { return 4; }
   int program_execution_active_level_() const { return active_level_; }
+  typename SharedServices::ProgramResourceTopology program_execution_resource_topology_()
+      const noexcept {
+    return {11, 17, Amr ? 3 : 1};
+  }
+  int program_execution_resource_level_() const noexcept { return resource_level_; }
+  void program_execution_select_resource_level_(int selected) const noexcept {
+    resource_level_ = selected;
+  }
 
   int active_level_ = -1;
+  mutable int resource_level_ = Amr ? 1 : 0;
   std::vector<int> block_map_{1, 0};
   mutable std::map<std::string, pops::Real> diagnostics_;
   mutable int last_params_block_ = -1;
   mutable int field_update_count_ = 0;
   mutable pops::runtime::program::Profiler profiler_;
+  mutable double logical_dt_ = 0.4;
+  mutable bool fail_logical_apply_ = false;
 };
 
 template <class Context>
@@ -120,6 +156,42 @@ void expect_shared_program_services(Context& context, bool amr) {
   }
   subcycle.finish();
   context.synchronize_sample_and_hold("clock.macro", "clock.fast", 4, pops::Real(0));
+
+  EXPECT_DOUBLE_EQ(context.logical_dt(), 0.4);
+  {
+    auto child = context.logical_evaluation_scope(1, 2);
+    EXPECT_DOUBLE_EQ(static_cast<double>(child.dt()), 0.2);
+    EXPECT_DOUBLE_EQ(context.logical_dt(), 0.2);
+  }
+  EXPECT_DOUBLE_EQ(context.logical_dt(), 0.4);
+  context.fail_next_logical_apply();
+  EXPECT_THROW((void)context.logical_evaluation_scope(0, 2), std::runtime_error);
+  EXPECT_DOUBLE_EQ(context.logical_dt(), 0.4)
+      << "the shared RAII scope restores a provider that throws after partial mutation";
+
+  const auto topology = context.program_resource_topology();
+  EXPECT_EQ(topology.epoch, 11);
+  EXPECT_EQ(topology.generation, 17);
+  EXPECT_EQ(topology.levels, amr ? 3 : 1);
+  const int incoming_resource_level = context.level();
+  const int selected_resource_level = amr ? 2 : 0;
+  context.with_program_resource_level(
+      selected_resource_level, [&]() { EXPECT_EQ(context.level(), selected_resource_level); });
+  EXPECT_EQ(context.level(), incoming_resource_level);
+  EXPECT_THROW(
+      context.with_program_resource_level(
+          selected_resource_level, []() { throw std::runtime_error("injected body failure"); }),
+      std::runtime_error);
+  EXPECT_EQ(context.level(), incoming_resource_level)
+      << "the shared topology scope restores the provider cursor after a body failure";
+  std::vector<int> visited_levels;
+  context.for_each_program_resource_level([&](int level) {
+    EXPECT_EQ(context.level(), level);
+    visited_levels.push_back(level);
+  });
+  EXPECT_EQ(visited_levels, amr ? std::vector<int>({0, 1, 2}) : std::vector<int>({0}));
+  EXPECT_EQ(context.level(), incoming_resource_level);
+  EXPECT_THROW(context.set_level(topology.levels), std::out_of_range);
 
   EXPECT_EQ(context.sys_block(0), 1);
   EXPECT_EQ(context.sys_block(1), 0);

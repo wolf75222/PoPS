@@ -10,7 +10,7 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/validation/numerics/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -56,12 +56,12 @@ TEST(test_solve_robust, converges_on_divergent_case_and_is_not_sticky) {
   const double dx = 1.0 / 640;
   set_ring_rhs(mg, 640, dx);
   const double r0 = mg.residual();
-  const int n1 = mg.solve_robust(1e-8, 50);
+  const int n1 = validation::GeometricMGValidationAccess::solve_robust(mg, 1e-8, 50);
   const double rfin = mg.residual();
   EXPECT_TRUE(rfin < 1e-6 * r0) << "convergence_sur_cas_divergent r0=" << r0 << " rfin=" << rfin;
 
   set_ring_rhs(mg, 640, dx);  // remise a froid (phi=0, meme RHS)
-  const int n2 = mg.solve_robust(1e-8, 50);
+  const int n2 = validation::GeometricMGValidationAccess::solve_robust(mg, 1e-8, 50);
   // sticky -> n2 < n1
   EXPECT_EQ(n1, n2) << "durcissement_local_non_sticky";
   std::printf("solve_robust eff640 : r0=%.2e rfin=%.2e ratio=%.2e cyc=%d puis %d (egaux=%d)\n", r0,
@@ -75,7 +75,7 @@ TEST(test_solve_robust, matches_solve_bit_identical_when_convergent) {
   set_ring_rhs(a, 224, dx);
   set_ring_rhs(b, 224, dx);
   a.solve(1e-8, 50);
-  b.solve_robust(1e-8, 50);
+  validation::GeometricMGValidationAccess::solve_robust(b, 1e-8, 50);
   MultiFab diff = a.phi();
   saxpy(diff, Real(-1), b.phi());
   const double md = norm_inf(diff);

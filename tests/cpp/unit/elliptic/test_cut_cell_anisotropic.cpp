@@ -11,7 +11,7 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>
+#include <pops/validation/numerics/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -50,7 +50,7 @@ static double solve_err_aniso(int nc, double ex, double ey) {
                                                [ey](Real, Real) { return Real(ey); }));
   mg.rhs().set_val(Real(-2.0 * (ex + ey)));  // f = div(diag(ex,ey) grad(R^2-r^2)) = -2(ex+ey)
   mg.phi().set_val(0.0);
-  mg.solve_robust(1e-10, 300);
+  validation::GeometricMGValidationAccess::solve_robust(mg, 1e-10, 300);
   const double dx = 1.0 / nc;
   const ConstArray4 p = mg.phi().fab(0).const_array();
   double s = 0;
@@ -93,12 +93,12 @@ TEST(test_cut_cell_anisotropic, degenerate_matches_isotropic) {
                                constant_scalar_field_provider(Real(1)));
   mg_a.rhs().set_val(Real(-4.0));
   mg_a.phi().set_val(0.0);
-  mg_a.solve_robust(1e-10, 300);
+  validation::GeometricMGValidationAccess::solve_robust(mg_a, 1e-10, 300);
 
   GeometricMG mg_p = make_mg(nc);  // sans eps : operateur lap
   mg_p.rhs().set_val(Real(-4.0));
   mg_p.phi().set_val(0.0);
-  mg_p.solve_robust(1e-10, 300);
+  validation::GeometricMGValidationAccess::solve_robust(mg_p, 1e-10, 300);
 
   const ConstArray4 pa = mg_a.phi().fab(0).const_array();
   const ConstArray4 pp = mg_p.phi().fab(0).const_array();

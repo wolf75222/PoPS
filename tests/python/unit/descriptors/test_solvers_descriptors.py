@@ -160,12 +160,51 @@ def test_nonlinear_surface_contains_only_executable_descriptors():
     assert local.to_data() == {
         "scheme": "newton",
         "tolerance": 1e-10,
+        "relative_tolerance": 0.0,
+        "step_tolerance": 0.0,
         "max_iterations": 12,
+        "max_evaluations": 0,
         "finite_difference_step": 1e-6,
+        "safeguard": "exact",
+        "damping": 1.0,
+        "max_backtracks": 12,
+        "minimum_step": 1.0 / 4096.0,
+        "armijo": 1.0e-4,
     }
     global_newton = nonlinear.Newton(restart=51)
     assert global_newton.options()["restart"] == 51
     assert global_newton.available().ok is True
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_evaluations": -1}, "max_evaluations"),
+        ({"max_iterations": 1 << 31}, "max_iterations"),
+        ({"max_evaluations": 1 << 31}, "max_evaluations"),
+        ({"max_backtracks": 1 << 31}, "max_backtracks"),
+        ({"safeguard": "fallback"}, "safeguard"),
+        ({"damping": 0.0}, "damping"),
+        ({"damping": 1.1}, "damping"),
+        ({"damping": 0.5}, "safeguard='exact'"),
+        ({"safeguard": "damped", "damping": 0.25, "minimum_step": 0.5}, "minimum_step"),
+        ({"armijo": 1.0}, "armijo"),
+    ],
+)
+def test_local_newton_prepared_controls_fail_during_authoring(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        nonlinear.LocalNewton(**kwargs)
+
+
+def test_local_newton_allows_one_exact_fixed_step():
+    descriptor = nonlinear.LocalNewton(damping=1.0, minimum_step=1.0)
+    assert descriptor.minimum_step == 1.0
+
+
+def test_local_newton_damping_requires_an_explicit_damped_safeguard():
+    descriptor = nonlinear.LocalNewton(safeguard="damped", damping=0.5)
+    assert descriptor.safeguard == "damped"
+    assert descriptor.damping == 0.5
 
 
 # --- the RICH GeometricMG elliptic solver ------------------------------------------------
