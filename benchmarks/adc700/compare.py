@@ -57,6 +57,39 @@ def _median_and_mad(values: list[float]) -> tuple[float, float]:
     return median, mad
 
 
+def _read_device_assignments(path: Path, mpi_ranks: int) -> list[dict[str, Any]]:
+    assignments: list[dict[str, Any]] = []
+    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw.strip():
+            continue
+        columns = raw.split("\t")
+        if len(columns) != 2:
+            raise CampaignError(
+                f"{path}:{line_number}: expected '<rank>\\t<device UUID>'"
+            )
+        try:
+            rank = int(columns[0])
+        except ValueError as error:
+            raise CampaignError(
+                f"{path}:{line_number}: device rank must be an integer"
+            ) from error
+        device_uuid = columns[1].strip()
+        if not device_uuid:
+            raise CampaignError(f"{path}:{line_number}: device UUID is empty")
+        assignments.append({"rank": rank, "uuid": device_uuid})
+
+    observed_ranks = [assignment["rank"] for assignment in assignments]
+    expected_ranks = list(range(mpi_ranks))
+    if sorted(observed_ranks) != expected_ranks:
+        raise CampaignError(
+            f"device assignments cover ranks {sorted(observed_ranks)}, expected {expected_ranks}"
+        )
+    device_uuids = [assignment["uuid"] for assignment in assignments]
+    if len(set(device_uuids)) != mpi_ranks:
+        raise CampaignError("each MPI rank must be assigned one distinct device UUID")
+    return sorted(assignments, key=lambda assignment: int(assignment["rank"]))
+
+
 def _validate_common(
     rows: list[dict[str, Any]],
     baseline_revision: str,
@@ -198,24 +231,16 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
     execution_space, mpi_ranks = _validate_common(
         rows, args.baseline_revision, args.candidate_revision
     )
-    inventory = [
-        line.strip()
-        for line in args.device_inventory.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    if len(inventory) < mpi_ranks:
-        raise CampaignError(
-            f"device inventory exposes {len(inventory)} devices for {mpi_ranks} MPI ranks"
-        )
+    assignments = _read_device_assignments(args.device_inventory, mpi_ranks)
 
     performance = _performance(rows, args.threshold)
     numerical = _numerical_parity(rows, args.signature_rtol, args.signature_atol)
     device = {
         "passed": True,
         "execution_space": execution_space,
-        "inventory": inventory,
+        "assignments": assignments,
         "mpi_ranks": mpi_ranks,
-        "one_device_per_rank_provisioned": len(inventory) >= mpi_ranks,
+        "one_distinct_device_per_rank": True,
     }
     passed = performance["passed"] and numerical["passed"] and device["passed"]
     return {
