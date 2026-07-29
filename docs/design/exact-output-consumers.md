@@ -446,6 +446,11 @@ ScientificOutput(
 )
 ```
 
+`AsyncScientificOutput(..., diagnostics=(Balance(mass, block=fluid),))` uses the same exact
+schedule and transaction. Its reductions are completed on the simulation thread before detachment;
+the post-commit worker receives only immutable arrays and scalar payloads, never the native mailbox
+or communicator facade.
+
 Each argument to `record_balance` is a signed, time-integrated native Program sum/dot reduction,
 or scalar arithmetic composed only from such reductions and exact literals.
 The reported residual is `storage_change + outward_boundary_flux - sources - reflux - projection`.
@@ -474,13 +479,24 @@ operation, that shared producer remains unconditional so cadence fusion cannot c
 semantics. A `Balance` consumer with no matching five-term `Program.record_balance` producer fails
 before native code generation. Program stride/substeps use one attempt-local outer accepted-step
 target, so every substep of one due public step sees the same decision and accumulates into the same
-attempt mailbox.
+attempt mailbox. The cadence is authored once as part of the Program identity, for example
+`program.cadence(substeps=2, stride=3)`, then authenticated and installed before runtime freeze on
+both Uniform and AMR targets. A stride-held public step executes no Program work and therefore
+publishes the exact additive-identity balance (all five terms are zero); a due Program that omits
+even one term still fails closed. Accepted-step periods larger than the native signed-32-bit ceiling
+can never fire in a representable run and are compiled off instead of being narrowed into C++.
+Selective checkpoint reconstruction may re-execute the Program to rebuild omitted history slots,
+but that work is not a public accepted step. Uniform and AMR replay therefore enter an explicit
+native replay guard: every Balance due query returns false, no term reaches the accepted-attempt
+mailbox, and the guard is restored on both success and exception. The replay still executes all
+non-Balance scientific operations needed to reconstruct the history exactly.
 
 This first sparse cutover is exact only for accepted-step `every(n)` schedules. Physical-time
 `every_dt`, `on_end`, and extension domains/triggers remain conservatively active for every Program
 invocation; their consumer still publishes only when its own runtime schedule is due, but upstream
 balance reductions are not yet skipped. This fallback can add work but cannot suppress required
-evidence.
+evidence. A zero-step run has no accepted native occurrence: its coincident start/end moment cannot
+publish an accepted-step consumer, including `Balance`.
 
 This route is explicit evidence, not automatic numerical instrumentation: a Program that cannot
 produce its actual reflux or projection increment cannot declare `Balance`. In particular, the
