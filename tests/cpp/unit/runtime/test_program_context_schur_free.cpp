@@ -254,7 +254,9 @@ class ExecutionServicesFixture
     source_state_ = &state;
     source_rhs_ = &rhs;
   }
-  bool program_execution_is_polar_geometry_() const noexcept { return false; }
+  typename SharedServices::ProgramMetricGeometry program_execution_metric_geometry_() const {
+    return {false, pops::Real(0), pops::Real(1)};
+  }
   pops::GridContext program_execution_default_grid_context_() const {
     const pops::Box2D domain = pops::Box2D::from_extents(4, 4);
     pops::GridContext context;

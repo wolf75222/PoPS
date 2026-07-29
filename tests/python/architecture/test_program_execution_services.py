@@ -38,6 +38,7 @@ SHARED_SIGNATURES = (
     "struct ProgramResourceStorage",
     "struct ProgramResourceTopology",
     "struct ProgramClockCoordinate",
+    "struct ProgramMetricGeometry",
     "class ExclusiveUseGuard",
     "static bool field_layout_matches_(",
     "ProgramRuntimeState& program_runtime_state_()",
@@ -61,6 +62,7 @@ SHARED_SIGNATURES = (
     "bool is_polar_geometry(",
     "Real radial_origin(",
     "Real radial_spacing(",
+    "ProgramMetricGeometry metric_geometry(",
     "MultiFab rhs_scratch_like(",
     "MultiFab scratch_state_like(",
     "MultiFab& rhs_scratch(",
@@ -297,9 +299,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_apply_projection_",
             "program_execution_hmin_",
             "program_execution_max_wave_speed_",
-            "program_execution_is_polar_geometry_",
-            "program_execution_radial_origin_",
-            "program_execution_radial_spacing_",
+            "program_execution_metric_geometry_",
             "program_execution_apply_polar_tensor_",
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
@@ -682,21 +682,31 @@ def test_shared_geometry_queries_leave_only_terminal_metric_facts_in_providers()
     shared = _read(SHARED)
     uniform = _read(UNIFORM)
     amr = _read(AMR)
-    for query, hook in (
-        ("bool is_polar_geometry()", "program_execution_is_polar_geometry_"),
-        ("Real radial_origin()", "program_execution_radial_origin_"),
-        ("Real radial_spacing()", "program_execution_radial_spacing_"),
+    assert "struct ProgramMetricGeometry" in shared
+    assert "ProgramMetricGeometry metric_geometry()" in shared
+    for query in (
+        "bool is_polar_geometry()",
+        "Real radial_origin()",
+        "Real radial_spacing()",
     ):
         assert shared.count(query) == 1
-        assert hook in shared
         assert query not in uniform
         assert query not in amr
-    assert "return sys_->program_is_polar();" in uniform
-    assert "sys_->program_polar_geometry().r_min" in uniform
-    assert "sys_->program_polar_geometry().dr()" in uniform
-    assert "program_execution_is_polar_geometry_() const noexcept { return false; }" in amr
-    assert "program_execution_radial_origin_() const noexcept { return Real(0); }" in amr
-    assert "return eng_->level_geom(level_).dx();" in amr
+    assert shared.count("program_execution_metric_geometry_") >= 1
+    assert uniform.count("program_execution_metric_geometry_") == 1
+    assert amr.count("program_execution_metric_geometry_") == 1
+    for retired_hook in (
+        "program_execution_is_polar_geometry_",
+        "program_execution_radial_origin_",
+        "program_execution_radial_spacing_",
+    ):
+        assert retired_hook not in shared
+        assert retired_hook not in uniform
+        assert retired_hook not in amr
+    assert "const PolarGeometry& geometry = sys_->program_polar_geometry();" in uniform
+    assert "return {true, geometry.r_min, geometry.dr()};" in uniform
+    assert "return {false, Real(0), sys_->grid_context().geom.dx()};" in uniform
+    assert "return {false, Real(0), eng_->level_geom(level_).dx()};" in amr
 
 
 def test_shared_commit_many_owns_layout_and_alias_semantics():

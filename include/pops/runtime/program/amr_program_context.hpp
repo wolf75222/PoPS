@@ -3083,9 +3083,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
     return eng_->level_max_speed(static_cast<std::size_t>(runtime_block), level_, state);
   }
-  bool program_execution_is_polar_geometry_() const noexcept { return false; }
-  Real program_execution_radial_origin_() const noexcept { return Real(0); }
-  Real program_execution_radial_spacing_() const { return eng_->level_geom(level_).dx(); }
+  ProgramMetricGeometry program_execution_metric_geometry_() const {
+    return {false, Real(0), eng_->level_geom(level_).dx()};
+  }
   [[noreturn]] void program_execution_apply_polar_tensor_(MultiFab&, MultiFab&, const MultiFab*,
                                                           const MultiFab*, const MultiFab*,
                                                           const MultiFab*) const {

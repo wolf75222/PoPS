@@ -726,13 +726,12 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
     return sys_->block_max_speed(runtime_block, state);
   }
-  bool program_execution_is_polar_geometry_() const { return sys_->program_is_polar(); }
-  Real program_execution_radial_origin_() const {
-    return sys_->program_is_polar() ? sys_->program_polar_geometry().r_min : Real(0);
-  }
-  Real program_execution_radial_spacing_() const {
-    return sys_->program_is_polar() ? sys_->program_polar_geometry().dr()
-                                    : sys_->grid_context().geom.dx();
+  ProgramMetricGeometry program_execution_metric_geometry_() const {
+    if (sys_->program_is_polar()) {
+      const PolarGeometry& geometry = sys_->program_polar_geometry();
+      return {true, geometry.r_min, geometry.dr()};
+    }
+    return {false, Real(0), sys_->grid_context().geom.dx()};
   }
   void program_execution_apply_polar_tensor_(MultiFab& out, MultiFab& in, const MultiFab* a_xx,
                                              const MultiFab* a_yy, const MultiFab* a_xy,

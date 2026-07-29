@@ -150,6 +150,12 @@ class ProgramExecutionServices {
     int active_level = -1;
   };
 
+  struct ProgramMetricGeometry {
+    bool polar = false;
+    Real radial_origin = Real(0);
+    Real radial_spacing = Real(0);
+  };
+
  protected:
   /// Scope one mutable prepared workspace to a single synchronous Program operation.
   ///
@@ -521,14 +527,19 @@ class ProgramExecutionServices {
     return provider_().program_execution_max_wave_speed_(sys_block(block), state);
   }
 
+  /// Metric geometry captured in one topology-qualified provider read.
+  ProgramMetricGeometry metric_geometry() const {
+    return provider_().program_execution_metric_geometry_();
+  }
+
   /// Whether generated metric-aware operators execute on a polar mesh.
-  bool is_polar_geometry() const { return provider_().program_execution_is_polar_geometry_(); }
+  bool is_polar_geometry() const { return metric_geometry().polar; }
 
   /// Physical radial origin used by generated metric-aware operators.
-  Real radial_origin() const { return provider_().program_execution_radial_origin_(); }
+  Real radial_origin() const { return metric_geometry().radial_origin; }
 
   /// Physical radial cell spacing used by generated metric-aware operators.
-  Real radial_spacing() const { return provider_().program_execution_radial_spacing_(); }
+  Real radial_spacing() const { return metric_geometry().radial_spacing; }
 
   MultiFab rhs_scratch_like(const MultiFab& prototype) const {
     MultiFab scratch(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
@@ -1454,7 +1465,7 @@ class ProgramExecutionServices {
     active_operator_snapshot_revision_ = 0;
   }
   void require_lane_or_prepared_laplacian_() const {
-    if (provider_().program_execution_is_polar_geometry_())
+    if (metric_geometry().polar)
       throw std::logic_error(
           "lane-isolated or prepared Program laplacian requires an explicit polar tensor "
           "operator");
@@ -1469,7 +1480,7 @@ class ProgramExecutionServices {
     if (coefficient_count != 0 && coefficient_count != 4)
       throw std::logic_error(
           "Program tensor Laplacian requires all four authored coefficient fields");
-    if (provider_().program_execution_is_polar_geometry_()) {
+    if (metric_geometry().polar) {
       provider_().program_execution_apply_polar_tensor_(out, in, a_xx, a_yy, a_xy, a_yx);
       return;
     }
