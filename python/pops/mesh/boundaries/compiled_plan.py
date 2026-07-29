@@ -194,6 +194,18 @@ class CompiledBoundaryPlan:
             if not isinstance(face, dict) or face.get("type") not in {
                     "periodic", "foextrap", "dirichlet", "slip_wall", "external"}:
                 raise ValueError("compiled boundary face has no executable producer type")
+            representation = face.get("representation", "conservative")
+            converter = face.get("converter")
+            if representation not in {"conservative", "primitive"}:
+                raise ValueError("compiled boundary face has no executable state representation")
+            if representation == "conservative" and converter is not None:
+                raise ValueError(
+                    "compiled conservative boundary face must not invent a converter")
+            if representation == "primitive" and (
+                    face["type"] != "dirichlet" or not isinstance(converter, str)
+                    or not converter):
+                raise ValueError(
+                    "compiled primitive boundary face requires one exact fixed-state converter")
             if face["type"] in {"periodic", "foextrap", "slip_wall", "external"}:
                 values = [0.0] * ncomp
             else:
@@ -218,6 +230,8 @@ class CompiledBoundaryPlan:
                 "geometry": face.get("geometry"),
                 "producer": face.get("producer"),
                 "type": face["type"],
+                "representation": representation,
+                "converter": converter,
                 "values": values,
             })
         faces.sort(key=lambda row: row["ordinal"])

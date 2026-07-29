@@ -1,9 +1,10 @@
 /// @file
-/// @brief Executable, immutable boundary authority prepared before block construction.
+/// @brief Executable boundary authority finalized before numerical execution.
 ///
 /// A PreparedBoundaryPlan is the executable native transport-face lowering of one resolved
-/// GhostProducerPlan. Resolution and string/Handle dispatch happen once during installation, never
-/// in a face-cell loop. The executed order is:
+/// GhostProducerPlan. Resolution, one-time model conversion, component preparation and
+/// string/Handle dispatch happen before a session is retained, never in a face-cell loop. The
+/// executed order is:
 ///
 ///   same-level/MPI + prepared periodic identifications -> physical faces.
 ///
@@ -23,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <stdexcept>
@@ -203,6 +205,21 @@ class PreparedBoundaryPlan {
   int required_depth() const { return required_depth_; }
   int ncomp() const { return hyperbolic_boundary_.ncomp(); }
   const PreparedHyperbolicBoundary<2>& hyperbolic_boundary() const { return hyperbolic_boundary_; }
+  bool requires_fixed_state_conversion() const {
+    return hyperbolic_boundary_.requires_fixed_state_conversion();
+  }
+  /// Complete one model-dependent preparation step before any execution session is retained.
+  ///
+  /// The revision increment invalidates any session or dependency token created too early instead
+  /// of allowing it to observe a changed numerical table.
+  void prepare_fixed_state_conversion(
+      const std::function<void(const double*, double*)>& primitive_to_conservative) {
+    if (!requires_fixed_state_conversion())
+      return;
+    hyperbolic_boundary_ =
+        hyperbolic_boundary_.with_converted_fixed_states(primitive_to_conservative);
+    ++component_revision_;
+  }
   const std::vector<PeriodicIdentification2D>& periodic_identifications() const noexcept {
     return periodic_identifications_;
   }

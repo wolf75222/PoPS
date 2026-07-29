@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include "explicit_amr_program.hpp"
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/config/model_spec.hpp>
@@ -389,6 +390,62 @@ TEST(test_amr_system_contract, Runs) {
       }
     }
   }
+}
+
+TEST(test_amr_system_contract, PrimitiveFixedStateUsesTheConcreteAmrBlockModelConversion) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {false, false};
+  AmrSystem system(cfg);
+  const std::string state_identity = "case::block::fluid::state::U";
+  system.install_block_state_route("fluid", state_identity);
+  std::vector<double> face_values;
+  for (const double primitive : {2.0, 3.0, -1.0})
+    face_values.insert(face_values.end(), {0.0, primitive, 0.0, 0.0});
+  system.install_boundary_plan("fluid", "case::block::fluid::boundary", 2,
+                               {"foextrap", "dirichlet", "foextrap", "foextrap"}, face_values,
+                               {"case::block::fluid::xlo", "case::block::fluid::xhi",
+                                "case::block::fluid::ylo", "case::block::fluid::yhi"},
+                               {"Density", "MomentumX", "MomentumY"}, {}, state_identity, {}, {},
+                               {"conservative", "primitive", "conservative", "conservative"},
+                               {"", "case::block::fluid::model-p2c", "", ""});
+  system.add_block("fluid", magnetic_fluid_spec(), "minmod", "rusanov", "conservative", "explicit",
+                   1);
+  (void)system.mass("fluid");
+
+  AmrRuntime* runtime = system.engine();
+  ASSERT_NE(runtime, nullptr);
+  MultiFab& state = runtime->level_state(0, 0);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      for (int component = 0; component < 3; ++component)
+        values(i, j, component) = Real(1);
+    });
+  }
+  device_fence();
+  MultiFab rhs = runtime->level_scalar_field(0, state.ncomp(), 0);
+  runtime->level_rhs_into(0, 0, state, rhs);
+  device_fence();
+  state.sync_host();
+
+  const Box2D domain = runtime->level_geom(0).domain;
+  bool observed = false;
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& values = state.fab(local);
+    if (!values.grown_box().contains(domain.hi[0] + 1, 2))
+      continue;
+    observed = true;
+    EXPECT_EQ(values(domain.hi[0] + 1, 2, 0), Real(3));
+    EXPECT_EQ(values(domain.hi[0] + 1, 2, 1), Real(11));
+    EXPECT_EQ(values(domain.hi[0] + 1, 2, 2), Real(-5));
+  }
+  EXPECT_TRUE(observed);
 }
 
 TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {

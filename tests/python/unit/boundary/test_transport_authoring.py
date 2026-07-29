@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 import pops
-from pops.boundary import TransportBoundarySet
+from pops.boundary import TransportBoundarySet, model_primitive_to_conservative
 from pops.boundary.transport import ResolvedTransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow, SlipWall
 from pops.domain import Rectangle
@@ -16,7 +16,7 @@ from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.physics import Axial, Density, Momentum
-from pops.representations import Conservative
+from pops.representations import Conservative, Primitive
 from pops.spaces import CellState
 
 
@@ -111,6 +111,83 @@ def test_transport_set_resolves_exact_ports_values_and_derived_stencil_requireme
         inflow_values[0], where="compiled inflow") == {
             ("qid", canonical_inlet.qualified_id)
         }
+
+
+def test_primitive_fixed_state_lowers_only_through_the_exact_block_model_converter():
+    frame, _, _, _, numerics, case, block, block_state = _authoring()
+    converter = model_primitive_to_conservative(block_state)
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: Inflow(
+            state=block_state,
+            value=0.25,
+            representation=Primitive(),
+            converter=converter,
+        ),
+        frame.boundaries.x_max: Outflow(state=block_state),
+        frame.boundaries.y_min: Inflow(state=block_state, value=0.25),
+        frame.boundaries.y_max: Outflow(state=block_state),
+    }))
+    case.numerics(numerics, block=block)
+    case.validate_report().raise_if_error()
+
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    compiled = authority.compile_boundary_data()
+    runtime = authority.runtime_boundary_data({})
+    compiled_xmin = next(face for face in compiled["faces"] if face["ordinal"] == 0)
+    runtime_xmin = next(face for face in runtime["faces"] if face["ordinal"] == 0)
+    expected_state = authority.conditions[0].state
+    expected = model_primitive_to_conservative(expected_state).qualified_id
+    assert compiled_xmin["representation"] == "primitive"
+    assert compiled_xmin["converter"] == expected
+    assert runtime_xmin["representation"] == "primitive"
+    assert runtime_xmin["converter"] == expected
+
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+
+    detached_compile = dict(compiled)
+    detached_compile.update({
+        "ghost_plan_identity": authority.plan.canonical_id,
+        "producer_order": [],
+        "component_region_templates": [],
+    })
+    detached_xmin = next(
+        face for face in CompiledBoundaryPlan(detached_compile).runtime_boundary_data({})["faces"]
+        if face["ordinal"] == 0
+    )
+    assert detached_xmin["representation"] == "primitive"
+    assert detached_xmin["converter"] == expected
+
+    from pops.model import Handle
+
+    converted_condition = next(
+        row for row in authority.conditions if row.geometry.axis.index == 0
+        and row.geometry.side.value == "lower"
+    )
+    forged_flow = replace(
+        converted_condition.provider.dependencies.representation,
+        converter=Handle(
+            "forged-converter",
+            kind="representation_conversion",
+            owner=converted_condition.state.owner_path,
+        ),
+    )
+    forged_dependencies = replace(
+        converted_condition.provider.dependencies,
+        representation=forged_flow,
+    )
+    forged_condition = replace(
+        converted_condition,
+        provider=replace(converted_condition.provider, dependencies=forged_dependencies),
+    )
+    forged_authority = replace(
+        authority,
+        conditions=tuple(
+            forged_condition if row is converted_condition else row
+            for row in authority.conditions
+        ),
+    )
+    with pytest.raises(NotImplementedError, match="exact model_primitive_to_conservative"):
+        forged_authority.compile_boundary_data()
 
 
 def test_transport_set_rejects_incomplete_geometry_at_resolution():

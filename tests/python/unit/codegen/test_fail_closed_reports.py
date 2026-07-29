@@ -89,16 +89,20 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert prepared.gpu is False
     assert "one prepared 2D model-aware plan" in prepared.limitation
     assert "typed-role slip wall" in prepared.limitation
+    assert "model primitive-to-conservative" in prepared.limitation
     assert "corners explicitly not required" in prepared.limitation
+
+    conversion = routes["boundary:representation_conversion"]
+    assert conversion.status == "partial"
+    assert conversion.layout == "uniform|amr"
+    assert conversion.backend == "production"
+    assert "to_conservative provider" in conversion.limitation
+    assert "recovery" in conversion.limitation
 
     expected_unavailable = {
         "boundary:characteristic_no_inflow": (
             "executable model eigenstructure",
             "prepared characteristic kernel",
-        ),
-        "boundary:representation_conversion": (
-            "non-identity RepresentationFlow",
-            "representation-conversion provider",
         ),
         "boundary:analytic_xtp": (
             "constants and RuntimeParams only",

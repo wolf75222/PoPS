@@ -443,6 +443,56 @@ TEST(ProgramContextContract, SystemPreparedSlipWallFillsDeepPhysicalGhosts) {
   }
 }
 
+TEST(ProgramContextContract, SystemPreparesPrimitiveFixedStateWithExactCompiledModelConversion) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::fluid::state::U";
+  sim.install_block_state_route("fluid", state_identity);
+  std::vector<double> face_values;
+  for (const double primitive : {2.0, 3.0, -1.0, 4.0})
+    face_values.insert(face_values.end(), {0.0, primitive, 0.0, 0.0});
+  sim.install_boundary_plan("fluid", "case::block::fluid::boundary", 2,
+                            {"foextrap", "dirichlet", "foextrap", "foextrap"}, face_values,
+                            {"case::block::fluid::xlo", "case::block::fluid::xhi",
+                             "case::block::fluid::ylo", "case::block::fluid::yhi"},
+                            {"Density", "MomentumX", "MomentumY", "Energy"}, {}, state_identity, {},
+                            {}, {"conservative", "primitive", "conservative", "conservative"},
+                            {"", "case::block::fluid::model-p2c", "", ""});
+  ASSERT_TRUE(sim.grid_context("fluid").boundary_plan->requires_fixed_state_conversion());
+
+  add_compiled_model(sim, "fluid", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod",
+                     "rusanov", "conservative", "explicit", kGamma);
+  ASSERT_FALSE(sim.grid_context("fluid").boundary_plan->requires_fixed_state_conversion());
+
+  MultiFab& state = sim.block_state(0);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      for (int component = 0; component < kNcomp; ++component)
+        values(i, j, component) = Real(1);
+    });
+  }
+  device_fence();
+  const auto lane = ExecutionLane::world("test.system.primitive-fixed-state");
+  const runtime::multiblock::BoundaryEvaluationPoint point{
+      "clock.system-primitive-inflow", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("fluid"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  if (state.local_size() > 0) {
+    const ConstArray4 values = state.fab(0).const_array();
+    EXPECT_EQ(values(4, 2, 0), Real(3));
+    EXPECT_EQ(values(4, 2, 1), Real(11));
+    EXPECT_EQ(values(4, 2, 2), Real(-5));
+    EXPECT_NEAR(values(4, 2, 3), Real(39), Real(1e-12));
+  }
+}
+
 TEST(ProgramContextContract, GeneratedScratchIsPersistentExactAndNonAliasing) {
   ensure_kokkos();
   SystemConfig cfg;

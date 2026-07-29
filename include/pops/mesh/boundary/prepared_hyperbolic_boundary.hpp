@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -35,6 +36,12 @@ namespace pops {
 enum class HyperbolicBoundaryLaw { Periodic, Extrapolate, FixedState, ReflectiveSlip, External };
 
 enum class HyperbolicComponentParity { Scalar, PolarVector, AxialVector };
+
+/// Representation in which a fixed-state face was authored.
+///
+/// Native face kernels consume conservative values. Primitive data therefore remains explicitly
+/// pending until the owning compiled block supplies its exact pointwise model conversion.
+enum class HyperbolicStateRepresentation { Conservative, Primitive };
 
 /// Reflection behavior of one model-qualified state component.
 ///
@@ -102,6 +109,10 @@ struct PreparedHyperbolicFace {
   std::string identity;
   std::uint64_t identity_token = 0;
   std::vector<Real> fixed_state;
+  HyperbolicStateRepresentation authored_representation =
+      HyperbolicStateRepresentation::Conservative;
+  std::string converter_identity;
+  bool fixed_state_converted = true;
 };
 
 /// Dimension-split FV stencils do not read double-physical corners.  Such corners are therefore
@@ -304,6 +315,15 @@ inline HyperbolicBoundaryLaw hyperbolic_law_from_token(std::string_view token) {
                               "'");
 }
 
+inline HyperbolicStateRepresentation hyperbolic_representation_from_token(std::string_view token) {
+  if (token == "conservative")
+    return HyperbolicStateRepresentation::Conservative;
+  if (token == "primitive")
+    return HyperbolicStateRepresentation::Primitive;
+  throw std::invalid_argument("unsupported prepared hyperbolic representation '" +
+                              std::string(token) + "'");
+}
+
 }  // namespace detail
 
 template <int Dim>
@@ -340,6 +360,56 @@ class PreparedHyperbolicBoundary {
   }
   HyperbolicCornerPolicy corner_policy() const { return corner_policy_; }
 
+  bool requires_fixed_state_conversion() const {
+    return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& prepared) {
+      return prepared.law == HyperbolicBoundaryLaw::FixedState &&
+             prepared.authored_representation == HyperbolicStateRepresentation::Primitive &&
+             !prepared.fixed_state_converted;
+    });
+  }
+
+  /// Return a new executable table after converting every pending primitive fixed state.
+  ///
+  /// Conversion is transactional: this immutable table is untouched if the model conversion
+  /// throws or produces a non-finite component.
+  PreparedHyperbolicBoundary with_converted_fixed_states(
+      const std::function<void(const double*, double*)>& primitive_to_conservative) const {
+    if (!requires_fixed_state_conversion())
+      return *this;
+    if (!primitive_to_conservative)
+      throw std::invalid_argument(
+          "primitive fixed-state boundary requires the compiled block-model conversion");
+
+    auto converted_faces = faces_;
+    std::vector<double> input(static_cast<std::size_t>(ncomp()));
+    std::vector<double> output(static_cast<std::size_t>(ncomp()));
+    for (auto& prepared : converted_faces) {
+      if (prepared.law != HyperbolicBoundaryLaw::FixedState ||
+          prepared.authored_representation != HyperbolicStateRepresentation::Primitive ||
+          prepared.fixed_state_converted)
+        continue;
+      for (int component = 0; component < ncomp(); ++component)
+        input[static_cast<std::size_t>(component)] =
+            static_cast<double>(prepared.fixed_state[static_cast<std::size_t>(component)]);
+      std::fill(output.begin(), output.end(), std::numeric_limits<double>::quiet_NaN());
+      primitive_to_conservative(input.data(), output.data());
+      if (std::any_of(output.begin(), output.end(),
+                      [](double value) { return !std::isfinite(value); }))
+        throw std::runtime_error(
+            "primitive fixed-state boundary conversion produced a non-finite component");
+      for (int component = 0; component < ncomp(); ++component) {
+        const Real converted = static_cast<Real>(output[static_cast<std::size_t>(component)]);
+        if (!std::isfinite(converted))
+          throw std::runtime_error(
+              "primitive fixed-state boundary conversion exceeds the runtime precision");
+        prepared.fixed_state[static_cast<std::size_t>(component)] = converted;
+      }
+      prepared.fixed_state_converted = true;
+    }
+    return PreparedHyperbolicBoundary(std::move(converted_faces), component_transforms_,
+                                      corner_policy_, allow_mapped_periodicity_);
+  }
+
   Periodicity periodicity() const {
     static_assert(Dim == 2, "the current MultiFab topology is two-dimensional");
     if ((faces_[0].law == HyperbolicBoundaryLaw::Periodic) !=
@@ -360,6 +430,9 @@ class PreparedHyperbolicBoundary {
   /// ghosts are included because they were already produced by fill_boundary and are valid inputs.
   void fill_physical(MultiFab& state, const Box2D& domain) const {
     static_assert(Dim == 2, "the current MultiFab storage is two-dimensional");
+    if (requires_fixed_state_conversion())
+      throw std::logic_error(
+          "primitive fixed-state boundary reached execution before model conversion");
     if (state.ncomp() != ncomp())
       throw std::invalid_argument(
           "prepared hyperbolic boundary component count differs from the state");
@@ -462,9 +535,24 @@ class PreparedHyperbolicBoundary {
                         [](Real value) { return !std::isfinite(value); }))
           throw std::invalid_argument(
               "fixed-state hyperbolic boundary must provide one finite value per component");
+        if (prepared_face.authored_representation == HyperbolicStateRepresentation::Primitive) {
+          if (prepared_face.converter_identity.empty())
+            throw std::invalid_argument(
+                "primitive fixed-state boundary requires one converter identity");
+        } else if (!prepared_face.converter_identity.empty() ||
+                   !prepared_face.fixed_state_converted) {
+          throw std::invalid_argument(
+              "conservative fixed-state boundary must not carry conversion metadata");
+        }
       } else if (!prepared_face.fixed_state.empty()) {
         throw std::invalid_argument(
             "only a fixed-state hyperbolic boundary may carry component values");
+      } else if (prepared_face.authored_representation !=
+                     HyperbolicStateRepresentation::Conservative ||
+                 !prepared_face.converter_identity.empty() ||
+                 !prepared_face.fixed_state_converted) {
+        throw std::invalid_argument(
+            "only a fixed-state hyperbolic boundary may carry conversion metadata");
       }
       if (prepared_face.law == HyperbolicBoundaryLaw::ReflectiveSlip) {
         const int normal_axis = face_ordinal / 2;
@@ -525,7 +613,9 @@ template <int Dim>
 PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
     const std::vector<std::string>& face_types, const std::vector<double>& face_values,
     const std::vector<std::string>& face_identities,
-    const std::vector<std::string>& component_roles, bool allow_mapped_periodicity = false) {
+    const std::vector<std::string>& component_roles, bool allow_mapped_periodicity = false,
+    const std::vector<std::string>& face_representations = {},
+    const std::vector<std::string>& face_converter_identities = {}) {
   if (face_types.size() != static_cast<std::size_t>(2 * Dim) ||
       face_identities.size() != static_cast<std::size_t>(2 * Dim))
     throw std::invalid_argument(
@@ -534,6 +624,12 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
       face_values.size() != component_roles.size() * static_cast<std::size_t>(2 * Dim))
     throw std::invalid_argument(
         "prepared hyperbolic boundary values must be component-major and total");
+  if ((!face_representations.empty() &&
+       face_representations.size() != static_cast<std::size_t>(2 * Dim)) ||
+      (!face_converter_identities.empty() &&
+       face_converter_identities.size() != static_cast<std::size_t>(2 * Dim)))
+    throw std::invalid_argument(
+        "prepared hyperbolic boundary conversion metadata must cover every oriented face");
 
   std::vector<HyperbolicComponentTransform<Dim>> transforms;
   transforms.reserve(component_roles.size());
@@ -546,12 +642,22 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
     destination.law = detail::hyperbolic_law_from_token(face_types[static_cast<std::size_t>(face)]);
     destination.identity = face_identities[static_cast<std::size_t>(face)];
     destination.identity_token = detail::stable_boundary_identity(destination.identity);
+    destination.authored_representation = detail::hyperbolic_representation_from_token(
+        face_representations.empty()
+            ? std::string_view("conservative")
+            : std::string_view(face_representations[static_cast<std::size_t>(face)]));
+    destination.converter_identity =
+        face_converter_identities.empty()
+            ? std::string{}
+            : face_converter_identities[static_cast<std::size_t>(face)];
     if (destination.law == HyperbolicBoundaryLaw::FixedState) {
       destination.fixed_state.reserve(component_roles.size());
       for (std::size_t component = 0; component < component_roles.size(); ++component)
         destination.fixed_state.push_back(
             static_cast<Real>(face_values[component * static_cast<std::size_t>(2 * Dim) +
                                           static_cast<std::size_t>(face)]));
+      destination.fixed_state_converted =
+          destination.authored_representation == HyperbolicStateRepresentation::Conservative;
     }
   }
   return PreparedHyperbolicBoundary<Dim>(std::move(faces), std::move(transforms),

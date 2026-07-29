@@ -328,7 +328,9 @@ class System {
       const std::vector<std::string>& component_roles,
       const std::vector<int>& omitted_interface_faces = {}, const std::string& state_identity = {},
       PreparedBoundaryReadDependencies read_dependencies = {},
-      std::vector<PeriodicIdentification2D> periodic_identifications = {});
+      std::vector<PeriodicIdentification2D> periodic_identifications = {},
+      const std::vector<std::string>& face_representations = {},
+      const std::vector<std::string>& face_converter_identities = {});
   /// Register the exact state Handle owned by a materialized block.  This registry is independent
   /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
   /// dependency of another block's boundary component.

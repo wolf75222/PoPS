@@ -239,18 +239,23 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::vector<std::string>& face_identities,
              const std::vector<std::string>& component_roles,
              const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-             const std::vector<std::array<int, 6>>& periodic_identifications) {
+             const std::vector<std::array<int, 6>>& periodic_identifications,
+             const std::vector<std::string>& face_representations,
+             const std::vector<std::string>& face_converter_identities) {
             system.install_boundary_plan(
                 name, identity, required_depth, face_types, face_values, face_identities,
                 component_roles, omitted_interface_faces, state_identity,
                 PreparedBoundaryReadDependencies{},
-                decode_periodic_identification_rows(periodic_identifications));
+                decode_periodic_identification_rows(periodic_identifications), face_representations,
+                face_converter_identities);
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
           py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
+          py::arg("face_representations") = std::vector<std::string>{},
+          py::arg("face_converter_identities") = std::vector<std::string>{},
           "Install one resolved per-block ghost-production plan before lazy AMR construction.")
       .def("_install_block_state_route", &AmrSystem::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
