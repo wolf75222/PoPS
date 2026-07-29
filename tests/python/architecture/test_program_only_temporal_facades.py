@@ -33,6 +33,9 @@ AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
 AMR_SUBCYCLING = ROOT / "include/pops/numerics/time/amr/levels/amr_subcycling.hpp"
 PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
 AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
+PROGRAM_EXECUTION_SERVICES = (
+    ROOT / "include/pops/runtime/program/program_execution_services.hpp"
+)
 AMR_DSL_BLOCK = ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
 AMR_BLOCK_SEAM = ROOT / "include/pops/runtime/builders/block/amr_block_seam.hpp"
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
@@ -414,17 +417,24 @@ def test_nonlinear_amr_semantics_use_the_compiled_program_not_a_blocker():
 
 
 def test_amr_pointwise_status_reduces_every_valid_level_cell():
-    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    services = PROGRAM_EXECUTION_SERVICES.read_text(encoding="utf-8")
 
     pointwise = _function_body(
-        context,
+        services,
         "  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const",
     )
-    assert "if (context.domain_mask == nullptr)" in pointwise
-    assert "return context.domain_mask;" in pointwise
+    assert "active_mask_from_context_(" in pointwise
+    assert "program_execution_block_grid_context_(block)" in pointwise
+
+    active_mask = _function_body(
+        services,
+        "  static const MultiFab* active_mask_from_context_(",
+    )
+    assert "if (context.domain_mask == nullptr)" in active_mask
+    assert "return context.domain_mask;" in active_mask
 
     status = _function_body(
-        context,
+        services,
         "  Real pointwise_status_max(int block, const MultiFab& status,",
     )
     assert "const MultiFab* expected = pointwise_active_mask(block, status)" in status
