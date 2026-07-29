@@ -36,6 +36,7 @@
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
+#include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime (the engine the driver wraps)
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
@@ -74,6 +75,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     int block = 0;
     SyncPhase phase = SyncPhase::Reflux;
     amr::ClockStamp clock;
+  };
+  struct InterfaceFluxFragmentAuditEntry {
+    amr::InterfaceFluxFragmentKey key;
+    amr::InterfaceFluxFragmentMeasure measure;
   };
   struct HistoryFluxTopology {
     std::uint64_t epoch = std::numeric_limits<std::uint64_t>::max();
@@ -248,6 +253,14 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// Number of populated ledger entries (test seam): the parity gate unit-asserts this is 0 on a
   /// coarse-only / flat Program (the capture path is unreachable at nlev == 1).
   std::size_t ledger_size() const { return active_flux_ledger_.size(); }
+  /// Raw accepted shared-interface evaluations. These fragments retain exact stage/window identity;
+  /// Program tableau/history algebra is intentionally not applied in this first fixed-hierarchy slice.
+  const std::vector<InterfaceFluxFragmentAuditEntry>& accepted_interface_flux_fragments() const {
+    if (facade_ != nullptr &&
+        facade_->program_accepted_state_revision() != accepted_state_revision_)
+      accepted_interface_flux_report_.clear();
+    return accepted_interface_flux_report_;
+  }
   /// Runtime-only identity of the layout-bound face-flux workspace.  This diagnostic seam lets
   /// native tests prove that restore/regrid rematerialized storage before the next stage.
   std::uint64_t capture_flux_workspace_generation() const noexcept {
@@ -482,17 +495,24 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     }
     std::vector<int> blocks;
     std::vector<MultiFab*> states;
+    std::vector<MultiFab*> rhs;
+    std::vector<int> flux_only;
     blocks.reserve(requests.size());
     states.reserve(requests.size());
+    rhs.reserve(requests.size());
+    flux_only.reserve(requests.size());
     for (const auto& request : requests) {
       blocks.push_back(sys_block(request.block));
       states.push_back(request.state);
+      rhs.push_back(request.rhs);
+      flux_only.push_back(request.flux_only);
     }
     if (capturing()) {
-      if (eng_->has_level_interfaces(level_))
+      const bool has_interfaces = eng_->has_level_interfaces(level_);
+      if (has_interfaces && nlev() != 2)
         deferred_op("refined_shared_block_interfaces",
-                    "shared block interfaces across a refined hierarchy require a prepared "
-                    "interface-flux reflux ledger; coarse-only execution is supported");
+                    "shared block interface-fragment publication currently requires exactly two "
+                    "fixed hierarchy levels");
       const auto group_point = boundary_point_(group_id);
       eng_->with_boundary_stage_states(group_point, blocks, states, [&] {
         for (const auto& request : requests) {
@@ -501,17 +521,16 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                         request.flux_only ? ResidualCapture::FluxOnly : ResidualCapture::FullRate,
                         request.rate_id, &group_point);
         }
+        if (has_interfaces) {
+          auto publication = interface_flux_publication_(group_id);
+          eng_->publish_level_interface_flux_fragments(level_, group_point, blocks, states, rhs,
+                                                       publication);
+        }
       });
       return;
     }
-    std::vector<MultiFab*> rhs;
-    std::vector<int> flux_only;
-    rhs.reserve(requests.size());
-    flux_only.reserve(requests.size());
     for (const auto& request : requests) {
       count_kernel();
-      rhs.push_back(request.rhs);
-      flux_only.push_back(request.flux_only);
     }
     eng_->level_rhs_group(level_, boundary_point_(group_id), blocks, states, rhs, flux_only);
   }
@@ -1528,6 +1547,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         "the scheduler accumulate_dt policy under a compiled Program on AMR is deferred; use "
         "System.");
   }
+
  private:
   struct CouplingWorkspace {
     std::vector<int> program_to_runtime;
@@ -2238,6 +2258,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         regrid_if_due_at_(window_start_step, facade_->time());
         automatic_regrid_macro_step_ = static_cast<int>(window_start_step);
       }
+      // Regrid owns the only topology mutation in an accepted attempt. Bind the interface-fragment
+      // transaction afterwards so its epoch and level count describe the hierarchy that the Program
+      // body will actually evaluate.
+      begin_interface_flux_attempt_();
       // A head-of-step regrid is the only place the hierarchy may have changed.  Prepare one
       // topology-shaped old/new image per parent level here, then reuse those allocations for every
       // recursive subcycle and every subsequent attempt on the same hierarchy.
@@ -2265,6 +2289,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       clock_schedule_.restore_accepted_ticks(clock_schedule_.accepted_ticks(window_end_step),
                                              window_end_step);
       conservative_ledger_.commit();
+      commit_interface_flux_attempt_();
       accepted_flux_report_.clear();
       accepted_flux_report_.reserve(conservative_ledger_.entries().size());
       for (const auto& entry : conservative_ledger_.entries())
@@ -2288,6 +2313,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         conservative_ledger_.rollback();
       else if (!conservative_ledger_.empty())
         conservative_ledger_.clear();
+      rollback_interface_flux_attempt_();
       const bool accepted_state_mutated =
           facade_->program_accepted_state_revision() != saved.program_accepted_state_revision;
       if (saved.engine_captured)
@@ -2491,6 +2517,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     ring_flux_init_ = std::move(state.ring_flux_initialized);
     history_flux_topology_ = history_flux_topology_snapshot_();
     accepted_flux_report_ = std::move(state.accepted_flux_ledger);
+    // Raw shared-interface fragments are a process-local audit seam in this bounded slice, not
+    // checkpoint state. An outer facade rollback/restart changes the accepted revision and must not
+    // leave a fragment report from the abandoned revision visible.
+    accepted_interface_flux_report_.clear();
     accepted_sync_report_ = std::move(state.accepted_sync);
     accepted_state_revision_ = revision;
     // An external restart/rollback may restore the same facade macro-step that this context had
@@ -2500,7 +2530,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   void publish_program_accepted_state_() const {
-    if (conservative_ledger_.in_transaction() || !conservative_ledger_.empty())
+    if (conservative_ledger_.in_transaction() || !conservative_ledger_.empty() ||
+        (interface_flux_ledger_ &&
+         (interface_flux_ledger_->in_transaction() || !interface_flux_ledger_->empty())))
       throw std::runtime_error("cannot checkpoint a non-accepted AMR conservative ledger");
     facade_->restore_program_accepted_state(
         serialize_amr_program_accepted_state(accepted_state_()));
@@ -2508,7 +2540,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   void refresh_accepted_hierarchy_state_() const {
-    if (attempt_snapshot_active_ || active_parent_ || conservative_ledger_.in_transaction())
+    if (attempt_snapshot_active_ || active_parent_ || conservative_ledger_.in_transaction() ||
+        (interface_flux_ledger_ && interface_flux_ledger_->in_transaction()))
       throw std::logic_error(
           "AMR Program hierarchy refresh requires an accepted bootstrap boundary");
     ensure_level_clocks_();
@@ -2548,6 +2581,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     std::map<FluxKey, RateProvenance> rate_provenance;
     std::vector<SyncEvent> sync_report;
     std::vector<AmrProgramFluxAuditEntry> accepted_flux_report;
+    std::vector<InterfaceFluxFragmentAuditEntry> accepted_interface_flux_report;
     std::vector<AmrProgramSyncEvent> accepted_sync_report;
     std::map<std::string, std::vector<std::vector<EdgeFlux>>> ring_flux;
     std::map<std::string, std::vector<std::vector<std::vector<FluxContribution>>>>
@@ -2803,6 +2837,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     }
     copy_vector_values_in_place_(snapshot.sync_report, sync_report_);
     copy_vector_values_in_place_(snapshot.accepted_flux_report, accepted_flux_report_);
+    copy_vector_values_in_place_(snapshot.accepted_interface_flux_report,
+                                 accepted_interface_flux_report_);
     copy_vector_values_in_place_(snapshot.accepted_sync_report, accepted_sync_report_);
     copy_ring_flux_in_place_(snapshot.ring_flux, ring_flux_);
     copy_ring_contributions_in_place_(snapshot.ring_flux_contributions, ring_flux_contributions_);
@@ -2851,6 +2887,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     }
     copy_vector_values_in_place_(sync_report_, snapshot.sync_report);
     copy_vector_values_in_place_(accepted_flux_report_, snapshot.accepted_flux_report);
+    copy_vector_values_in_place_(accepted_interface_flux_report_,
+                                 snapshot.accepted_interface_flux_report);
     copy_vector_values_in_place_(accepted_sync_report_, snapshot.accepted_sync_report);
     copy_ring_flux_in_place_(ring_flux_, snapshot.ring_flux);
     copy_ring_contributions_in_place_(ring_flux_contributions_, snapshot.ring_flux_contributions);
@@ -3046,6 +3084,77 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                             stage_time_.value() * (current_window_->end.physical_time -
                                                    current_window_->begin.physical_time);
     return {level_, current_window_->begin.macro_step, phase, physical};
+  }
+
+  void begin_interface_flux_attempt_() const {
+    if (nlev() != 2)
+      return;
+    eng_->require_complete_fixed_two_level_interfaces();
+    const std::uint64_t topology_epoch = eng_->topology_epoch();
+    if (!interface_flux_ledger_)
+      interface_flux_ledger_.emplace(topology_epoch);
+    if (interface_flux_ledger_->in_transaction())
+      throw std::logic_error("AMR interface-flux fragment attempt is already active");
+    if (interface_flux_ledger_->topology_epoch() != topology_epoch)
+      interface_flux_ledger_.emplace(topology_epoch);
+    if (!interface_flux_ledger_->empty())
+      interface_flux_ledger_->clear();
+    interface_flux_ledger_->begin();
+  }
+
+  void commit_interface_flux_attempt_() const {
+    if (!interface_flux_ledger_)
+      return;
+    // A head-of-step regrid may have removed the fine level before this attempt entered the
+    // Program body. begin_interface_flux_attempt_() is then intentionally a no-op; the matching
+    // commit must be one too instead of treating the resident, inactive two-level workspace as a
+    // broken transaction.
+    if (nlev() != 2) {
+      accepted_interface_flux_report_.clear();
+      return;
+    }
+    if (!interface_flux_ledger_->in_transaction())
+      throw std::logic_error("AMR interface-flux fragment attempt is not active at commit");
+    if (interface_flux_ledger_->topology_epoch() != eng_->topology_epoch())
+      throw std::runtime_error(
+          "AMR interface-flux fragment transaction crossed a frozen hierarchy topology epoch");
+    interface_flux_ledger_->commit();
+    std::vector<InterfaceFluxFragmentAuditEntry> accepted;
+    accepted.reserve(interface_flux_ledger_->published_size());
+    for (const auto& entry : interface_flux_ledger_->published_entries())
+      accepted.push_back({entry.key, entry.measure});
+    interface_flux_ledger_->clear();
+    accepted_interface_flux_report_.swap(accepted);
+  }
+
+  void rollback_interface_flux_attempt_() const {
+    if (!interface_flux_ledger_)
+      return;
+    if (interface_flux_ledger_->in_transaction())
+      interface_flux_ledger_->rollback();
+    if (!interface_flux_ledger_->empty())
+      interface_flux_ledger_->clear();
+  }
+
+  runtime::multiblock::InterfaceFluxFragmentPublication interface_flux_publication_(
+      int stage) const {
+    require_group_identity_(stage);
+    if (nlev() != 2 || !current_window_ || !interface_flux_ledger_ ||
+        !interface_flux_ledger_->in_transaction())
+      throw std::runtime_error(
+          "AMR interface-flux publication has no active fixed two-level Program transaction");
+    const std::uint64_t topology_epoch = eng_->topology_epoch();
+    if (interface_flux_ledger_->topology_epoch() != topology_epoch)
+      throw std::runtime_error(
+          "AMR interface-flux publication crossed a frozen hierarchy topology epoch");
+    return {&*interface_flux_ledger_,
+            topology_epoch,
+            0,
+            1,
+            evaluation_clock_(),
+            "program.group.node." + std::to_string(stage),
+            *current_window_,
+            amr::Rational(1, 1)};
   }
 
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
@@ -3736,33 +3845,27 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   const std::vector<int>& program_execution_block_map_() const {
     return facade_->program_block_map();
   }
-  int program_execution_block_count_() const {
-    return static_cast<int>(eng_->n_blocks());
-  }
-  Real program_execution_physical_time_() const {
-    return static_cast<Real>(facade_->time());
-  }
+  int program_execution_block_count_() const { return static_cast<int>(eng_->n_blocks()); }
+  Real program_execution_physical_time_() const { return static_cast<Real>(facade_->time()); }
   void program_execution_record_scalar_(const std::string& name, Real value) const {
     facade_->record_program_diagnostic(name, value);
   }
   RuntimeParams program_execution_params_(int block) const {
     return facade_->program_params(block);
   }
-  void program_execution_set_field_timepoint_(
-      const std::string& field, const FieldLogicalTimePoint& point) const {
+  void program_execution_set_field_timepoint_(const std::string& field,
+                                              const FieldLogicalTimePoint& point) const {
     facade_->set_field_logical_timepoint(field, point);
   }
-  void program_execution_set_field_parameters_(
-      const std::string& field, const std::vector<double>& parameters) const {
+  void program_execution_set_field_parameters_(const std::string& field,
+                                               const std::vector<double>& parameters) const {
     facade_->set_field_boundary_parameters(field, parameters);
   }
-  void program_execution_set_field_kernel_(
-      const std::string& field, const CompiledFieldBoundaryKernel& kernel) const {
+  void program_execution_set_field_kernel_(const std::string& field,
+                                           const CompiledFieldBoundaryKernel& kernel) const {
     facade_->set_field_boundary_kernel(field, kernel);
   }
-  Profiler& program_execution_profiler_() const {
-    return facade_->profiler_handle();
-  }
+  Profiler& program_execution_profiler_() const { return facade_->profiler_handle(); }
   int program_execution_macro_step_() const { return facade_->macro_step(); }
   int program_execution_active_level_() const { return level_; }
 
@@ -3820,7 +3923,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   mutable std::map<FluxKey, RateProvenance> provenance_algebra_scratch_;
   mutable std::vector<SyncEvent> sync_report_;
   mutable amr::TransactionalFluxLedger<EdgeFlux> conservative_ledger_;
+  mutable std::optional<runtime::multiblock::InterfaceFluxFragmentLedger> interface_flux_ledger_;
   mutable std::vector<AmrProgramFluxAuditEntry> accepted_flux_report_;
+  mutable std::vector<InterfaceFluxFragmentAuditEntry> accepted_interface_flux_report_;
   mutable std::vector<AmrProgramSyncEvent> accepted_sync_report_;
   // One persistent transaction image per context.  Attempts are deliberately non-reentrant; keeping
   // the image resident lets stable retries reuse every compact reflux/history allocation.

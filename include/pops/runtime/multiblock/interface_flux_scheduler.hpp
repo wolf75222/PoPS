@@ -4,6 +4,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
+#include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/config/generated_component_abi.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
@@ -85,6 +86,24 @@ using InterfaceFluxEvaluator =
     std::function<void(const BoundaryEvaluationPoint&, const InterfaceFluxBatch&)>;
 using InterfaceFluxEvaluatorFactory = std::function<InterfaceFluxEvaluator()>;
 
+using InterfaceFluxFragmentPayload = std::vector<Real>;
+using InterfaceFluxFragmentLedger =
+    ::pops::amr::TransactionalInterfaceFluxLedger<InterfaceFluxFragmentPayload>;
+
+/// Exact Program-owned transaction context for publishing one scheduler evaluation as the
+/// level-qualified contribution of a fixed two-level interface. The scheduler owns the canonical
+/// flux batch; the Program owns the temporal/topology identity and enclosing attempt transaction.
+struct InterfaceFluxFragmentPublication {
+  InterfaceFluxFragmentLedger* ledger = nullptr;
+  std::uint64_t topology_epoch = 0;
+  int coarse_level = 0;
+  int fine_level = 1;
+  ::pops::amr::ClockStamp clock;
+  std::string stage_identity;
+  ::pops::amr::ClockWindow interval;
+  ::pops::amr::Rational stage_weight{1, 1};
+};
+
 class InterfaceFluxScheduler {
  public:
   /// Prepare and install one supported route.  Layout, component permutation, face orientation and
@@ -100,6 +119,7 @@ class InterfaceFluxScheduler {
     int left_faces = 0;
     Real left_normal = Real(0);
     Real right_normal = Real(0);
+    Real left_tangential = Real(0);
     std::vector<BoundaryCell> left_cells;
     std::vector<BoundaryCell> right_cells;
     std::exception_ptr structural_failure;
@@ -184,11 +204,17 @@ class InterfaceFluxScheduler {
 
       const Box2D left_box = left_state.box_array().bounding_box();
       const Box2D right_box = right_state.box_array().bounding_box();
+      if (!tiles_declared_physical_face_(left_box, left_geometry, route.left_axis,
+                                         route.left_side) ||
+          !tiles_declared_physical_face_(right_box, right_geometry, route.right_axis,
+                                         route.right_side))
+        throw std::invalid_argument(
+            "multi-block interface level layout does not tile its declared physical face");
       left_faces = tangential_count_(left_box, route.left_axis);
       const int right_faces = tangential_count_(right_box, route.right_axis);
       left_normal = normal_spacing_(left_geometry, route.left_axis);
       right_normal = normal_spacing_(right_geometry, route.right_axis);
-      const Real left_tangential = tangential_spacing_(left_geometry, route.left_axis);
+      left_tangential = tangential_spacing_(left_geometry, route.left_axis);
       const Real right_tangential = tangential_spacing_(right_geometry, route.right_axis);
       if (left_faces != right_faces || left_faces < 1 || !(left_normal > Real(0)) ||
           !(right_normal > Real(0)) || left_normal != right_normal ||
@@ -259,6 +285,7 @@ class InterfaceFluxScheduler {
                                    std::move(right_cells),
                                    left_normal,
                                    right_normal,
+                                   left_tangential,
                                    left_faces,
                                    component_count,
                                    distributed,
@@ -311,7 +338,8 @@ class InterfaceFluxScheduler {
   /// the owning runtime executor.  Each route calls its evaluator exactly once and scatters one shared
   /// flux with -/+ signs into left/right RHS at the same BoundaryEvaluationPoint.
   void apply(const BoundaryEvaluationPoint& point, const std::vector<MultiFab*>& states,
-             const std::vector<MultiFab*>& rhs) {
+             const std::vector<MultiFab*>& rhs,
+             InterfaceFluxFragmentPublication* publication = nullptr) {
     const bool collective_world = comm_active() && n_ranks() > 1;
     std::exception_ptr point_failure;
     try {
@@ -320,6 +348,19 @@ class InterfaceFluxScheduler {
       point_failure = std::current_exception();
     }
     finish_collective_preflight_(collective_world, point_failure, "evaluation-point preflight");
+    std::exception_ptr publication_failure;
+    try {
+      if (publication != nullptr) {
+        if (collective_world)
+          throw std::runtime_error(
+              "AMR interface-flux fragment publication does not yet support distributed MPI");
+        validate_fragment_publication_(point, *publication);
+      }
+    } catch (...) {
+      publication_failure = std::current_exception();
+    }
+    finish_collective_preflight_(collective_world, publication_failure,
+                                 "interface-fragment publication preflight");
     if (collective_world && !registry_agrees_across_ranks_())
       throw std::runtime_error("multi-block interface prepared registry differs across MPI ranks");
     const std::string point_identity = collective_point_identity_(point);
@@ -366,7 +407,10 @@ class InterfaceFluxScheduler {
       }
       if (!active)
         continue;  // sparse RHS group unrelated to this installed interface on every rank
-      apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs);
+      if (publication != nullptr && prepared.distributed)
+        throw std::runtime_error(
+            "AMR interface-flux fragment publication does not yet support distributed MPI");
+      apply_one_(prepared, point, *left_state, *right_state, *left_rhs, *right_rhs, publication);
     }
   }
 
@@ -381,6 +425,29 @@ class InterfaceFluxScheduler {
       if (prepared.route.level == level)
         return true;
     return false;
+  }
+
+  /// Boundary plans are shared across levels. A fixed two-level Program must therefore schedule the
+  /// same interface on both levels instead of omitting a touching face on one level with no canonical
+  /// flux to put back.
+  void require_complete_fixed_two_level_registry() const {
+    for (const PreparedInterface& prepared : interfaces_) {
+      if (prepared.route.level != 0 && prepared.route.level != 1)
+        throw std::runtime_error(
+            "fixed two-level interface registry contains a route outside levels 0/1");
+      const int peer_level = 1 - prepared.route.level;
+      const PreparedInterface* peer = nullptr;
+      for (const PreparedInterface& candidate : interfaces_)
+        if (candidate.route.identity == prepared.route.identity &&
+            candidate.route.level == peer_level) {
+          peer = &candidate;
+          break;
+        }
+      if (peer == nullptr || !same_route_across_levels_(prepared.route, peer->route) ||
+          prepared.component_count != peer->component_count)
+        throw std::runtime_error(
+            "fixed two-level interface registry is missing an exact peer-level route");
+    }
   }
 
   bool participates(std::size_t block, int level) const {
@@ -415,6 +482,7 @@ class InterfaceFluxScheduler {
     std::vector<BoundaryCell> right_cells;
     Real left_normal_spacing = 0;
     Real right_normal_spacing = 0;
+    Real face_measure = 0;
     int face_count = 0;
     int component_count = 0;
     bool distributed = false;
@@ -541,6 +609,29 @@ class InterfaceFluxScheduler {
   static int tangential_count_(const Box2D& box, InterfaceAxis axis) {
     return axis == InterfaceAxis::X ? box.ny() : box.nx();
   }
+  static bool tiles_declared_physical_face_(const Box2D& box, const Geometry& geometry,
+                                            InterfaceAxis axis, InterfaceSide side) {
+    const int normal_axis = axis == InterfaceAxis::X ? 0 : 1;
+    const int tangent_axis = 1 - normal_axis;
+    const int normal = side == InterfaceSide::Low ? box.lo[normal_axis] : box.hi[normal_axis];
+    const int expected_normal = side == InterfaceSide::Low ? geometry.domain.lo[normal_axis]
+                                                           : geometry.domain.hi[normal_axis];
+    return normal == expected_normal && box.lo[tangent_axis] == geometry.domain.lo[tangent_axis] &&
+           box.hi[tangent_axis] == geometry.domain.hi[tangent_axis];
+  }
+  static bool same_route_across_levels_(const AxisAlignedInterface& lhs,
+                                        const AxisAlignedInterface& rhs) {
+    return lhs.identity == rhs.identity && lhs.left_block == rhs.left_block &&
+           lhs.right_block == rhs.right_block && lhs.left_axis == rhs.left_axis &&
+           lhs.right_axis == rhs.right_axis && lhs.left_side == rhs.left_side &&
+           lhs.right_side == rhs.right_side &&
+           lhs.tangential_orientation == rhs.tangential_orientation &&
+           lhs.right_component_for_left == rhs.right_component_for_left &&
+           lhs.affine_mapping_identity == rhs.affine_mapping_identity &&
+           lhs.right_normal_translation == rhs.right_normal_translation &&
+           lhs.right_tangential_scale == rhs.right_tangential_scale &&
+           lhs.right_tangential_offset == rhs.right_tangential_offset;
+  }
   static Real normal_spacing_(const Geometry& geometry, InterfaceAxis axis) {
     return axis == InterfaceAxis::X ? geometry.dx() : geometry.dy();
   }
@@ -600,6 +691,50 @@ class InterfaceFluxScheduler {
       throw std::invalid_argument("multi-block interface evaluation point is not fully qualified");
   }
 
+  static void validate_fragment_publication_(const BoundaryEvaluationPoint& point,
+                                             const InterfaceFluxFragmentPublication& publication) {
+    if (publication.ledger == nullptr || !publication.ledger->in_transaction())
+      throw std::invalid_argument(
+          "AMR interface-flux fragment publication requires an active ledger transaction");
+    const ::pops::amr::Rational interval_span =
+        publication.interval.end.phase - publication.interval.begin.phase;
+    const ::pops::amr::Rational expected_phase =
+        publication.interval.begin.phase + point.stage_fraction * interval_span;
+    const double expected_physical_time =
+        publication.interval.begin.physical_time +
+        point.stage_fraction.value() *
+            (publication.interval.end.physical_time - publication.interval.begin.physical_time);
+    if (publication.ledger->topology_epoch() != publication.topology_epoch ||
+        publication.coarse_level != 0 || publication.fine_level != 1 ||
+        publication.clock.level != point.level ||
+        (point.level != publication.coarse_level && point.level != publication.fine_level) ||
+        publication.interval.begin.level != point.level ||
+        publication.interval.end.level != point.level ||
+        publication.interval.begin.macro_step != point.tick ||
+        publication.interval.end.macro_step != point.tick ||
+        publication.clock.macro_step != point.tick || publication.clock.phase != expected_phase ||
+        publication.clock.physical_time != point.physical_time ||
+        publication.clock.physical_time != expected_physical_time ||
+        publication.stage_identity.empty())
+      throw std::invalid_argument(
+          "AMR interface-flux fragment publication identity differs from its scheduler point");
+  }
+
+  static void publish_fragment_(const PreparedInterface& prepared,
+                                const InterfaceFluxFragmentPublication& publication) {
+    const auto orientation = publication.clock.level == publication.coarse_level
+                                 ? ::pops::amr::InterfaceFluxOrientation::CoarseOutward
+                                 : ::pops::amr::InterfaceFluxOrientation::FineOutward;
+    ::pops::amr::InterfaceFluxFragmentKey key{prepared.route.identity,  publication.topology_epoch,
+                                              publication.coarse_level, publication.fine_level,
+                                              publication.clock,        publication.stage_identity,
+                                              publication.interval,     orientation};
+    const ::pops::amr::InterfaceFluxFragmentMeasure measure{publication.stage_weight,
+                                                            prepared.face_measure};
+    InterfaceFluxFragmentPayload payload(prepared.flux.begin(), prepared.flux.end());
+    publication.ledger->accumulate(std::move(key), measure, std::move(payload));
+  }
+
   static bool runtime_field_matches_(const MultiFab& field,
                                      const std::vector<Box2D>& expected_boxes,
                                      const std::vector<int>& expected_ranks, int component_count) {
@@ -635,7 +770,7 @@ class InterfaceFluxScheduler {
 
   static void apply_one_(PreparedInterface& prepared, const BoundaryEvaluationPoint& point,
                          MultiFab& left_state, MultiFab& right_state, MultiFab& left_rhs,
-                         MultiFab& right_rhs) {
+                         MultiFab& right_rhs, InterfaceFluxFragmentPublication* publication) {
     if (prepared.distributed && (!comm_active() || n_ranks() != prepared.communicator_size))
       throw std::runtime_error("multi-block interface MPI world changed after route preparation");
     const bool layouts_match =
@@ -729,6 +864,8 @@ class InterfaceFluxScheduler {
     } else if (!finite_flux) {
       throw std::runtime_error("multi-block interface evaluator returned a non-finite flux");
     }
+    if (publication != nullptr)
+      publish_fragment_(prepared, *publication);
     ++prepared.evaluation_count;
 
     for (int face = 0; face < prepared.face_count; ++face) {
