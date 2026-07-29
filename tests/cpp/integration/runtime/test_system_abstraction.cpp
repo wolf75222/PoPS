@@ -6,11 +6,12 @@
 #include <pops/core/model/coupled_system.hpp>
 #include <pops/core/state/state.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
-#include <pops/numerics/time/schemes/scheduler.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+
+#include "reference_time_scheduler.hpp"
 
 #include <cmath>
 #include <type_traits>
@@ -68,7 +69,7 @@ TEST(SystemAbstraction, CoupledSystemSubcyclesBlocksAndAssemblesChargeDensityRhs
 
   int ne = 0, ni = 0;
   Real dte = 0, dti = 0;
-  advance_subcycled(system, Real(0.2), [&](auto& block, Real h, int, int) {
+  pops::test_support::advance_subcycled(system, Real(0.2), [&](auto& block, Real h, int, int) {
     using M = typename std::decay_t<decltype(block)>::Model;
     if constexpr (std::is_same_v<M, ElectronToy>) {
       ++ne;
