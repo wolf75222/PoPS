@@ -25,7 +25,7 @@ from pops.linalg.norms import L2
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import Clock, FailRun as SolveFailRun, every
+from pops.time import Clock, FailRun as SolveFailRun, every, on_start
 from tests.python.support.layout_plan import cartesian_grid
 
 
@@ -262,10 +262,47 @@ def test_balance_consumer_resolves_one_exact_native_ledger_route():
     resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
     quantity, = resolved.nodes[0].diagnostic_quantities
     operation, = quantity.execution["operations"]
+    assert not schedule.consumer_may_fire_at_start()
     assert operation["reduction"] == "accepted_balance"
     assert operation["balance_route"] == ledger.route_identity(
         case.resolve(block)).token
     assert quantity.reference == case.resolve(state)
+
+
+def test_balance_consumer_refuses_a_schedule_that_can_fire_at_start():
+    case, block, state = _case()
+    clock = Clock("macro", owner=case.owner_path)
+    schedule = on_start(clock=clock)
+    graph = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(state,),
+            diagnostics=(Balance(BalanceLedger("mass"), block=block),),
+            target="state/balance",
+        ),
+    ))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+
+    assert schedule.consumer_may_fire_at_start()
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Balance schedule cannot fire at_start: accepted balance evidence "
+            "exists only after a native step attempt"
+        ),
+    ):
+        graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
 
 
 def test_console_monitor_can_be_removed_at_authoring_time():
