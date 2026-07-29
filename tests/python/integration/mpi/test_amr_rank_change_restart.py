@@ -24,8 +24,34 @@ PROBE = Path(__file__).with_name("probe_amr_rank_change_restart.py")
 PROCESS_TIMEOUT_SECONDS = 15 * 60
 
 
-def _launcher_or_skip() -> tuple[str, ...]:
-    launcher = shutil.which("mpiexec") or shutil.which("mpirun")
+def _launcher_or_skip(native_mpi_contract: object) -> tuple[str, ...]:
+    candidates: list[str] = []
+    explicit_launcher = os.environ.get("POPS_MPIEXEC")
+    if explicit_launcher:
+        if shutil.which(explicit_launcher) is None:
+            require_mpi_or_skip(
+                f"POPS_MPIEXEC does not resolve to an executable: {explicit_launcher}",
+                optional_skip=pytest.skip,
+            )
+            raise AssertionError("pytest.skip unexpectedly returned")
+        candidates.append(explicit_launcher)
+    if isinstance(native_mpi_contract, dict):
+        compiler = native_mpi_contract.get("compiler")
+        if isinstance(compiler, str) and compiler:
+            mpi_bin = Path(compiler).parent
+            candidates.extend(
+                str(mpi_bin / name)
+                for name in ("mpiexec", "mpirun", "mpiexec.hydra")
+            )
+    candidates.extend(("mpiexec", "mpirun", "mpiexec.hydra"))
+    launcher = next(
+        (
+            resolved
+            for candidate in candidates
+            if (resolved := shutil.which(candidate)) is not None
+        ),
+        None,
+    )
     if launcher is None:
         require_mpi_or_skip(
             "AMR rank-change restart proof requires mpiexec or mpirun",
@@ -128,7 +154,7 @@ def test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one(
         )
         raise AssertionError("pytest.skip unexpectedly returned")
 
-    launcher = _launcher_or_skip()
+    launcher = _launcher_or_skip(getattr(_pops, "__mpi_contract__", None))
     environment = dict(os.environ)
     # Both source ranks and both later singleton jobs share the exact production artifact cache.
     # The probe's compile-once helper serializes publication within each MPI world.
