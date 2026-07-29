@@ -904,9 +904,39 @@ inline void CompositeFacPoisson::average_down_level_(int m) {
 //   m == 0     : base mg_ (identical to the legacy coarse correction :225-228);
 //   1<=m<=L-2  : the patch-union multigrid level_mg_[m].
 // ------------------------------------------------------------------------------------------------
+inline void CompositeFacPoisson::project_base_correction_rhs_() {
+  if (has_reaction_ || bc_.xlo != BCType::Periodic || bc_.xhi != BCType::Periodic ||
+      bc_.ylo != BCType::Periodic || bc_.yhi != BCType::Periodic)
+    return;
+
+  // The base correction operator is a periodic Poisson operator and therefore has the constant
+  // nullspace.  Its FAC residual is assembled from independently rounded volume and interface-flux
+  // terms, so even a compatible composite defect can carry a tiny constant component.  A periodic
+  // multigrid correction cannot remove that component; its bottom solve instead amplifies it.
+  //
+  // mg_ is deliberately REPLICATED on every rank.  Reduce only the rank-local replica (rather than
+  // MPI-summing identical copies), then subtract the same scalar on every rank.  This projects only
+  // the INTERNAL correction residual; the caller's scientific RHS is never changed.
+  MultiFab& rhs = mg_.rhs();
+  Real local_sum = Real(0);
+  std::size_t local_count = 0;
+  for (int li = 0; li < rhs.local_size(); ++li) {
+    const Box2D valid = rhs.box(li);
+    local_sum += reduce_sum_cell(valid, detail::FacSumKernel{rhs.fab(li).const_array()});
+    local_count += static_cast<std::size_t>(valid.num_cells());
+  }
+  if (local_count == 0)
+    throw std::runtime_error(
+        "CompositeFacPoisson: replicated base correction has no local cells");
+  const Real mean = local_sum / static_cast<Real>(local_count);
+  for (int li = 0; li < rhs.local_size(); ++li)
+    for_each_cell(rhs.box(li), detail::FacShiftKernel{rhs.fab(li).array(), mean});
+}
+
 inline void CompositeFacPoisson::correct_level_(int m) {
   if (m == 0) {
     copy0_(mg_.rhs(), res_c_);
+    project_base_correction_rhs_();
     mg_.phi().set_val(Real(0));
     mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
     require_usable_fixed_cycle_result_(mg_, "level-0 correction solve");
