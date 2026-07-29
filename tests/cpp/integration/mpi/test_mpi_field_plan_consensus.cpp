@@ -137,15 +137,29 @@ enum class SolveReportFault {
   None,
   OutcomeOnRankOne,
   ReasonBytesOnRankOne,
+  EvaluationsOnRankOne,
+  SafeguardStepsOnRankOne,
+  StepNormOnRankOne,
+  ConditionEvidenceOnRankOne,
+  FailedIOnRankOne,
+  FailedJOnRankOne,
+  FailedComponentOnRankOne,
   ThrowWithStaleReject,
 };
 
 SolveReport make_consensus_report(SolveReportFault fault) {
   SolveReport report;
   report.iters = 1;
+  report.evaluations = 2;
+  report.safeguard_steps = 3;
   report.rel_residual = Real(0.125);
   report.reference_residual_norm = Real(8);
   report.residual_norm = Real(1);
+  report.step_norm = Real(0.5);
+  report.condition_evidence = Real(4);
+  report.failed_i = -1;
+  report.failed_j = -1;
+  report.failed_component = -1;
   if (fault == SolveReportFault::OutcomeOnRankOne && my_rank() == 1) {
     report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt,
                        "rank-one-failed");
@@ -155,6 +169,36 @@ SolveReport make_consensus_report(SolveReportFault fault) {
     report.mark_solved(std::move(reason));
   } else {
     report.mark_solved("collective-solved");
+  }
+  if (my_rank() == 1) {
+    switch (fault) {
+      case SolveReportFault::EvaluationsOnRankOne:
+        ++report.evaluations;
+        break;
+      case SolveReportFault::SafeguardStepsOnRankOne:
+        ++report.safeguard_steps;
+        break;
+      case SolveReportFault::StepNormOnRankOne:
+        report.step_norm *= Real(2);
+        break;
+      case SolveReportFault::ConditionEvidenceOnRankOne:
+        report.condition_evidence *= Real(2);
+        break;
+      case SolveReportFault::FailedIOnRankOne:
+        report.failed_i = 0;
+        break;
+      case SolveReportFault::FailedJOnRankOne:
+        report.failed_j = 0;
+        break;
+      case SolveReportFault::FailedComponentOnRankOne:
+        report.failed_component = 0;
+        break;
+      case SolveReportFault::None:
+      case SolveReportFault::OutcomeOnRankOne:
+      case SolveReportFault::ReasonBytesOnRankOne:
+      case SolveReportFault::ThrowWithStaleReject:
+        break;
+    }
   }
   return report;
 }
@@ -408,7 +452,11 @@ int run_field_plan_consensus(int argc, char** argv) {
     }
   }
   for (const SolveReportFault fault :
-       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne}) {
+       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne,
+        SolveReportFault::EvaluationsOnRankOne, SolveReportFault::SafeguardStepsOnRankOne,
+        SolveReportFault::StepNormOnRankOne, SolveReportFault::ConditionEvidenceOnRankOne,
+        SolveReportFault::FailedIOnRankOne, SolveReportFault::FailedJOnRankOne,
+        SolveReportFault::FailedComponentOnRankOne}) {
     ConsensusHierarchyPrepared solver(fault);
     bool rejected = false;
     bool exact_error = false;
@@ -439,7 +487,11 @@ int run_field_plan_consensus(int argc, char** argv) {
     }
   }
   for (const SolveReportFault fault :
-       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne}) {
+       {SolveReportFault::OutcomeOnRankOne, SolveReportFault::ReasonBytesOnRankOne,
+        SolveReportFault::EvaluationsOnRankOne, SolveReportFault::SafeguardStepsOnRankOne,
+        SolveReportFault::StepNormOnRankOne, SolveReportFault::ConditionEvidenceOnRankOne,
+        SolveReportFault::FailedIOnRankOne, SolveReportFault::FailedJOnRankOne,
+        SolveReportFault::FailedComponentOnRankOne}) {
     ConsensusAmrFieldPrepared solver(fault);
     bool rejected = false;
     bool exact_error = false;

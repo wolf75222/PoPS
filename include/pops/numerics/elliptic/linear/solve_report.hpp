@@ -83,7 +83,7 @@ inline const char* solve_action_name(SolveAction action) {
 struct SolveReport {
   int iters = 0;                     ///< number of iterations performed
   int evaluations = 0;               ///< residual/Jacobian evaluations performed
-  int safeguard_steps = 0;           ///< rejected/damped trial steps
+  int safeguard_steps = 0;           ///< rejected backtracking trial steps
   Real rel_residual = 0;             ///< residual_norm / declared reference denominator
   Real reference_residual_norm = 0;  ///< exact reference norm of the owning solver contract
   Real residual_norm = 0;            ///< exact final norm tested for convergence
