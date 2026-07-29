@@ -675,6 +675,10 @@ class AmrSystem {
   void begin_restart_transaction();
   void commit_restart_transaction();
   void rollback_restart_transaction();
+  /// Force exactly one artifact-owned scientific regrid inside an active restart transaction.
+  /// The exact recorded accepted state must already have been restored and authenticated.
+  void preflight_regrid_on_restart();
+  void regrid_on_restart();
   int checkpoint_regrid_count() const;
   std::uint64_t checkpoint_topology_epoch() const;
   void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch);
@@ -765,6 +769,11 @@ class AmrSystem {
   /// explicit bootstrap commits a hierarchy level. Generated artifacts own this seam; direct
   /// low-level steps may omit it because they have no authenticated checkpoint context.
   POPS_EXPORT void install_program_hierarchy_refresh(std::function<void()> refresh);
+  /// Install the artifact-owned restart preflight, transform and forced rollback-resynchronization
+  /// hooks.
+  POPS_EXPORT void install_program_restart_hooks(std::function<void()> preflight,
+                                                 std::function<void()> regrid,
+                                                 std::function<void()> resync);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
