@@ -36,7 +36,6 @@ api pops/coupling/amr/amr_diagnostics.hpp
 api pops/coupling/amr/amr_level_storage.hpp
 api pops/coupling/amr/amr_regrid_coupler.hpp
 api pops/coupling/base/aux_fill.hpp
-api pops/coupling/base/coupling_policy.hpp
 api pops/coupling/base/elliptic_rhs.hpp
 api pops/coupling/single/coupler.hpp
 api pops/coupling/source/coupled_source.hpp
