@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pops.identity import make_identity
 from pops._generated_release_contract import (
     AMR_CHECKPOINT_PAYLOAD_VERSION,
     UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
@@ -312,8 +313,10 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
     payload["t"] = np.array(0.4)
     payload["macro_step"] = np.array(4)
     after = restart_topology_image(sim)
+    recorded_contract = json.loads(str(payload["amr_accepted_contract"]))
+    transformed_contract = contract_for(sim)
     receipt = {
-        "schema_version": 1,
+        "schema_version": 2,
         "policy_identity": "pops.restart-hierarchy.v1:sha256:" + "0" * 64,
         # The policy executed and advanced its audit counters, but the structural hierarchy
         # identity did not change.
@@ -322,11 +325,37 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
         "accepted_macro_step": 4,
         "before": {**after, "topology_epoch": 7, "regrid_count": 4},
         "after": after,
+        "accepted_contract_identity_before": make_identity(
+            "restart-accepted-contract", recorded_contract
+        ).token,
+        "accepted_contract_identity_after": make_identity(
+            "restart-accepted-contract", transformed_contract
+        ).token,
+        "history_identity_before": make_identity(
+            "restart-history-image", {"phase": "before"}
+        ).token,
+        "history_identity_after": make_identity(
+            "restart-history-image", {"phase": "after"}
+        ).token,
         "composite_integrals_before": [],
         "composite_integrals_after": [],
     }
 
     assert validate_regridded_contract(sim, payload, receipt) is None
+    receipt["accepted_contract_identity_after"] = receipt["accepted_contract_identity_before"]
+    with pytest.raises(ValueError, match="accepted-contract audit identity"):
+        validate_regridded_contract(sim, payload, receipt)
+    receipt["accepted_contract_identity_after"] = make_identity(
+        "restart-accepted-contract", transformed_contract
+    ).token
+    receipt["history_identity_after"] = make_identity(
+        "restart-history-image", {"phase": "after"}, schema_version=2
+    ).token
+    with pytest.raises(ValueError, match="domain or schema version"):
+        validate_regridded_contract(sim, payload, receipt)
+    receipt["history_identity_after"] = make_identity(
+        "restart-history-image", {"phase": "after"}
+    ).token
     receipt["after"] = {**after, "topology_epoch": 9}
     with pytest.raises(ValueError, match="receipt differs"):
         validate_regridded_contract(sim, payload, receipt)

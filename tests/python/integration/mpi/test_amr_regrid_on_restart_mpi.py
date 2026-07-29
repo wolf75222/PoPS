@@ -93,6 +93,10 @@ def _accepted_image(runtime):
         "time": float(runtime.time()),
         "step": int(runtime.macro_step()),
         "boxes": tuple(tuple(int(value) for value in box) for box in runtime.patch_boxes()),
+        "owners": tuple(
+            tuple(int(rank) for rank in native.level_owner_ranks(level))
+            for level in range(levels)
+        ),
         "states": tuple(
             np.asarray(
                 runtime.block_level_state_global("tracer", level),
@@ -102,6 +106,18 @@ def _accepted_image(runtime):
         ),
         "histories": histories,
         "program_state": bytes(native.program_accepted_state()),
+        "flux_ledger": tuple(
+            tuple(map(str, row)) for row in native.program_flux_ledger_manifest()
+        ),
+        "interface_flux_ledger": tuple(
+            tuple(map(str, row)) for row in native.program_interface_flux_ledger_manifest()
+        ),
+        "synchronization": tuple(
+            tuple(map(str, row)) for row in native.program_sync_manifest()
+        ),
+        "transfer_routes": tuple(
+            tuple(map(str, row)) for row in native.checkpoint_transfer_routes()
+        ),
         "regrid_count": int(native.checkpoint_regrid_count()),
         "topology_epoch": int(native.checkpoint_topology_epoch()),
         "run_identity": runtime.last_run_identity,
@@ -191,6 +207,49 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
             "failed collective restart restores each rank's complete accepted image",
         )
 
+        # Let the complete native transform finish, then make one rank report a different accepted
+        # contract identity.  The post-transform consensus must reject it and the outer restart
+        # transaction must restore owners, histories, ledgers, Program bytes and topology exactly.
+        from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
+
+        original_contract_identity = checkpoint_codec._restart_accepted_contract_identity
+        identity_calls = 0
+
+        def diverge_after_native_transform(sim):
+            nonlocal identity_calls
+            identity_calls += 1
+            identity = original_contract_identity(sim)
+            if identity_calls == 2 and int(_COMM.rank) == 1:
+                from pops.identity import make_identity
+
+                return make_identity(
+                    "restart-accepted-contract",
+                    {"injected_rank": 1, "native_identity": identity},
+                ).token
+            return identity
+
+        checkpoint_codec._restart_accepted_contract_identity = diverge_after_native_transform
+        divergent_identity_caught = False
+        try:
+            restarted.restart(checkpoint)
+        except RuntimeError:
+            divergent_identity_caught = True
+        finally:
+            checkpoint_codec._restart_accepted_contract_identity = original_contract_identity
+
+        chk(
+            all(allgather_value(_COMM, divergent_identity_caught)),
+            "rank-divergent post-transform contract identity fails every rank coherently",
+        )
+        chk(
+            all(value == 2 for value in allgather_value(_COMM, identity_calls)),
+            "identity divergence is injected only after the native transform",
+        )
+        chk(
+            _same_image(_accepted_image(restarted), rollback_image),
+            "post-transform identity divergence rolls back owners, histories and Program audit",
+        )
+
         restart_identity = restarted.restart(checkpoint)
         continuation_identity = restarted.last_run_identity
         receipt = restarted._executor.last_restart_regrid_receipt()
@@ -202,6 +261,24 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
             receipt["changed"] is True
             and receipt["before"]["topology_identity"] != receipt["after"]["topology_identity"],
             "successful retry performs one real structural hierarchy transform",
+        )
+        from pops.identity import Identity
+
+        chk(
+            receipt["schema_version"] == 2
+            and Identity.from_token(
+                receipt["accepted_contract_identity_before"]
+            ).domain
+            == "restart-accepted-contract"
+            and Identity.from_token(
+                receipt["accepted_contract_identity_after"]
+            ).domain
+            == "restart-accepted-contract"
+            and Identity.from_token(receipt["history_identity_before"]).domain
+            == "restart-history-image"
+            and Identity.from_token(receipt["history_identity_after"]).domain
+            == "restart-history-image",
+            "receipt authenticates accepted contracts and dense history images before/after",
         )
         chk(
             np.allclose(

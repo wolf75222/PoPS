@@ -56,20 +56,19 @@ def test_refined_shared_interface_bind_accepts_exact_mpi_world() -> None:
     _validate_refined_shared_interface_execution((0, 1, 2), mpi, 2)
 
 
-def test_dynamic_refined_shared_interface_bind_remains_serial() -> None:
+def test_dynamic_refined_shared_interface_bind_accepts_serial_and_exact_mpi_world() -> None:
     _validate_refined_shared_interface_execution(
         (0, 1, 2),
         {"communicator_identity": "serial"},
         1,
         dynamic_regrid=True,
     )
-    with pytest.raises(NotImplementedError, match="rematerialization"):
-        _validate_refined_shared_interface_execution(
-            (0, 1, 2),
-            {"communicator_identity": "MPI_COMM_WORLD"},
-            2,
-            dynamic_regrid=True,
-        )
+    _validate_refined_shared_interface_execution(
+        (0, 1, 2),
+        {"communicator_identity": "MPI_COMM_WORLD"},
+        2,
+        dynamic_regrid=True,
+    )
 
 
 def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> None:
