@@ -5,7 +5,8 @@
 #include <pops/core/state/variables.hpp>   // VariableSet (role descriptor carried by each block)
 #include <pops/mesh/index/box2d.hpp>       // Box2D
 #include <pops/mesh/execution/for_each.hpp>  // device_fence (marshaling synchronizes the device before reading the host)
-#include <pops/mesh/storage/multifab.hpp>         // MultiFab, Array4, ConstArray4
+#include <pops/mesh/storage/multifab.hpp>  // MultiFab, Array4, ConstArray4
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GeometryMode + point-qualified geometry residuals
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 
@@ -56,6 +57,7 @@ class SystemBlockStore {
   /// arrays of ncomp doubles. SAME type as System::CellConvert (identical std::function): assignment
   /// from set_block_conversion / native_loader stays a trivial move.
   using CellConvert = std::function<void(const double* in, double* out)>;
+  using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
 
   /// Compiled spatial closures frozen at block add time (composite model + spatial scheme).
   /// Type-erased ONLY at the block list level; the kernel stays compiled.
@@ -97,7 +99,8 @@ class SystemBlockStore {
     // Set at add time (install_block / push_dynamic) from the real model; empty -> identity (the
     // model exposes no conversion, e.g. pure scalar or .so generated before this work).
     // Consumed by set_primitive_state / get_primitive_state (init/diagnostic in primitive).
-    CellConvert prim_to_cons, cons_to_prim;
+    CellConvert prim_to_cons;
+    CellRecovery cons_to_prim;
     // dt_hotspot DIAGNOSTIC (ADC-182): (U, w, i, j) -> GLOBAL cell dominating the transport CFL bound
     // of the block + its speed w = max(wx, wy). ON DEMAND only (System::dt_hotspot):
     // never queried by step/step_cfl (hot path bit-identical). Trailing + empty default.
