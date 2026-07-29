@@ -199,6 +199,7 @@
   "test_two_species_minimal": 2.0,
   "test_user_time_integrator": 2.0,
   "test_variable_epsilon": 2.0,
+  "test_variable_recovery_chain": 2.0,
   "test_variable_role": 2.0,
   "test_variable_user_role": 2.0,
   "test_wave_speed_cache_engagement": 2.0,
