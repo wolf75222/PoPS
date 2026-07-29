@@ -234,6 +234,19 @@ class AmrPreparedFieldSolver {
   virtual MultiFab& rhs_level(int level) = 0;
   virtual MultiFab& phi_level(int level) = 0;
   virtual void set_boundary_context(const FieldBoundaryExecutionContext& context) = 0;
+  /// Replace the dynamic-boundary carrier for one exact materialized hierarchy level. Provider
+  /// implementations rebuilt against this interface retain a fail-closed source-compatible
+  /// default: only level zero can reuse the historical single-context route. Providers advertising
+  /// genuine multilevel dynamic boundaries must override this seam instead of presenting coarse
+  /// dependency storage to a fine-level iterate. Binary compatibility for an already-built external
+  /// provider remains a separate ABI contract.
+  virtual void set_boundary_context_at_level(int level,
+                                             const FieldBoundaryExecutionContext& context) {
+    if (level != 0)
+      throw std::runtime_error(
+          "AMR field provider has no level-qualified dynamic-boundary context route");
+    set_boundary_context(context);
+  }
   [[nodiscard]] virtual const SolveReport& last_solve_report() const noexcept = 0;
 
  protected:
@@ -3684,9 +3697,9 @@ class AmrRuntime {
   /// consumed; only the provider's candidate publication remains transactional. This is the native
   /// field-coupled Jacobian seam used by AmrProgramContext.
   ///
-  /// Dynamic field boundaries whose kernels read conservative state remain coarse-only until their
-  /// dependency views are materialized per level. Rejecting that narrower case here prevents a fine
-  /// solve from silently presenting coarse storage to a fine boundary kernel.
+  /// A level-local provider receives one exact dependency carrier per materialized level. Composite
+  /// providers retain one coupled context and therefore remain fail-closed for state-dependent
+  /// dynamic boundaries until their solver ABI exposes an equally exact per-level route.
   [[nodiscard]] bool named_field_stage_state_is_level_qualified(const std::string& provider_slot,
                                                                 int level) const {
     const auto field = named_fields_.find(provider_slot);
@@ -3698,7 +3711,8 @@ class AmrRuntime {
       throw std::out_of_range(
           "AmrRuntime::named_field_stage_state_is_level_qualified level is out of range");
     return level == 0 || !field->second.plan.has_boundary_kernel ||
-           field->second.plan.boundary_state_blocks.empty();
+           field->second.plan.boundary_state_blocks.empty() ||
+           field->second.plan.hierarchy_policy.policy_id == "pops.field-hierarchy.level-local";
   }
 
   SolveOutcome solve_named_fields_from_state_at(
@@ -3852,31 +3866,97 @@ class AmrRuntime {
           (has_gradient && (nf.gx_comp >= aux_ncomp_ || nf.gy_comp >= aux_ncomp_)))
         throw std::runtime_error(
             "AmrRuntime: named elliptic field output components exceed the aux channel width");
-      nf.plan.boundary_state_buffers.clear();
-      nf.plan.boundary_state_distributions.clear();
-      for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
-        const int block = block_index(nf.plan.boundary_state_blocks[index]);
-        if (block < 0)
-          throw std::runtime_error("AmrRuntime: boundary state dependency names unknown block");
-        const MultiFab& state = (*blocks_[static_cast<std::size_t>(block)].levels)[0].U;
-        if (nf.plan.boundary_state_components[index] < 0 ||
-            nf.plan.boundary_state_components[index] >= state.ncomp())
-          throw std::runtime_error("AmrRuntime: boundary state component is out of range");
-        nf.plan.boundary_state_buffers.push_back(&state);
-        nf.plan.boundary_state_distributions.push_back(
-            replicated_coarse_ ? FieldDistribution::Replicated : FieldDistribution::Distributed);
-      }
-      nf.plan.boundary_context.states =
-          nf.plan.boundary_state_buffers.empty() ? nullptr : nf.plan.boundary_state_buffers.data();
-      nf.plan.boundary_context.state_distributions =
-          nf.plan.boundary_state_distributions.empty()
-              ? nullptr
-              : nf.plan.boundary_state_distributions.data();
-      nf.plan.boundary_context.state_count =
-          static_cast<int>(nf.plan.boundary_state_buffers.size());
       ensure_named_elliptic(nf);
-      if (nf.plan.has_boundary_kernel)
-        nf.solver->set_boundary_context(nf.plan.boundary_context);
+      if (nf.plan.has_boundary_kernel && !nf.plan.boundary_state_blocks.empty()) {
+        const int levels = nf.solver->level_count();
+        long dependency_error =
+            nf.plan.boundary_state_blocks.size() != nf.plan.boundary_state_components.size() ? 1L
+                                                                                             : 0L;
+        if (levels != nlev_ || (levels > 1 && nf.plan.hierarchy_policy.policy_id !=
+                                                  "pops.field-hierarchy.level-local"))
+          dependency_error = std::max(dependency_error, 2L);
+        if (dependency_error == 0)
+          for (int level = 0; level < levels; ++level)
+            for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
+              const int raw_block = block_index(nf.plan.boundary_state_blocks[index]);
+              if (raw_block < 0) {
+                dependency_error = std::max(dependency_error, 3L);
+                continue;
+              }
+              const std::size_t block = static_cast<std::size_t>(raw_block);
+              const MultiFab& accepted =
+                  (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+              const MultiFab* state = &accepted;
+              if (boundary_stage_states_ && boundary_stage_states_->point.level == level) {
+                MultiFab* staged = boundary_stage_states_->state(block);
+                if (staged != nullptr) {
+                  if (!same_exact_multifab_layout_(accepted, *staged))
+                    dependency_error = std::max(dependency_error, 4L);
+                  state = staged;
+                }
+              }
+              if (nf.plan.boundary_state_components[index] < 0 ||
+                  nf.plan.boundary_state_components[index] >= state->ncomp())
+                dependency_error = std::max(dependency_error, 5L);
+            }
+        dependency_error = all_reduce_max(dependency_error);
+        if (dependency_error != 0)
+          throw std::runtime_error(
+              "AmrRuntime: level-qualified boundary-state materialization failed collectively "
+              "(code " +
+              std::to_string(dependency_error) + ")");
+        std::vector<NamedField::BoundaryLevelContext> prepared_contexts;
+        long preparation_error = 0;
+        try {
+          prepared_contexts.resize(static_cast<std::size_t>(levels));
+          for (int level = 0; level < levels; ++level) {
+            auto& carrier = prepared_contexts[static_cast<std::size_t>(level)];
+            carrier.state_buffers.reserve(nf.plan.boundary_state_blocks.size());
+            carrier.state_distributions.reserve(nf.plan.boundary_state_blocks.size());
+            for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
+              const int raw_block = block_index(nf.plan.boundary_state_blocks[index]);
+              const std::size_t block = static_cast<std::size_t>(raw_block);
+              const MultiFab& accepted =
+                  (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+              const MultiFab* state = &accepted;
+              if (boundary_stage_states_ && boundary_stage_states_->point.level == level) {
+                MultiFab* staged = boundary_stage_states_->state(block);
+                if (staged != nullptr)
+                  state = staged;
+              }
+              carrier.state_buffers.push_back(state);
+              carrier.state_distributions.push_back(level == 0 && replicated_coarse_
+                                                        ? FieldDistribution::Replicated
+                                                        : FieldDistribution::Distributed);
+            }
+            carrier.context = nf.plan.boundary_context;
+            carrier.context.states = carrier.state_buffers.data();
+            carrier.context.state_distributions = carrier.state_distributions.data();
+            carrier.context.state_count = static_cast<int>(carrier.state_buffers.size());
+          }
+        } catch (...) {
+          preparation_error = 6;
+        }
+        preparation_error = all_reduce_max(preparation_error);
+        if (preparation_error != 0)
+          throw std::runtime_error(
+              "AmrRuntime: level-qualified boundary-state carriers could not be prepared "
+              "collectively");
+        nf.boundary_level_contexts = std::move(prepared_contexts);
+        for (int level = 0; level < levels; ++level) {
+          auto& carrier = nf.boundary_level_contexts[static_cast<std::size_t>(level)];
+          carrier.context.states = carrier.state_buffers.data();
+          carrier.context.state_distributions = carrier.state_distributions.data();
+          nf.solver->set_boundary_context_at_level(level, carrier.context);
+        }
+      } else if (nf.plan.has_boundary_kernel) {
+        FieldBoundaryExecutionContext context = nf.plan.boundary_context;
+        context.states = nullptr;
+        context.state_distributions = nullptr;
+        context.state_count = 0;
+        nf.boundary_level_contexts.clear();
+        nf.solver->set_boundary_context(context);
+      }
       prepare_named_field_providers(nf);
       prepare_named_rhs_scratch_(nf);
       // The provider registry has already resolved the complete block-qualified route.  Assembly
@@ -5246,6 +5326,11 @@ class AmrRuntime {
       Real coefficient = Real(1);
       std::function<void(const MultiFab&, MultiFab&)> rhs;
     };
+    struct BoundaryLevelContext {
+      std::vector<const MultiFab*> state_buffers;
+      std::vector<FieldDistribution> state_distributions;
+      FieldBoundaryExecutionContext context{};
+    };
     int phi_comp = -1;
     int gx_comp = -1;
     int gy_comp = -1;
@@ -5262,6 +5347,7 @@ class AmrRuntime {
     std::vector<MultiFab*> nullspace_phi_levels;
     std::vector<MultiFab> rhs_contribution_scratch;
     std::uint64_t rhs_scratch_generation = 0;
+    std::vector<BoundaryLevelContext> boundary_level_contexts;
     bool nullspace_ready = false;
   };
 
@@ -5343,6 +5429,7 @@ class AmrRuntime {
     field.nullspace_phi_levels.clear();
     field.rhs_contribution_scratch.clear();
     field.rhs_scratch_generation = 0;
+    field.boundary_level_contexts.clear();
     field.solver.reset();
     field.nullspace = {};
     field.level_nullspace.clear();
