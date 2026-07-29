@@ -824,7 +824,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n  # Check historique", 1)[0]
     assert "timeout-minutes: 22" in cpp_prewarm_block
     assert (
-        "lane: [system, amr-base, amr-compressible, amr-compiled]"
+        "lane: [system, amr-base, amr-block-base, amr-compressible]"
         in cpp_prewarm_block
     )
     assert "scripts/ci_python_module_objects.py" in cpp_prewarm_block
@@ -884,7 +884,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "needs: [set-mode, changes]" in mpi_prewarm_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_prewarm_block
     assert (
-        "lane: [system, amr-base, amr-compressible, amr-compiled]"
+        "lane: [system, amr-base, amr-block-base, amr-compressible]"
         in mpi_prewarm_block
     )
     assert "cmake --preset ci-mpi" in mpi_prewarm_block
@@ -963,7 +963,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "needs: set-mode" in openmp_prewarm_block
     assert "if: needs.set-mode.outputs.openmp_required == 'true'" in openmp_prewarm_block
     assert (
-        "lane: [system, amr-base, amr-compressible, amr-compiled]"
+        "lane: [system, amr-base, amr-block-base, amr-compressible]"
         in openmp_prewarm_block
     )
     assert "graph: [cpp, python]" in openmp_prewarm_block
@@ -1203,9 +1203,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "--verify-contracts" in python_build_block
     assert "test \"${#cache_archives[@]}\" -eq 4" in python_build_block
     assert "test \"${#compile_contracts[@]}\" -eq 4" in python_build_block
-    assert "matrix.lane: [system, amr-base, amr-compressible, amr-compiled]" \
+    assert "matrix.lane: [system, amr-base, amr-block-base, amr-compressible]" \
         not in python_prewarm_block
-    assert "lane: [system, amr-base, amr-compressible, amr-compiled]" \
+    assert "lane: [system, amr-base, amr-block-base, amr-compressible]" \
         in python_prewarm_block
     assert "timeout-minutes: 22" in python_prewarm_block
     assert "lookup-only: true" in python_prewarm_block
@@ -1277,7 +1277,7 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
     assert "timeout-minutes: 60" in prewarm
     assert "profile: [warnings, asan, coverage]" in prewarm
     assert (
-        "lane: [system, amr-base, amr-compressible, amr-compiled]"
+        "lane: [system, amr-base, amr-block-base, amr-compressible]"
         in prewarm
     )
     assert "CCACHE_MAXSIZE: 2G" in prewarm
@@ -1301,7 +1301,7 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
     artifact_names = {
         f"quality-prewarm-{profile}-{lane}"
         for profile in ("warnings", "asan", "coverage")
-        for lane in ("system", "amr-base", "amr-compressible", "amr-compiled")
+        for lane in ("system", "amr-base", "amr-block-base", "amr-compressible")
     }
     assert len(artifact_names) == 12
     for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):

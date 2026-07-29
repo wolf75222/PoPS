@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 
 
-LANES = ("system", "amr-base", "amr-compressible", "amr-compiled")
+LANES = ("system", "amr-base", "amr-block-base", "amr-compressible")
 
 
 def _runtime_objects(ninja_targets: str) -> list[str]:
@@ -47,8 +47,8 @@ def partition_runtime_objects(ninja_targets: str) -> dict[str, list[str]]:
     lanes = {lane: [] for lane in LANES}
     for target in _runtime_objects(ninja_targets):
         if target.startswith("src/CMakeFiles/pops_runtime_amr.dir/"):
-            if "/generated_seams/amr/compiled/" in target:
-                lanes["amr-compiled"].append(target)
+            if "/generated_seams/amr/block/base/" in target:
+                lanes["amr-block-base"].append(target)
             elif "/compressible/" in target:
                 lanes["amr-compressible"].append(target)
             else:

@@ -311,7 +311,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-cpp-prewarm
@@ -724,7 +724,7 @@ jobs:
         run: pyright
 
   # PREWARM PYTHON NATIF : quatre runners compilent des ensembles d'objets O3 disjoints du MEME
-  # graphe Ninja (System/core, AMR base, AMR compressible, AMR compiled). Ils ne publient aucun
+  # graphe Ninja (System/core, AMR core, AMR block base, AMR compressible). Ils ne publient aucun
   # binaire : seulement
   # les entrees ccache adressees par contenu et un contrat compilateur/flags/SHA/sources. Le build
   # final ci-dessous reconfigure officiellement tout le module, authentifie les quatre contrats,
@@ -738,7 +738,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
@@ -1445,7 +1445,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-mpi-prewarm
@@ -1962,7 +1962,7 @@ jobs:
       fail-fast: false
       matrix:
         graph: [cpp, python]
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-openmp-prewarm

@@ -180,7 +180,7 @@ jobs:
       fail-fast: false
       matrix:
         profile: [warnings, asan, coverage]
-        lane: [system, amr-base, amr-compressible, amr-compiled]
+        lane: [system, amr-base, amr-block-base, amr-compressible]
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-quality-prewarm
       CCACHE_MAXSIZE: 2G
