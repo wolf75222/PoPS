@@ -42,7 +42,7 @@
 #include <pops/runtime/program/cache_manager.hpp>   // CacheManager (held-node value cache, ADC-458)
 #include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
 #include <pops/runtime/program/program_execution_services.hpp>
-#include <pops/runtime/system.hpp>                  // System (the runtime this facade forwards to)
+#include <pops/runtime/system.hpp>  // System (the runtime this facade forwards to)
 
 /// @file
 /// @brief ProgramContext -- the C++-side facade a generated problem.so calls to run a compiled time
@@ -1013,8 +1013,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       if (std::find(targets.begin(), targets.end(), target) != targets.end())
         throw std::invalid_argument("ProgramContext::commit_many received a duplicate target");
       if (target->box_array().boxes() != source->box_array().boxes() ||
-          target->dmap().ranks() != source->dmap().ranks() ||
-          target->ncomp() != source->ncomp())
+          target->dmap().ranks() != source->dmap().ranks() || target->ncomp() != source->ncomp())
         throw std::invalid_argument("ProgramContext::commit_many state layout mismatch");
       targets.push_back(target);
     }
@@ -1522,10 +1521,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const int mapped = sys_block(static_cast<int>(p));
       for (std::size_t previous = 0; previous < p; ++previous) {
         if (block_map[previous] == mapped)
-          throw block_map_error_(
-              "ProgramContext::solve_fields_from_blocks: Program blocks " +
-              std::to_string(previous) + " and " + std::to_string(p) +
-              " both map to System block " + std::to_string(mapped));
+          throw block_map_error_("ProgramContext::solve_fields_from_blocks: Program blocks " +
+                                 std::to_string(previous) + " and " + std::to_string(p) +
+                                 " both map to System block " + std::to_string(mapped));
       }
     }
     workspace.program_to_system.assign(block_map.begin(), block_map.end());
@@ -1813,32 +1811,26 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
 
   friend class ProgramExecutionServices<ProgramContext>;
-  const std::vector<int>& program_execution_block_map_() const {
-    return sys_->program_block_map();
-  }
+  const std::vector<int>& program_execution_block_map_() const { return sys_->program_block_map(); }
   int program_execution_block_count_() const { return sys_->n_blocks(); }
-  Real program_execution_physical_time_() const {
-    return static_cast<Real>(sys_->time());
-  }
+  Real program_execution_physical_time_() const { return static_cast<Real>(sys_->time()); }
   void program_execution_record_scalar_(const std::string& name, Real value) const {
     sys_->record_program_diagnostic(name, value);
   }
   void program_execution_note_step_projection_(const std::string& name) const {
     sys_->note_step_projection(name);
   }
-  RuntimeParams program_execution_params_(int block) const {
-    return sys_->program_params(block);
-  }
-  void program_execution_set_field_timepoint_(
-      const std::string& field, const FieldLogicalTimePoint& point) const {
+  RuntimeParams program_execution_params_(int block) const { return sys_->program_params(block); }
+  void program_execution_set_field_timepoint_(const std::string& field,
+                                              const FieldLogicalTimePoint& point) const {
     sys_->set_field_logical_timepoint(field, point);
   }
-  void program_execution_set_field_parameters_(
-      const std::string& field, const std::vector<double>& parameters) const {
+  void program_execution_set_field_parameters_(const std::string& field,
+                                               const std::vector<double>& parameters) const {
     sys_->set_field_boundary_parameters(field, parameters);
   }
-  void program_execution_set_field_kernel_(
-      const std::string& field, const CompiledFieldBoundaryKernel& kernel) const {
+  void program_execution_set_field_kernel_(const std::string& field,
+                                           const CompiledFieldBoundaryKernel& kernel) const {
     sys_->set_field_boundary_kernel(field, kernel);
   }
   Profiler& program_execution_profiler_() const { return sys_->profiler(); }

@@ -981,8 +981,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       if (std::find(targets.begin(), targets.end(), target) != targets.end())
         throw std::invalid_argument("AmrProgramContext::commit_many received a duplicate target");
       if (target->box_array().boxes() != source->box_array().boxes() ||
-          target->dmap().ranks() != source->dmap().ranks() ||
-          target->ncomp() != source->ncomp())
+          target->dmap().ranks() != source->dmap().ranks() || target->ncomp() != source->ncomp())
         throw std::invalid_argument("AmrProgramContext::commit_many state layout mismatch");
       targets.push_back(target);
     }

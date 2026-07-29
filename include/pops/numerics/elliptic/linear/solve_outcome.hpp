@@ -140,10 +140,8 @@ class [[nodiscard]] SolveOutcome final {
     } else if (action == SolveConsumption::kRejectAttempt || action == SolveConsumption::kFailRun) {
       if (report_.solved_value_available())
         throw std::logic_error("cannot reject a solved SolveOutcome");
-      if (action == SolveConsumption::kRejectAttempt &&
-          report_.action == SolveAction::kFailRun)
-        throw std::logic_error(
-            "cannot downgrade a FailRun SolveOutcome to RejectAttempt");
+      if (action == SolveConsumption::kRejectAttempt && report_.action == SolveAction::kFailRun)
+        throw std::logic_error("cannot downgrade a FailRun SolveOutcome to RejectAttempt");
     } else {
       throw std::logic_error("invalid SolveConsumption action");
     }

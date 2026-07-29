@@ -251,10 +251,8 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
     const int A0 = n / 4, A1 = 3 * n / 4 - 1;
     Box2D b1{{r * A0, r * A0}, {r * A1 + r - 1, r * A1 + r - 1}};
     const int B0 = 3 * n / 8, B1 = 5 * n / 8 - 1;
-    Box2D b2{{r * r * B0, r * r * B0}, {r * r * B1 + r * r - 1,
-                                         r * r * B1 + r * r - 1}};
-    std::vector<BoxArray> lb{BoxArray(std::vector<Box2D>{b1}),
-                             BoxArray(std::vector<Box2D>{b2})};
+    Box2D b2{{r * r * B0, r * r * B0}, {r * r * B1 + r * r - 1, r * r * B1 + r * r - 1}};
+    std::vector<BoxArray> lb{BoxArray(std::vector<Box2D>{b1}), BoxArray(std::vector<Box2D>{b2})};
     CompositeFacPoisson fac(geom_c, ba_c, periodic, lb, r);
     for (int level = 0; level < fac.n_levels(); ++level) {
       const Geometry& geometry = fac.geom_level(level);
@@ -268,10 +266,9 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
         const Box2D valid = rhs.box(local);
         for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
           for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-            values(i, j, 0) =
-                -(eps_x + eps_y) * wave * wave *
-                periodic_exact(static_cast<Real>(geometry.x_cell(i)),
-                               static_cast<Real>(geometry.y_cell(j)));
+            values(i, j, 0) = -(eps_x + eps_y) * wave * wave *
+                              periodic_exact(static_cast<Real>(geometry.x_cell(i)),
+                                             static_cast<Real>(geometry.y_cell(j)));
       }
     }
     fac.use_variable_coefficient(true);

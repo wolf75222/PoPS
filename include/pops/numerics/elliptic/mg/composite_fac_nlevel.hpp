@@ -926,8 +926,7 @@ inline void CompositeFacPoisson::project_base_correction_rhs_() {
     local_count += static_cast<std::size_t>(valid.num_cells());
   }
   if (local_count == 0)
-    throw std::runtime_error(
-        "CompositeFacPoisson: replicated base correction has no local cells");
+    throw std::runtime_error("CompositeFacPoisson: replicated base correction has no local cells");
   const Real mean = local_sum / static_cast<Real>(local_count);
   for (int li = 0; li < rhs.local_size(); ++li)
     for_each_cell(rhs.box(li), detail::FacShiftKernel{rhs.fab(li).array(), mean});

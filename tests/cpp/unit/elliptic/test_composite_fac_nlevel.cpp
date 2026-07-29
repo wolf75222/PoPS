@@ -335,22 +335,18 @@ TEST(CompositeFacNlevelTest, three_level_periodic_full_tensor_mms_converges) {
   const int level2_lo = 3 * n / 8;
   const int level2_hi = 5 * n / 8 - 1;
   const Box2D level2_box{{r * r * level2_lo, r * r * level2_lo},
-                         {r * r * level2_hi + r * r - 1,
-                          r * r * level2_hi + r * r - 1}};
-  CompositeFacPoisson fac(
-      coarse_geometry, coarse_boxes, periodic,
-      std::vector<BoxArray>{BoxArray(std::vector<Box2D>{level1_box}),
-                            BoxArray(std::vector<Box2D>{level2_box})},
-      r);
+                         {r * r * level2_hi + r * r - 1, r * r * level2_hi + r * r - 1}};
+  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, periodic,
+                          std::vector<BoxArray>{BoxArray(std::vector<Box2D>{level1_box}),
+                                                BoxArray(std::vector<Box2D>{level2_box})},
+                          r);
 
   constexpr Real eps_x = Real(1.2);
   constexpr Real eps_y = Real(0.8);
   constexpr Real a_xy = Real(0.2);
   constexpr Real a_yx = Real(-0.2);
   const Real wave = Real(2) * Real(kPi);
-  const auto exact = [wave](Real x, Real y) {
-    return std::sin(wave * x) * std::sin(wave * y);
-  };
+  const auto exact = [wave](Real x, Real y) { return std::sin(wave * x) * std::sin(wave * y); };
   for (int level = 0; level < fac.n_levels(); ++level) {
     const Geometry& geometry = fac.geom_level(level);
     fac.eps_level(level).set_val(eps_x);
@@ -365,21 +361,19 @@ TEST(CompositeFacNlevelTest, three_level_periodic_full_tensor_mms_converges) {
         for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
           values(i, j, 0) =
               -(eps_x + eps_y) * wave * wave *
-              exact(static_cast<Real>(geometry.x_cell(i)),
-                    static_cast<Real>(geometry.y_cell(j)));
+              exact(static_cast<Real>(geometry.x_cell(i)), static_cast<Real>(geometry.y_cell(j)));
     }
   }
   fac.use_variable_coefficient(true);
   fac.use_anisotropic_coefficient(true);
   fac.use_cross_terms(true);
 
-  const Real residual =
-      fac.solve(/*max_iters=*/160, /*fine_sweeps=*/100, /*rel_tol=*/1e-9,
-                /*abs_tol=*/1e-12);
+  const Real residual = fac.solve(/*max_iters=*/160, /*fine_sweeps=*/100, /*rel_tol=*/1e-9,
+                                  /*abs_tol=*/1e-12);
   EXPECT_TRUE(std::isfinite(static_cast<double>(residual)));
   EXPECT_TRUE(fac.last_solve_report().solved())
-      << "three-level periodic tensor FAC status="
-      << fac.last_solve_report().status_name() << " residual=" << residual;
+      << "three-level periodic tensor FAC status=" << fac.last_solve_report().status_name()
+      << " residual=" << residual;
   EXPECT_LT(residual, Real(1e-5));
   comm_finalize();
 }

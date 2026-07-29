@@ -290,12 +290,11 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
   // already rejected by validate_riemann(polar=true), and suppresses -Wswitch on the partial switch.
   switch (parse_riemann_route(riem, "System (polar)")) {
     case RiemannRouteId::kRusanov:
-      return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",
-                              [&](auto tag) {
-                                using L = typename decltype(tag)::type;
-                                return build_block_polar<L, RusanovFlux>(
-                                    m, ctx, recon_prim, wall_radial, pos_floor);
-                              });
+      return dispatch_limiter(
+          parse_limiter_route(lim, "System (polar)"), "System (polar)", [&](auto tag) {
+            using L = typename decltype(tag)::type;
+            return build_block_polar<L, RusanovFlux>(m, ctx, recon_prim, wall_radial, pos_floor);
+          });
     case RiemannRouteId::kHll:
       // GATE IDENTICAL TO THE CARTESIAN ONE (block_builder.hpp make_block, 'hll' branch): HLL is
       // available as soon as a model exposes its SIGNED wave speeds model.wave_speeds (the polar
@@ -306,12 +305,11 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
       if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
                       mm.wave_speeds(s, a, 0, r, r);
                     }) {
-        return dispatch_limiter(parse_limiter_route(lim, "System (polar)"), "System (polar)",
-                                [&](auto tag) {
-                                  using L = typename decltype(tag)::type;
-                                  return build_block_polar<L, HLLFlux>(
-                                      m, ctx, recon_prim, wall_radial, pos_floor);
-                                });
+        return dispatch_limiter(
+            parse_limiter_route(lim, "System (polar)"), "System (polar)", [&](auto tag) {
+              using L = typename decltype(tag)::type;
+              return build_block_polar<L, HLLFlux>(m, ctx, recon_prim, wall_radial, pos_floor);
+            });
       } else {
         throw std::runtime_error(
             "System (polar): flux 'hll' requires signed wave speeds (model.wave_speeds); "

@@ -153,14 +153,14 @@ void external_install_system(System& sys, const std::string& name, const std::st
   Model model{};
   sys.ensure_aux_width(aux_comps<Model>());
   const GridContext ctx = sys.grid_context(name);
-  BlockClosures closures = dispatch_limiter(
-      parse_limiter_route(limiter, "external riemann brick"), "external riemann brick",
-      [&](auto tag) {
-        using Limiter = typename decltype(tag)::type;
-        return build_block<Limiter, Flux>(model, ctx, recon_prim,
-                                          static_cast<Real>(positivity_floor), false,
-                                          static_cast<Real>(weno_epsilon));
-      });
+  BlockClosures closures =
+      dispatch_limiter(parse_limiter_route(limiter, "external riemann brick"),
+                       "external riemann brick", [&](auto tag) {
+                         using Limiter = typename decltype(tag)::type;
+                         return build_block<Limiter, Flux>(model, ctx, recon_prim,
+                                                           static_cast<Real>(positivity_floor),
+                                                           false, static_cast<Real>(weno_epsilon));
+                       });
   auto max_speed = make_max_speed(model, ctx);
   auto poisson_rhs = make_poisson_rhs(model);
   sys.install_block(name, Model::n_vars, Model::conservative_vars(), Model::primitive_vars(), gamma,

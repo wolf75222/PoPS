@@ -268,8 +268,7 @@ class SystemProgramDriver {
       throw std::runtime_error("System::step_cfl field solver published a malformed SolveReport");
     ExactSolveReportConsensusScratch field_report_consensus;
     if (!field_report_consensus.agrees(field_report))
-      throw std::runtime_error(
-          "System::step_cfl field solver report differs between MPI ranks");
+      throw std::runtime_error("System::step_cfl field solver report differs between MPI ranks");
 
     SolveOutcome field_outcome = SolveOutcome::collective_world(std::move(field_report));
     const SolveConsumption field_action =
@@ -284,9 +283,8 @@ class SystemProgramDriver {
         throw runtime::program::StepAttemptRejected(field_report.status, "CFL field evaluation",
                                                     field_report.reason);
       throw std::runtime_error(std::string("System::step_cfl field evaluation failed: status=") +
-                               field_report.status_name() +
-                               " action=" + field_report.action_name() +
-                               " reason=" + field_report.reason);
+                               field_report.status_name() + " action=" +
+                               field_report.action_name() + " reason=" + field_report.reason);
     }
     // MIN physical step of the grid (Cartesian min(dx,dy) / polar min(dr, r_min*dtheta), cf.
     // cfl_grid_h). The rest of the CFL formula (per block, substeps/stride) is unchanged.

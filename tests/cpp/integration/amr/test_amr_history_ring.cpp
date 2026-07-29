@@ -206,11 +206,10 @@ static void install_history_state_authorities(AmrSystem& sim) {
 
 static void install_history_threshold_union(AmrSystem& sim, double threshold) {
   test::install_prepared_threshold_union(
-      sim,
-      {{"a", "n", threshold, test::PreparedThresholdRelation::Above,
-        "test://amr-history/block/a/state/U"},
-       {"b", "n", threshold, test::PreparedThresholdRelation::Above,
-        "test://amr-history/block/b/state/U"}});
+      sim, {{"a", "n", threshold, test::PreparedThresholdRelation::Above,
+             "test://amr-history/block/a/state/U"},
+            {"b", "n", threshold, test::PreparedThresholdRelation::Above,
+             "test://amr-history/block/b/state/U"}});
 }
 
 static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio = kAmrRefRatio) {
@@ -457,8 +456,7 @@ TEST(test_amr_history_ring, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(17));
 
   MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
-  EXPECT_THROW(context.commit_many({{&first, &wrong_components}}),
-               std::invalid_argument);
+  EXPECT_THROW(context.commit_many({{&first, &wrong_components}}), std::invalid_argument);
   EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(17));
   EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(5));
 }
