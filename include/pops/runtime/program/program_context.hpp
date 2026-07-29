@@ -741,65 +741,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     neg_div_flux_into(r, fx, fy, divc, lane);
   }
 
-  /// Register (idempotent) the history @p name with maximum lag @p lag, allocating the ring buffer
-  /// WITHOUT reading it. The codegen emits this ONCE in the artifact-install prelude for each
-  /// declared history, so a fresh restart sees the complete ring schema before the first step and
-  /// the depth is locked before the first store (the cold-start fill then broadcasts the first
-  /// stored value into every -- already allocated -- slot). @p ncomp is the slot component count:
-  /// the default -1 resolves to block 0's ncomp (the multistep ring, byte-identical), and an explicit
-  /// @p ncomp >= 1 sizes a narrower ring (ADC-427: a 1-component cross-step potential carry).
-  /// Forwards to System::register_history. A read-only counterpart of @ref history.
-  void register_history(const std::string& name, int lag, int ncomp = -1) const {
-    sys_->register_history(name, lag, ncomp);
-  }
-  void register_history(const std::string& name, int lag, int ncomp, int owner,
-                        const std::string& state_identity, const std::string& space_identity,
-                        const std::string& clock_identity,
-                        const std::string& interpolation_identity) const {
-    sys_->register_history(name, lag, ncomp, owner < 0 ? -1 : sys_block(owner), state_identity,
-                           space_identity, clock_identity, interpolation_identity);
-  }
-
-  /// The history slot @p lag macro-steps back (the SYSTEM-OWNED ring buffer, ADC-406a): lag 1 = the
-  /// previous step's stored value (e.g. R_{n-1} for Adams-Bashforth), lag 0 = the current slot. The
-  /// codegen emits ``ctx.history("<name>", <lag>)``; the read registers the ring on first use
-  /// (idempotent) and forwards to System::read_history, which throws if the history was never stored
-  /// (spec error 17). The register uses the DEFAULT ncomp (block 0's ncomp) so a bare read never
-  /// changes an already-declared ring's width; a narrower ring (ADC-427) is declared by the prelude
-  /// register_history(name, lag, ncomp) the codegen emits before any read. @p lag defaults to 1.
-  MultiFab& history(const std::string& name, int lag = 1) const {
-    // System::register_history requires a retained depth of at least one even though slot 0 is a
-    // valid read target. Register that minimum depth when the caller asks for the current slot.
-    sys_->register_history(name, lag == 0 ? 1 : lag);
-    return sys_->read_history(name, lag);
-  }
-  /// Owner-qualified mirror used by sources that also contain an AMR entry point.  @p owner is a
-  /// Program block index (never a component index); resolving it here preserves the same topology
-  /// guard as the AMR context before delegating to the System-owned whole-field ring.
-  MultiFab& history(const std::string& name, int lag, int owner) const {
-    (void)sys_block(owner);
-    return history(name, lag);
-  }
-
-  /// ZERO COLD-START history read (ADC-427): like @ref history, but a read BEFORE the first store
-  /// returns the zero-filled slot instead of failing loud. A read-first carry (the cross-step
-  /// potential: read the previous step's value at the TOP of the step, store the new one at the END)
-  /// has no store before its very first read; its declared step-0 value IS zero (the slots are
-  /// zero-initialized at registration), so the first read marks the ring initialized and reads it.
-  /// The multistep store-first pattern keeps the fail-loud @ref history read unchanged. @p ncomp
-  /// mirrors register_history (binds the slot width at the first register; -1 = block 0's ncomp).
-  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
-    sys_->register_history(name, lag, ncomp);  // idempotent; ncomp binds at the first register
-    if (!sys_->history_initialized(name))
-      sys_->set_history_initialized(name,
-                                    true);  // the zero-filled slots ARE the declared cold start
-    return sys_->read_history(name, lag);
-  }
-  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp, int owner) const {
-    (void)sys_block(owner);
-    return history_zero_start(name, lag, ncomp);
-  }
-
   /// Reconstruct one primary-clock retained state at an exact target-clock coordinate. The
   /// bracketing slots and every intervening accepted interval come from the native history ledger;
   /// no Python callback, current-state alias, or fixed-dt inference participates.
@@ -858,32 +799,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     MultiFab& newer = history(name, older_lag - 1);
     const Real alpha = static_cast<Real>(timestamp_fraction);
     lincomb(out, Real(1) - alpha, older, alpha, newer);
-  }
-
-  /// Store @p value into the CURRENT slot of history @p name (ADC-406a). Registers the ring on first
-  /// use (at least a current slot; the lag the program reads via @ref history sets the real depth) and
-  /// forwards to System::store_history (which fills every slot on the first store -- the cold start).
-  /// A generated logical scope publishes its active dt explicitly, so a child-clock ring records the
-  /// child interval. Hand-written contexts that did not call begin_step retain the legacy System-owned
-  /// macro-dt route. Uses the default ncomp on register (the width is fixed by the prelude register).
-  void store_history(const std::string& name, const MultiFab& value) const {
-    sys_->register_history(name, 1);  // idempotent: at least a current slot exists before the store
-    if (std::isfinite(current_dt_) && current_dt_ > 0.0)
-      sys_->store_history(name, value, current_dt_);
-    else
-      sys_->store_history(name, value);
-  }
-  void store_history(const std::string& name, const MultiFab& value, int owner) const {
-    (void)sys_block(owner);
-    store_history(name, value);
-  }
-
-  /// Shift every history ring one macro-step (slot k <- slot k-1). Forwards to
-  /// System::rotate_histories. The codegen emits ``ctx.rotate_histories()`` as the LAST statement of
-  /// the step body (after the commit), so the next step reads lag k as the value k stores ago.
-  void rotate_histories() const { sys_->rotate_histories(); }
-  void rotate_histories(const std::string& clock_identity) const {
-    sys_->rotate_histories(clock_identity);
   }
 
   /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the
@@ -1315,6 +1230,49 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   std::size_t program_execution_apply_coupling_(
       Real dt, const std::vector<MultiFab*>& runtime_states) const {
     return sys_->apply_coupling_operators(dt, runtime_states);
+  }
+  void program_execution_register_history_storage_(const HistoryRegistration& registration) const {
+    sys_->register_history(registration.name, registration.lag, registration.ncomp,
+                           registration.qualified ? registration.runtime_owner : -1,
+                           registration.state_identity, registration.space_identity,
+                           registration.clock_identity, registration.interpolation_identity);
+  }
+  MultiFab& program_execution_read_history_storage_(const HistoryRegistration& registration,
+                                                    int lag, HistoryReadMode /*mode*/) const {
+    return sys_->read_history(registration.name, lag);
+  }
+  bool program_execution_history_initialized_storage_(
+      const HistoryRegistration& registration) const {
+    return sys_->history_initialized(registration.name);
+  }
+  void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
+                                                          bool initialized) const {
+    sys_->set_history_initialized(registration.name, initialized);
+  }
+  HistoryStorePlan program_execution_history_store_plan_(
+      const HistoryRegistration& /*registration*/) const {
+    if (std::isfinite(current_dt_) && current_dt_ > 0.0)
+      return {true, static_cast<Real>(current_dt_)};
+    return {true, std::nullopt};
+  }
+  void program_execution_store_history_storage_(const HistoryRegistration& registration,
+                                                const MultiFab& value,
+                                                const std::optional<Real>& outgoing_dt) const {
+    if (outgoing_dt)
+      sys_->store_history(registration.name, value, static_cast<double>(*outgoing_dt));
+    else
+      sys_->store_history(registration.name, value);
+  }
+  bool program_execution_history_supports_selective_rotation_() const noexcept { return true; }
+  HistoryRotationAction program_execution_history_rotation_action_() const noexcept {
+    return HistoryRotationAction::Rotate;
+  }
+  void program_execution_defer_history_rotation_() const noexcept {}
+  void program_execution_rotate_history_storage_(const std::string& clock_identity) const {
+    if (clock_identity.empty())
+      sys_->rotate_histories();
+    else
+      sys_->rotate_histories(clock_identity);
   }
   CacheManager& program_execution_cache_(SchedulerCacheOperation /*operation*/) const {
     return sys_->program_cache();

@@ -10,6 +10,10 @@ SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
 CODEGEN = ROOT / "python" / "pops" / "codegen"
+HISTORY_CONTRACT = (
+    ROOT / "tests" / "python" / "integration" / "amr"
+    / "test_program_history_contract.py"
+)
 CODEGEN_CONTEXT_ROUTES = (
     CODEGEN / "program_codegen.py",
     CODEGEN / "program_emit_amr.py",
@@ -22,6 +26,10 @@ SHARED_SIGNATURES = (
     "struct CouplingStateOverride",
     "enum class ScratchKind",
     "enum class SchedulerCacheOperation",
+    "enum class HistoryReadMode",
+    "enum class HistoryRotationAction",
+    "struct HistoryRegistration",
+    "struct HistoryStorePlan",
     "struct ProgramResourceStorage",
     "struct ProgramResourceTopology",
     "struct LogicalEvaluationInterval",
@@ -108,6 +116,11 @@ SHARED_OVERLOAD_COUNTS = {
     "Real min(": 2,
     "Real abs_sum(": 2,
     "void fill_boundary(": 2,
+    "void register_history(": 2,
+    "MultiFab& history(": 2,
+    "MultiFab& history_zero_start(": 2,
+    "void store_history(": 2,
+    "void rotate_histories(": 2,
 }
 
 
@@ -217,6 +230,16 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_state_",
             "program_execution_alloc_scalar_field_",
             "program_execution_apply_coupling_",
+            "program_execution_register_history_storage_",
+            "program_execution_read_history_storage_",
+            "program_execution_history_initialized_storage_",
+            "program_execution_set_history_initialized_storage_",
+            "program_execution_history_store_plan_",
+            "program_execution_store_history_storage_",
+            "program_execution_history_supports_selective_rotation_",
+            "program_execution_history_rotation_action_",
+            "program_execution_defer_history_rotation_",
+            "program_execution_rotate_history_storage_",
             "program_execution_cache_",
             "program_execution_resource_topology_",
             "program_execution_resource_level_",
@@ -330,19 +353,38 @@ def test_scheduler_cache_algorithm_is_shared_but_storage_lifecycle_is_provider_o
         assert shared.count('count("%s")' % counter) == 1
 
 
-def test_history_ledger_clock_and_regrid_lifecycle_remain_provider_owned():
+def test_history_program_algorithms_are_shared_and_contexts_expose_only_storage_hooks():
     shared = _read(SHARED)
     uniform = _read(UNIFORM)
     amr = _read(AMR)
-    for operation in (
-        "register_history(",
-        "history_zero_start(",
-        "store_history(",
-        "rotate_histories(",
+    operations = {
+        "register_history": 2,
+        "history": 2,
+        "history_zero_start": 2,
+        "store_history": 2,
+        "rotate_histories": 2,
+    }
+    for operation, count in operations.items():
+        definition = re.compile(
+            r"(?m)^\s{2}(?:void|MultiFab&)\s+%s\s*\(" % operation
+        )
+        assert len(definition.findall(shared)) == count
+        assert definition.search(uniform) is None
+        assert definition.search(amr) is None
+    for hook in (
+        "program_execution_register_history_storage_",
+        "program_execution_read_history_storage_",
+        "program_execution_history_initialized_storage_",
+        "program_execution_set_history_initialized_storage_",
+        "program_execution_history_store_plan_",
+        "program_execution_store_history_storage_",
+        "program_execution_history_supports_selective_rotation_",
+        "program_execution_history_rotation_action_",
+        "program_execution_defer_history_rotation_",
+        "program_execution_rotate_history_storage_",
     ):
-        assert operation not in shared
-        assert operation in uniform
-        assert operation in amr
+        assert hook in uniform
+        assert hook in amr
     for amr_authority in (
         "rotate_pending_",
         "ring_clocks_",
@@ -351,6 +393,16 @@ def test_history_ledger_clock_and_regrid_lifecycle_remain_provider_owned():
     ):
         assert amr_authority not in shared
         assert amr_authority in amr
+
+
+def test_real_uniform_and_amr_runtimes_execute_one_analytical_history_contract():
+    source = _read(HISTORY_CONTRACT)
+    assert "_ab2_factor" in source
+    assert source.count("_check_history_contract(") == 3
+    assert '_check_history_contract("System"' in source
+    assert '_check_history_contract("AmrSystem"' in source
+    assert "np.array_equal(sys_rho, amr_rho)" not in source
+    assert "byte-faithful mirror" not in source
 
 
 def test_shared_storage_facade_maps_blocks_once_and_owns_nullspace_assignment():
