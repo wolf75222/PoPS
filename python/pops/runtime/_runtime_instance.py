@@ -1035,7 +1035,101 @@ class RuntimeInstance:
         if hasattr(native, "_last_step_transaction_report"):
             native._last_step_transaction_report = snapshot["last_step_transaction_report"]
 
+    def _restore_unsuccessful_attempt_stats(
+        self, accepted_temporal: Any, failed_temporal: Any,
+    ) -> None:
+        """Keep attempt counters while every executable cursor rolls back.
+
+        ``TemporalRestartState.reject/fail`` deliberately marks the provisional envelope
+        unsynchronized. The transaction restores the complete accepted envelope before a retry,
+        but attempt statistics are accepted diagnostic/controller state and must survive that
+        rollback. Carry only monotone unsuccessful-counter deltas; never copy a failed cursor,
+        status, event queue, history, cache, or controller proposal.
+        """
+        if accepted_temporal is None or failed_temporal is None:
+            return
+        restored = getattr(self._executor, "_temporal_restart_state", None)
+        if restored is None:
+            raise RuntimeError(
+                "transaction rollback lost the accepted temporal authority")
+
+        def leaves(temporal: Any) -> tuple[Any, ...]:
+            states = getattr(temporal, "states", None)
+            if states is None:
+                return (temporal,)
+            if type(states) is not tuple or not states:
+                raise RuntimeError(
+                    "composite temporal attempt statistics require non-empty exact states")
+            return tuple(leaf for state in states for leaf in leaves(state))
+
+        accepted_leaves = leaves(accepted_temporal)
+        failed_leaves = leaves(failed_temporal)
+        restored_leaves = leaves(restored)
+        if not (
+            len(accepted_leaves) == len(failed_leaves) == len(restored_leaves)
+        ):
+            raise RuntimeError(
+                "transaction rollback changed the temporal authority cardinality")
+        updates: list[tuple[dict[str, int], str, int]] = []
+        for accepted_leaf, failed_leaf, restored_leaf in zip(
+            accepted_leaves, failed_leaves, restored_leaves, strict=True,
+        ):
+            accepted_stats = getattr(accepted_leaf, "transaction_stats", None)
+            failed_stats = getattr(failed_leaf, "transaction_stats", None)
+            restored_stats = getattr(restored_leaf, "transaction_stats", None)
+            if (
+                type(accepted_stats) is not dict
+                or type(failed_stats) is not dict
+                or type(restored_stats) is not dict
+            ):
+                raise RuntimeError(
+                    "transaction rollback received malformed temporal attempt statistics")
+            accepted_exact = cast(dict[str, int], accepted_stats)
+            failed_exact = cast(dict[str, int], failed_stats)
+            restored_exact = cast(dict[str, int], restored_stats)
+            for status in ("rejected", "failed"):
+                before = accepted_exact.get(status)
+                after = failed_exact.get(status)
+                current = restored_exact.get(status)
+                if (
+                    type(before) is not int
+                    or before < 0
+                    or type(after) is not int
+                    or after < 0
+                    or type(current) is not int
+                    or current < 0
+                ):
+                    raise RuntimeError(
+                        "temporal attempt statistics require non-negative exact integers")
+                if after < before:
+                    raise RuntimeError(
+                        "temporal unsuccessful-attempt statistics moved backwards")
+                updates.append((restored_exact, status, current + after - before))
+        for stats, status, value in updates:
+            stats[status] = value
+
     def _accepted_step_transaction(
+        self,
+        advance: Any,
+        *,
+        at_end: Any = False,
+    ) -> Any:
+        """Run one attempt controller inside the sole collective publication envelope."""
+        native = self._executor
+        missing = object()
+        previous = getattr(native, "_collective_step_envelope_active", missing)
+        if previous is True:
+            raise RuntimeError("nested collective step envelope")
+        native._collective_step_envelope_active = True
+        try:
+            return self._accepted_step_transaction_body(advance, at_end=at_end)
+        finally:
+            if previous is missing:
+                delattr(native, "_collective_step_envelope_active")
+            else:
+                native._collective_step_envelope_active = previous
+
+    def _accepted_step_transaction_body(
         self,
         advance: Any,
         *,
@@ -1087,6 +1181,16 @@ class RuntimeInstance:
             self._retry_consumer_finalizers()
             return result
         except BaseException as error:
+            try:
+                failed_temporal = copy.deepcopy(
+                    getattr(native, "_temporal_restart_state", None))
+            except BaseException as stats_snapshot_error:
+                failed_temporal = None
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "temporal attempt-statistics snapshot also failed: "
+                        f"{stats_snapshot_error}")
             if phase == "native_finalized":
                 # The engine and published receipts are already irrevocably accepted.  A release
                 # bug is operational evidence only: never compensate artifacts, call native
@@ -1125,13 +1229,21 @@ class RuntimeInstance:
                                 f"{rollback_error}")
             finally:
                 self._restore_step_envelope(snapshot)
+                try:
+                    self._restore_unsuccessful_attempt_stats(
+                        snapshot["temporal_restart_state"], failed_temporal)
+                except BaseException as stats_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note(
+                            "temporal attempt-statistics restoration also failed: "
+                            f"{stats_error}")
             # A prepare failure can escape before the controller replaces the previous accepted
             # report.  Object identity distinguishes that stale snapshot from a report produced by
             # this attempt; effect/commit failures deliberately supersede its provisional success.
-            if (
-                failure_report is snapshot["last_step_transaction_report"]
-                or phase in {"effect", "commit"}
-            ):
+            stale_failure_report = (
+                failure_report is snapshot["last_step_transaction_report"])
+            if stale_failure_report or phase in {"effect", "commit"}:
                 transaction_plan = getattr(native, "_step_transaction_plan", None)
                 stores = tuple(
                     store.value
@@ -1145,6 +1257,10 @@ class RuntimeInstance:
                     attempts=attempts,
                     staged_effects=stores,
                     rolled_back_effects=stores,
+                    projections=tuple(
+                        () if stale_failure_report else
+                        getattr(failure_report, "projections", ())
+                    ),
                     diagnostics=(str(error),),
                 )
             if failure_report is not None and hasattr(native, "_last_step_transaction_report"):
@@ -1152,6 +1268,53 @@ class RuntimeInstance:
             if cleanup_error is not None:
                 raise cleanup_error from error
             raise
+
+    def _accepted_controller_step(
+        self,
+        native: Any,
+        step_target: Any,
+        strategy: Any,
+        *,
+        t_end: float,
+        controls: Mapping[str, Any],
+        deadline: float | None = None,
+        at_end: Any = False,
+    ) -> Any:
+        """Execute one accepted controller step with one transaction per native attempt."""
+        from pops._bootstrap import StepAttemptRejected
+        from pops.runtime._step_strategy import (
+            prepare_step_attempts,
+            run_prepared_step_attempt,
+        )
+
+        sequence = prepare_step_attempts(
+            native,
+            step_target,
+            strategy,
+            t_end=float(t_end),
+            controls=controls,
+        )
+        while True:
+            def advance() -> tuple[Any, int]:
+                report = run_prepared_step_attempt(sequence)
+                reached = float(native.time())
+                if deadline is not None \
+                        and reached > deadline \
+                        and not _same_physical_time(reached, deadline):
+                    raise RuntimeError(
+                        "step controller crossed every_dt hard deadline %s and reached %s"
+                        % (deadline.hex(), reached.hex())
+                    )
+                return report, report.attempts
+
+            try:
+                return self._accepted_step_transaction(advance, at_end=at_end)
+            except StepAttemptRejected as error:
+                # _accepted_step_transaction has already restored every native/Python store here.
+                # Only the detached proposal cursor may advance to the next retry.
+                if sequence.retry(error):
+                    continue
+                raise
 
     def _run(self, t_end: Any, *, max_steps: int = 1_000_000,
              output_dir: Any = None, console: bool = True,
@@ -1168,7 +1331,7 @@ class RuntimeInstance:
                 "with Program.step_strategy(...)"
             )
         from pops.runtime._step_strategy import (
-            prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+            prepare_step_controller, resolve_run_strategy, run_control_payload)
         from pops.runtime._native_step_target import native_step_target
         from pops.runtime.run_report import RunStopReason
 
@@ -1223,26 +1386,13 @@ class RuntimeInstance:
                     deadline_is_active = False
                     step_end = run_end
 
-                def advance(
-                    *,
-                    accepted_deadline: float | None = deadline if deadline_is_active else None,
-                    accepted_step_end: float = step_end,
-                ) -> tuple[Any, int]:
-                    report = run_step_attempt(
-                        native, step_target, selected, t_end=accepted_step_end,
-                        controls=controller_controls)
-                    reached = float(native.time())
-                    if accepted_deadline is not None \
-                            and reached > accepted_deadline \
-                            and not _same_physical_time(reached, accepted_deadline):
-                        raise RuntimeError(
-                            "step controller crossed every_dt hard deadline %s and reached %s"
-                            % (accepted_deadline.hex(), reached.hex())
-                        )
-                    return report, report.attempts
-
-                step_report = self._accepted_step_transaction(
-                    advance,
+                step_report = self._accepted_controller_step(
+                    native,
+                    step_target,
+                    selected,
+                    t_end=step_end,
+                    controls=controller_controls,
+                    deadline=deadline if deadline_is_active else None,
                     at_end=lambda: not (native.time() < t_end),
                 )
                 rejected_steps += int(step_report.attempts) - 1

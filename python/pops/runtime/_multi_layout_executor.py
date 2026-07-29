@@ -380,6 +380,25 @@ class _MultiLayoutUniformExecutor:
     def macro_step(self) -> int:
         return int(self._common_clock("macro_step"))
 
+    def _consume_step_projections(self) -> tuple[str, ...]:
+        """Consume the union of projection identities executed by child layouts."""
+        result = []
+        for engine in self._engines.values():
+            consume = getattr(engine, "_consume_step_projections", None)
+            if not callable(consume):
+                raise TypeError(
+                    "multi-layout child lacks the step-projection report protocol")
+            rows = consume()
+            if not isinstance(rows, (tuple, list)) or any(
+                not isinstance(name, str) or not name for name in rows
+            ):
+                raise TypeError(
+                    "multi-layout child returned an invalid step-projection report")
+            for name in rows:
+                if name not in result:
+                    result.append(name)
+        return tuple(result)
+
     def _native_step_target(self) -> Any:
         """The coordinator itself is the raw target for one composite attempt."""
         return self

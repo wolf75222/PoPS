@@ -417,6 +417,15 @@ Real System::program_diagnostic(const std::string& name) const {
 std::map<std::string, Real> System::program_diagnostics() const {
   return p_->program_.diagnostics();
 }
+void System::begin_step_projection_report() {
+  p_->program_.begin_step_projection_report();
+}
+void System::note_step_projection(const std::string& name) {
+  p_->program_.note_step_projection(name);
+}
+std::vector<std::string> System::consume_step_projections() {
+  return p_->program_.consume_step_projections();
+}
 // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5). Seed/overwrite/read the per-PROGRAM-block
 // RuntimeParams the installed step closure reads through ProgramContext::program_params. Delegated to
 // the extracted Program subsystem (ADC-594): the store lives in program_ so a value change reaches the

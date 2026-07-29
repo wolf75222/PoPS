@@ -316,7 +316,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # aliases the input state. Forwards to ctx.apply_projection(idx, state) (ADC-426: the op's
         # own block, so each block runs its own projection).
         (state_in,) = v.inputs
+        step_projection = v.attrs.get("step_projection")
+        if step_projection is not None:
+            if not isinstance(step_projection, str) or not step_projection:
+                raise TypeError("project step_projection must be a non-empty string")
         lines.append("ctx.apply_projection(%d, %s);" % (bidx, var[state_in.id]))
+        if step_projection is not None:
+            lines.append("ctx.note_step_projection(%s);" % json.dumps(step_projection))
         var[v.id] = var[state_in.id]
     elif v.op == "local_transform":
         if prelude is None:

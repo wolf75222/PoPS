@@ -107,6 +107,22 @@ requirement = "step_transaction"
 polarity = "positive"
 kind = "ctest"
 target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.ProjectAndRecheckConsumesSolveAndCommitsProjectedCandidate$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.ProjectAndRecheckFailureConsumesSolveAndRollsBackWithoutPublication$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_runtime"
 test_regex = "^ProgramRuntime\\.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock$"
 
 [[check]]

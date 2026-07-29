@@ -34,6 +34,7 @@ System& System::operator=(System&&) noexcept = default;
 // the accepted-step transaction and profiling boundary.
 void System::step(double dt) {
   p_->program_.require_step_installed("System::step");
+  p_->program_.begin_step_projection_report();
   pops::runtime::program::ProfileScope s(p_->program_.profiler_, "step");
   p_->program_.profiler_.count("steps");
   p_->execute_step_transaction([&] { p_->program_driver_.step(dt); });
@@ -97,6 +98,7 @@ void System::rollback_step_transaction() {
 }
 double System::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
   p_->program_.require_step_installed("System::step_cfl");
+  p_->program_.begin_step_projection_report();
   return p_->execute_step_transaction(
       [&] { return p_->program_driver_.step_cfl(cfl, speed_floor, max_dt, min_dt); });
 }
