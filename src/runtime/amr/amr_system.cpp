@@ -2015,6 +2015,10 @@ void AmrSystem::set_bootstrap_tagging(
     int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
     const std::string& clock_identity, const std::string& provider_identity) {
   require_assembling_amr(p_->bound_, "set_bootstrap_tagging");
+  if (min_cycles > 0)
+    throw std::runtime_error(
+        "AmrSystem::set_bootstrap_tagging min_cycles requires the checkpointed public "
+        "persistent-state adapter");
   const std::size_t leaf_count = leaf_subject_kinds.size();
   if (p_->built || p_->tagging_spec || leaf_count == 0 ||
       leaf_subject_identities.size() != leaf_count || leaf_blocks.size() != leaf_count ||
