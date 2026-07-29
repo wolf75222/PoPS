@@ -6,10 +6,13 @@ import argparse
 import ast
 from collections import Counter, defaultdict
 from collections.abc import Iterable
+import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import tomllib
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,13 +22,16 @@ EXPECTED_ISSUES = ("ADC-648",) + tuple("ADC-%d" % number for number in range(661
 EXPECTED_REQUIREMENTS = {
     "amr_step_transaction",
     "phase_pipeline", "program_graph", "schedules", "residual_operator",
-    "solve_outcome", "native_multiblock_implicit_phase",
+    "solve_outcome", "fallible_nonlinear_evaluation", "fallible_linear_evaluation",
+    "native_multiblock_implicit_phase",
+    "refined_hierarchy_native_ordering",
     "normalized_program_execution",
+    "program_only_temporal_routes",
     "step_transaction", "restart", "temporal_restart",
 }
 ALLOWED_PYTEST_TARGETS = {
     "architecture", "pipeline", "program_graph", "residual", "schedule",
-    "solve", "transaction",
+    "restart", "solve", "transaction",
 }
 
 
@@ -176,6 +182,44 @@ def _run(command: list[str]) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
+def _pytest_skip_count(report: Path) -> int:
+    if not report.is_file():
+        raise RuntimeError("M2 pytest did not produce its mandatory JUnit report")
+    try:
+        root = ET.parse(report).getroot()
+    except ET.ParseError as exc:
+        raise RuntimeError("M2 pytest produced an invalid JUnit report") from exc
+    return len(root.findall(".//skipped"))
+
+
+def _run_pytest(nodeids: list[str]) -> None:
+    environment = dict(os.environ)
+    environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
+    with tempfile.TemporaryDirectory(prefix="pops-m2-gate-") as temporary:
+        report = Path(temporary) / "pytest.xml"
+        command = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--strict-markers",
+            "-o",
+            "xfail_strict=true",
+            "--junitxml",
+            str(report),
+            *nodeids,
+        ]
+        print("+ POPS_REQUIRE_NATIVE_TESTS=1", " ".join(command), flush=True)
+        completed = subprocess.run(command, cwd=ROOT, env=environment, check=False)
+        skipped = _pytest_skip_count(report)
+        if skipped:
+            raise RuntimeError(
+                "M2 pytest reported %d skipped/xfail proof(s); every proof is mandatory" % skipped
+            )
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(completed.returncode, command)
+
+
 def _chunks(values: list[str], size: int) -> Iterable[list[str]]:
     for index in range(0, len(values), size):
         yield values[index:index + size]
@@ -213,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
 
     nodeids = [row["nodeid"] for row in checks if row["kind"] == "pytest"]
     for chunk in _chunks(nodeids, 24):
-        _run([sys.executable, "-m", "pytest", "-q", *chunk])
+        _run_pytest(chunk)
     if not args.python_only:
         for row in sorted(
                 (row for row in checks if row["kind"] == "ctest"),
