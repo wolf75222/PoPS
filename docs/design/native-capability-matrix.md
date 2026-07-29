@@ -84,17 +84,21 @@ Supported native routes include:
   `MPI_COMM_WORLD` layouts may distribute the two face decompositions independently: native C++
   collectives reconstruct both traces, require a finite bit-identical shared flux on every rank,
   then scatter only into locally owned residual cells.
-  A public serial `AMRRegrid.frozen()` hierarchy may contain one or two levels. The two-level route
-  installs both level-qualified evaluators and retains endpoint-qualified canonical fragments with
-  exact Program weights and authoritative local substep duration. Those fragments authenticate the
-  paired RHS update; they are not injected again into reflux because that would duplicate the same
-  face flux. Both endpoint hierarchies must already expose matching full-tangential fine-face
-  coverage. The level-zero route is installed before hierarchy bootstrap, and only that exact route
-  can authorize proper-nesting support across an omitted physical-boundary face. This route does not
-  mirror one endpoint's AMR tags through the interface mapping.
+  A public serial `AMRRegrid.frozen()` hierarchy may contain one or two levels. A dynamic
+  two-level hierarchy is also executable when both levels are already active at bind and every
+  accepted regrid preserves that active depth. The scheduler rematerializes the authenticated
+  per-level routes on the replacement BoxArray and DistributionMapping before the next Program
+  stage; missing full-face coverage or a depth change rejects the regrid and restores the accepted
+  registry. The two-level route retains endpoint-qualified canonical fragments with exact Program
+  weights and authoritative local substep duration. Those fragments authenticate the paired RHS
+  update; they are not injected again into reflux because that would duplicate the same face flux.
+  Both endpoint hierarchies must expose matching full-tangential fine-face coverage. The level-zero
+  route is installed before hierarchy bootstrap, and only that exact route can authorize
+  proper-nesting support across an omitted physical-boundary face. This route does not mirror one
+  endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
-  three-or-more-level or dynamically regridded public AMR interfaces, historical shared-interface
-  rates, and refined MPI publication remain unavailable.
+  three-or-more-level public AMR interfaces, dynamic active-depth changes, historical
+  shared-interface rates, and refined MPI publication remain unavailable.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes

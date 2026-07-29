@@ -527,7 +527,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       if (has_interfaces && nlev() != 2)
         deferred_op("refined_shared_block_interfaces",
                     "shared block interface-fragment publication currently requires exactly two "
-                    "fixed hierarchy levels");
+                    "active hierarchy levels");
       if (has_interfaces)
         register_interface_flux_group_(group_id, blocks, rate_ids);
       const auto group_point = boundary_point_(group_id);

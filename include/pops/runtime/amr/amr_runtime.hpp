@@ -2706,7 +2706,8 @@ class AmrRuntime {
 
   /// Install one prepared interface route on an AMR level.  The current AMR engine owns one shared
   /// layout per level, but the same scheduler contract used by Uniform still proves orientation,
-  /// permutation and equal face discretisation before the route becomes executable.
+  /// permutation and equal face discretisation before the route becomes executable. A later
+  /// topology replacement rematerializes the route from this authenticated declaration.
   void install_level_interface_flux(
       int k, runtime::multiblock::AxisAlignedInterface route,
       const PopsExecutionContextV1& execution,
@@ -2714,9 +2715,6 @@ class AmrRuntime {
     if (k < 0 || k >= nlev_ || route.level != k || route.left_block >= blocks_.size() ||
         route.right_block >= blocks_.size())
       throw std::out_of_range("AmrRuntime interface level/block index is out of range");
-    if (regrid_every_ != 0)
-      throw std::invalid_argument(
-          "AmrRuntime interface v1 requires a frozen hierarchy (regrid_every=0)");
     const std::size_t left = route.left_block;
     const std::size_t right = route.right_block;
     if (!blocks_[left].level_rhs_without_prepared_interfaces ||
@@ -3061,8 +3059,8 @@ class AmrRuntime {
   /// transaction. The scheduler still applies the one shared flux to both blocks with opposite
   /// signs. Local flux-materialising residuals must already have omitted the prepared face. The
   /// Program resolves each current fragment's exact contribution weight from both consumer states
-  /// before the outer transaction may commit. This route remains restricted to a frozen two-level
-  /// serial hierarchy.
+  /// before the outer transaction may commit. This route remains restricted to a serial hierarchy
+  /// with exactly two active levels; dynamic replacement rematerializes its face plans atomically.
   void publish_level_interface_flux_fragments(
       int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
       const std::vector<int>& requested_blocks, const std::vector<MultiFab*>& requested_states,
@@ -3075,7 +3073,7 @@ class AmrRuntime {
         requested_blocks.size() != requested_states.size() ||
         requested_blocks.size() != requested_rhs.size())
       throw std::invalid_argument(
-          "AMR interface-flux fragment publication requires one valid fixed two-level group");
+          "AMR interface-flux fragment publication requires one valid two-active-level group");
     std::vector<MultiFab*> states(blocks_.size(), nullptr);
     std::vector<MultiFab*> rhs(blocks_.size(), nullptr);
     for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
@@ -4182,7 +4180,8 @@ class AmrRuntime {
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[level].aux = &aux_[level];
     invalidate_named_field_topology();
-    record_topology_replacement_();
+    record_topology_replacement_(
+        runtime::multiblock::InterfaceRematerializationAuthority::BindBootstrap);
     if (!static_aux_.empty()) {
       // The hierarchy may grow after bind-time aux publication.  A newly bootstrapped level must
       // therefore receive every static named aux before any following bootstrap materializer or
@@ -4351,7 +4350,7 @@ class AmrRuntime {
               if (level != 0)
                 throw std::runtime_error(
                     "AMR regrid interface-owned physical support is limited to the level-zero "
-                    "parent of a frozen two-level hierarchy");
+                    "parent of a two-active-level hierarchy");
               if (!interface_owns(axis, side))
                 throw std::runtime_error(
                     "AMR regrid boundary omission has no authenticated shared-interface owner");
@@ -5922,7 +5921,10 @@ class AmrRuntime {
                                                                generation);
   }
 
-  void rematerialize_persistent_topology_resources_(std::uint64_t generation) {
+  void rematerialize_persistent_topology_resources_(
+      std::uint64_t generation,
+      runtime::multiblock::InterfaceRematerializationAuthority interface_authority =
+          runtime::multiblock::InterfaceRematerializationAuthority::RuntimeTopology) {
     if (field_solve_transaction_active_)
       throw std::logic_error("AMR topology cannot change during a field-solve transaction");
     auto temporal_candidate = make_temporal_parent_workspaces_(generation);
@@ -5968,9 +5970,18 @@ class AmrRuntime {
           *block.levels, dom_, base_per_, generation, world_communicator_view()));
     }
     auto tagging_candidate = make_tagging_execution_plan_(tagging_program_, generation);
+    auto interface_candidate = interface_scheduler_.rematerialized(
+        nlev_,
+        [this](std::size_t block, int level) -> MultiFab& {
+          if (block >= blocks_.size() || level < 0 || level >= nlev_)
+            throw std::out_of_range("AMR interface rematerialization block/level is out of range");
+          return (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+        },
+        [this](int level) { return level_geom(level); }, interface_authority);
     temporal_parent_workspaces_.swap(temporal_candidate);
     aux_publication_workspaces_.swap(aux_candidate);
     tagging_execution_plan_ = std::move(tagging_candidate);
+    interface_scheduler_.swap(interface_candidate);
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
       blocks_[block].fill_patch_plan = std::move(fill_patch_candidate[block]);
       blocks_[block].coarse_fine_spatial_workspaces =
@@ -5982,8 +5993,11 @@ class AmrRuntime {
     topology_materialization_generation_ = generation;
   }
 
-  void record_topology_replacement_() {
-    rematerialize_persistent_topology_resources_(next_topology_materialization_generation_());
+  void record_topology_replacement_(
+      runtime::multiblock::InterfaceRematerializationAuthority interface_authority =
+          runtime::multiblock::InterfaceRematerializationAuthority::RuntimeTopology) {
+    rematerialize_persistent_topology_resources_(next_topology_materialization_generation_(),
+                                                 interface_authority);
     ++topology_epoch_;
   }
   // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): non-owning pointer to the AmrSystem-owned
