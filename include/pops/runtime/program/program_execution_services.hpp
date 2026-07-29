@@ -135,12 +135,13 @@ class ProgramExecutionServices {
   /// Immutable identity of the hierarchy on which generated persistent resources are materialized.
   ///
   /// ``epoch`` is checkpointed topology identity, while ``generation`` also changes after any
-  /// process-local storage rebuild.  ``levels`` is captured in the same provider read so generated
-  /// code cannot compare an epoch from one hierarchy against a level count from another.
+  /// process-local storage rebuild. ``levels`` and ``blocks`` are captured in the same provider read
+  /// so generated code cannot compare an epoch from one hierarchy against counts from another.
   struct ProgramResourceTopology {
     std::uint64_t epoch = 0;
     std::uint64_t generation = 0;
     int levels = 1;
+    int blocks = 0;
   };
 
   struct ProgramClockCoordinate {
@@ -910,6 +911,8 @@ class ProgramExecutionServices {
     const ProgramResourceTopology topology = provider_().program_execution_resource_topology_();
     if (topology.levels <= 0)
       throw std::runtime_error("Program resource topology requires at least one level");
+    if (topology.blocks <= 0)
+      throw std::runtime_error("Program resource topology requires at least one runtime block");
     return topology;
   }
 
@@ -1291,7 +1294,7 @@ class ProgramExecutionServices {
                                " is outside the explicit runtime block map [0, " +
                                std::to_string(block_map.size()) + ")");
     const int mapped = block_map[static_cast<std::size_t>(program_block)];
-    const int count = provider_().program_execution_block_count_();
+    const int count = program_resource_topology().blocks;
     if (mapped < 0 || mapped >= count)
       throw std::runtime_error("Program block index " + std::to_string(program_block) +
                                " maps to invalid runtime block index " + std::to_string(mapped) +
@@ -1299,7 +1302,7 @@ class ProgramExecutionServices {
     return mapped;
   }
 
-  int n_blocks() const { return provider_().program_execution_block_count_(); }
+  int n_blocks() const { return program_resource_topology().blocks; }
 
   Real physical_time() const {
     return provider_().program_execution_clock_coordinate_().physical_time;
@@ -1583,8 +1586,7 @@ class ProgramExecutionServices {
 
   void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
     const std::vector<int>& block_map = program_runtime_state_().block_map();
-    const std::size_t runtime_blocks =
-        static_cast<std::size_t>(provider_().program_execution_block_count_());
+    const std::size_t runtime_blocks = static_cast<std::size_t>(program_resource_topology().blocks);
     if (block_map.empty())
       throw block_map_error_("Program coupling has no explicit program-to-runtime block map");
     if (block_map.size() != runtime_blocks || candidates.size() != block_map.size())
