@@ -3073,6 +3073,7 @@ const std::vector<CouplingOperatorView>& AmrSystem::coupled_operators() const {
 void AmrSystem::step(double dt) {
   p_->program_.require_step_installed("AmrSystem::step");
   p_->ensure_built();
+  p_->program_.begin_step_projection_report();
   p_->execute_step_transaction([&] {
     // The installed Program is the sole temporal authority. It drives the per-level macro-step
     // through AmrProgramContext; AmrRuntime remains available only as the spatial hierarchy engine.
@@ -3139,6 +3140,7 @@ void AmrSystem::restore_active_step_transaction_for_program() {
 double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
   p_->program_.require_step_installed("AmrSystem::step_cfl");
   p_->ensure_built();
+  p_->program_.begin_step_projection_report();
   return p_->execute_step_transaction([&]() -> double {
     if (std::isnan(max_dt) || max_dt <= 0.0)
       throw std::invalid_argument("AmrSystem::step_cfl max_dt must be positive or +infinity");
@@ -3533,6 +3535,15 @@ double AmrSystem::program_diagnostic(const std::string& name) const {
 }
 std::map<std::string, double> AmrSystem::program_diagnostics() const {
   return p_->program_.diagnostics_;
+}
+void AmrSystem::begin_step_projection_report() {
+  p_->program_.begin_step_projection_report();
+}
+void AmrSystem::note_step_projection(const std::string& name) {
+  p_->program_.note_step_projection(name);
+}
+std::vector<std::string> AmrSystem::consume_step_projections() {
+  return p_->program_.consume_step_projections();
 }
 
 // Exact selected-level collective reduction over a named block. Live MultiFabs are folded through

@@ -69,11 +69,13 @@ def test_project_and_recheck_is_lazy_lowered_and_visible_in_transaction_identity
     assert plan.projections == (BlockProjection(),)
     source = emit_cpp_program(program)
     projection = source.index("ctx.apply_projection(0,")
-    recheck_reduction = source.index("ctx.norm_inf(0,", projection)
+    projection_report = source.index(
+        'ctx.note_step_projection("embedded_error");', projection)
+    recheck_reduction = source.index("ctx.norm_inf(0,", projection_report)
     recheck_branch = source.index("if (!(", recheck_reduction)
     rejection = source.index("StepAttemptRejected", recheck_branch)
     commit = source.index("ctx.commit_many({", rejection)
-    assert projection < recheck_reduction < recheck_branch < rejection < commit
+    assert projection < projection_report < recheck_reduction < recheck_branch < rejection < commit
 
     report = StepTransactionReport(
         status="accepted",

@@ -450,10 +450,16 @@ TEST(test_amr_history_ring, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(11));
   EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(5));
 
-  MultiFab wrong_ghost_width(first.box_array(), first.dmap(), first.ncomp(), first.n_grow() + 1);
-  EXPECT_THROW(context.commit_many({{&first, &second}, {&second, &wrong_ghost_width}}),
+  MultiFab different_ghost_width(first.box_array(), first.dmap(), first.ncomp(),
+                                 first.n_grow() + 1);
+  different_ghost_width.set_val(Real(17));
+  context.commit_many({{&first, &different_ghost_width}});
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(17));
+
+  MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
+  EXPECT_THROW(context.commit_many({{&first, &wrong_components}}),
                std::invalid_argument);
-  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(11));
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(17));
   EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(5));
 }
 

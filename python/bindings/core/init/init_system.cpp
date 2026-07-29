@@ -354,6 +354,7 @@ void bind_system_program(py::class_<System>& cls) {
       // program_diagnostics() returns the whole name -> value dict.
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &System::program_diagnostics)
+      .def("_consume_step_projections", &System::consume_step_projections)
       // ADC-542: the native collective reduction over a named block the diagnostics driver drives to
       // fire a declared typed measure (Norm / Integral / MinMax) each cadence tick, and the sink the
       // driver records the measured scalar into (readable via program_diagnostics, same map a

@@ -1229,6 +1229,9 @@ class System {
   /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
   /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  POPS_EXPORT void begin_step_projection_report();
+  POPS_EXPORT void note_step_projection(const std::string& name);
+  POPS_EXPORT std::vector<std::string> consume_step_projections();
   /// @}
   /// @name Compiled-Program RUNTIME parameters (epic ADC-479 / ADC-510, Spec 5 C5)
   /// A compiled time Program whose physics reads a dsl.Param(..., kind="runtime") carries the value

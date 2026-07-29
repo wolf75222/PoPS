@@ -66,10 +66,30 @@ def _stores(engine: Any) -> tuple[str, ...]:
 
 def _projections(engine: Any) -> tuple[str, ...]:
     plan = getattr(engine, "_step_transaction_plan", None)
-    return tuple(
+    declared = tuple(
         guard.name for guard in getattr(plan, "guards", ())
         if type(guard.action) is ProjectAndRecheck
     )
+    consume = getattr(engine, "_consume_step_projections", None)
+    if not callable(consume):
+        if declared:
+            raise TypeError(
+                "native ProjectAndRecheck execution lacks the step-projection report protocol")
+        return ()
+    executed = consume()
+    if not isinstance(executed, (tuple, list)) or any(
+        not isinstance(name, str) or not name for name in executed
+    ):
+        raise TypeError(
+            "native step-projection report must be a sequence of non-empty strings")
+    if len(set(executed)) != len(executed):
+        raise ValueError("native step-projection report cannot contain duplicates")
+    unknown = tuple(name for name in executed if name not in declared)
+    if unknown:
+        raise RuntimeError(
+            "native step-projection report contains undeclared identities: %s"
+            % ", ".join(unknown))
+    return tuple(name for name in declared if name in executed)
 
 
 def _phase(error: BaseException) -> str:

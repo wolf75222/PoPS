@@ -206,11 +206,14 @@ def test_report_counts_only_rejected_attempts_from_this_run():
     assert report.accepted_steps == 2
     assert report.rejected_steps == 1
     assert engine._attempt == 3
-    assert engine._executor._temporal_restart_state.transaction_stats == {
+    temporal = engine._executor._temporal_restart_state
+    assert temporal.transaction_stats == {
         "accepted": 2,
         "rejected": 1,
         "failed": 0,
     }
+    assert temporal.status == "accepted"
+    assert temporal.synchronized is True
 
 
 def test_failed_max_steps_run_raises_instead_of_returning_a_success_report():

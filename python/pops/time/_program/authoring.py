@@ -73,6 +73,26 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
                          state.block, space=state.space, point=state.point,
                          field_context=state.field_context, state_ref=state.state_ref)
 
+    def _project_for_step_guard(
+        self, name: str, state: ProgramValue, projection: Any, guard: str,
+    ) -> ProgramValue:
+        """Author the lazy projection arm with its exact report identity."""
+        from pops.time._step.transaction import BlockProjection
+        if type(projection) is not BlockProjection:
+            raise TypeError("guard projection must be BlockProjection()")
+        return self._new(
+            "state",
+            "project",
+            (state,),
+            {"projection": projection, "step_projection": guard},
+            name,
+            state.block,
+            space=state.space,
+            point=state.point,
+            field_context=state.field_context,
+            state_ref=state.state_ref,
+        )
+
     def transform(
         self, state: Any, *, transform: Any, fields: Any = None, name: Any = None,
     ) -> Any:
@@ -148,9 +168,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
                     "guard: ProjectAndRecheck requires an authoring recheck(P, projected) callable")
 
             def project_and_recheck(program: Any) -> ProgramValue:
-                projected = program.project(
-                    name="%s_projection" % name, state=value,
-                    projection=action.projection)
+                projected = program._project_for_step_guard(
+                    "%s_projection" % name, value, action.projection, name)
                 predicate = recheck(program, projected)
                 if not isinstance(predicate, ProgramValue) or predicate.vtype != "bool":
                     raise TypeError("guard: recheck must return a scalar Bool ProgramValue")

@@ -890,6 +890,9 @@ class AmrSystem {
   /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
   POPS_EXPORT double program_diagnostic(const std::string& name) const;
   POPS_EXPORT std::map<std::string, double> program_diagnostics() const;
+  POPS_EXPORT void begin_step_projection_report();
+  POPS_EXPORT void note_step_projection(const std::string& name);
+  POPS_EXPORT std::vector<std::string> consume_step_projections();
   /// LEVEL-COMPOSITE collective reduction over a named block, the AMR counterpart of
   /// System::reduce_component the diagnostics driver drives (ADC-542). @p kind is per-component
   /// "sum" / "min" / "max" / "abs_sum" / "sum_sq" / "abs_max", or the full-state "*_all" variants.

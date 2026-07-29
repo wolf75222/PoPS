@@ -104,6 +104,26 @@ TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup
   EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
 }
 
+TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilConsumed) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 2;
+  cfg.L = 1.0;
+  System sim(cfg);
+
+  sim.begin_step_projection_report();
+  EXPECT_TRUE(sim.consume_step_projections().empty());
+
+  sim.begin_step_transaction();
+  sim.note_step_projection("realizability");
+  sim.note_step_projection("realizability");
+  sim.rollback_step_transaction();
+
+  EXPECT_EQ(sim.consume_step_projections(), std::vector<std::string>({"realizability"}));
+  EXPECT_TRUE(sim.consume_step_projections().empty());
+  EXPECT_THROW(sim.note_step_projection(""), std::invalid_argument);
+}
+
 double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) {
   double d = 0;
   for (std::size_t k = 0; k < a.size(); ++k) {
@@ -355,10 +375,16 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(7));
   EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
 
-  MultiFab wrong_ghost_width(first.box_array(), first.dmap(), first.ncomp(), first.n_grow() + 1);
-  EXPECT_THROW(ctx.commit_many({{&first, &second}, {&second, &wrong_ghost_width}}),
+  MultiFab different_ghost_width(first.box_array(), first.dmap(), first.ncomp(),
+                                 first.n_grow() + 1);
+  different_ghost_width.set_val(Real(13));
+  ctx.commit_many({{&first, &different_ghost_width}});
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
+
+  MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
+  EXPECT_THROW(ctx.commit_many({{&first, &wrong_components}}),
                std::invalid_argument);
-  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(7));
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(13));
   EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(3));
 }
 

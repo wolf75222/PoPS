@@ -257,6 +257,10 @@ struct ProgramRuntimeState {
   /// COMPILED-PROGRAM SCALAR DIAGNOSTICS (ADC-414): name -> last value recorded via P.record_scalar.
   /// Lives here (not the .so) so it outlives the step closure and Python can read it. Used by BOTH.
   std::map<std::string, Real> diagnostics_;
+  /// Attempt-local identities of ProjectAndRecheck branches that actually executed. This report
+  /// mailbox is cleared at attempt entry and consumed by the Python transaction coordinator before
+  /// commit or rollback; it is deliberately not checkpoint or accepted scientific state.
+  std::vector<std::string> step_projections_;
   /// COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510 / ADC-508): program-block index -> current
   /// RuntimeParams for a Program that reads dsl.Param(..., kind="runtime"). Seeded to the declaration
   /// defaults at install, overwritten at run time; the step closure reads the CURRENT value each step
@@ -685,6 +689,22 @@ struct ProgramRuntimeState {
 
   /// The whole name -> value diagnostics map (checkpoint / inspection). By value: inert copy.
   std::map<std::string, Real> diagnostics() const { return diagnostics_; }
+
+  void begin_step_projection_report() { step_projections_.clear(); }
+
+  void note_step_projection(const std::string& name) {
+    if (name.empty())
+      throw std::invalid_argument("Program step projection identity cannot be empty");
+    if (std::find(step_projections_.begin(), step_projections_.end(), name) ==
+        step_projections_.end())
+      step_projections_.push_back(name);
+  }
+
+  std::vector<std::string> consume_step_projections() {
+    std::vector<std::string> result;
+    result.swap(step_projections_);
+    return result;
+  }
 
   /// Seed a program block's RuntimeParams to its declaration defaults (ADC-510 / ADC-508). Idempotent
   /// (re-seeding resets to the baseline). Called by install. DEFENCE IN DEPTH (ADC-610): a block with

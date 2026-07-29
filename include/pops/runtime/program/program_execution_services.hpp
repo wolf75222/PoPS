@@ -116,6 +116,10 @@ class ProgramExecutionServices {
     provider_().program_execution_record_scalar_(name, value);
   }
 
+  void note_step_projection(const std::string& name) const {
+    provider_().program_execution_note_step_projection_(name);
+  }
+
   RuntimeParams program_params(int block) const {
     return provider_().program_execution_params_(block);
   }

@@ -964,8 +964,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       if (std::find(targets.begin(), targets.end(), target) != targets.end())
         throw std::invalid_argument("AmrProgramContext::commit_many received a duplicate target");
       if (target->box_array().boxes() != source->box_array().boxes() ||
-          target->dmap().ranks() != source->dmap().ranks() || target->ncomp() != source->ncomp() ||
-          target->n_grow() != source->n_grow())
+          target->dmap().ranks() != source->dmap().ranks() ||
+          target->ncomp() != source->ncomp())
         throw std::invalid_argument("AmrProgramContext::commit_many state layout mismatch");
       targets.push_back(target);
     }
@@ -3879,6 +3879,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   Real program_execution_physical_time_() const { return static_cast<Real>(facade_->time()); }
   void program_execution_record_scalar_(const std::string& name, Real value) const {
     facade_->record_program_diagnostic(name, value);
+  }
+  void program_execution_note_step_projection_(const std::string& name) const {
+    facade_->note_step_projection(name);
   }
   RuntimeParams program_execution_params_(int block) const {
     return facade_->program_params(block);

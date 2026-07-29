@@ -1035,6 +1035,69 @@ class RuntimeInstance:
         if hasattr(native, "_last_step_transaction_report"):
             native._last_step_transaction_report = snapshot["last_step_transaction_report"]
 
+    def _restore_unsuccessful_attempt_stats(
+        self, accepted_temporal: Any, failed_temporal: Any,
+    ) -> None:
+        """Keep attempt counters while every executable cursor rolls back.
+
+        ``TemporalRestartState.reject/fail`` deliberately marks the provisional envelope
+        unsynchronized. The transaction restores the complete accepted envelope before a retry,
+        but attempt statistics are accepted diagnostic/controller state and must survive that
+        rollback. Carry only monotone unsuccessful-counter deltas; never copy a failed cursor,
+        status, event queue, history, cache, or controller proposal.
+        """
+        if accepted_temporal is None or failed_temporal is None:
+            return
+        restored = getattr(self._executor, "_temporal_restart_state", None)
+        if restored is None:
+            raise RuntimeError(
+                "transaction rollback lost the accepted temporal authority")
+
+        def leaves(temporal: Any) -> tuple[Any, ...]:
+            states = getattr(temporal, "states", None)
+            if states is None:
+                return (temporal,)
+            if type(states) is not tuple or not states:
+                raise RuntimeError(
+                    "composite temporal attempt statistics require non-empty exact states")
+            return tuple(leaf for state in states for leaf in leaves(state))
+
+        accepted_leaves = leaves(accepted_temporal)
+        failed_leaves = leaves(failed_temporal)
+        restored_leaves = leaves(restored)
+        if not (
+            len(accepted_leaves) == len(failed_leaves) == len(restored_leaves)
+        ):
+            raise RuntimeError(
+                "transaction rollback changed the temporal authority cardinality")
+        updates: list[tuple[dict[str, int], str, int]] = []
+        for accepted_leaf, failed_leaf, restored_leaf in zip(
+            accepted_leaves, failed_leaves, restored_leaves, strict=True,
+        ):
+            accepted_stats = getattr(accepted_leaf, "transaction_stats", None)
+            failed_stats = getattr(failed_leaf, "transaction_stats", None)
+            restored_stats = getattr(restored_leaf, "transaction_stats", None)
+            if not all(type(stats) is dict for stats in (
+                accepted_stats, failed_stats, restored_stats,
+            )):
+                raise RuntimeError(
+                    "transaction rollback received malformed temporal attempt statistics")
+            for status in ("rejected", "failed"):
+                before = accepted_stats.get(status)
+                after = failed_stats.get(status)
+                current = restored_stats.get(status)
+                if any(type(value) is not int or value < 0 for value in (
+                    before, after, current,
+                )):
+                    raise RuntimeError(
+                        "temporal attempt statistics require non-negative exact integers")
+                if after < before:
+                    raise RuntimeError(
+                        "temporal unsuccessful-attempt statistics moved backwards")
+                updates.append((restored_stats, status, current + after - before))
+        for stats, status, value in updates:
+            stats[status] = value
+
     def _accepted_step_transaction(
         self,
         advance: Any,
@@ -1063,7 +1126,7 @@ class RuntimeInstance:
         at_end: Any = False,
     ) -> Any:
         """Advance once and publish its due effects as one rollback boundary."""
-        from pops.time import ProjectAndRecheck, StepTransactionReport
+        from pops.time import StepTransactionReport
 
         self._retry_consumer_finalizers()
         native = self._executor
@@ -1108,6 +1171,16 @@ class RuntimeInstance:
             self._retry_consumer_finalizers()
             return result
         except BaseException as error:
+            try:
+                failed_temporal = copy.deepcopy(
+                    getattr(native, "_temporal_restart_state", None))
+            except BaseException as stats_snapshot_error:
+                failed_temporal = None
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "temporal attempt-statistics snapshot also failed: "
+                        f"{stats_snapshot_error}")
             if phase == "native_finalized":
                 # The engine and published receipts are already irrevocably accepted.  A release
                 # bug is operational evidence only: never compensate artifacts, call native
@@ -1146,13 +1219,21 @@ class RuntimeInstance:
                                 f"{rollback_error}")
             finally:
                 self._restore_step_envelope(snapshot)
+                try:
+                    self._restore_unsuccessful_attempt_stats(
+                        snapshot["temporal_restart_state"], failed_temporal)
+                except BaseException as stats_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note(
+                            "temporal attempt-statistics restoration also failed: "
+                            f"{stats_error}")
             # A prepare failure can escape before the controller replaces the previous accepted
             # report.  Object identity distinguishes that stale snapshot from a report produced by
             # this attempt; effect/commit failures deliberately supersede its provisional success.
-            if (
-                failure_report is snapshot["last_step_transaction_report"]
-                or phase in {"effect", "commit"}
-            ):
+            stale_failure_report = (
+                failure_report is snapshot["last_step_transaction_report"])
+            if stale_failure_report or phase in {"effect", "commit"}:
                 transaction_plan = getattr(native, "_step_transaction_plan", None)
                 stores = tuple(
                     store.value
@@ -1167,9 +1248,8 @@ class RuntimeInstance:
                     staged_effects=stores,
                     rolled_back_effects=stores,
                     projections=tuple(
-                        guard.name
-                        for guard in getattr(transaction_plan, "guards", ())
-                        if type(getattr(guard, "action", None)) is ProjectAndRecheck
+                        () if stale_failure_report else
+                        getattr(failure_report, "projections", ())
                     ),
                     diagnostics=(str(error),),
                 )
