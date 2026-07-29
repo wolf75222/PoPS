@@ -150,6 +150,22 @@ target = "solve"
 nodeid = "tests/python/integration/runtime/test_multiblock_implicit_phase.py::test_multiblock_implicit_fixture_refuses_route_or_phase_multiplicity_drift"
 
 [[check]]
+issue = "ADC-648"
+requirement = "refined_hierarchy_native_ordering"
+polarity = "positive"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/unit/codegen/test_composite_tensor_fac_provider.py::test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity"
+
+[[check]]
+issue = "ADC-648"
+requirement = "refined_hierarchy_native_ordering"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState$"
+
+[[check]]
 issue = "ADC-668"
 requirement = "normalized_program_execution"
 polarity = "positive"
@@ -233,9 +249,9 @@ nodeid = "tests/python/unit/runtime/test_step_transaction_runtime.py::test_fault
 issue = "ADC-666"
 requirement = "restart"
 polarity = "positive"
-kind = "ctest"
-target = "test_checkpoint_history"
-test_regex = "^CheckpointHistory\\.RingRoundTripsBitEqualAcrossRestart$"
+kind = "pytest"
+target = "restart"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly"
 
 [[check]]
 issue = "ADC-666"
@@ -243,7 +259,7 @@ requirement = "restart"
 polarity = "refusal"
 kind = "pytest"
 target = "restart"
-nodeid = "tests/python/integration/io/test_time_history_checkpoint.py::test_uniform_restart_refuses_a_different_compiled_program"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_restart_rejects_a_different_installed_nested_clock_schedule"
 
 [[check]]
 issue = "ADC-667"
