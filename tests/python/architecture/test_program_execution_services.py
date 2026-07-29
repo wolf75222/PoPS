@@ -344,7 +344,6 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_publish_exact_lincomb_",
             "program_execution_validate_commit_aliases_",
             "program_execution_runtime_state_",
-            "program_execution_block_count_",
             "program_execution_clock_coordinate_",
             "program_execution_set_field_timepoint_",
             "program_execution_set_field_parameters_",
@@ -511,10 +510,12 @@ def test_resource_topology_transaction_is_shared_while_raw_topology_and_scratch_
     emitter = _read(ROOT / "python" / "pops" / "codegen" / "program_emit_amr.py")
     for shared_authority in (
         "struct ProgramResourceTopology",
+        "int blocks = 0;",
         "ProgramResourceTopology program_resource_topology()",
         "void with_program_resource_level(",
         "void for_each_program_resource_level(",
         "Program resource topology requires at least one level",
+        "Program resource topology requires at least one runtime block",
     ):
         assert shared_authority in shared
         assert shared_authority not in uniform
@@ -527,6 +528,9 @@ def test_resource_topology_transaction_is_shared_while_raw_topology_and_scratch_
         assert shared.count(provider_hook) >= 1
         assert uniform.count(provider_hook) == 1
         assert amr.count(provider_hook) == 1
+    assert "program_execution_block_count_" not in shared
+    assert "program_execution_block_count_" not in uniform
+    assert "program_execution_block_count_" not in amr
     for retired_direct_surface in (
         "program_resource_topology_epoch",
         "program_resource_topology_generation",

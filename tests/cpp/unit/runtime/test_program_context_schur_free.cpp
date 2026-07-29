@@ -298,7 +298,6 @@ class ExecutionServicesFixture
   pops::runtime::program::ProgramRuntimeState& program_execution_runtime_state_() const {
     return program_runtime_state_;
   }
-  int program_execution_block_count_() const { return 2; }
   typename SharedServices::ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {pops::Real(3.5), 4, active_level_};
   }
@@ -355,7 +354,7 @@ class ExecutionServicesFixture
   }
   typename SharedServices::ProgramResourceTopology program_execution_resource_topology_()
       const noexcept {
-    return {11, 17, Amr ? 3 : 1};
+    return {11, 17, Amr ? 3 : 1, 2};
   }
   int program_execution_resource_level_() const noexcept { return resource_level_; }
   void program_execution_select_resource_level_(int selected) const noexcept {

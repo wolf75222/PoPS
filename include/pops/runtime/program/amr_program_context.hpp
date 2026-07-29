@@ -3313,7 +3313,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     throw std::logic_error("unknown Program scheduler cache operation");
   }
   ProgramResourceTopology program_execution_resource_topology_() const {
-    return {eng_->topology_epoch(), eng_->topology_materialization_generation(), eng_->nlev()};
+    return {eng_->topology_epoch(), eng_->topology_materialization_generation(), eng_->nlev(),
+            static_cast<int>(eng_->n_blocks())};
   }
   int program_execution_resource_level_() const noexcept { return level_; }
   void program_execution_select_resource_level_(int selected) const noexcept {
@@ -3428,7 +3429,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   ProgramRuntimeState& program_execution_runtime_state_() const {
     return facade_->program_runtime_state_();
   }
-  int program_execution_block_count_() const { return static_cast<int>(eng_->n_blocks()); }
   ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {static_cast<Real>(facade_->time()), facade_->macro_step(), level_};
   }
