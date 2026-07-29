@@ -30,6 +30,7 @@
   "tests/python/integration/dsl/test_dsl_hll_explicit_wave_speeds.py": 160.0,
   "tests/python/integration/dsl/test_dsl_jacobian_fd_public.py": 160.0,
   "tests/python/integration/io/test_amr_history_checkpoint.py": 360.0,
+  "tests/python/integration/io/test_amr_history_reflux_restart.py": 180.0,
   "tests/python/integration/io/test_amr_history_regrid_replay.py": 230.6,
   "tests/python/integration/io/test_io_checkpoint.py": 0.5,
   "tests/python/integration/io/test_io_multirank.py": 0.5,
@@ -403,7 +404,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 220,
+    "estimated_count": 221,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -420,6 +421,7 @@
       "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
       "tests/python/integration/dsl/test_dsl_hll_explicit_wave_speeds.py",
       "tests/python/integration/dsl/test_dsl_jacobian_fd_public.py",
+      "tests/python/integration/io/test_amr_history_reflux_restart.py",
       "tests/python/integration/io/test_uniform_selective_history_checkpoint.py",
       "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py",
       "tests/python/integration/mpi/test_compile_stale_and_debug.py",
@@ -626,6 +628,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 399
+    "total_files": 400
   }
 }
