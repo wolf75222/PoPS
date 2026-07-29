@@ -297,72 +297,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   bool history_flux_topology_bound() const { return history_flux_topology_.bound(); }
   int history_flux_topology_rebind_count() const { return history_flux_topology_rebind_count_; }
 
-  // --- state / RHS seam over the CURRENT level -------------------------------------------------------
-  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
-    require_rate_identity_(rate_id);
-    count_kernel();
-    if (capturing()) {
-      capture_into_(b, u, r, ResidualCapture::FullRate, rate_id);
-      return;
-    }
-    eng_->level_rhs_into_at(static_cast<std::size_t>(sys_block(b)), level_,
-                            boundary_point_(rate_id), u, r);
-  }
-  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage_id) const {
-    return boundary_point_(stage_id);
-  }
-  bool has_boundary_linearization(int b) const {
-    return eng_->has_boundary_linearization(static_cast<std::size_t>(sys_block(b)));
-  }
-  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                        MultiFab& u, MultiFab& r, bool flux_only) const {
-    count_kernel();
-    eng_->level_rhs_core_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u, r,
-                                 flux_only);
-  }
-  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                        MultiFab& u, MultiFab& r, bool flux_only,
-                        const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    eng_->level_rhs_core_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u, r,
-                                 flux_only, boundary);
-  }
-  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                                 MultiFab& u, MultiFab& c) const {
-    count_kernel();
-    eng_->level_boundary_residual_into_at(static_cast<std::size_t>(sys_block(b)), point.level,
-                                          point, u, c);
-  }
-  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                                 MultiFab& u, MultiFab& c,
-                                 const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    eng_->level_boundary_residual_into_at(static_cast<std::size_t>(sys_block(b)), point.level,
-                                          point, u, c, boundary);
-  }
-  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                            MultiFab& u, const MultiFab& v, MultiFab& j) const {
-    count_kernel();
-    eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u,
-                                     v, j);
-  }
-  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
-                            MultiFab& u, const MultiFab& v, MultiFab& j,
-                            const PreparedGridBoundarySession& boundary) const {
-    count_kernel();
-    eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u,
-                                     v, j, boundary);
-  }
-  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
-    require_rate_identity_(rate_id);
-    count_kernel();
-    if (capturing()) {
-      capture_into_(b, u, r, ResidualCapture::FluxOnly, rate_id);
-      return;
-    }
-    eng_->level_neg_div_flux_into_at(static_cast<std::size_t>(sys_block(b)), level_,
-                                     boundary_point_(rate_id), u, r);
-  }
   // --- field solve (the SHARED coarse Poisson) ------------------------------------------------------
   /// The default head-of-step elliptic solve: the coarse system Poisson + coarse->fine aux injection.
   /// The AMR runtime runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard):
@@ -3156,6 +3090,63 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
 
   friend class ProgramExecutionServices<AmrProgramContext>;
 
+  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
+      int stage_id) const {
+    return boundary_point_(stage_id);
+  }
+  void program_execution_rhs_into_(int program_block, int runtime_block, MultiFab& state,
+                                   MultiFab& rhs, int rate_id) const {
+    if (capturing()) {
+      capture_into_(program_block, state, rhs, ResidualCapture::FullRate, rate_id);
+      return;
+    }
+    eng_->level_rhs_into_at(static_cast<std::size_t>(runtime_block), level_,
+                            boundary_point_(rate_id), state, rhs);
+  }
+  bool program_execution_has_boundary_linearization_(int runtime_block) const {
+    return eng_->has_boundary_linearization(static_cast<std::size_t>(runtime_block));
+  }
+  void program_execution_rhs_core_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      MultiFab& rhs, bool flux_only, const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      eng_->level_rhs_core_into_at(static_cast<std::size_t>(runtime_block), point.level, point,
+                                   state, rhs, flux_only);
+    else
+      eng_->level_rhs_core_into_at(static_cast<std::size_t>(runtime_block), point.level, point,
+                                   state, rhs, flux_only, *boundary);
+  }
+  void program_execution_boundary_residual_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      MultiFab& residual, const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      eng_->level_boundary_residual_into_at(static_cast<std::size_t>(runtime_block), point.level,
+                                            point, state, residual);
+    else
+      eng_->level_boundary_residual_into_at(static_cast<std::size_t>(runtime_block), point.level,
+                                            point, state, residual, *boundary);
+  }
+  void program_execution_boundary_jvp_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
+      const MultiFab& direction, MultiFab& result,
+      const PreparedGridBoundarySession* boundary) const {
+    if (boundary == nullptr)
+      eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(runtime_block), point.level, point,
+                                       state, direction, result);
+    else
+      eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(runtime_block), point.level, point,
+                                       state, direction, result, *boundary);
+  }
+  void program_execution_neg_div_flux_default_into_(int program_block, int runtime_block,
+                                                    MultiFab& state, MultiFab& rhs,
+                                                    int rate_id) const {
+    if (capturing()) {
+      capture_into_(program_block, state, rhs, ResidualCapture::FluxOnly, rate_id);
+      return;
+    }
+    eng_->level_neg_div_flux_into_at(static_cast<std::size_t>(runtime_block), level_,
+                                     boundary_point_(rate_id), state, rhs);
+  }
   void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
     if (capturing()) {
       const bool has_interfaces = eng_->has_level_interfaces(level_);
