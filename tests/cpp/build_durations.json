@@ -161,6 +161,7 @@
   "test_polar_transport_mms": 2.0,
   "test_positivity_floor": 2.0,
   "test_prepared_boundary_plan": 2.0,
+  "test_prepared_numerics_gate": 2.0,
   "test_primitive_recon": 2.0,
   "test_pure_field_algebra_extreme_dot": 2.0,
   "test_profiler": 2.0,
