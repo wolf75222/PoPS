@@ -42,7 +42,7 @@
 #include <pops/runtime/program/cache_manager.hpp>   // CacheManager (held-node value cache, ADC-458)
 #include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
 #include <pops/runtime/program/program_execution_services.hpp>
-#include <pops/runtime/system.hpp>                  // System (the runtime this facade forwards to)
+#include <pops/runtime/system.hpp>  // System (the runtime this facade forwards to)
 
 /// @file
 /// @brief ProgramContext -- the C++-side facade a generated problem.so calls to run a compiled time
@@ -72,81 +72,6 @@ namespace program {
 
 class ProgramContext : public ProgramExecutionServices<ProgramContext> {
  public:
-  /// One exact logical-clock child interval.  The generated subcycle cursor validates iteration
-  /// order; this companion owns the numerical evaluation window used by prepared operators.  It is
-  /// deliberately move-only and restores the enclosing dt/phase/time/stage on every exit path, so
-  /// nested Program.subcycle bodies cannot leak a child clock into their parent evaluation.
-  class LogicalEvaluationScope {
-   public:
-    LogicalEvaluationScope(const ProgramContext& owner, int iteration, int count)
-        : owner_(&owner),
-          saved_dt_(owner.current_dt_),
-          saved_stage_(owner.stage_time_),
-          saved_phase_begin_(owner.logical_phase_begin_),
-          saved_phase_span_(owner.logical_phase_span_),
-          saved_physical_offset_(owner.logical_physical_time_offset_) {
-      if (count <= 0 || iteration < 0 || iteration >= count)
-        throw std::invalid_argument("Program logical evaluation requires a valid child iteration");
-      if (!std::isfinite(saved_dt_) || saved_dt_ <= 0.0)
-        throw std::logic_error("Program logical evaluation requires a prepared parent dt");
-      const double child_dt = saved_dt_ / static_cast<double>(count);
-      const double child_offset =
-          saved_physical_offset_ + static_cast<double>(iteration) * child_dt;
-      if (!std::isfinite(child_dt) || child_dt <= 0.0 || !std::isfinite(child_offset))
-        throw std::overflow_error("Program logical evaluation child window is not finite");
-      const amr::Rational child_fraction(iteration, count);
-      const amr::Rational child_span = saved_phase_span_ * amr::Rational(1, count);
-      const amr::Rational child_begin = saved_phase_begin_ + saved_phase_span_ * child_fraction;
-
-      owner.invalidate_active_operator_snapshot_();
-      child_dt_ = child_dt;
-      owner.current_dt_ = child_dt;
-      owner.stage_time_ = amr::Rational(0, 1);
-      owner.logical_phase_begin_ = child_begin;
-      owner.logical_phase_span_ = child_span;
-      owner.logical_physical_time_offset_ = child_offset;
-    }
-    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
-    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
-    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
-        : owner_(std::exchange(other.owner_, nullptr)),
-          saved_dt_(other.saved_dt_),
-          saved_stage_(other.saved_stage_),
-          saved_phase_begin_(other.saved_phase_begin_),
-          saved_phase_span_(other.saved_phase_span_),
-          saved_physical_offset_(other.saved_physical_offset_),
-          child_dt_(other.child_dt_) {}
-    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
-    ~LogicalEvaluationScope() noexcept { restore_(); }
-
-    Real dt() const {
-      if (owner_ == nullptr)
-        throw std::logic_error("Program logical evaluation scope is no longer active");
-      return static_cast<Real>(child_dt_);
-    }
-
-   private:
-    void restore_() noexcept {
-      if (owner_ == nullptr)
-        return;
-      owner_->current_dt_ = saved_dt_;
-      owner_->stage_time_ = saved_stage_;
-      owner_->logical_phase_begin_ = saved_phase_begin_;
-      owner_->logical_phase_span_ = saved_phase_span_;
-      owner_->logical_physical_time_offset_ = saved_physical_offset_;
-      owner_->invalidate_active_operator_snapshot_();
-      owner_ = nullptr;
-    }
-
-    const ProgramContext* owner_ = nullptr;
-    double saved_dt_ = 0.0;
-    amr::Rational saved_stage_{0, 1};
-    amr::Rational saved_phase_begin_{0, 1};
-    amr::Rational saved_phase_span_{1, 1};
-    double saved_physical_offset_ = 0.0;
-    double child_dt_ = 0.0;
-  };
-
   explicit ProgramContext(System* sys) : sys_(sys) {}
   /// Wraps a System passed as a flat void* (what pops_install_program(void* sys) receives).
   explicit ProgramContext(void* sys) : sys_(static_cast<System*>(sys)) {}
@@ -168,10 +93,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_phase_begin_ = amr::Rational(0, 1);
     logical_phase_span_ = amr::Rational(1, 1);
     logical_physical_time_offset_ = 0.0;
-  }
-
-  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
-    return LogicalEvaluationScope(*this, iteration, count);
   }
 
   SolveOutcome solve_fields() const {
@@ -203,32 +124,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       return sys_->solve_fields_from_state_at_in_place_(point, provider_slot, sys_block(b),
                                                         u_stage);
     });
-  }
-  template <class Body>
-  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                    const std::string& provider_slot, int b,
-                                    MultiFab& evaluation_state, MultiFab& restore_state,
-                                    Body&& body) const {
-    const auto restore = [&]() {
-      const SolveReport restored = consume_field_outcome_(
-          solve_fields_from_state_at(point, provider_slot, b, restore_state));
-      if (!restored.solved_value_available())
-        throw_field_solve_failure_(restored, "restoring the frozen field state");
-    };
-    const SolveReport prepared = consume_field_outcome_(
-        solve_fields_from_state_at(point, provider_slot, b, evaluation_state));
-    if (!prepared.solved_value_available()) {
-      restore();
-      throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
-    }
-    try {
-      std::forward<Body>(body)();
-    } catch (...) {
-      const std::exception_ptr failure = std::current_exception();
-      restore();
-      std::rethrow_exception(failure);
-    }
-    restore();
   }
   /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
   /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
@@ -927,49 +822,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     neg_div_flux_into(r, fx, fy, divc, lane);
   }
 
-  /// A zero-initialized RHS scratch with the SAME layout (box array / distribution / ghosts) as @p u,
-  /// so the subsequent axpy(u, ., r) combines identical layouts. Records the allocation into the
-  /// scratch peak-memory counters (no-op when profiling is off); scratch_state_like forwards here, so
-  /// every stage / rhs scratch is counted once at its single allocation site (ADC-459).
-  MultiFab rhs_scratch_like(const MultiFab& u) const {
-    MultiFab scratch(u.box_array(), u.dmap(), u.ncomp(), u.n_grow());
-    count_scratch(scratch);
-    return scratch;
-  }
-
-  /// A zero-initialized scratch STATE with the same layout as @p u: an intermediate stage state of a
-  /// multi-stage scheme (SSPRK/RK). Same allocation as rhs_scratch_like; named for the codegen's
-  /// intent. Starts at zero, so a stage `sum_i c_i V_i` is built by axpy-ing each term onto it.
-  MultiFab scratch_state_like(const MultiFab& u) const { return rhs_scratch_like(u); }
-
-  /// Context-owned scratch selected by the exact generated IR value and one local sub-slot.  Unlike
-  /// rhs_scratch_like(), this is the hot Program path: storage survives macro steps and is replaced
-  /// only when the prototype's complete distributed layout changes.  Acquisition restores the
-  /// historical zero-initialized-scratch semantics, so rejected attempts cannot leak provisional
-  /// bytes into a retry.  The registry belongs to this ProgramContext (and is shared only by copies
-  /// of that context); there is no process-global cache or Python fallback.
-  MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
-                                prototype.n_grow());
-  }
-
-  /// Persistent state-shaped counterpart of rhs_scratch().  A distinct kind namespace guarantees
-  /// that an IR node asking for both an RHS and a provisional state never aliases accidentally.
-  MultiFab& scratch_state(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::State, value_id, subslot, prototype, prototype.ncomp(),
-                                prototype.n_grow());
-  }
-
-  /// Persistent scalar/vector field on @p prototype's exact distributed mesh.  Component and ghost
-  /// widths are part of the authenticated layout, rather than inferred from a previous use of the
-  /// same node id.
-  MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
-                           int n_comp = 1, int n_ghost = 1) const {
-    if (n_comp < 1 || n_ghost < 0)
-      throw std::invalid_argument("Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
-    return program_scratch_for_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp, n_ghost);
-  }
-
   /// u <- u + a r over the valid cells (linear combine; forwards to pops::saxpy).
   void axpy(MultiFab& u, Real a, const MultiFab& r) const {
     count_kernel();
@@ -997,27 +849,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                std::initializer_list<ExactCoefficientTerm> /*exact_a*/,
                std::initializer_list<ExactCoefficientTerm> /*exact_b*/) const {
     lincomb(z, a, x, b, y);
-  }
-
-  /// Publish a complete multi-state commit group only after every target/source pair validates.
-  /// The enclosing System step snapshot is the exception-safety boundary: an allocation/copy failure
-  /// in this final phase restores the entire accepted group before the exception escapes.
-  void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
-    std::vector<MultiFab*> targets;
-    targets.reserve(commits.size());
-    for (const auto& [target, source] : commits) {
-      if (target == nullptr || source == nullptr)
-        throw std::invalid_argument("ProgramContext::commit_many received a null state");
-      if (std::find(targets.begin(), targets.end(), target) != targets.end())
-        throw std::invalid_argument("ProgramContext::commit_many received a duplicate target");
-      if (target->ncomp() != source->ncomp() ||
-          target->box_array().boxes() != source->box_array().boxes())
-        throw std::invalid_argument("ProgramContext::commit_many state layout mismatch");
-      targets.push_back(target);
-    }
-    for (const auto& [target, source] : commits)
-      if (target != source)
-        lincomb(*target, Real(0), *target, Real(1), *source);
   }
 
   /// Register (idempotent) the history @p name with maximum lag @p lag, allocating the ring buffer
@@ -1489,10 +1320,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const int mapped = sys_block(static_cast<int>(p));
       for (std::size_t previous = 0; previous < p; ++previous) {
         if (block_map[previous] == mapped)
-          throw block_map_error_(
-              "ProgramContext::solve_fields_from_blocks: Program blocks " +
-              std::to_string(previous) + " and " + std::to_string(p) +
-              " both map to System block " + std::to_string(mapped));
+          throw block_map_error_("ProgramContext::solve_fields_from_blocks: Program blocks " +
+                                 std::to_string(previous) + " and " + std::to_string(p) +
+                                 " both map to System block " + std::to_string(mapped));
       }
     }
     workspace.program_to_system.assign(block_map.begin(), block_map.end());
@@ -1649,8 +1479,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->solve_fields_from_blocks_in_place_(field, workspace.system_stages);
   }
 
-  enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
-
   struct ScratchKey {
     ScratchKind kind = ScratchKind::Rhs;
     std::int64_t value_id = -1;
@@ -1731,18 +1559,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return nullptr;
   }
 
-  static void require_rate_identity_(int rate_id) {
-    if (rate_id < 0)
-      throw std::invalid_argument(
-          "Program rate evaluation requires a non-negative authored node identity");
-  }
-
-  static void require_group_identity_(int group_id) {
-    if (group_id < 0)
-      throw std::invalid_argument(
-          "Program RHS group requires a non-negative authored group identity");
-  }
-
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
@@ -1759,10 +1575,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                 stage_time_.value() * current_dt_};
   }
 
-  static std::runtime_error block_map_error_(std::string message) {
-    return std::runtime_error(std::move(message));
-  }
-
   static SolveReport consume_field_outcome_(SolveOutcome outcome) {
     return outcome.consume(outcome.report().solved_value_available()
                                ? SolveConsumption::kAccept
@@ -1770,39 +1582,64 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
                                       ? SolveConsumption::kRejectAttempt
                                       : SolveConsumption::kFailRun));
   }
-
-  [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,
-                                                      const char* detail) {
-    if (report.action == SolveAction::kRejectAttempt)
-      throw StepAttemptRejected(report.status, "prepared field evaluation", detail);
-    throw std::runtime_error(std::string("prepared field evaluation failed: ") +
-                             report.status_name() + " (" + detail + ")");
-  }
-
   friend class ProgramExecutionServices<ProgramContext>;
-  const std::vector<int>& program_execution_block_map_() const {
-    return sys_->program_block_map();
+  LogicalEvaluationState program_execution_begin_logical_evaluation_(int iteration,
+                                                                     int count) const {
+    LogicalEvaluationState state;
+    state.parent_dt = current_dt_;
+    state.stage = stage_time_;
+    state.phase_begin = logical_phase_begin_;
+    state.phase_span = logical_phase_span_;
+    state.physical_time_offset = logical_physical_time_offset_;
+    if (!std::isfinite(state.parent_dt) || state.parent_dt <= 0.0)
+      throw std::logic_error("Program logical evaluation requires a prepared parent dt");
+    state.child_dt = state.parent_dt / static_cast<double>(count);
+    const double child_offset =
+        state.physical_time_offset + static_cast<double>(iteration) * state.child_dt;
+    if (!std::isfinite(state.child_dt) || state.child_dt <= 0.0 || !std::isfinite(child_offset))
+      throw std::overflow_error("Program logical evaluation child window is not finite");
+    const amr::Rational child_fraction(iteration, count);
+    const amr::Rational child_span = state.phase_span * amr::Rational(1, count);
+    const amr::Rational child_begin = state.phase_begin + state.phase_span * child_fraction;
+
+    invalidate_active_operator_snapshot_();
+    current_dt_ = state.child_dt;
+    stage_time_ = amr::Rational(0, 1);
+    logical_phase_begin_ = child_begin;
+    logical_phase_span_ = child_span;
+    logical_physical_time_offset_ = child_offset;
+    return state;
   }
+  void program_execution_restore_logical_evaluation_(
+      const LogicalEvaluationState& state) const noexcept {
+    current_dt_ = state.parent_dt;
+    stage_time_ = state.stage;
+    logical_phase_begin_ = state.phase_begin;
+    logical_phase_span_ = state.phase_span;
+    logical_physical_time_offset_ = state.physical_time_offset;
+    invalidate_active_operator_snapshot_();
+  }
+  MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
+                                       const MultiFab& prototype, int n_comp, int n_ghost) const {
+    return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
+  }
+  const std::vector<int>& program_execution_block_map_() const { return sys_->program_block_map(); }
   int program_execution_block_count_() const { return sys_->n_blocks(); }
-  Real program_execution_physical_time_() const {
-    return static_cast<Real>(sys_->time());
-  }
+  Real program_execution_physical_time_() const { return static_cast<Real>(sys_->time()); }
   void program_execution_record_scalar_(const std::string& name, Real value) const {
     sys_->record_program_diagnostic(name, value);
   }
-  RuntimeParams program_execution_params_(int block) const {
-    return sys_->program_params(block);
-  }
-  void program_execution_set_field_timepoint_(
-      const std::string& field, const FieldLogicalTimePoint& point) const {
+  RuntimeParams program_execution_params_(int block) const { return sys_->program_params(block); }
+  void program_execution_set_field_timepoint_(const std::string& field,
+                                              const FieldLogicalTimePoint& point) const {
     sys_->set_field_logical_timepoint(field, point);
   }
-  void program_execution_set_field_parameters_(
-      const std::string& field, const std::vector<double>& parameters) const {
+  void program_execution_set_field_parameters_(const std::string& field,
+                                               const std::vector<double>& parameters) const {
     sys_->set_field_boundary_parameters(field, parameters);
   }
-  void program_execution_set_field_kernel_(
-      const std::string& field, const CompiledFieldBoundaryKernel& kernel) const {
+  void program_execution_set_field_kernel_(const std::string& field,
+                                           const CompiledFieldBoundaryKernel& kernel) const {
     sys_->set_field_boundary_kernel(field, kernel);
   }
   Profiler& program_execution_profiler_() const { return sys_->profiler(); }

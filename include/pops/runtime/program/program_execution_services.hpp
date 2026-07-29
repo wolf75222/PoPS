@@ -1,20 +1,28 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <initializer_list>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
+#include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/profiler.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 
 namespace pops::runtime::program {
 
@@ -37,6 +45,139 @@ class ProgramExecutionServices {
     int program_block = -1;
     MultiFab* state = nullptr;
   };
+
+  enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
+
+  /// Provider-owned state captured before entering one logical child-clock interval.
+  ///
+  /// The lifetime and rollback semantics are topology-independent. Uniform execution uses the
+  /// rational phase fields; AMR execution uses ``window``. Providers translate this shared record to
+  /// their native clock/storage representation.
+  struct LogicalEvaluationState {
+    std::optional<amr::ClockWindow> window;
+    double parent_dt = 0.0;
+    amr::Rational stage{0, 1};
+    amr::Rational phase_begin{0, 1};
+    amr::Rational phase_span{1, 1};
+    double physical_time_offset = 0.0;
+    double child_dt = 0.0;
+  };
+
+  /// One exact logical child-clock interval.
+  ///
+  /// Program semantics own validation, move-only lifetime and rollback exactly once. The provider
+  /// only maps the interval to its uniform or hierarchy clock/storage representation.
+  class LogicalEvaluationScope {
+   public:
+    LogicalEvaluationScope(const Provider& owner, int iteration, int count) : owner_(&owner) {
+      if (count <= 0 || iteration < 0 || iteration >= count)
+        throw std::invalid_argument("Program logical evaluation requires a valid child iteration");
+      state_ = owner_->program_execution_begin_logical_evaluation_(iteration, count);
+      if (!std::isfinite(state_.child_dt) || state_.child_dt <= 0.0)
+        throw std::logic_error("Program logical evaluation provider returned an invalid child dt");
+    }
+    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)), state_(std::move(other.state_)) {}
+    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
+    ~LogicalEvaluationScope() noexcept { restore_(); }
+
+    Real dt() const {
+      if (owner_ == nullptr)
+        throw std::logic_error("Program logical evaluation scope is no longer active");
+      return static_cast<Real>(state_.child_dt);
+    }
+
+   private:
+    void restore_() noexcept {
+      if (owner_ == nullptr)
+        return;
+      owner_->program_execution_restore_logical_evaluation_(state_);
+      owner_ = nullptr;
+    }
+
+    const Provider* owner_ = nullptr;
+    LogicalEvaluationState state_;
+  };
+
+  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
+    return LogicalEvaluationScope(provider_(), iteration, count);
+  }
+
+  template <class Body>
+  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                    const std::string& provider_slot, int block,
+                                    MultiFab& evaluation_state, MultiFab& restore_state,
+                                    Body&& body) const {
+    const auto restore = [&]() {
+      const SolveReport restored =
+          provider_().solve_fields_from_state_at(point, provider_slot, block, restore_state);
+      if (!restored.solved_value_available())
+        throw_field_solve_failure_(restored, "restoring the frozen field state");
+    };
+    const SolveReport prepared =
+        provider_().solve_fields_from_state_at(point, provider_slot, block, evaluation_state);
+    if (!prepared.solved_value_available()) {
+      restore();
+      throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
+    }
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      const std::exception_ptr failure = std::current_exception();
+      restore();
+      std::rethrow_exception(failure);
+    }
+    restore();
+  }
+
+  MultiFab rhs_scratch_like(const MultiFab& prototype) const {
+    MultiFab scratch(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
+                     prototype.n_grow());
+    count_scratch(scratch);
+    return scratch;
+  }
+
+  MultiFab scratch_state_like(const MultiFab& prototype) const {
+    return rhs_scratch_like(prototype);
+  }
+
+  MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
+    return provider_().program_execution_scratch_(ScratchKind::Rhs, value_id, subslot, prototype,
+                                                  prototype.ncomp(), prototype.n_grow());
+  }
+
+  MultiFab& scratch_state(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
+    return provider_().program_execution_scratch_(ScratchKind::State, value_id, subslot, prototype,
+                                                  prototype.ncomp(), prototype.n_grow());
+  }
+
+  MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
+                           int n_comp = 1, int n_ghost = 1) const {
+    if (n_comp < 1 || n_ghost < 0)
+      throw std::invalid_argument("Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
+    return provider_().program_execution_scratch_(ScratchKind::Scalar, value_id, subslot, prototype,
+                                                  n_comp, n_ghost);
+  }
+
+  void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+    std::vector<MultiFab*> targets;
+    targets.reserve(commits.size());
+    for (const auto& [target, source] : commits) {
+      if (target == nullptr || source == nullptr)
+        throw std::invalid_argument("Program commit_many received a null state");
+      if (std::find(targets.begin(), targets.end(), target) != targets.end())
+        throw std::invalid_argument("Program commit_many received a duplicate target");
+      if (target->ncomp() != source->ncomp() ||
+          target->box_array().boxes() != source->box_array().boxes())
+        throw std::invalid_argument("Program commit_many state layout mismatch");
+      targets.push_back(target);
+    }
+    for (const auto& [target, source] : commits)
+      if (target != source)
+        provider_().lincomb(*target, Real(0), *target, Real(1), *source);
+  }
 
   void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
     if (denominator <= 0 || numerator < 0 || numerator > denominator)
@@ -166,6 +307,30 @@ class ProgramExecutionServices {
   }
 
  protected:
+  static void require_rate_identity_(int rate_id) {
+    if (rate_id < 0)
+      throw std::invalid_argument(
+          "Program rate evaluation requires a non-negative authored node identity");
+  }
+
+  static void require_group_identity_(int group_id) {
+    if (group_id < 0)
+      throw std::invalid_argument(
+          "Program RHS group requires a non-negative authored group identity");
+  }
+
+  static std::runtime_error block_map_error_(std::string message) {
+    return std::runtime_error(std::move(message));
+  }
+
+  [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,
+                                                      const char* detail) {
+    if (report.action == SolveAction::kRejectAttempt)
+      throw StepAttemptRejected(report.status, "prepared field evaluation", detail);
+    throw std::runtime_error(std::string("prepared field evaluation failed: ") +
+                             report.status_name() + " (" + detail + ")");
+  }
+
   mutable ClockScheduleState clock_schedule_;
   mutable std::string primary_clock_;
   mutable amr::Rational stage_time_{0, 1};
