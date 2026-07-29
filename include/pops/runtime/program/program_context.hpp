@@ -564,13 +564,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
 
   SolveReport solve_named_field_workspace_(const std::string& field,
                                            FieldSolveWorkspace& workspace) const {
-    if (workspace.in_use)
-      throw std::logic_error("Program simultaneous field-solve workspace is already in use");
-    struct WorkspaceUse {
-      bool& flag;
-      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
-      ~WorkspaceUse() { flag = false; }
-    } use(workspace.in_use);
+    ExclusiveUseGuard use(workspace.in_use,
+                          "Program simultaneous field-solve workspace is already in use");
     std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
     bool has_override = false;
     for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
