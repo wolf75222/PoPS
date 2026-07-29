@@ -262,20 +262,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->require_cartesian_generated_operator(sys_block(b), operation);
   }
 
-  /// The MIN physical cell size of the grid (Cartesian min(dx, dy); polar min(dr, r_min*dtheta)) -- the
-  /// SAME hmin the native CFL uses. Forwards to System::cfl_min_dx. A compiled time Program's dt bound
-  /// (epic ADC-399 / ADC-417, spec s18) reads it to express e.g. cfl * hmin / max_wave_speed.
-  Real hmin() const { return sys_->cfl_min_dx(); }
-
-  /// The maximum |wave speed| of block @p b on the state @p u: the SAME per-block reduction step_cfl
-  /// reads (BlockState::max_speed). Forwards to System::block_max_speed -- it REUSES the block's
-  /// wave-speed closure, it does not recompute the speed. @p u is the state the bound is evaluated on
-  /// (the block's current state for a CFL bound). The dt_bound expression uses it as the denominator of
-  /// cfl * hmin / max_wave_speed (epic ADC-399 / ADC-417, spec s18).
-  Real max_wave_speed(int b, const MultiFab& u) const {
-    return sys_->block_max_speed(sys_block(b), u);
-  }
-
   /// Materialize one lane-private mesh authority for a prepared operator that is not attached to a
   /// conservative block (for example, a scalar elliptic field).  This deliberately uses the
   /// unqualified mesh BC and cannot borrow a block's native boundary components.
@@ -1233,6 +1219,10 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
   void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
     sys_->block_project(runtime_block, state);
+  }
+  Real program_execution_hmin_() const { return sys_->cfl_min_dx(); }
+  Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
+    return sys_->block_max_speed(runtime_block, state);
   }
 
   struct LogicalEvaluationRollback {

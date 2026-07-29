@@ -277,6 +277,20 @@ class ProgramExecutionServices {
     provider_().program_execution_apply_projection_(sys_block(block), state);
   }
 
+  /// Minimum physical cell size used by the native CFL authority.
+  ///
+  /// The Program owns one dt-bound operation. The provider supplies only the topology-qualified
+  /// terminal query, so Uniform and AMR cannot grow separate public CFL dispatch paths.
+  Real hmin() const { return provider_().program_execution_hmin_(); }
+
+  /// Maximum wave speed for one authored block on the supplied state.
+  ///
+  /// Program-to-runtime block qualification happens exactly once here. The provider receives the
+  /// authenticated runtime block and performs only its Uniform or active-level native reduction.
+  Real max_wave_speed(int block, const MultiFab& state) const {
+    return provider_().program_execution_max_wave_speed_(sys_block(block), state);
+  }
+
   MultiFab rhs_scratch_like(const MultiFab& prototype) const {
     MultiFab scratch(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
                      prototype.n_grow());
