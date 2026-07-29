@@ -381,8 +381,12 @@ TEST(test_multiblock_interface_scheduler,
   EXPECT_EQ(first.key.clock.phase, clock.phase);
   EXPECT_EQ(first.key.stage_identity, "program.group.node.42");
   EXPECT_EQ(first.key.orientation, amr::InterfaceFluxOrientation::CoarseOutward);
+  EXPECT_EQ(first.key.left_block, 0u);
+  EXPECT_EQ(first.key.right_block, 1u);
   EXPECT_EQ(first.measure.stage_weight, amr::Rational(3, 4));
   EXPECT_DOUBLE_EQ(first.measure.face_measure, 1.0);
+  EXPECT_DOUBLE_EQ(first.measure.substep_duration, 0.2);
+  EXPECT_TRUE(first.measure.stage_weight_resolved);
   EXPECT_EQ(first.payload, (InterfaceFluxFragmentPayload{Real(2), Real(3), Real(4)}));
 }
 
@@ -493,8 +497,8 @@ TEST(test_multiblock_interface_scheduler,
   facade.set_program_block_map({0, 1});
   runtime::program::AmrProgramContext context(&runtime, &facade);
   context.configure_primary_clock("clock.program-fragments");
-  const auto evaluate_group = [&](bool reject_after_parent) {
-    context.advance_hierarchy(0.2, [&](double) {
+  const auto evaluate_group = [&](bool reject_after_parent, bool mismatch_consumer_weight = false) {
+    context.advance_hierarchy(0.2, [&](double level_dt) {
       context.set_stage_time(1, 2);
       MultiFab& left = context.state(0);
       MultiFab& right = context.state(1);
@@ -507,6 +511,11 @@ TEST(test_multiblock_interface_scheduler,
       const Real right_flux = right_rhs.fab(0).const_array()(box.lo[0], j, 0);
       EXPECT_NE(left_flux, Real(0));
       EXPECT_EQ(left_flux + right_flux, Real(0));
+      context.axpy(left, Real(0.5 * level_dt), left_rhs, Real(level_dt), {{1, 1, 2}});
+      if (mismatch_consumer_weight)
+        context.axpy(right, Real(0.25 * level_dt), right_rhs, Real(level_dt), {{1, 1, 4}});
+      else
+        context.axpy(right, Real(0.5 * level_dt), right_rhs, Real(level_dt), {{1, 1, 2}});
       if (reject_after_parent && context.level() == 0)
         throw std::runtime_error("reject after canonical parent interface flux");
     });
@@ -534,7 +543,10 @@ TEST(test_multiblock_interface_scheduler,
     EXPECT_EQ(entry.key.interval.begin.macro_step, 0);
     EXPECT_EQ(entry.key.interval.end.macro_step, 0);
     EXPECT_EQ(entry.key.clock.macro_step, 0);
-    EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 1));
+    EXPECT_EQ(entry.key.left_block, 0u);
+    EXPECT_EQ(entry.key.right_block, 1u);
+    EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 2));
+    EXPECT_TRUE(entry.measure.stage_weight_resolved);
     if (entry.key.orientation == amr::InterfaceFluxOrientation::CoarseOutward)
       ++coarse_orientation_count;
     else if (entry.key.orientation == amr::InterfaceFluxOrientation::FineOutward)
@@ -548,9 +560,11 @@ TEST(test_multiblock_interface_scheduler,
       EXPECT_DOUBLE_EQ(entry.key.interval.end.physical_time, 0.2);
       EXPECT_DOUBLE_EQ(entry.key.clock.physical_time, 0.1);
       EXPECT_DOUBLE_EQ(entry.measure.face_measure, 0.25);
+      EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.2);
     } else if (entry.key.clock.level == 1) {
       ++child_clock_count;
       EXPECT_DOUBLE_EQ(entry.measure.face_measure, 0.125);
+      EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.1);
       if (entry.key.interval.begin.phase == amr::Rational(0, 1)) {
         ++first_child_window_count;
         EXPECT_EQ(entry.key.interval.end.phase, amr::Rational(1, 2));
@@ -584,6 +598,68 @@ TEST(test_multiblock_interface_scheduler,
   EXPECT_EQ(evaluator_calls[1], calls_before_rejection[1]);
   EXPECT_EQ(context.accepted_interface_flux_fragments().size(), 3u)
       << "the rejected parent publication must not replace the accepted report";
+
+  const std::array<int, 2> calls_before_mismatch = evaluator_calls;
+  EXPECT_THROW(evaluate_group(false, true), std::runtime_error);
+  EXPECT_EQ(evaluator_calls[0], calls_before_mismatch[0] + 1);
+  EXPECT_EQ(evaluator_calls[1], calls_before_mismatch[1]);
+  EXPECT_EQ(context.accepted_interface_flux_fragments().size(), 3u)
+      << "different consumer weights must fail before replacing the accepted report";
+
+  context.advance_hierarchy(0.2, [&](double) {
+    for (int iteration = 0; iteration < 2; ++iteration) {
+      auto logical = context.logical_evaluation_scope(iteration, 2);
+      context.set_stage_time(1, 2);
+      MultiFab& left = context.state(0);
+      MultiFab& right = context.state(1);
+      MultiFab& left_rhs = context.rhs_scratch(110, 0, left);
+      MultiFab& right_rhs = context.rhs_scratch(111, 0, right);
+      context.rhs_group(43, {{0, &left, &left_rhs, 13, 0}, {1, &right, &right_rhs, 14, 0}});
+      const Real logical_dt = logical.dt();
+      context.axpy(left, logical_dt, left_rhs, logical_dt, {{1, 1, 1}});
+      context.axpy(right, logical_dt, right_rhs, logical_dt, {{1, 1, 1}});
+    }
+  });
+  const auto& logical_fragments = context.accepted_interface_flux_fragments();
+  ASSERT_EQ(logical_fragments.size(), 6u);
+  int parent_logical_fragments = 0;
+  int child_logical_fragments = 0;
+  for (const auto& entry : logical_fragments) {
+    EXPECT_EQ(entry.key.stage_identity, "program.group.node.43");
+    EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 1));
+    if (entry.key.clock.level == 0) {
+      ++parent_logical_fragments;
+      EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.1);
+    } else {
+      ++child_logical_fragments;
+      EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.05);
+    }
+  }
+  EXPECT_EQ(parent_logical_fragments, 2);
+  EXPECT_EQ(child_logical_fragments, 4);
+
+  context.advance_synchronized_hierarchy(0.2, [&](double hierarchy_dt) {
+    for (int level = 0; level < 2; ++level) {
+      context.set_level(level);
+      context.set_stage_time(1, 2);
+      MultiFab& left = context.state(0);
+      MultiFab& right = context.state(1);
+      MultiFab& left_rhs = context.rhs_scratch(120, 0, left);
+      MultiFab& right_rhs = context.rhs_scratch(121, 0, right);
+      context.rhs_group(44, {{0, &left, &left_rhs, 15, 0}, {1, &right, &right_rhs, 16, 0}});
+      context.axpy(left, Real(0.5 * hierarchy_dt), left_rhs, Real(hierarchy_dt), {{1, 1, 2}});
+      context.axpy(right, Real(0.5 * hierarchy_dt), right_rhs, Real(hierarchy_dt), {{1, 1, 2}});
+    }
+  });
+  const auto& barrier_fragments = context.accepted_interface_flux_fragments();
+  ASSERT_EQ(barrier_fragments.size(), 2u);
+  for (const auto& entry : barrier_fragments) {
+    EXPECT_EQ(entry.key.stage_identity, "program.group.node.44");
+    EXPECT_EQ(entry.key.interval.begin.level, entry.key.clock.level);
+    EXPECT_EQ(entry.key.interval.end.level, entry.key.clock.level);
+    EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 2));
+    EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.2);
+  }
 }
 
 TEST(test_multiblock_interface_scheduler,

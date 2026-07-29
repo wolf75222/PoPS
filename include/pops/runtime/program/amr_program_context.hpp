@@ -190,7 +190,13 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   // --- hierarchy-driver state -----------------------------------------------------------------------
-  void set_level(int k) const { level_ = k; }
+  void set_level(int k) const {
+    level_ = k;
+    if (hierarchy_barrier_level_selection_active_ && current_window_) {
+      current_window_->begin.level = k;
+      current_window_->end.level = k;
+    }
+  }
   int level() const { return level_; }
   /// Epoch used by generated install-time resource bundles. A regrid/rebalance changes this value;
   /// generated Programs then rematerialize every per-level persistent field/problem/workspace once,
@@ -253,8 +259,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// Number of populated ledger entries (test seam): the parity gate unit-asserts this is 0 on a
   /// coarse-only / flat Program (the capture path is unreachable at nlev == 1).
   std::size_t ledger_size() const { return active_flux_ledger_.size(); }
-  /// Raw accepted shared-interface evaluations. These fragments retain exact stage/window identity;
-  /// Program tableau/history algebra is intentionally not applied in this first fixed-hierarchy slice.
+  /// Accepted shared-interface evaluations after the exact Program contribution algebra has
+  /// resolved every current fragment's stage weight. The report retains the original stage/window
+  /// identity together with the authoritative local substep duration.
   const std::vector<InterfaceFluxFragmentAuditEntry>& accepted_interface_flux_fragments() const {
     if (facade_ != nullptr &&
         facade_->program_accepted_state_revision() != accepted_state_revision_)
@@ -285,19 +292,27 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// would silently change a hierarchy-scoped operator into a level operator, so it is forbidden here.
   template <class Body>
   void advance_synchronized_hierarchy(double dt, Body&& body) const {
-    advance_attempt_(dt, "AmrProgramContext::advance_synchronized_hierarchy",
-                     CouplingSchedule::HierarchyBarrier, [&](const amr::ClockWindow& root) {
-                       current_window_ = root;
-                       current_level_dt_ = dt;
-                       active_parent_.reset();
-                       stage_time_ = amr::Rational(0, 1);
-                       body(dt);
-                       for (int k = 0; k < nlev(); ++k) {
-                         const amr::ClockStamp accepted{k, root.end.macro_step, root.end.phase,
-                                                        root.end.physical_time};
-                         flush_level_flux_(k, dt, accepted);
-                       }
-                     });
+    advance_attempt_(
+        dt, "AmrProgramContext::advance_synchronized_hierarchy", CouplingSchedule::HierarchyBarrier,
+        [&](const amr::ClockWindow& root) {
+          current_window_ = root;
+          current_level_dt_ = dt;
+          active_parent_.reset();
+          stage_time_ = amr::Rational(0, 1);
+          if (hierarchy_barrier_level_selection_active_)
+            throw std::logic_error("AMR hierarchy-barrier level selection is already active");
+          hierarchy_barrier_level_selection_active_ = true;
+          struct HierarchyBarrierLevelSelectionReset {
+            bool* active = nullptr;
+            ~HierarchyBarrierLevelSelectionReset() { *active = false; }
+          } reset{&hierarchy_barrier_level_selection_active_};
+          body(dt);
+          for (int k = 0; k < nlev(); ++k) {
+            const amr::ClockStamp accepted{k, root.end.macro_step, root.end.phase,
+                                           root.end.physical_time};
+            flush_level_flux_(k, dt, accepted);
+          }
+        });
   }
 
   [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
@@ -513,6 +528,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         deferred_op("refined_shared_block_interfaces",
                     "shared block interface-fragment publication currently requires exactly two "
                     "fixed hierarchy levels");
+      if (has_interfaces)
+        register_interface_flux_group_(group_id, blocks, rate_ids);
       const auto group_point = boundary_point_(group_id);
       eng_->with_boundary_stage_states(group_point, blocks, states, [&] {
         for (const auto& request : requests) {
@@ -3011,6 +3028,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void flush_level_flux_(int level, double dt, const amr::ClockStamp& clock) const {
     (void)dt;
     (void)clock;
+    resolve_interface_flux_stage_weights_(level);
     for (int b = 0; b < n_blocks(); ++b) {
       const MultiFab* state = &eng_->level_state(static_cast<std::size_t>(sys_block(b)), level);
       if (active_flux_({level, static_cast<const void*>(state)}) == nullptr)
@@ -3136,6 +3154,105 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       interface_flux_ledger_->clear();
   }
 
+  static std::string interface_flux_group_identity_(int group_id) {
+    require_group_identity_(group_id);
+    return "program.group.node." + std::to_string(group_id);
+  }
+
+  void register_interface_flux_group_(int group_id, const std::vector<int>& runtime_blocks,
+                                      const std::vector<int>& rate_ids) const {
+    if (runtime_blocks.empty() || runtime_blocks.size() != rate_ids.size())
+      throw std::invalid_argument(
+          "AMR interface-flux group requires matching runtime blocks and rate identities");
+    std::map<std::size_t, int> members;
+    for (std::size_t index = 0; index < runtime_blocks.size(); ++index) {
+      const int runtime_block = runtime_blocks[index];
+      require_rate_identity_(rate_ids[index]);
+      if (runtime_block < 0 ||
+          !members.emplace(static_cast<std::size_t>(runtime_block), rate_ids[index]).second)
+        throw std::invalid_argument(
+            "AMR interface-flux group requires unique non-negative runtime blocks");
+    }
+    const std::string identity = interface_flux_group_identity_(group_id);
+    const auto found = interface_flux_group_rates_.find(identity);
+    if (found == interface_flux_group_rates_.end()) {
+      interface_flux_group_rates_.emplace(identity, std::move(members));
+      return;
+    }
+    if (found->second != members)
+      throw std::runtime_error(
+          "AMR interface-flux group identity changed its authored block/rate membership");
+  }
+
+  amr::Rational interface_flux_stage_weight_(int level, std::size_t runtime_block, int rate_id,
+                                             const amr::ClockStamp& evaluation_clock,
+                                             double substep_duration) const {
+    if (runtime_block >= eng_->n_blocks())
+      throw std::out_of_range("AMR interface-flux consumer block is outside the runtime");
+    const MultiFab* state = &eng_->level_state(runtime_block, level);
+    const FluxKey key{level, static_cast<const void*>(state)};
+    if (active_flux_(key) == nullptr)
+      throw std::runtime_error(
+          "AMR interface-flux consumer has no final Program contribution ledger");
+    const auto provenance = rate_provenance_.find(key);
+    if (provenance == rate_provenance_.end() ||
+        std::find(provenance->second.begin(), provenance->second.end(), rate_id) ==
+            provenance->second.end())
+      throw std::runtime_error("AMR interface-flux consumer did not consume its grouped rate");
+
+    amr::Rational weight(0, 1);
+    const auto contributions = flux_contributions_.find(key);
+    if (contributions == flux_contributions_.end())
+      throw std::runtime_error(
+          "AMR interface-flux consumer lost its exact Program contribution metadata");
+    bool matched_exact_contribution = false;
+    for (const FluxContribution& contribution : contributions->second) {
+      if (contribution.rate_id != rate_id || !(contribution.evaluation_clock == evaluation_clock))
+        continue;
+      if (contribution.dt_power != 1 || contribution.duration != substep_duration)
+        throw std::runtime_error(
+            "AMR interface-flux consumer does not have exact weight*local_dt provenance");
+      matched_exact_contribution = true;
+      weight = weight + contribution.weight;
+    }
+    if (!matched_exact_contribution)
+      throw std::runtime_error(
+          "AMR interface-flux consumer has no contribution at the fragment's exact clock");
+    return weight;
+  }
+
+  void resolve_interface_flux_stage_weights_(int level) const {
+    if (!interface_flux_ledger_ || !interface_flux_ledger_->in_transaction())
+      return;
+
+    for (std::size_t index = 0; index < interface_flux_ledger_->pending_size(); ++index) {
+      const auto& entry = interface_flux_ledger_->pending_entries().at(index);
+      if (entry.measure.stage_weight_resolved || entry.key.clock.level != level)
+        continue;
+      const double substep_duration = entry.measure.substep_duration;
+      if (!(substep_duration > 0.0) || !std::isfinite(substep_duration))
+        throw std::runtime_error(
+            "AMR interface-flux fragment lost its authoritative finite positive local dt");
+      const auto group = interface_flux_group_rates_.find(entry.key.stage_identity);
+      if (group == interface_flux_group_rates_.end())
+        throw std::runtime_error(
+            "AMR interface-flux fragment has no authored grouped-rate membership");
+      const auto left = group->second.find(entry.key.left_block);
+      const auto right = group->second.find(entry.key.right_block);
+      if (left == group->second.end() || right == group->second.end())
+        throw std::runtime_error(
+            "AMR interface-flux grouped rate does not contain both interface consumers");
+      const amr::Rational left_weight = interface_flux_stage_weight_(
+          level, entry.key.left_block, left->second, entry.key.clock, substep_duration);
+      const amr::Rational right_weight = interface_flux_stage_weight_(
+          level, entry.key.right_block, right->second, entry.key.clock, substep_duration);
+      if (left_weight != right_weight)
+        throw std::runtime_error(
+            "AMR interface-flux consumers use different exact Program stage weights");
+      interface_flux_ledger_->resolve_pending_stage_weight(index, left_weight);
+    }
+  }
+
   runtime::multiblock::InterfaceFluxFragmentPublication interface_flux_publication_(
       int stage) const {
     require_group_identity_(stage);
@@ -3152,9 +3269,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
             0,
             1,
             evaluation_clock_(),
-            "program.group.node." + std::to_string(stage),
+            interface_flux_group_identity_(stage),
             *current_window_,
-            amr::Rational(1, 1)};
+            amr::Rational(0, 1),
+            false};
   }
 
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
@@ -3924,6 +4042,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   mutable std::vector<SyncEvent> sync_report_;
   mutable amr::TransactionalFluxLedger<EdgeFlux> conservative_ledger_;
   mutable std::optional<runtime::multiblock::InterfaceFluxFragmentLedger> interface_flux_ledger_;
+  mutable std::map<std::string, std::map<std::size_t, int>> interface_flux_group_rates_;
   mutable std::vector<AmrProgramFluxAuditEntry> accepted_flux_report_;
   mutable std::vector<InterfaceFluxFragmentAuditEntry> accepted_interface_flux_report_;
   mutable std::vector<AmrProgramSyncEvent> accepted_sync_report_;
@@ -3947,6 +4066,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   mutable std::optional<amr::ClockWindow> current_window_;
   mutable std::optional<amr::ClockStamp> current_sync_clock_;
   mutable double current_level_dt_ = 0.0;
+  mutable bool hierarchy_barrier_level_selection_active_ = false;
   // PERSISTENT per-history-ring flux strips (NOT cleared per step): name -> [slot][level] -> EdgeFlux. A
   // multistep scheme (AB2 / BDF2) reads a lagged RHS / state from the ring; store_history saves that
   // buffer's ledger strip here (slot 0), rotate_histories rotates it in lockstep with the ring, and

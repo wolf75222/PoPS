@@ -102,6 +102,7 @@ struct InterfaceFluxFragmentPublication {
   std::string stage_identity;
   ::pops::amr::ClockWindow interval;
   ::pops::amr::Rational stage_weight{1, 1};
+  bool stage_weight_resolved = true;
 };
 
 class InterfaceFluxScheduler {
@@ -721,16 +722,20 @@ class InterfaceFluxScheduler {
   }
 
   static void publish_fragment_(const PreparedInterface& prepared,
+                                const BoundaryEvaluationPoint& point,
                                 const InterfaceFluxFragmentPublication& publication) {
     const auto orientation = publication.clock.level == publication.coarse_level
                                  ? ::pops::amr::InterfaceFluxOrientation::CoarseOutward
                                  : ::pops::amr::InterfaceFluxOrientation::FineOutward;
-    ::pops::amr::InterfaceFluxFragmentKey key{prepared.route.identity,  publication.topology_epoch,
-                                              publication.coarse_level, publication.fine_level,
-                                              publication.clock,        publication.stage_identity,
-                                              publication.interval,     orientation};
+    ::pops::amr::InterfaceFluxFragmentKey key{
+        prepared.route.identity,   publication.topology_epoch,
+        publication.coarse_level,  publication.fine_level,
+        publication.clock,         publication.stage_identity,
+        publication.interval,      orientation,
+        prepared.route.left_block, prepared.route.right_block};
     const ::pops::amr::InterfaceFluxFragmentMeasure measure{publication.stage_weight,
-                                                            prepared.face_measure};
+                                                            prepared.face_measure, point.dt,
+                                                            publication.stage_weight_resolved};
     InterfaceFluxFragmentPayload payload(prepared.flux.begin(), prepared.flux.end());
     publication.ledger->accumulate(std::move(key), measure, std::move(payload));
   }
@@ -865,7 +870,7 @@ class InterfaceFluxScheduler {
       throw std::runtime_error("multi-block interface evaluator returned a non-finite flux");
     }
     if (publication != nullptr)
-      publish_fragment_(prepared, *publication);
+      publish_fragment_(prepared, point, *publication);
     ++prepared.evaluation_count;
 
     for (int face = 0; face < prepared.face_count; ++face) {

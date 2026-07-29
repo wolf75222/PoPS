@@ -1,8 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -47,23 +49,31 @@ struct InterfaceFluxFragmentKey {
   std::string stage_identity;
   ClockWindow interval;
   InterfaceFluxOrientation orientation = InterfaceFluxOrientation::CoarseOutward;
+  std::size_t left_block = 0;
+  std::size_t right_block = 1;
 
   friend bool operator<(const InterfaceFluxFragmentKey& a, const InterfaceFluxFragmentKey& b) {
     return std::make_tuple(a.interface_identity, a.topology_epoch, a.coarse_level, a.fine_level,
                            detail::interface_flux_clock_coordinate(a.clock), a.stage_identity,
-                           detail::interface_flux_window_coordinate(a.interval), a.orientation) <
+                           detail::interface_flux_window_coordinate(a.interval), a.orientation,
+                           a.left_block, a.right_block) <
            std::make_tuple(b.interface_identity, b.topology_epoch, b.coarse_level, b.fine_level,
                            detail::interface_flux_clock_coordinate(b.clock), b.stage_identity,
-                           detail::interface_flux_window_coordinate(b.interval), b.orientation);
+                           detail::interface_flux_window_coordinate(b.interval), b.orientation,
+                           b.left_block, b.right_block);
   }
 };
 
-/// Fragment metadata that is numerical rather than identifying.  Face measure
-/// is retained for auditing; the downstream reflux route applies geometry
-/// exactly once, as for FluxMeasure.
+/// Fragment metadata that is numerical rather than identifying. Face measure
+/// is retained for auditing. The paired shared-interface RHS already applies
+/// geometry exactly once; this ledger is provenance and must not inject the
+/// same flux into reflux a second time. Substep duration is the authored local
+/// dt, never reconstructed from rounded physical timestamps.
 struct InterfaceFluxFragmentMeasure {
   Rational stage_weight{1, 1};
   double face_measure = 0.0;
+  double substep_duration = 0.0;
+  bool stage_weight_resolved = true;
 };
 
 template <class Payload>
@@ -82,13 +92,17 @@ struct InterfaceFluxAccumulationKey {
   int fine_level = 1;
   ClockWindow interval;
   InterfaceFluxOrientation orientation = InterfaceFluxOrientation::CoarseOutward;
+  std::size_t left_block = 0;
+  std::size_t right_block = 1;
 
   friend bool operator<(const InterfaceFluxAccumulationKey& a,
                         const InterfaceFluxAccumulationKey& b) {
     return std::make_tuple(a.interface_identity, a.topology_epoch, a.coarse_level, a.fine_level,
-                           detail::interface_flux_window_coordinate(a.interval), a.orientation) <
+                           detail::interface_flux_window_coordinate(a.interval), a.orientation,
+                           a.left_block, a.right_block) <
            std::make_tuple(b.interface_identity, b.topology_epoch, b.coarse_level, b.fine_level,
-                           detail::interface_flux_window_coordinate(b.interval), b.orientation);
+                           detail::interface_flux_window_coordinate(b.interval), b.orientation,
+                           b.left_block, b.right_block);
   }
 };
 
@@ -104,17 +118,18 @@ inline double interface_flux_orientation_sign(InterfaceFluxOrientation orientati
 
 inline InterfaceFluxAccumulationKey interface_flux_accumulation_key(
     const InterfaceFluxFragmentKey& key) {
-  return {key.interface_identity, key.topology_epoch, key.coarse_level,
-          key.fine_level,         key.interval,       key.orientation};
+  return {key.interface_identity, key.topology_epoch, key.coarse_level, key.fine_level,
+          key.interval,           key.orientation,    key.left_block,   key.right_block};
 }
 
-/// Convert one physical-flux sample to an oriented, time-integrated
-/// contribution.  Geometry stays auditable but is not multiplied here because
-/// the reflux route owns the unique face/cell measure conversion.
+/// Convert one physical-flux sample to an oriented, time-integrated audit
+/// contribution. Geometry stays explicit in the measure but is not multiplied
+/// here because the shared-interface RHS already applied its unique face/cell
+/// conversion.
 inline double interface_flux_fragment_scale(const InterfaceFluxFragmentKey& key,
                                             const InterfaceFluxFragmentMeasure& measure) {
   return interface_flux_orientation_sign(key.orientation) * measure.stage_weight.value() *
-         (key.interval.end.physical_time - key.interval.begin.physical_time);
+         measure.substep_duration;
 }
 
 /// Transactional store for refined multi-block interface fluxes.  Pending
@@ -135,6 +150,7 @@ class TransactionalInterfaceFluxLedger {
   std::size_t pending_size() const { return pending_.size(); }
   std::size_t published_size() const { return published_.size(); }
   bool empty() const { return pending_.empty() && published_.empty(); }
+  const std::vector<Entry>& pending_entries() const { return pending_; }
   const std::vector<Entry>& published_entries() const { return published_; }
 
   void begin() { savepoints_.push_back(pending_.size()); }
@@ -142,6 +158,11 @@ class TransactionalInterfaceFluxLedger {
   void commit() {
     if (!in_transaction())
       throw std::runtime_error("AMR interface-flux ledger commit without active transaction");
+    if (savepoints_.size() == 1)
+      for (const Entry& entry : pending_)
+        if (!entry.measure.stage_weight_resolved)
+          throw std::runtime_error(
+              "AMR interface-flux ledger cannot publish an unresolved Program stage weight");
     savepoints_.pop_back();
     if (in_transaction())
       return;
@@ -182,7 +203,27 @@ class TransactionalInterfaceFluxLedger {
     if (!in_transaction())
       throw std::runtime_error("AMR interface-flux accumulation requires an active transaction");
     validate_(key, measure);
+    if (std::any_of(pending_.begin(), pending_.end(),
+                    [&](const Entry& entry) { return same_identity_(entry.key, key); }))
+      throw std::runtime_error(
+          "AMR interface-flux attempt contains a duplicate stage/clock fragment identity");
     pending_.push_back({std::move(key), measure, std::move(payload)});
+  }
+
+  void resolve_pending_stage_weight(std::size_t index, Rational stage_weight) {
+    if (!in_transaction())
+      throw std::runtime_error(
+          "AMR interface-flux stage-weight resolution requires an active transaction");
+    if (transaction_depth() != 1)
+      throw std::runtime_error(
+          "AMR interface-flux stage weights resolve only in the outer attempt transaction");
+    if (index >= pending_.size())
+      throw std::out_of_range("AMR interface-flux pending fragment index is out of range");
+    Entry& entry = pending_[index];
+    if (entry.measure.stage_weight_resolved)
+      throw std::logic_error("AMR interface-flux stage weight was already resolved");
+    entry.measure.stage_weight = stage_weight;
+    entry.measure.stage_weight_resolved = true;
   }
 
   template <class Axpy>
@@ -196,12 +237,17 @@ class TransactionalInterfaceFluxLedger {
   }
 
  private:
+  static bool same_identity_(const InterfaceFluxFragmentKey& left,
+                             const InterfaceFluxFragmentKey& right) {
+    return !(left < right) && !(right < left);
+  }
+
   void validate_(const InterfaceFluxFragmentKey& key,
                  const InterfaceFluxFragmentMeasure& measure) const {
     if (key.topology_epoch != topology_epoch_)
       throw std::invalid_argument("AMR interface-flux fragment uses a stale topology epoch");
     if (key.interface_identity.empty() || key.stage_identity.empty() || key.coarse_level < 0 ||
-        key.fine_level != key.coarse_level + 1)
+        key.fine_level != key.coarse_level + 1 || key.left_block == key.right_block)
       throw std::invalid_argument("AMR interface-flux fragment is not fully qualified");
     if (key.clock.level != key.coarse_level && key.clock.level != key.fine_level)
       throw std::invalid_argument("AMR interface-flux clock is outside its coarse/fine level pair");
@@ -221,12 +267,19 @@ class TransactionalInterfaceFluxLedger {
           "AMR interface-flux clock is outside its exact temporal interval");
     const double begin_time = key.interval.begin.physical_time;
     const double end_time = key.interval.end.physical_time;
+    const double reconstructed_duration = end_time - begin_time;
+    const double timestamp_scale = std::max(
+        {1.0, std::abs(begin_time), std::abs(end_time), std::abs(measure.substep_duration)});
+    const double timestamp_tolerance =
+        8.0 * std::numeric_limits<double>::epsilon() * timestamp_scale;
     if (!std::isfinite(key.clock.physical_time) || !std::isfinite(begin_time) ||
         !std::isfinite(end_time) || !(end_time > begin_time) ||
         key.clock.physical_time < begin_time || key.clock.physical_time > end_time ||
-        !(measure.face_measure > 0.0) || !std::isfinite(measure.face_measure))
+        !(measure.face_measure > 0.0) || !std::isfinite(measure.face_measure) ||
+        !(measure.substep_duration > 0.0) || !std::isfinite(measure.substep_duration) ||
+        std::abs(reconstructed_duration - measure.substep_duration) > timestamp_tolerance)
       throw std::invalid_argument(
-          "AMR interface-flux fragment requires finite positive geometry/time");
+          "AMR interface-flux fragment requires consistent finite positive geometry/time");
   }
 
   std::uint64_t topology_epoch_;

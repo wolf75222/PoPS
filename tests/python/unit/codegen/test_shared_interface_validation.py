@@ -1,4 +1,5 @@
 """Resolve-time guards for atomic shared-interface RHS groups."""
+
 from __future__ import annotations
 
 import re
@@ -49,8 +50,7 @@ def _resolved_context() -> tuple[tuple[object, ...], object]:
 
     def block(name: str, boundary: str) -> object:
         plan = SimpleNamespace(
-            productions=(SimpleNamespace(
-                region=SimpleNamespace(boundary=boundary)),),
+            productions=(SimpleNamespace(region=SimpleNamespace(boundary=boundary)),),
             interfaces=(interface,),
         )
         return SimpleNamespace(
@@ -62,21 +62,72 @@ def _resolved_context() -> tuple[tuple[object, ...], object]:
         block("left", interface.left.boundary),
         block("right", interface.right.boundary),
     )
-    layout_plan = SimpleNamespace(assignments=tuple(
-        SimpleNamespace(
-            subject_kind="block",
-            subject=SimpleNamespace(local_id=name),
-            layout=layout,
+    layout_plan = SimpleNamespace(
+        assignments=tuple(
+            SimpleNamespace(
+                subject_kind="block",
+                subject=SimpleNamespace(local_id=name),
+                layout=layout,
+            )
+            for name in ("left", "right")
         )
-        for name in ("left", "right")
-    ))
+    )
     return blocks, layout_plan
 
 
-def _validate(program: Program) -> None:
+def _validate(
+    program: Program,
+    *,
+    target: str = "system",
+    resolved_hierarchy: object | None = None,
+) -> None:
     blocks, layout_plan = _resolved_context()
     validate_shared_interface_program(
-        blocks, layout_plan, program, target="system")
+        blocks, layout_plan, program, target=target, resolved_hierarchy=resolved_hierarchy
+    )
+
+
+def _paired_flux_program() -> Program:
+    program = Program("paired_shared_interface")
+    left = typed_state(program, "left", state_name="U")
+    right = typed_state(program, "right", state_name="U")
+    program.rhs("left_rate", state=left.n, terms=[Flux()])
+    program.rhs("right_rate", state=right.n, terms=[Flux()])
+    return program
+
+
+def _resolved_amr_hierarchy(*, levels: int, frozen: bool = True) -> object:
+    from pops.mesh._amr import FrozenHierarchy
+
+    regrid = FrozenHierarchy() if frozen else object()
+    return SimpleNamespace(plan=SimpleNamespace(level_count=levels, regrid=regrid))
+
+
+def test_amr_shared_interface_accepts_one_frozen_level() -> None:
+    _validate(
+        _paired_flux_program(),
+        target="amr_system",
+        resolved_hierarchy=_resolved_amr_hierarchy(levels=1),
+    )
+
+
+def test_amr_shared_interface_rejects_dynamic_regrid_before_codegen() -> None:
+    with pytest.raises(NotImplementedError, match="supports only one frozen level"):
+        _validate(
+            _paired_flux_program(),
+            target="amr_system",
+            resolved_hierarchy=_resolved_amr_hierarchy(levels=1, frozen=False),
+        )
+
+
+@pytest.mark.parametrize("levels", (2, 3))
+def test_amr_shared_interface_rejects_refined_hierarchy(levels: int) -> None:
+    with pytest.raises(NotImplementedError, match="supports only one frozen level"):
+        _validate(
+            _paired_flux_program(),
+            target="amr_system",
+            resolved_hierarchy=_resolved_amr_hierarchy(levels=levels),
+        )
 
 
 def test_shared_interface_rejects_default_flux_rhs_nested_in_branch() -> None:
@@ -86,15 +137,14 @@ def test_shared_interface_rejects_default_flux_rhs_nested_in_branch() -> None:
     condition = program.norm2(left) > 0
     program.branch(
         condition,
-        lambda branch: branch.rhs(
-            "left_true_rate", state=left, terms=[Flux()]),
-        lambda branch: branch.rhs(
-            "left_false_rate", state=left, terms=[Flux()]),
+        lambda branch: branch.rhs("left_true_rate", state=left, terms=[Flux()]),
+        lambda branch: branch.rhs("left_false_rate", state=left, terms=[Flux()]),
     )
 
     with pytest.raises(
-            NotImplementedError,
-            match=r"nested under control flow branch\.true_block.*top-level coherence round"):
+        NotImplementedError,
+        match=r"nested under control flow branch\.true_block.*top-level coherence round",
+    ):
         _validate(program)
 
 
@@ -106,15 +156,17 @@ def test_shared_interface_rejects_default_flux_rhs_nested_in_loop() -> None:
     def body(loop: Program, state: object) -> object:
         rate = loop.rhs("left_loop_rate", state=state, terms=[Flux()])
         return loop.value(
-            "left_loop_state", state + loop.dt * rate,
+            "left_loop_state",
+            state + loop.dt * rate,
             at=TimePoint(loop.clock, step=1),
         )
 
     program.range(left, 2, body)
 
     with pytest.raises(
-            NotImplementedError,
-            match=r"nested under control flow range\.body_block.*top-level coherence round"):
+        NotImplementedError,
+        match=r"nested under control flow range\.body_block.*top-level coherence round",
+    ):
         _validate(program)
 
 
@@ -126,21 +178,33 @@ def test_group_codegen_keeps_atomic_and_per_rate_identities_distinct() -> None:
     right_state = SimpleNamespace(id=4)
     point = TimePoint(program.clock, Fraction(1, 2))
     left_rate = SimpleNamespace(
-        id=11, name="left_rate", point=point, block=left_block,
-        inputs=(left_state,), attrs={"sources": None})
+        id=11,
+        name="left_rate",
+        point=point,
+        block=left_block,
+        inputs=(left_state,),
+        attrs={"sources": None},
+    )
     right_rate = SimpleNamespace(
-        id=12, name="right_rate", point=point, block=right_block,
-        inputs=(right_state,), attrs={"sources": ()})
+        id=12,
+        name="right_rate",
+        point=point,
+        block=right_block,
+        inputs=(right_state,),
+        attrs={"sources": ()},
+    )
     variables = {3: "u3", 4: "u4"}
     lines: list[str] = []
 
     _emit_contiguous_rhs_group(
-        [left_rate, right_rate], {left_block: 0, right_block: 1},
-        variables, lines, group_identity=29)
+        [left_rate, right_rate],
+        {left_block: 0, right_block: 1},
+        variables,
+        lines,
+        group_identity=29,
+    )
 
-    assert lines[-1] == (
-        "ctx.rhs_group(29, {{0, &u3, &r11, 11, 0}, "
-        "{1, &u4, &r12, 12, 1}});")
+    assert lines[-1] == ("ctx.rhs_group(29, {{0, &u3, &r11, 11, 0}, {1, &u4, &r12, 12, 1}});")
 
 
 def test_validation_and_codegen_share_noncontiguous_stage_coherence_plan() -> None:
@@ -151,10 +215,8 @@ def test_validation_and_codegen_share_noncontiguous_stage_coherence_plan() -> No
     left_rate = program.rhs("left_rate", state=left.n, terms=[Flux()])
     program.norm2(left.n)  # deliberately separates the two same-StagePoint residual nodes
     right_rate = program.rhs("right_rate", state=right.n, terms=[Flux()])
-    left_next = program.value(
-        "left_next", left.n + program.dt * left_rate, at=left.next.point)
-    right_next = program.value(
-        "right_next", right.n + program.dt * right_rate, at=right.next.point)
+    left_next = program.value("left_next", left.n + program.dt * left_rate, at=left.next.point)
+    right_next = program.value("right_next", right.n + program.dt * right_rate, at=right.next.point)
     program.commit(left.next, left_next)
     program.commit(right.next, right_next)
 
@@ -183,9 +245,11 @@ def test_same_stage_repeated_blocks_form_two_deterministic_rhs_rounds() -> None:
         program.rhs("right_rate_1", state=right.n, terms=[Flux()]),
     )
     left_next = program.value(
-        "left_next", left.n + program.dt * (rates[0] + rates[2]), at=left.next.point)
+        "left_next", left.n + program.dt * (rates[0] + rates[2]), at=left.next.point
+    )
     right_next = program.value(
-        "right_next", right.n + program.dt * (rates[1] + rates[3]), at=right.next.point)
+        "right_next", right.n + program.dt * (rates[1] + rates[3]), at=right.next.point
+    )
     program.commit(left.next, left_next)
     program.commit(right.next, right_next)
 
@@ -194,10 +258,10 @@ def test_same_stage_repeated_blocks_form_two_deterministic_rhs_rounds() -> None:
         source = emit_cpp_program(program, target=target)
         groups = [line for line in source.splitlines() if "ctx.rhs_group(" in line]
         assert len(groups) == 2
-        assert [
-            re.findall(r"\{(\d+), &u\d+, &r\d+, \d+, 1\}", group)
-            for group in groups
-        ] == [["0", "1"], ["0", "1"]]
+        assert [re.findall(r"\{(\d+), &u\d+, &r\d+, \d+, 1\}", group) for group in groups] == [
+            ["0", "1"],
+            ["0", "1"],
+        ]
 
 
 def test_shared_interface_rejects_incomplete_second_rhs_round() -> None:
@@ -234,10 +298,8 @@ def test_amr_codegen_refuses_to_move_stage_group_across_side_effect() -> None:
     diagnostic = program.norm2(left.n)
     program.record_scalar("before_right_rate", diagnostic)
     right_rate = program.rhs("right_rate", state=right.n, terms=[Flux()])
-    left_next = program.value(
-        "left_next", left.n + program.dt * left_rate, at=left.next.point)
-    right_next = program.value(
-        "right_next", right.n + program.dt * right_rate, at=right.next.point)
+    left_next = program.value("left_next", left.n + program.dt * left_rate, at=left.next.point)
+    right_next = program.value("right_next", right.n + program.dt * right_rate, at=right.next.point)
     program.commit(left.next, left_next)
     program.commit(right.next, right_next)
 
