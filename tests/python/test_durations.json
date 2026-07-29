@@ -1,4 +1,5 @@
 {
+  "tests/python/architecture/test_adc700_device_performance_campaign.py": 1.0,
   "tests/python/examples/final/test_hyqmom15_final_example.py": 160.0,
   "tests/python/examples/final/test_imex_amr_final_example.py": 125.1,
   "tests/python/examples/final/test_multiphysics_core_example.py": 90.7,

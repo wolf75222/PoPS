@@ -47,3 +47,34 @@ fail-fast `srun` with one GPU per rank. Work and build files default to
 `$HOME/pops-benchmark-results`. Override paths with `POPS_BENCH_SOURCE_DIR`,
 `POPS_BENCH_WORK_DIR`, `POPS_BENCH_BUILD_DIR`, `POPS_BENCH_RESULTS_DIR`, or `POPS_KOKKOS_ROOT`
 when needed.
+
+## ADC-700 Program cutover campaign
+
+`benchmarks/adc700/` is a separate, non-routine campaign for the two hardware-dependent ADC-700
+claims. It compiles one AMR Forward-Euler workload twice: the pinned pre-cutover revision uses its
+native temporal route, while the candidate installs the equivalent Program-only route. The ROMEO
+job runs both binaries in paired `A B B A` order on real GPU-backed MPI ranks.
+
+```sh
+benchmarks/romeo/submit_adc700_program_cutover.sh
+```
+
+The default comparison is
+`db3d390f43dfb14f12e88db31a9b3e631ff50488` (the parent of the first ADC-700 cutover commit)
+against `bdb169b96f71f0f809501b9b2f38b44797749212`. Override
+`POPS_ADC700_BASELINE_REF` or `POPS_ADC700_CANDIDATE_REF` only to run a deliberately different
+campaign.
+
+The job fails closed unless:
+
+- Kokkos reports a real device execution space (`Cuda`, `HIP`, or `SYCL`) and the scheduler node
+  exposes at least one recorded device per MPI rank;
+- every baseline/candidate run validates a genuinely refined hierarchy and conserved state;
+- the final numerical signatures agree within the declared tolerance;
+- the median paired candidate/pre-cutover throughput ratio is at least `0.98`.
+
+Raw JSONL, device inventory, and the machine-readable
+`pops.adc700.program_cutover.report.v1` report are retained under
+`$HOME/pops-benchmark-results/adc700`. This campaign is intentionally outside routine CI: a CPU
+run, missing device inventory, malformed ABBA ordering, or absent hardware produces no device or
+performance proof.

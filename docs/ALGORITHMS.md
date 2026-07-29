@@ -677,6 +677,14 @@ production time engine. `System` and `AmrSystem` execute only their installed `P
 production subcycling, holds, catch-up, and adaptive-step placement must be authored as typed Program
 composition.
 
+The hardware-dependent cutover proof is deliberately not a routine conformance test. The ADC-700
+campaign under [`benchmarks/adc700/`](../benchmarks/adc700/) builds one AMR workload against the
+pinned pre-cutover native revision and the Program-only candidate, executes both in paired ABBA
+order on a real device, and emits a machine-readable candidate/pre-cutover throughput ratio. It
+rejects CPU runs, incomplete device inventories, incomparable parameters, failed numerical
+signatures, and a median ratio below `0.98`; no report from the campaign means no hardware
+performance proof.
+
 **Intuition.** Not all species of a coupled system require the same time step.
 A stiff species (electrons) splits a macro-step into several substeps ($\text{substeps}$); a
 slow species (under-resolved gas) is advanced only once every $M$ macro-steps (cadence, $\text{stride}$),

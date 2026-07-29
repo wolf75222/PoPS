@@ -48,3 +48,17 @@ default_work_root = "/scratch_p/$USER/$SLURM_JOB_ID"
 default_results_root = "$HOME/pops-benchmark-results"
 job_script = "benchmarks/romeo/job_armgpu.sbatch"
 submit_script = "benchmarks/romeo/submit_armgpu.sh"
+
+[campaigns.adc700_program_cutover]
+routine_ci = false
+source = "benchmarks/adc700"
+baseline_revision = "db3d390f43dfb14f12e88db31a9b3e631ff50488"
+candidate_revision = "bdb169b96f71f0f809501b9b2f38b44797749212"
+measurement_schema = "pops.adc700.program_cutover.measurement.v1"
+report_schema = "pops.adc700.program_cutover.report.v1"
+protocol = "paired_ABBA"
+metric = "candidate_throughput_over_pre_cutover"
+minimum_ratio = 0.98
+requires_real_device = true
+job_script = "benchmarks/romeo/adc700_program_cutover.sbatch"
+submit_script = "benchmarks/romeo/submit_adc700_program_cutover.sh"
