@@ -302,7 +302,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// The AMR runtime runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard):
   /// calling it again at fine levels within the same macro-step is a no-op cache-hit (parity: the
   /// body stays atomic, the solve fires once -- the OncePerStep cadence the native AMR step uses).
-  SolveOutcome solve_fields() const {
+ private:
+  SolveOutcome program_execution_solve_fields_outcome_() const {
     if (level_ == 0 || !default_solve_report_) {
       default_solve_report_.reset();
       SolveOutcome outcome = eng_->solve_default_field();
@@ -318,7 +319,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   /// Per-stage re-solve from a stage state is currently a coarse-only capability.  A fine-level request
   /// is rejected explicitly; it never consumes a stale injected auxiliary field.
-  SolveOutcome solve_fields_from_state(int b, MultiFab& u_stage) const {
+  SolveOutcome program_execution_solve_fields_from_state_outcome_(int b, MultiFab& u_stage) const {
     if (level_ == 0) {
       MultiFab& live = state(b);
       MultiFab& saved = stage_state_scratch_for_(b, level_, live);
@@ -345,12 +346,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         "the default per-stage fine-level field re-solve requires a composite stage solver; use "
         "OncePerStep field cadence or an exact named field provider");
   }
-  SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                          const std::string& provider_slot, int b,
-                                          MultiFab& u_stage) const {
-    if (provider_slot.empty())
-      throw std::invalid_argument(
-          "AmrProgramContext::solve_fields_from_state_at requires an exact provider slot");
+  SolveOutcome program_execution_field_solve_from_state_at_outcome_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int b, MultiFab& u_stage) const {
     if (point.level < 0 || point.level >= eng_->nlev())
       throw std::out_of_range(
           "AmrProgramContext::solve_fields_from_state_at level is out of range");
@@ -379,7 +377,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
   /// fine levels consume only that exact provider-qualified report.
-  SolveOutcome solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
+  SolveOutcome program_execution_solve_named_field_from_state_outcome_(const std::string& field,
+                                                                       int b,
+                                                                       MultiFab& u_stage) const {
     if (level_ != 0) {
       if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
         throw std::logic_error(
@@ -413,15 +413,16 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
   /// Retained default-provider overload: the final Program IR always carries an exact field identity,
   /// while an unqualified coupled solve has no provider authority and therefore fails loud.
-  SolveOutcome solve_fields_from_blocks(const std::vector<const MultiFab*>& /*u_stages*/) const {
+  SolveOutcome program_execution_solve_fields_from_blocks_outcome_(
+      const std::vector<const MultiFab*>& /*u_stages*/) const {
     deferred_op(
         "solve_fields_from_blocks_default",
         "an unqualified coupled multi-block field solve has no AMR provider authority; use the "
         "exact field-qualified Program operation");
   }
 
-  SolveOutcome solve_fields_from_blocks(const std::string& field,
-                                        const std::vector<const MultiFab*>& u_stages) const {
+  SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
+      const std::string& field, const std::vector<const MultiFab*>& u_stages) const {
     if (level_ != 0) {
       if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
         throw std::logic_error(
@@ -502,14 +503,16 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// Generated allocation-free route. The static initializer-list request is copied into one
   /// context-owned pointer workspace keyed by the exact IR identity; field and ordered block pack
   /// cannot drift across replays. The vector overload above remains the manual C++ API.
-  SolveOutcome solve_fields_from_blocks(std::int64_t value_id, std::string_view field,
-                                        std::initializer_list<FieldStageOverride> overrides) const {
+  SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
+      std::int64_t value_id, std::string_view field,
+      std::initializer_list<FieldStageOverride> overrides) const {
     const std::vector<const MultiFab*>& stages =
         generated_field_solve_stages_(value_id, field, overrides);
     return solve_fields_from_blocks(generated_field_solve_workspaces_.at(value_id).field_identity,
                                     stages);
   }
 
+ public:
   // --- condensed-implicit elliptic primitives on the hierarchy (ADC-633 / ADC-637): WIRED per level ---
   // The codegen lowers a condensed-implicit (ADC-637) Program to inline block-inverse assembly kernels
   // referencing ONLY the variable `ctx`, so the SAME emitted body compiles against this context. With its

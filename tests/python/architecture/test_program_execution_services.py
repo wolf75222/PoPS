@@ -36,6 +36,8 @@ SHARED_SIGNATURES = (
     "struct HistoryStorePlan",
     "struct ProgramResourceStorage",
     "struct ProgramResourceTopology",
+    "SolveOutcome solve_fields()",
+    "SolveOutcome solve_fields_from_state_at(",
     "struct LogicalEvaluationInterval",
     "class LogicalEvaluationScope",
     "[[nodiscard]] auto logical_evaluation_scope(",
@@ -131,6 +133,8 @@ SHARED_SIGNATURES = (
 )
 
 SHARED_OVERLOAD_COUNTS = {
+    "SolveOutcome solve_fields_from_state(": 2,
+    "SolveOutcome solve_fields_from_blocks(": 3,
     "void neg_div_flux_into(": 4,
     "void rhs_core_into_at(": 2,
     "void boundary_residual_into_at(": 2,
@@ -293,6 +297,13 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
             "program_execution_solve_fields_from_state_at_",
+            "program_execution_solve_fields_outcome_",
+            "program_execution_solve_fields_from_state_outcome_",
+            "program_execution_field_solve_from_state_at_outcome_",
+            "program_execution_solve_named_field_from_state_outcome_",
+            "program_execution_solve_fields_from_blocks_outcome_",
+            "program_execution_solve_named_field_from_blocks_outcome_",
+            "program_execution_solve_generated_field_from_blocks_outcome_",
             "program_execution_scratch_",
             "program_execution_default_grid_context_",
             "program_execution_block_grid_context_",
