@@ -812,9 +812,9 @@ class AmrSystem {
   /// @p so_path, checks its ABI key against this module (fail-loud on mismatch), runs the section-24
   /// install-time requirement validation (aux / solver / block instance, verbatim spec messages), binds
   /// the Program's blocks to the AMR blocks BY NAME, seeds each block's RuntimeParams from the .so
-  /// pops_program_param_* metadata, then calls the .so's pops_install_program_amr(this), which wraps the
-  /// AmrSystem in an AmrProgramContext and installs the macro-step closure. Mirrors add_native_block and
-  /// System::install_program; the .so stays loaded for the process lifetime.
+  /// pops_program_param_* metadata, then calls the .so's pops_install_program_amr(this), whose shared
+  /// facade factory selects the hierarchy provider and installs the macro-step closure. Mirrors
+  /// add_native_block and System::install_program; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).

@@ -301,6 +301,14 @@ def _validate_controller_events(
     the sole next-dt authority. Other controllers own no queued event today and therefore must not
     accept one.
     """
+    last_hex = controller["last_accepted_dt"]
+    if macro_step == 0 and last_hex is not None:
+        raise ValueError(
+            "temporal controller state cannot have an accepted dt before the first macro step")
+    if macro_step > 0 and last_hex is None:
+        raise ValueError(
+            "temporal controller state lacks the last accepted dt")
+
     descriptor = strategy["strategy"]
     if descriptor["kind"] != "error_controlled_dt":
         if events:
@@ -332,7 +340,6 @@ def _validate_controller_events(
     if proposal["time"] != expected_time:
         raise ValueError("ErrorControlledDt proposal time disagrees with its dt")
 
-    last_hex = controller["last_accepted_dt"]
     from pops.time._step.strategy import ErrorControlledDt
 
     policy = ErrorControlledDt.from_data(descriptor)

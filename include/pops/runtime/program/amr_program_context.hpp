@@ -87,84 +87,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
 
     bool bound() const { return epoch != std::numeric_limits<std::uint64_t>::max(); }
   };
-  /// Logical-clock child interval nested inside the current AMR level window.  The hierarchy driver
-  /// remains the authority for level substeps; this move-only companion further partitions that exact
-  /// window for Program.subcycle and restores it on normal, nested, and exceptional exits.
-  class LogicalEvaluationScope {
-   public:
-    LogicalEvaluationScope(const AmrProgramContext& owner, int iteration, int count)
-        : owner_(&owner),
-          saved_window_(owner.current_window_),
-          saved_dt_(owner.current_level_dt_),
-          saved_stage_(owner.stage_time_) {
-      if (count <= 0 || iteration < 0 || iteration >= count)
-        throw std::invalid_argument(
-            "AMR Program logical evaluation requires a valid child iteration");
-      if (!saved_window_ || !std::isfinite(saved_dt_) || saved_dt_ <= 0.0)
-        throw std::logic_error(
-            "AMR Program logical evaluation requires a prepared parent level window");
-      const double child_dt = saved_dt_ / static_cast<double>(count);
-      const double child_physical_time =
-          saved_window_->begin.physical_time + static_cast<double>(iteration) * child_dt;
-      if (!std::isfinite(child_dt) || child_dt <= 0.0 || !std::isfinite(child_physical_time))
-        throw std::overflow_error("AMR Program logical evaluation child window is not finite");
-      const amr::Rational parent_span = saved_window_->end.phase - saved_window_->begin.phase;
-      const amr::Rational child_begin_phase =
-          saved_window_->begin.phase + parent_span * amr::Rational(iteration, count);
-      const amr::Rational child_end_phase =
-          saved_window_->begin.phase + parent_span * amr::Rational(iteration + 1, count);
-      amr::ClockStamp child_begin = saved_window_->begin;
-      child_begin.phase = child_begin_phase;
-      child_begin.physical_time = child_physical_time;
-      amr::ClockStamp child_end = child_begin;
-      child_end.phase = child_end_phase;
-      child_end.physical_time = child_physical_time + child_dt;
-
-      owner.invalidate_active_operator_snapshot_();
-      child_dt_ = child_dt;
-      owner.current_window_ = amr::ClockWindow{child_begin, child_end};
-      owner.current_level_dt_ = child_dt;
-      owner.stage_time_ = amr::Rational(0, 1);
-    }
-    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
-    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
-    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
-        : owner_(std::exchange(other.owner_, nullptr)),
-          saved_window_(other.saved_window_),
-          saved_dt_(other.saved_dt_),
-          saved_stage_(other.saved_stage_),
-          child_dt_(other.child_dt_) {}
-    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
-    ~LogicalEvaluationScope() noexcept { restore_(); }
-
-    Real dt() const {
-      if (owner_ == nullptr)
-        throw std::logic_error("AMR Program logical evaluation scope is no longer active");
-      return static_cast<Real>(child_dt_);
-    }
-
-   private:
-    void restore_() noexcept {
-      if (owner_ == nullptr)
-        return;
-      owner_->current_window_ = saved_window_;
-      owner_->current_level_dt_ = saved_dt_;
-      owner_->stage_time_ = saved_stage_;
-      owner_->invalidate_active_operator_snapshot_();
-      owner_ = nullptr;
-    }
-
-    const AmrProgramContext* owner_ = nullptr;
-    std::optional<amr::ClockWindow> saved_window_;
-    double saved_dt_ = 0.0;
-    amr::Rational saved_stage_{0, 1};
-    double child_dt_ = 0.0;
-  };
-  /// Wrap an AmrSystem passed as a flat void* (what pops_install_program_amr(void* sys) receives). The
-  /// ctor pulls the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR
-  /// blocks must be materialized -- install_program forces the build before install()).
-  explicit AmrProgramContext(void* sys)
-      : facade_(static_cast<AmrSystem*>(sys)), eng_(facade_->engine()) {
+  /// Wrap the typed AmrSystem facade selected by the shared Program provider factory. The ctor pulls
+  /// the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR blocks must
+  /// be materialized -- install_program forces the build before install()).
+  explicit AmrProgramContext(AmrSystem* facade) : facade_(facade), eng_(facade_->engine()) {
     if (eng_ == nullptr)
       throw std::runtime_error(
           "AmrProgramContext: the AMR runtime engine is not built; install_program must force the "
@@ -179,7 +105,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   AmrProgramContext(AmrRuntime* eng, AmrSystem* facade) : facade_(facade), eng_(eng) {
     // Keep the established contract-test seam: argument/rate validation must be exercisable before
     // any topology lookup. Every executable driver supplies a real engine and is ratio-validated here;
-    // the production void* constructor above remains fail-closed when the engine was not built.
+    // the production facade constructor above remains fail-closed when the engine was not built.
     if (eng_ != nullptr) {
       require_supported_program_refinement_ratios_(*eng_);
       stage_restore_scratch_.reserve(eng_->n_blocks());
@@ -190,49 +116,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   // --- hierarchy-driver state -----------------------------------------------------------------------
-  void set_level(int k) const {
-    level_ = k;
-    if (hierarchy_barrier_level_selection_active_ && current_window_) {
-      current_window_->begin.level = k;
-      current_window_->end.level = k;
-    }
-  }
-  int level() const { return level_; }
-  /// Epoch used by generated install-time resource bundles. A regrid/rebalance changes this value;
-  /// generated Programs then rematerialize every per-level persistent field/problem/workspace once,
-  /// before entering the next hierarchy advance. Compatible steps retain the same bundles.
-  std::uint64_t program_resource_topology_epoch() const { return eng_->topology_epoch(); }
-  /// Runtime-only companion to the checkpointed epoch. This changes whenever hierarchy storage is
-  /// reconstructed, including checkpoint restore and rejected-attempt rollback, so an equal restored
-  /// epoch/nlev pair can never authenticate stale layout-bound Program resources.
-  std::uint64_t program_resource_topology_generation() const {
-    return eng_->topology_materialization_generation();
-  }
-  /// Exact ownership of the level whose install-time Program resources are being materialized.
-  /// Generated prepared solvers must not infer replication from rank-local DistributionMapping
-  /// metadata: a replicated level intentionally names the current rank as its local owner.
-  const PreparedVectorDistribution& program_resource_vector_distribution() const {
-    return eng_->level_is_replicated(level_) ? PreparedVectorDistribution::Replicated
-                                             : PreparedVectorDistribution::Distributed;
-  }
-  FieldDistribution program_resource_field_storage_distribution() const {
-    return eng_->level_is_replicated(level_) ? FieldDistribution::Replicated
-                                             : FieldDistribution::Distributed;
-  }
-  int program_resource_field_level() const { return level_; }
-  /// Materialize absolute hierarchy metadata for the current level's persistent prepared resource.
-  /// The generated solver remains topology-agnostic; AMR alone owns level numbering, per-level
-  /// ownership and metric resolution.
-  void configure_program_resource_field_nullspace(FieldNullspacePlan& plan) const {
-    if (level_ < 0 || level_ >= nlev())
-      throw std::out_of_range("AMR Program field-nullspace resource level is out of range");
-    const Geometry geometry = eng_->level_geom(level_);
-    const Real measure = geometry.dx() * geometry.dy();
-    for (FieldNullspaceBasis& basis : plan.bases) {
-      basis.cell_measure.assign(static_cast<std::size_t>(nlev()), Real(0));
-      basis.cell_measure[static_cast<std::size_t>(level_)] = measure;
-    }
-  }
   int nlev() const { return eng_->nlev(); }
   bool uses_prepared_krylov_fallback() const {
     return configured_hierarchy_tensor_solver_().execution_path() ==
@@ -313,10 +196,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
             flush_level_flux_(k, dt, accepted);
           }
         });
-  }
-
-  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
-    return LogicalEvaluationScope(*this, iteration, count);
   }
 
   /// Register the macro-step body (forwards to AmrSystem::install_program_step). @p step is the per-level
@@ -419,9 +298,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   int history_flux_topology_rebind_count() const { return history_flux_topology_rebind_count_; }
 
   // --- state / RHS seam over the CURRENT level -------------------------------------------------------
-  MultiFab& state(int b) const {
-    return eng_->level_state(static_cast<std::size_t>(sys_block(b)), level_);
-  }
   void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel();
@@ -572,27 +448,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     eng_->project_level_state(static_cast<std::size_t>(sys_block(b)), level_, u);
   }
 
-  /// AMR structural mirror of ProgramContext::apply_coupling_operators.  The complete candidate pack
-  /// is qualified by the current level cursor; coupling changes only those private candidates and
-  /// leaves publication plus hierarchy synchronization to the Program transaction.
-  void apply_coupling_operators(Real dt,
-                                std::initializer_list<CouplingStateOverride> candidates) const {
-    if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
-      throw std::invalid_argument(
-          "AMR Program coupling application requires a finite non-negative dt");
-    if (coupling_workspace_.in_use)
-      throw std::logic_error("AMR Program coupling workspace is already in use");
-    prepare_coupling_workspace_(candidates);
-    struct WorkspaceUse {
-      bool& flag;
-      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
-      ~WorkspaceUse() { flag = false; }
-    } use(coupling_workspace_.in_use);
-    const std::size_t applied =
-        eng_->apply_coupling_operators_at_level(level_, dt, coupling_workspace_.runtime_states);
-    count_kernel(static_cast<std::int64_t>(applied));
-  }
-
   // --- dt bound primitives (evaluated at the COARSE level, where the AMR CFL lives) -----------------
   Real hmin() const { return eng_->level_hmin(level_); }
   Real max_wave_speed(int b, const MultiFab& u) const {
@@ -678,32 +533,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     const SolveReport report = outcome.report();
     named_solve_reports_.insert_or_assign(provider_slot, report);
     return outcome;
-  }
-  template <class Body>
-  void evaluate_with_field_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                    const std::string& provider_slot, int b,
-                                    MultiFab& evaluation_state, MultiFab& restore_state,
-                                    Body&& body) const {
-    const auto restore = [&]() {
-      const SolveReport restored = consume_field_outcome_(
-          solve_fields_from_state_at(point, provider_slot, b, restore_state));
-      if (!restored.solved_value_available())
-        throw_field_solve_failure_(restored, "restoring the frozen field state");
-    };
-    const SolveReport prepared = consume_field_outcome_(
-        solve_fields_from_state_at(point, provider_slot, b, evaluation_state));
-    if (!prepared.solved_value_available()) {
-      restore();
-      throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
-    }
-    try {
-      std::forward<Body>(body)();
-    } catch (...) {
-      const std::exception_ptr failure = std::current_exception();
-      restore();
-      std::rethrow_exception(failure);
-    }
-    restore();
   }
   /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
   /// fine levels consume only that exact provider-qualified report.
@@ -838,58 +667,12 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                                     stages);
   }
 
-  /// The SHARED aux of the current level (phi / grad / B_z), the channel solve_fields fills.
-  MultiFab& aux() const { return const_cast<MultiFab&>(eng_->aux(level_)); }
-  /// The current level's metric (dx/dy >> level, domain << level).
-  Geometry geom() const { return eng_->level_geom(level_); }
   /// The installed AMR route is Cartesian.  The metric queries still exist on this context so one
   /// generated Program body instantiates against both runtime contexts without geometry-specific
   /// source-stage classes.
   bool is_polar_geometry() const { return false; }
   Real radial_origin() const { return Real(0); }
   Real radial_spacing() const { return geom().dx(); }
-
-  /// The grid context of the CURRENT level (ADC-633): the AMR counterpart of System::grid_context(),
-  /// per level. It bundles the transport BC + the level geometry + the live level aux pointer, exactly
-  /// what System::grid_context() returns for the uniform mesh. Used by the emitted condensed-implicit
-  /// assembly kernels so their per-cell assembly reads the CURRENT level's geom / aux / BC as direct
-  /// body calls (they read the level_ cursor live). transport_bc() (not poisson_bc()) matches the
-  /// uniform Program's gc.bc, so the flat-hierarchy phi-ghost fill is byte-identical to the uniform
-  /// Program (the flat bit-parity gate). BY VALUE, like ProgramContext.
-  GridContext grid_context() const {
-    const Geometry g = eng_->level_geom(level_);
-    GridContext gc;
-    gc.dom = g.domain;
-    gc.bc = eng_->transport_bc();
-    gc.geom = g;
-    gc.aux = &const_cast<MultiFab&>(eng_->aux(level_));
-    return gc;
-  }
-
-  /// Block/level-qualified active-cell mask for generated pointwise operators.  Current Cartesian AMR
-  /// levels return nullptr.  Geometry-aware AMR providers can populate GridContext::domain_mask and
-  /// automatically obtain the same protocol without changing generated Program code.
-  const MultiFab* pointwise_active_mask(int block, const MultiFab& field) const {
-    const GridContext context =
-        eng_->level_grid_context(static_cast<std::size_t>(sys_block(block)), level_);
-    if (context.domain_mask == nullptr)
-      return nullptr;
-    pops::detail::validate_relative_cell_measure(field,
-                                                 RelativeCellMeasure{context.domain_mask, nullptr},
-                                                 "AmrProgramContext pointwise active-cell mask");
-    return context.domain_mask;
-  }
-
-  /// AMR counterpart of ProgramContext::pointwise_status_max.  The exact mask view used by the
-  /// pointwise kernel is authenticated again before the collective reduction.
-  Real pointwise_status_max(int block, const MultiFab& status, const MultiFab* active_cells) const {
-    const MultiFab* expected = pointwise_active_mask(block, status);
-    if (expected != active_cells)
-      throw std::invalid_argument(
-          "AmrProgramContext pointwise status reduction received a different active-cell mask");
-    const Real reduced = pops::reduce_max(status, 0, RelativeCellMeasure{active_cells, nullptr});
-    return reduced == -std::numeric_limits<Real>::infinity() ? Real(0) : reduced;
-  }
 
   std::shared_ptr<PreparedGridBoundarySession> prepare_mesh_boundary_session(
       const MultiFab&, const ExecutionLane& lane) const {
@@ -905,123 +688,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   // --- scratch (per-level) --------------------------------------------------------------------------
-  MultiFab alloc_scalar_field(int n_comp = 1, int n_ghost = 1) const {
-    return eng_->level_scalar_field(level_, n_comp, n_ghost);
-  }
-  MultiFab rhs_scratch_like(const MultiFab& u) const {
-    MultiFab scratch(u.box_array(), u.dmap(), u.ncomp(), u.n_grow());
-    count_scratch(scratch);
-    return scratch;
-  }
-  MultiFab scratch_state_like(const MultiFab& u) const { return rhs_scratch_like(u); }
-
-  /// Topology-qualified persistent scratch for generated rate nodes.  The IR identity and local
-  /// sub-slot select one non-aliasing buffer per AMR level; a materialization-generation or exact
-  /// layout change replaces that buffer, while stable steps reuse it without Fab allocation.
-  MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
-                                prototype.n_grow());
-  }
-
-  MultiFab& scratch_state(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return program_scratch_for_(ScratchKind::State, value_id, subslot, prototype, prototype.ncomp(),
-                                prototype.n_grow());
-  }
-
-  MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
-                           int n_comp = 1, int n_ghost = 1) const {
-    if (n_comp < 1 || n_ghost < 0)
-      throw std::invalid_argument(
-          "AMR Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
-    return program_scratch_for_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp, n_ghost);
-  }
-
-  // --- linear algebra (LEVEL-AGNOSTIC: operate on the MultiFab handed in) ---------------------------
-  void axpy(MultiFab& u, Real a, const MultiFab& r) const {
-    count_kernel();
-    pops::saxpy(u, a, r);
-    if (capturing()) {
-      ledger_axpy_(
-          u, a,
-          r);  // shadow the state combine on the effective-flux strip: ledger[u] += a*ledger[r]
-      note_live_write_(
-          &u);  // a write to the live state invalidates any earlier live-state ring snapshot
-    }
-  }
-  void axpy(MultiFab& u, Real a, const MultiFab& r, Real dt,
-            std::initializer_list<ExactCoefficientTerm> exact) const {
-    count_kernel();
-    pops::saxpy(u, a, r);
-    if (capturing()) {
-      ledger_axpy_exact_(u, a, r, dt, exact);
-      note_live_write_(&u);
-    }
-  }
-  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
-    count_kernel();
-    pops::lincomb(z, a, x, b, y);
-    if (capturing()) {
-      ledger_lincomb_(z, a, x, b, y);  // ledger[z] = a*ledger[x] + b*ledger[y]
-      note_live_write_(&z);
-    }
-  }
-  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real dt,
-               std::initializer_list<ExactCoefficientTerm> exact_a,
-               std::initializer_list<ExactCoefficientTerm> exact_b) const {
-    count_kernel();
-    pops::lincomb(z, a, x, b, y);
-    if (capturing()) {
-      ledger_lincomb_exact_(z, a, x, b, y, dt, exact_a, exact_b);
-      note_live_write_(&z);
-    }
-  }
-  void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
-    std::vector<MultiFab*> targets;
-    targets.reserve(commits.size());
-    for (const auto& [target, source] : commits) {
-      if (target == nullptr || source == nullptr)
-        throw std::invalid_argument("AmrProgramContext::commit_many received a null state");
-      if (std::find(targets.begin(), targets.end(), target) != targets.end())
-        throw std::invalid_argument("AmrProgramContext::commit_many received a duplicate target");
-      if (target->box_array().boxes() != source->box_array().boxes() ||
-          target->dmap().ranks() != source->dmap().ranks() || target->ncomp() != source->ncomp())
-        throw std::invalid_argument("AmrProgramContext::commit_many state layout mismatch");
-      targets.push_back(target);
-    }
-    const bool has_aliased_source =
-        std::any_of(commits.begin(), commits.end(), [&targets](const auto& commit) {
-          return commit.first != commit.second &&
-                 std::find(targets.begin(), targets.end(), commit.second) != targets.end();
-        });
-    if (!has_aliased_source) {
-      for (const auto& [target, source] : commits)
-        if (target != source)
-          lincomb(*target, Real(0), *target, Real(1), *source);
-      return;
-    }
-    if (capturing())
-      throw std::invalid_argument(
-          "AmrProgramContext::commit_many aliased target/source requires a flat hierarchy; "
-          "materialize an explicit provisional state before a conservative multi-level commit");
-    std::vector<std::pair<MultiFab*, const MultiFab*>> prepared(commits);
-    std::vector<MultiFab> aliased_sources;
-    aliased_sources.reserve(prepared.size());
-    for (auto& [target, source] : prepared) {
-      if (target != source && std::find(targets.begin(), targets.end(), source) != targets.end()) {
-        source->sync_host();
-        aliased_sources.emplace_back(*source);
-        aliased_sources.back().sync_device();
-        source = &aliased_sources.back();
-      }
-    }
-    for (const auto& [target, source] : prepared) {
-      if (target != source) {
-        lincomb(*target, Real(0), *target, Real(1), *source);
-        device_fence();
-      }
-    }
-  }
-
   // --- matrix-free elliptic primitives over the CURRENT level (parity with ProgramContext) ----------
   void laplacian(MultiFab& out, MultiFab& in) const {
     count_kernel();
@@ -1142,28 +808,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       boundary.fill(fy, point);
     apply_divergence(fx, fy, boundary.context().geom, out, /*cx=*/0, /*cy=*/1);
   }
-  // --- reductions (COLLECTIVE all_reduce, called on every rank; per-level field) --------------------
-  Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
-  Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
-  Real min_component(const MultiFab& u, int comp) const { return pops::reduce_min(u, comp); }
-  Real abs_sum_component(const MultiFab& u, int comp) const {
-    return pops::reduce_abs_sum(u, comp);
-  }
-  Real sum(const MultiFab& u) const { return pops::reduce_sum(u, 0); }
-  Real max(const MultiFab& u) const { return pops::reduce_max(u, 0); }
-  Real min(const MultiFab& u) const { return pops::reduce_min(u, 0); }
-  Real abs_sum(const MultiFab& u) const { return pops::reduce_abs_sum(u, 0); }
-
-  void fill_boundary(MultiFab& x) const {
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(x, g.domain, eng_->transport_bc());
-  }
-
-  void fill_boundary(MultiFab& x, const ExecutionLane& lane) const {
-    const Geometry g = eng_->level_geom(level_);
-    fill_ghosts(x, g.domain, eng_->transport_bc(), lane);
-  }
-
   // --- history (ADC-631): per-level ring slots on the AmrRuntime engine, driven by the SAME lowered
   // body as Uniform (the level index is the driver's set_level cursor -- no scheme dispatch, no new IR).
   // register/read/store address the CURRENT level; rotate fires ONCE per accepted hierarchy step. The
@@ -1556,106 +1200,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         "whose flux IR runs through the level RHS.");
   }
 
-  // --- scheduler value cache: DEFERRED on AMR, fail loud ---------------------------------------------
-  // The codegen lowers a held / scheduled field-solve node (ADC-458) against these cache seams. The
-  // CacheManager that backs them is owned by System (per-installed-Program, keyed by node id); AMR
-  // has no AmrSystem cache store, so a held schedule on AMR is not wired. Same EXACT signatures as
-  // ProgramContext; each throws rather than silently caching nothing (which would read a stale value).
-  bool cache_should_update(int /*node_id*/, int /*every_n*/) const {
-    deferred_op("cache_should_update",
-                "a held / scheduled field solve under a compiled Program on AMR is deferred; use "
-                "System (the scheduler cache lives on System), or drop the schedule.");
-  }
-  void cache_store_aux(int /*node_id*/) const {
-    deferred_op("cache_store_aux",
-                "the scheduler aux cache under a compiled Program on AMR is deferred; use System.");
-  }
-  void cache_restore_aux(int /*node_id*/) const {
-    deferred_op("cache_restore_aux",
-                "the scheduler aux cache under a compiled Program on AMR is deferred; use System.");
-  }
-  void cache_store_scratch(int /*node_id*/, const MultiFab& /*scratch*/) const {
-    deferred_op(
-        "cache_store_scratch",
-        "the scheduler scratch cache under a compiled Program on AMR is deferred; use System.");
-  }
-  void cache_restore_scratch(int /*node_id*/, MultiFab& /*scratch*/) const {
-    deferred_op(
-        "cache_restore_scratch",
-        "the scheduler scratch cache under a compiled Program on AMR is deferred; use System.");
-  }
-  void cache_accumulate_dt(int /*node_id*/, Real /*dt*/) const {
-    deferred_op(
-        "cache_accumulate_dt",
-        "the scheduler accumulate_dt policy under a compiled Program on AMR is deferred; use "
-        "System.");
-  }
-  Real cache_effective_dt(int /*node_id*/, Real /*dt_now*/) const {
-    deferred_op(
-        "cache_effective_dt",
-        "the scheduler accumulate_dt policy under a compiled Program on AMR is deferred; use "
-        "System.");
-  }
-
  private:
-  struct CouplingWorkspace {
-    std::vector<int> program_to_runtime;
-    std::vector<MultiFab*> runtime_states;
-    bool in_use = false;
-  };
-
-  void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
-    const std::vector<int>& block_map = facade_->program_block_map();
-    const std::size_t runtime_blocks = eng_->n_blocks();
-    if (block_map.empty())
-      throw block_map_error_(
-          "AmrProgramContext::apply_coupling_operators has no explicit program-to-AMR block map");
-    if (block_map.size() != runtime_blocks || candidates.size() != block_map.size())
-      throw std::invalid_argument(
-          "AMR Program coupling requires a complete candidate pack for every runtime block");
-
-    const bool structure_changed = coupling_workspace_.program_to_runtime != block_map ||
-                                   coupling_workspace_.runtime_states.size() != runtime_blocks;
-    if (structure_changed) {
-      coupling_workspace_.runtime_states.assign(runtime_blocks, nullptr);
-      for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
-        const int runtime_block = sys_block(static_cast<int>(program_block));
-        MultiFab*& mapped =
-            coupling_workspace_.runtime_states[static_cast<std::size_t>(runtime_block)];
-        if (mapped != nullptr)
-          throw std::invalid_argument(
-              "AMR Program coupling block map does not cover each runtime block exactly once");
-        mapped = &eng_->level_state(static_cast<std::size_t>(runtime_block), level_);
-      }
-      coupling_workspace_.program_to_runtime.assign(block_map.begin(), block_map.end());
-    }
-
-    std::fill(coupling_workspace_.runtime_states.begin(), coupling_workspace_.runtime_states.end(),
-              nullptr);
-    std::size_t ordinal = 0;
-    for (const CouplingStateOverride& candidate : candidates) {
-      if (candidate.program_block != static_cast<int>(ordinal) || candidate.state == nullptr)
-        throw std::invalid_argument(
-            "AMR Program coupling candidates must be non-null and ordered by Program block");
-      const int runtime_block =
-          coupling_workspace_.program_to_runtime[static_cast<std::size_t>(candidate.program_block)];
-      const MultiFab& live = eng_->level_state(static_cast<std::size_t>(runtime_block), level_);
-      if (candidate.state->box_array().boxes() != live.box_array().boxes() ||
-          candidate.state->dmap().ranks() != live.dmap().ranks() ||
-          candidate.state->ncomp() != live.ncomp() || candidate.state->n_grow() != live.n_grow())
-        throw std::invalid_argument(
-            "AMR Program coupling candidate does not match its exact level layout");
-      for (std::size_t other = 0; other < block_map.size(); ++other)
-        if (candidate.state ==
-            &eng_->level_state(static_cast<std::size_t>(sys_block(static_cast<int>(other))),
-                               level_))
-          throw std::invalid_argument(
-              "AMR Program coupling candidates cannot alias accepted live states");
-      coupling_workspace_.runtime_states[static_cast<std::size_t>(runtime_block)] = candidate.state;
-      ++ordinal;
-    }
-  }
-
   enum class ResidualCapture { FullRate, FluxOnly };
   /// The normal Berger-Oliger driver synchronizes each child as soon as it catches its parent.
   /// A hierarchy-scoped operator executes behind one global barrier and therefore synchronizes the
@@ -1699,10 +1244,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
             ". Select a provider whose declared capabilities cover that transition.");
     }
   }
-  static std::runtime_error block_map_error_(std::string message) {
-    return std::runtime_error(std::move(message));
-  }
-
   static SolveReport consume_field_outcome_(SolveOutcome outcome) {
     return outcome.consume(outcome.report().solved_value_available()
                                ? SolveConsumption::kAccept
@@ -1710,15 +1251,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
                                       ? SolveConsumption::kRejectAttempt
                                       : SolveConsumption::kFailRun));
   }
-
-  [[noreturn]] static void throw_field_solve_failure_(const SolveReport& report,
-                                                      const char* detail) {
-    if (report.action == SolveAction::kRejectAttempt)
-      throw StepAttemptRejected(report.status, "prepared field evaluation", detail);
-    throw std::runtime_error(std::string("prepared field evaluation failed: ") +
-                             report.status_name() + " (" + detail + ")");
-  }
-
   struct CaptureFluxScratchKey {
     std::size_t block = 0;
     int level = 0;
@@ -2025,8 +1557,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return workspace.program_stages;
   }
 
-  enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
-
   struct ProgramScratchKey {
     ScratchKind kind = ScratchKind::Rhs;
     std::int64_t value_id = -1;
@@ -2056,6 +1586,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
            field.n_grow() == n_ghost;
   }
 
+  /// Provider-owned by design: a regrid, restart materialization or rejected-attempt rollback can
+  /// preserve the checkpointed epoch while replacing every hierarchy allocation.  The shared
+  /// service therefore selects scratch semantically, but only this AMR storage provider may
+  /// authenticate and invalidate slots against both topology epoch and materialization generation.
   MultiFab& program_scratch_for_(ScratchKind kind, std::int64_t value_id, int subslot,
                                  const MultiFab& prototype, int n_comp, int n_ghost) const {
     if (value_id < 0 || subslot < 0)
@@ -3395,18 +2929,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
             stamp.physical_time};
   }
 
-  static void require_rate_identity_(int rate_id) {
-    if (rate_id < 0)
-      throw std::invalid_argument(
-          "AMR Program rate evaluation requires a non-negative authored node identity");
-  }
-
-  static void require_group_identity_(int group_id) {
-    if (group_id < 0)
-      throw std::invalid_argument(
-          "AMR Program RHS group requires a non-negative authored group identity");
-  }
-
   static std::size_t scaled_contribution_count_(const std::vector<FluxContribution>& source,
                                                 std::initializer_list<ExactCoefficientTerm> exact) {
     std::size_t nonzero_terms = 0;
@@ -4060,6 +3582,174 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   friend class ProgramExecutionServices<AmrProgramContext>;
+  struct LogicalEvaluationRollback {
+    std::optional<amr::ClockWindow> window;
+    double parent_dt = 0.0;
+    amr::Rational stage{0, 1};
+  };
+
+  GridContext program_execution_default_grid_context_() const {
+    const Geometry geometry = eng_->level_geom(level_);
+    GridContext context;
+    context.dom = geometry.domain;
+    context.bc = eng_->transport_bc();
+    context.geom = geometry;
+    context.aux = &const_cast<MultiFab&>(eng_->aux(level_));
+    return context;
+  }
+  GridContext program_execution_block_grid_context_(int owner) const {
+    return eng_->level_grid_context(static_cast<std::size_t>(sys_block(owner)), level_);
+  }
+  MultiFab& program_execution_state_(int runtime_block) const {
+    return eng_->level_state(static_cast<std::size_t>(runtime_block), level_);
+  }
+  MultiFab program_execution_alloc_scalar_field_(int n_comp, int n_ghost) const {
+    return eng_->level_scalar_field(level_, n_comp, n_ghost);
+  }
+  std::size_t program_execution_apply_coupling_(
+      Real dt, const std::vector<MultiFab*>& runtime_states) const {
+    return eng_->apply_coupling_operators_at_level(level_, dt, runtime_states);
+  }
+  CacheManager& program_execution_cache_(SchedulerCacheOperation operation) const {
+    const std::string detail =
+        "the scheduler value cache has no AMR checkpoint/regrid storage provider; use System, or "
+        "drop the held schedule.";
+    switch (operation) {
+      case SchedulerCacheOperation::ShouldUpdate:
+        deferred_op("cache_should_update", detail);
+      case SchedulerCacheOperation::StoreAux:
+        deferred_op("cache_store_aux", detail);
+      case SchedulerCacheOperation::RestoreAux:
+        deferred_op("cache_restore_aux", detail);
+      case SchedulerCacheOperation::StoreScratch:
+        deferred_op("cache_store_scratch", detail);
+      case SchedulerCacheOperation::RestoreScratch:
+        deferred_op("cache_restore_scratch", detail);
+      case SchedulerCacheOperation::AccumulateDt:
+        deferred_op("cache_accumulate_dt", detail);
+      case SchedulerCacheOperation::EffectiveDt:
+        deferred_op("cache_effective_dt", detail);
+    }
+    throw std::logic_error("unknown Program scheduler cache operation");
+  }
+  ProgramResourceTopology program_execution_resource_topology_() const {
+    return {eng_->topology_epoch(), eng_->topology_materialization_generation(), eng_->nlev()};
+  }
+  int program_execution_resource_level_() const noexcept { return level_; }
+  void program_execution_select_resource_level_(int selected) const noexcept {
+    level_ = selected;
+    // The provider cursor and an active exact clock window are one level-qualified identity.
+    // Recursive windows already carry this level; hierarchy-wide resource scopes select it here.
+    // Updating both endpoints also makes the shared scope's no-throw restoration exact.
+    if (current_window_) {
+      current_window_->begin.level = selected;
+      current_window_->end.level = selected;
+    }
+  }
+  ProgramResourceStorage program_execution_resource_storage_() const {
+    const bool replicated = eng_->level_is_replicated(level_);
+    return {replicated ? PreparedVectorDistribution::Replicated
+                       : PreparedVectorDistribution::Distributed,
+            replicated ? FieldDistribution::Replicated : FieldDistribution::Distributed, level_};
+  }
+  std::vector<Real> program_execution_resource_cell_measures_() const {
+    if (level_ < 0 || level_ >= nlev())
+      throw std::out_of_range("AMR Program field-nullspace resource level is out of range");
+    const Geometry geometry = eng_->level_geom(level_);
+    std::vector<Real> measures(static_cast<std::size_t>(nlev()), Real(0));
+    measures[static_cast<std::size_t>(level_)] = geometry.dx() * geometry.dy();
+    return measures;
+  }
+  void program_execution_publish_axpy_(MultiFab& u, Real a, const MultiFab& r) const {
+    if (!capturing())
+      return;
+    ledger_axpy_(u, a, r);
+    note_live_write_(&u);
+  }
+  void program_execution_publish_exact_axpy_(
+      MultiFab& u, Real a, const MultiFab& r, Real dt,
+      std::initializer_list<ExactCoefficientTerm> exact) const {
+    if (!capturing())
+      return;
+    ledger_axpy_exact_(u, a, r, dt, exact);
+    note_live_write_(&u);
+  }
+  void program_execution_publish_lincomb_(MultiFab& z, Real a, const MultiFab& x, Real b,
+                                          const MultiFab& y) const {
+    if (!capturing())
+      return;
+    ledger_lincomb_(z, a, x, b, y);
+    note_live_write_(&z);
+  }
+  void program_execution_publish_exact_lincomb_(
+      MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real dt,
+      std::initializer_list<ExactCoefficientTerm> exact_a,
+      std::initializer_list<ExactCoefficientTerm> exact_b) const {
+    if (!capturing())
+      return;
+    ledger_lincomb_exact_(z, a, x, b, y, dt, exact_a, exact_b);
+    note_live_write_(&z);
+  }
+
+  double program_execution_logical_parent_dt_() const noexcept { return current_level_dt_; }
+  LogicalEvaluationRollback program_execution_capture_logical_evaluation_() const {
+    if (!current_window_)
+      throw std::logic_error(
+          "AMR Program logical evaluation requires a prepared parent level window");
+    return {current_window_, current_level_dt_, stage_time_};
+  }
+  void program_execution_apply_logical_evaluation_(
+      const LogicalEvaluationInterval& interval) const {
+    if (!current_window_)
+      throw std::logic_error(
+          "AMR Program logical evaluation requires a prepared parent level window");
+    const double child_physical_time = current_window_->begin.physical_time +
+                                       static_cast<double>(interval.iteration) * interval.child_dt;
+    const double child_end_physical_time = child_physical_time + interval.child_dt;
+    if (!std::isfinite(child_physical_time) || !std::isfinite(child_end_physical_time))
+      throw std::overflow_error("AMR Program logical evaluation child window is not finite");
+    const amr::Rational parent_span = current_window_->end.phase - current_window_->begin.phase;
+    const amr::Rational child_begin_phase =
+        current_window_->begin.phase + parent_span * interval.child_begin;
+    const amr::Rational child_end_phase =
+        current_window_->begin.phase + parent_span * interval.child_end;
+    amr::ClockStamp child_begin = current_window_->begin;
+    child_begin.phase = child_begin_phase;
+    child_begin.physical_time = child_physical_time;
+    amr::ClockStamp child_end = child_begin;
+    child_end.phase = child_end_phase;
+    child_end.physical_time = child_end_physical_time;
+
+    invalidate_active_operator_snapshot_();
+    current_window_ = amr::ClockWindow{child_begin, child_end};
+    current_level_dt_ = interval.child_dt;
+    stage_time_ = amr::Rational(0, 1);
+  }
+  void program_execution_restore_logical_evaluation_(
+      const LogicalEvaluationRollback& rollback) const noexcept {
+    current_window_ = rollback.window;
+    current_level_dt_ = rollback.parent_dt;
+    stage_time_ = rollback.stage;
+    invalidate_active_operator_snapshot_();
+  }
+  SolveReport program_execution_solve_fields_from_state_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int block, MultiFab& state) const {
+    return consume_field_outcome_(solve_fields_from_state_at(point, provider_slot, block, state));
+  }
+  MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
+                                       const MultiFab& prototype, int n_comp, int n_ghost) const {
+    return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
+  }
+  void program_execution_validate_commit_aliases_(bool has_aliased_source) const {
+    if (has_aliased_source && capturing())
+      throw std::invalid_argument(
+          "AmrProgramContext::commit_many aliased target/source requires a flat hierarchy; "
+          "materialize an explicit provisional state before a conservative multi-level commit");
+  }
+  void program_execution_commit_copy_(MultiFab& target, const MultiFab& source) const {
+    lincomb(target, Real(0), target, Real(1), source);
+  }
   const std::vector<int>& program_execution_block_map_() const {
     return facade_->program_block_map();
   }
@@ -4097,7 +3787,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   mutable std::map<std::string, SolveReport> named_solve_reports_;
   mutable bool named_field_solve_in_use_ = false;
   mutable std::map<std::pair<int, int>, MultiFab> stage_state_scratch_;
-  mutable CouplingWorkspace coupling_workspace_;
   mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
   mutable std::map<ProgramScratchKey, ProgramScratchSlot> program_scratch_;
   mutable std::uint64_t program_scratch_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
@@ -4205,6 +3894,11 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   // after the reflux corrects that live state, couple_levels re-copies it into slot 0 so the stored state
   // and the live state stay consistent. A ring storing a non-live buffer (AB2 stores the RHS) is absent.
   mutable std::vector<LiveStateRing> live_state_rings_;
+};
+
+template <>
+struct ProgramExecutionProviderFor<AmrSystem> {
+  using type = AmrProgramContext;
 };
 
 }  // namespace program

@@ -138,6 +138,38 @@ def test_step_transaction_report_refuses_partial_publication():
             action="commit",
             projections=("realizability", "realizability"),
         )
+    with pytest.raises(ValueError, match="staged_effects must contain non-empty effect names"):
+        StepTransactionReport(
+            status="rejected",
+            phase="guard",
+            action="reject_attempt",
+            staged_effects=("",),
+            rolled_back_effects=("",),
+        )
+    with pytest.raises(ValueError, match="committed_effects cannot contain duplicates"):
+        StepTransactionReport(
+            status="accepted",
+            phase="commit",
+            action="commit",
+            staged_effects=("states",),
+            committed_effects=("states", "states"),
+        )
+    with pytest.raises(ValueError, match="commit every staged_effect"):
+        StepTransactionReport(
+            status="accepted",
+            phase="commit",
+            action="commit",
+            staged_effects=("states", "fields"),
+            committed_effects=("states",),
+        )
+    with pytest.raises(ValueError, match="roll back every staged_effect"):
+        StepTransactionReport(
+            status="rejected",
+            phase="guard",
+            action="reject_attempt",
+            staged_effects=("states", "fields"),
+            rolled_back_effects=("states",),
+        )
 
 
 def test_compiled_time_is_removed_instead_of_aliased():
