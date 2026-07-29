@@ -5,7 +5,9 @@ temporal core. It validates the manifest before executing an exact list of
 mandatory pytest nodeids and CTest cases. Renaming, skipping or deleting a proof
 therefore fails source-only CI instead of silently reducing coverage. Executable
 pytest proofs always run with `POPS_REQUIRE_NATIVE_TESTS=1`; their JUnit report is
-also rejected if any skip or xfail survives prerequisite enforcement.
+also rejected if any skip or xfail survives prerequisite enforcement. Function
+nodeids must remain individually collectable; a process-isolated whole-file test
+cannot masquerade as an exact `file::function` proof.
 
 The final executable scope covers the landed contracts without a waiver:
 
@@ -14,10 +16,13 @@ The final executable scope covers the landed contracts without a waiver:
 - explicit `SolveOutcome`, including `RejectAttempt` lowering;
 - manual and preset SSPRK2/IMEX execution through one normalized `ProgramGraph`;
 - one native multi-block implicit phase with exact name-qualified routes;
+- one hierarchy-wide refined implicit solve ordered as gather, one solve,
+  publication/reconstruction, guards and commit;
 - uniform and AMR step transactions, including topology/state/history/cache/diagnostic/clock rollback;
 - accepted AMR transaction commit across topology, state, history and clock;
 - strict shared `TemporalRestartState` round-trip and rejected-attempt checkpoint refusal;
-- real history restart round-trip and mismatched-program refusal;
+- real compiled-Program history continuation that is bit-identical across
+  restart, plus mismatched-program refusal;
 - Program-only Uniform/AMR temporal facades with no compatibility stepper or
   explicit-Euler fallback for unsupported semantics.
 
