@@ -84,6 +84,7 @@ def rebuild_program(
         object.__setattr__(out, "clock", Clock("macro", owner=out.owner_path))
     out.dt = self.dt
     out._step_strategy = getattr(self, "_step_strategy", None)
+    out._cadence = getattr(self, "_cadence", None)
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
     if project_states and (self._dt_bound is not None or out._acceptance_guards):

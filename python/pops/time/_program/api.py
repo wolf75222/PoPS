@@ -13,6 +13,7 @@ from typing import Any
 
 from pops.model.ownership import OwnerKind, OwnerPath
 from pops.time._program.contract import register_program_type
+from pops.time._program.cadence import ProgramCadence
 from pops.time._program.authoring import _ProgramAuthoring
 from pops.time._program.condensed import _ProgramCondensed
 from pops.time._program.operations import _ProgramCore
@@ -118,6 +119,9 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # ADC-666: explicit attempt controller. Runtime kwargs are validated against this descriptor;
         # a run-time CFL/dt/error-control option never silently selects a strategy.
         self._step_strategy = None
+        # The default executes once per accepted macro-step. A non-default cadence is an authored,
+        # immutable part of the Program identity and is installed before the runtime freezes.
+        self._cadence = None
         self._transaction_stores = ALL_PROVISIONAL_STORES
         self._acceptance_guards = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
@@ -217,6 +221,28 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._step_strategy = strategy
         self._transaction_stores = stores
         return self
+
+    def cadence(self, *, substeps: Any = 1, stride: Any = 1) -> Any:
+        """Declare the global Program cadence once, before compile.
+
+        ``stride`` accumulates accepted macro-step intervals and executes the Program when the
+        window closes. ``substeps`` divides that complete window into exact Program executions.
+        Off-cadence accepted steps sample-and-hold the last Program state.
+        """
+        self._guard_mutable("set Program cadence")
+        if self._cadence is not None:
+            raise ValueError("Program.cadence may be declared only once")
+        self._cadence = ProgramCadence(substeps=substeps, stride=stride)
+        return self
+
+    def cadence_contract(self) -> ProgramCadence:
+        """Return the immutable authored cadence, defaulting to one execution per macro-step."""
+        cadence = self._cadence
+        if cadence is None:
+            return ProgramCadence()
+        if type(cadence) is not ProgramCadence:
+            raise TypeError("Program carries an invalid cadence contract")
+        return cadence
 
     def _register_acceptance_guard(self, guard: AcceptanceGuard) -> None:
         self._guard_mutable("register acceptance guard %r" % guard.name)

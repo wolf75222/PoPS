@@ -18,6 +18,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- `Program.cadence(substeps=..., stride=...)` now authors the native global cadence as immutable,
+  identity-bearing Program data and installs it before the Uniform or AMR runtime freezes.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories, and state explicitly
   that `RegridOnRestart()` remains unsupported. The M3 gate now executes the persisted two-rank to
