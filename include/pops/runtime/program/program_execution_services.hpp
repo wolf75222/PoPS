@@ -806,4 +806,19 @@ std::shared_ptr<ProgramExecutionProviderForT<RuntimeFacade>> make_program_execut
   return std::make_shared<Provider>(runtime);
 }
 
+/// Construct a short-lived provider view without heap allocation.
+///
+/// Read-only scalar queries such as the CFL/dt bound need the same facade-selected provider but do
+/// not install a closure or extend its lifetime. Returning the provider prvalue gives guaranteed
+/// copy elision and keeps the per-step query allocation-free.
+template <class RuntimeFacade>
+ProgramExecutionProviderForT<RuntimeFacade> make_program_execution_view(RuntimeFacade* runtime) {
+  using Provider = ProgramExecutionProviderForT<RuntimeFacade>;
+  static_assert(std::is_base_of_v<ProgramExecutionServices<Provider>, Provider>,
+                "a Program execution provider must consume ProgramExecutionServices");
+  if (runtime == nullptr)
+    throw std::invalid_argument("Program execution view requires a non-null runtime facade");
+  return Provider(runtime);
+}
+
 }  // namespace pops::runtime::program
