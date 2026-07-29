@@ -131,8 +131,11 @@ Explicit unsupported rows include:
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use accepted-state v5.
 - `checkpoint:amr_dynamic_regrid` is available through the strict v5 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
-  per native rank, so AMR restart currently requires the same rank count; rank redistribution is never
-  inferred from opaque local publications.
+  per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
+  non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and
+  the rank-owned accepted Program image onto a different MPI rank count only when every persisted
+  history ring is Dense. Selective history replay remains same-rank. Recorded patch boxes and
+  refinement topology are not regridded or inferred from opaque local publications.
 - `checkpoint:regrid_on_restart` has an explicit typed `RegridOnRestart()` identity and the weaker
   `accepted_state_after_regrid` guarantee, but the builtin accepted-state-v5 provider refuses it before
   artifact creation. No complete hierarchy/history/field remap route currently implements that

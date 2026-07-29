@@ -18,6 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
+  non-bit-identical rank-count rematerialization with Dense persisted histories, and state explicitly
+  that `RegridOnRestart()` remains unsupported. The M3 gate now executes the persisted two-rank to
+  one-rank restart proof.
 - Internal frozen two-level serial AMR shared-interface transactions now retain endpoint-qualified
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second

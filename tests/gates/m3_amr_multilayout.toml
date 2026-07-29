@@ -227,6 +227,14 @@ nodeid = "tests/python/integration/runtime/test_multi_layout_runtime.py::test_mu
 issue = "ADC-678"
 requirement = "accepted_state"
 polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/mpi/test_amr_rank_change_restart.py::test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "positive"
 kind = "ctest"
 target = "test_mpi_amr_twoblock_parity"
 test_regex = "^test_mpi_amr_twoblock_parity_np2$"

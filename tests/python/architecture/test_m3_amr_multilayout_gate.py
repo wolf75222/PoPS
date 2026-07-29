@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,7 +26,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 32
+    assert len(data["check"]) == 33
 
 
 def test_m3_final_gate_has_no_deferred_requirement():
@@ -92,6 +93,20 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
             "test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count"
         ),
     } in checks
+    assert runner._python_mpi_orchestrators() == {
+        "tests/python/integration/mpi/test_amr_rank_change_restart.py"
+    }
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "positive",
+        "kind": "pytest",
+        "target": "accepted_state",
+        "nodeid": (
+            "tests/python/integration/mpi/test_amr_rank_change_restart.py::"
+            "test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one"
+        ),
+    } in checks
     assert {
         "issue": "ADC-678",
         "requirement": "accepted_state",
@@ -105,6 +120,14 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
     _, errors = runner.validate_manifest(MANIFEST)
     assert any(
         "test_amr_history_mpi.py is not a manifest-owned MPI Python entrypoint" in error
+        for error in errors
+    )
+
+    monkeypatch.setattr(runner, "_python_mpi_orchestrators", lambda: set())
+    _, errors = runner.validate_manifest(MANIFEST)
+    assert any(
+        "test_amr_rank_change_restart.py is not a manifest-owned serial MPI orchestrator"
+        in error
         for error in errors
     )
 
@@ -131,7 +154,40 @@ def test_m3_mpi_python_launch_is_explicit_required_and_check_only_safe(monkeypat
     ]
     monkeypatch.setenv("POPS_REQUIRE_MPI_TESTS", "0")
     assert runner._required_mpi_environment()["POPS_REQUIRE_MPI_TESTS"] == "1"
+    monkeypatch.setenv("POPS_REQUIRE_NATIVE_TESTS", "0")
+    assert runner._required_mpi_environment()["POPS_REQUIRE_NATIVE_TESTS"] == "1"
 
     monkeypatch.setattr(runner.shutil, "which", lambda _command: None)
     with pytest.raises(RuntimeError, match="required MPI launcher"):
         runner._mpi_python_command("mpiexec", 2, relative)
+
+
+def test_m3_required_pytest_execution_rejects_every_skip_or_xfail(
+    tmp_path, monkeypatch
+):
+    runner = _load_runner()
+    report = tmp_path / "pytest.xml"
+    skipped_xml = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<testsuites><testsuite tests="1" skipped="1">'
+        '<testcase classname="m3" name="proof"><skipped type="pytest.skip"/></testcase>'
+        "</testsuite></testsuites>"
+    )
+    report.write_text(skipped_xml, encoding="utf-8")
+    assert runner._pytest_skip_count(report) == 1
+
+    def successful_pytest_with_a_skip(command, *, cwd, env, check):
+        assert cwd == ROOT
+        assert env["POPS_REQUIRE_MPI_TESTS"] == "1"
+        assert env["POPS_REQUIRE_NATIVE_TESTS"] == "1"
+        assert check is False
+        assert "xfail_strict=true" in command
+        junit = Path(command[command.index("--junitxml") + 1])
+        junit.write_text(skipped_xml, encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, "run", successful_pytest_with_a_skip)
+    with pytest.raises(RuntimeError, match="reported 1 skipped/xfail proof"):
+        runner._run_required_pytest(
+            ["tests/python/unit/runtime/test_amr_checkpoint_contract.py::proof"]
+        )
