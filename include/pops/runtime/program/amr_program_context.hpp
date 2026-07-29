@@ -57,11 +57,13 @@
 /// conservative synchronization. The `{amr_install}` slot
 /// installs one recursive Berger-Oliger driver: child steps partition the parent window, each rate reads
 /// a mandatory old/new dense-output interpolation at its exact Program abscissa, and level sync is
-/// conservative reflux followed by average-down. The single coarse system Poisson per macro-step
-/// (OncePerStep) is injected coarse -> fine; unsupported per-stage fine re-solves fail loudly. Multistep
-/// history rings (keep_history / T.prev) are owner/space/clock-qualified; their per-level slots are
-/// remapped through regrid and v3 checkpoint native replay. GPU execution stays device-clean by
-/// construction: every per-cell op is for_each_cell / a POPS_HD named functor reused from the engine.
+/// conservative reflux followed by average-down. The single default system Poisson per macro-step
+/// (OncePerStep) is injected coarse -> fine; a field-coupled Jacobian perturbation instead re-evaluates
+/// its exact named prepared provider from the active hierarchy level and restores the accepted state
+/// transactionally. Multistep history rings (keep_history / T.prev) are owner/space/clock-qualified;
+/// their per-level slots are remapped through regrid and v3 checkpoint native replay. GPU execution
+/// stays device-clean by construction: every per-cell op is for_each_cell / a POPS_HD named functor
+/// reused from the engine.
 namespace pops {
 namespace runtime {
 namespace program {
@@ -657,9 +659,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       throw std::invalid_argument(
           "AmrProgramContext::solve_fields_from_state_at point level differs from the active "
           "Program level");
-    if (!eng_->named_field_stage_state_is_level_qualified(provider_slot, point.level))
-      deferred_op("solve_fields_from_state_at_fine_level",
-                  "a fine-level dynamic field boundary requires level-qualified dependency views");
     named_solve_reports_.erase(provider_slot);
     SolveOutcome outcome = [&]() -> SolveOutcome {
       try {

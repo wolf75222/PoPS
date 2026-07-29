@@ -106,9 +106,9 @@ def test_parser_finds_only_explicit_known_deferrals():
         "solve_fields_from_state_default",
         "solve_fields_from_blocks_default",
         "refined_shared_block_interfaces",
-        "solve_fields_from_state_at_fine_level",
     ):
         assert identifier in header
+    assert "solve_fields_from_state_at_fine_level" not in header
     assert "apply_projection" not in header
     assert not any(identifier.startswith("history") for identifier in header)
 
@@ -143,7 +143,7 @@ def test_complete_query_requires_resolved_context():
         module.amr_program_op_support(_Program([]), context=None)
 
 
-def test_context_sensitive_deferrals_are_reported_only_when_reachable():
+def test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarchy():
     module = _load_support_module()
     matrix_free = {"op": "matrix_free_operator", "attrs": {"apply_block": ["#2"]}}
     field_jacobian = _Program(
@@ -157,7 +157,7 @@ def test_context_sensitive_deferrals_are_reported_only_when_reachable():
         field_jacobian, context=_context(module, refined=False)) == {}
     assert module.amr_program_op_support(
         field_jacobian, context=_context(module, refined=True)) == {
-            "fine_level_field_perturbation": "pending",
+            "fine_level_field_perturbation": "green",
         }
     assert module.amr_program_op_support(
         _Program([]), context=_context(module, refined=True, interfaces=True)) == {
