@@ -44,6 +44,7 @@ SHARED_SIGNATURES = (
     "void rhs_into(",
     "runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(",
     "bool has_boundary_linearization(",
+    "void require_cartesian_generated_operator(",
     "void neg_div_flux_default_into(",
     "void source_default_into(",
     "void apply_projection(",
@@ -270,6 +271,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_boundary_point_",
             "program_execution_rhs_into_",
             "program_execution_has_boundary_linearization_",
+            "program_execution_require_cartesian_generated_operator_",
             "program_execution_rhs_core_into_at_",
             "program_execution_boundary_residual_into_at_",
             "program_execution_boundary_jvp_into_at_",
@@ -356,6 +358,21 @@ def test_shared_service_uses_only_explicit_provider_hooks():
     calls = re.findall(r"provider_\(\)\.(\w+)\(", shared)
     assert calls
     assert all(call.startswith("program_execution_") for call in calls), calls
+
+
+def test_generated_cartesian_guard_is_shared_and_providers_own_only_terminal_topology():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    assert re.search(
+        r"program_execution_require_cartesian_generated_operator_\(\s*"
+        r"sys_block\(block\),\s*operation\)",
+        shared,
+    )
+    assert "sys_->require_cartesian_generated_operator(runtime_block, operation);" in uniform
+    assert "current AMR engine supports Cartesian hierarchy layouts only" in amr
+    assert "void require_cartesian_generated_operator(" not in uniform
+    assert "void require_cartesian_generated_operator(" not in amr
 
 
 def test_prepared_operator_policy_is_shared_while_storage_stays_provider_owned():

@@ -3014,6 +3014,11 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   bool program_execution_has_boundary_linearization_(int runtime_block) const {
     return eng_->has_boundary_linearization(static_cast<std::size_t>(runtime_block));
   }
+  void program_execution_require_cartesian_generated_operator_(
+      int /*runtime_block*/, const std::string& /*operation*/) const noexcept {
+    // The current AMR engine supports Cartesian hierarchy layouts only and has no embedded-domain
+    // route. Reaching this provider therefore proves the generated operator's Cartesian precondition.
+  }
   void program_execution_rhs_core_into_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
       MultiFab& rhs, bool flux_only, const PreparedGridBoundarySession* boundary) const {
