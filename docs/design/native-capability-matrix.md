@@ -106,9 +106,11 @@ Supported native routes include:
 - Prepared state-boundary residual/JVP pairs on Program matrix-free solves. The exact base
   `BoundaryEvaluationPoint` is transported into the apply closure, the core RHS is
   finite-differenced, and the authenticated state-only boundary JVP is added once with persistent
-  conditional scratch. A field-dependent boundary closure under `field_coupled=True` is refused
-  until a qualified tangent-field solve exists. Core field-coupled `rhs_jacvec` currently has an
-  exact provider route only on AMR level 0.
+  conditional scratch. Field-coupled `rhs_jacvec` re-solves its exact prepared provider from the
+  perturbed state on level zero and every refined level. Dynamic physical field boundaries may read
+  level-qualified conservative states, already-solved fields and the exact stage/local time under
+  `LevelByLevelSolve`; multilevel composite dynamic boundaries remain fail-closed until the
+  composite FAC provider exposes one boundary context per physical level.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
 - Runtime accepted-state checkpoint v5 for Uniform and AMR. The single-file MPI route captures

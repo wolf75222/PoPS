@@ -306,9 +306,11 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
     if (level_local && request.hierarchy.nlev() > 1 && request.plan.has_newton)
       return PreparedProviderSupport::reject(
           15, "multi-level local hierarchy has no qualified nonlinear-boundary transaction");
-    if (composite && request.hierarchy.nlev() > 1 && !request.plan.boundary_state_blocks.empty())
+    if (composite && request.hierarchy.nlev() > 1 &&
+        (!request.plan.boundary_state_blocks.empty() ||
+         !request.plan.boundary_field_blocks.empty()))
       return PreparedProviderSupport::reject(
-          16, "composite hierarchy has no level-qualified boundary-state carrier");
+          16, "composite hierarchy has no level-qualified boundary state/field carrier");
     return PreparedProviderSupport::accept();
   }
   [[nodiscard]] std::string expected_prepared_contract(
