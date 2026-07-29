@@ -126,7 +126,13 @@ def _ab2_program(model, name="adc631_ckpt_ab2"):
     return P
 
 
-def _state3_program(model, name="adc631_ckpt_state3", *, step_strategy=None):
+def _state3_program(
+    model,
+    name="adc631_ckpt_state3",
+    *,
+    step_strategy=None,
+    balance_replay_proof=False,
+):
     """A 3-slot STATE ring (max lag 2, Interval(2) -> stores slots {0,2}, replays slot 1).
 
     The commit is the strictly affine recurrence U^{n+1} = U^n + dt*_C*U^n -- it depends only on U^n,
@@ -143,9 +149,57 @@ def _state3_program(model, name="adc631_ckpt_state3", *, step_strategy=None):
     # Strictly affine growth (reads U.n only), + a zero-weight prev(2) read that declares the 3-slot
     # ring without breaking the single-step reconstructability of the replay.
     nxt = P.value("Un", U.n + P.dt * _C * U.n + 0.0 * U.prev(2), at=U.next.point)
+    balance_due_contract = None
+    if balance_replay_proof:
+        from pops.diagnostics import BalanceLedger
+        from pops.identity import make_identity
+        from pops.output._balance_due_contract import (
+            BalanceDueConsumer,
+            BalanceDueContract,
+            BalanceDueRoute,
+        )
+
+        total = P.sum(U)
+        ledger = BalanceLedger("amr-selective-replay")
+        P.record_balance(
+            ledger,
+            storage_change=total,
+            outward_boundary_flux=0.0 * total,
+            sources=0.0 * total,
+            reflux=0.0 * total,
+            projection=0.0 * total,
+        )
+        route = ledger.route_identity(U.block)
+        balance_due_contract = BalanceDueContract(
+            make_identity("consumer-graph", {"test": "amr-selective-replay"}),
+            (
+                BalanceDueRoute(
+                    route,
+                    (
+                        BalanceDueConsumer(
+                            make_identity(
+                                "consumer-manifest",
+                                {"test": "amr-selective-replay"},
+                            ),
+                            pops.time.every(2, clock=P.clock),
+                        ),
+                    ),
+                ),
+            ),
+        )
     P.commit(U.next, nxt)
     P.step_strategy(pops.time.FixedDt(DT) if step_strategy is None else step_strategy)
+    if balance_due_contract is not None:
+        return P, balance_due_contract
     return P
+
+
+def _state3_balance_program(model):
+    return _state3_program(
+        model,
+        name="adc686_ckpt_state3_balance",
+        balance_replay_proof=True,
+    )
 
 
 def _state5_program(model, name="adc631_ckpt_state5"):
@@ -221,8 +275,17 @@ def _build(program_factory, regrid_every=2, program_cadence=None):
             "test_amr_history_checkpoint requires install_program/history_names bindings"
         )
     model = _passive_source_model("%s_model" % program_factory.__name__.lstrip("_"))
-    program = program_factory(model)
-    compiled = compile_problem(model=model, time=program, target="amr_system")
+    authored = program_factory(model)
+    if isinstance(authored, tuple):
+        program, balance_due_contract = authored
+    else:
+        program, balance_due_contract = authored, None
+    compiled = compile_problem(
+        model=model,
+        time=program,
+        target="amr_system",
+        balance_due_contract=balance_due_contract,
+    )
     block_cm = compile_block_model(model, target="amr_system")
     amr.add_equation(
         "blk",
@@ -377,6 +440,35 @@ def test_state3_interval_replay_bit_identical():
     )
 
 
+def test_state3_selective_replay_compiles_balance_off():
+    print("== (2b) selective replay re-steps a Balance Program outside a public-step window ==")
+    out, err = _run_case(
+        _state3_balance_program,
+        nsteps=6,
+        half=3,
+        label="state3-balance",
+        regrid_every=0,
+    )
+    assert out is not None, err
+    ref, got, cont_rings, rest_rings, stored_info, report = out
+    chk(
+        bool(stored_info)
+        and all(
+            requested == stored and len(stored) < depth and mode == "policy" and fp == []
+            for depth, requested, stored, mode, fp in stored_info.values()
+        ),
+        "the Balance Program retains selective storage and therefore exercises replay",
+    )
+    chk(
+        report is not None and any(h["recomputed_slots"] >= 1 for h in report.histories),
+        "restart re-executed the compiled Balance Program for an omitted slot",
+    )
+    chk(
+        _rings_equal(cont_rings, rest_rings) and np.array_equal(ref, got),
+        "Balance is compiled off only during replay; restart and continuation remain bit-identical",
+    )
+
+
 def test_state3_replay_window_straddling_regrid_bit_identical():
     print("== (3) ckpt at m=6 straddles regrid step 4 -> explicit dense safety storage ==")
     out, err = _run_case(_state3_program, nsteps=10, half=6, label="straddle", regrid_every=4)
@@ -522,6 +614,7 @@ def test_amr_variable_dt_stride_checkpoint_closes_like_continuous_run():
 def main():
     test_ab2_dense_checkpoint_bit_identical()
     test_state3_interval_replay_bit_identical()
+    test_state3_selective_replay_compiles_balance_off()
     test_state3_replay_window_straddling_regrid_bit_identical()
     test_state5_multiple_anchor_gaps_replay_by_index_bit_identical()
     test_amr_variable_dt_stride_checkpoint_closes_like_continuous_run()
