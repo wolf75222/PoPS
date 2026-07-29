@@ -22,7 +22,8 @@ EXPECTED_ISSUES = ("ADC-648",) + tuple("ADC-%d" % number for number in range(661
 EXPECTED_REQUIREMENTS = {
     "amr_step_transaction",
     "phase_pipeline", "program_graph", "schedules", "residual_operator",
-    "solve_outcome", "native_multiblock_implicit_phase",
+    "solve_outcome", "fallible_nonlinear_evaluation", "fallible_linear_evaluation",
+    "native_multiblock_implicit_phase",
     "normalized_program_execution",
     "program_only_temporal_routes",
     "step_transaction", "restart", "temporal_restart",
