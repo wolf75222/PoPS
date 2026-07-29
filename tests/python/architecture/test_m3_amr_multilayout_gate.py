@@ -147,6 +147,55 @@ def test_m3_gate_requires_native_positive_and_refusal_proofs_for_every_issue(tmp
     assert any("ADC-673 lacks a mandatory native positive proof" in error for error in errors)
 
 
+def test_m3_gate_rejects_a_missing_or_non_exact_ctest_case_before_build(tmp_path):
+    data = MANIFEST.read_text(encoding="utf-8")
+    data = data.replace(
+        (
+            'test_regex = "^test_amr_history_ring\\\\.'
+            'ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"'
+        ),
+        'test_regex = "^test_amr_history_ring\\\\.DefinitelyMissingProof$"',
+        1,
+    )
+    manifest = tmp_path / "m3.toml"
+    manifest.write_text(data, encoding="utf-8")
+
+    _, errors = _load_runner().validate_manifest(manifest)
+
+    assert any(
+        "is not one exact source-registered case for target 'test_amr_history_ring'"
+        in error
+        for error in errors
+    )
+
+    data = data.replace(
+        'test_regex = "^test_amr_history_ring\\\\.DefinitelyMissingProof$"',
+        'test_regex = "^test_amr_history_ring\\\\..*$"',
+        1,
+    )
+    manifest.write_text(data, encoding="utf-8")
+    _, errors = _load_runner().validate_manifest(manifest)
+    assert any(
+        "is not one exact source-registered case for target 'test_amr_history_ring'"
+        in error
+        for error in errors
+    )
+
+
+def test_m3_gate_does_not_authenticate_commented_or_stringified_gtests():
+    source = r'''
+TEST(RealFixture, ExecutedProof) {}
+// TEST(CommentFixture, NotAProof) {}
+/* TEST(BlockCommentFixture, NotAProofEither) {} */
+const char* text = "TEST(StringFixture, StillNotAProof)";
+const char* raw = R"cpp(TEST(RawStringFixture, StillNotAProof))cpp";
+'''
+
+    assert _load_runner()._registered_gtest_cases(source) == {
+        "RealFixture.ExecutedProof",
+    }
+
+
 def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
