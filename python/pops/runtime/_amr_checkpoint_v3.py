@@ -423,7 +423,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v5 AMR payload without mutating the native engine.
+    """Validate an accepted-state v6 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -540,7 +540,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v5 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v6 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -945,7 +945,7 @@ def apply_v3(owner, sim, prepared):
     # (7) Replay is allowed to mutate Program clocks/ring publications and regrid counters while it
     # reconstructs policy-omitted dense values. Replace those temporary values with the checkpoint's
     # exact accepted semantic state before exposing the runtime again.
-    sim.restore_program_accepted_state(program_state)
+    sim.restore_checkpoint_accepted_state(program_state)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
 
     sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
@@ -1139,7 +1139,7 @@ def _preflight_histories_v3(sim, d, current_ranks):
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore accepted-state v5 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v6 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function

@@ -438,11 +438,12 @@ positive-definiteness are mutually exclusive. Consequently CG requires the globa
 when `nullspace=None`, and the complement-SPD certificate for `ConstantNullspace`; PoPS never swaps
 methods or upgrades a certificate from stencil metadata.
 
-Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v5
-reader validates topology, ownership maps, state, aux, potentials, provider slots and history rings
-before its first write, then restores the hierarchy through the final clock update inside one native
-accepted-state transaction.  Any exception restores the previous hierarchy, data, field warm starts,
-histories, diagnostics and cadence counters; a partially restored simulation is never observable.
+Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v6
+reader preflights topology, ownership maps, state, aux, potentials, provider slots and history rings,
+then authenticates the runtime-owned tagging hysteresis before publishing the accepted Program image.
+It restores the hierarchy through the final clock update inside one native accepted-state transaction.
+Any exception restores the previous hierarchy, data, field warm starts, histories, diagnostics,
+cadence counters and tagging state; a partially restored simulation is never observable.
 The sealed accepted-state contract also records the topology epoch and regrid count, exact rational
 level clocks, owner/state/space-qualified ring slots, lagged effective-flux publications, parent/child
 temporal relations and every required transfer route.  Restart compares the bound identities and this

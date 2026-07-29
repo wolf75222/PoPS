@@ -189,6 +189,7 @@ static runtime::program::AmrProgramAcceptedState ranked_accepted_state(
   runtime::program::AmrProgramAcceptedState state;
   state.level_clocks = {{0, 7, amr::Rational(0, 1), 0.7}, {1, 7, amr::Rational(0, 1), 0.7}};
   state.logical_clock_ticks = {{"clock.macro", 7}, {"clock.fine", 14}};
+  state.tagging_hysteresis_state = {9, 8, 7};
   state.history_owners["rhs"] = 0;
   state.history_states["rhs"] = "fluid.U";
   state.history_spaces["rhs"] = "cell.conservative";
@@ -514,6 +515,7 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonical
   runtime::program::AmrProgramAcceptedState state;
   state.level_clocks = {{0, 9, amr::Rational(0, 1), 0.9}, {1, 9, amr::Rational(0, 1), 0.9}};
   state.logical_clock_ticks = {{"clock.macro", 9}, {"clock.fine", 18}};
+  state.tagging_hysteresis_state = {1, 3, 3, 7};
   state.history_owners["rhs"] = 0;
   state.history_states["rhs"] = "fluid.U";
   state.history_spaces["rhs"] = "cell.conservative";
@@ -548,6 +550,7 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonical
   const auto decoded = runtime::program::deserialize_amr_program_accepted_state(encoded);
   EXPECT_EQ(decoded.level_clocks, state.level_clocks);
   EXPECT_EQ(decoded.logical_clock_ticks, state.logical_clock_ticks);
+  EXPECT_EQ(decoded.tagging_hysteresis_state, state.tagging_hysteresis_state);
   EXPECT_EQ(decoded.history_owners, state.history_owners);
   EXPECT_EQ(decoded.history_states, state.history_states);
   EXPECT_EQ(decoded.history_spaces, state.history_spaces);
@@ -597,6 +600,7 @@ TEST(test_program_reflux_ledger,
   for (const auto& state : target_states) {
     EXPECT_EQ(state.level_clocks, source_states[0].level_clocks);
     EXPECT_EQ(state.logical_clock_ticks, source_states[0].logical_clock_ticks);
+    EXPECT_EQ(state.tagging_hysteresis_state, source_states[0].tagging_hysteresis_state);
     ASSERT_EQ(state.ring_flux.at("rhs")[0][0].coarse.size(), 3u);
     ASSERT_EQ(state.ring_flux.at("rhs")[0][1].fine.size(), 3u);
     ASSERT_EQ(state.ring_flux_contributions.at("rhs")[0][1].size(), 1u);
@@ -657,6 +661,15 @@ TEST(test_program_reflux_ledger,
   EXPECT_THROW(
       runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
       std::runtime_error);
+
+  states.clear();
+  states.push_back(ranked_accepted_state(0, ownership));
+  states.push_back(ranked_accepted_state(1, ownership));
+  states[1].tagging_hysteresis_state.push_back(6);
+  EXPECT_THROW(
+      runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
+      std::runtime_error)
+      << "rank-independent tagging state must reach exact checkpoint consensus";
 }
 
 TEST(test_program_reflux_ledger,

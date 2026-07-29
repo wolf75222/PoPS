@@ -833,6 +833,10 @@ class AmrSystem {
   /// Replace the accepted image during strict restart.  Each replacement advances a revision observed
   /// by the persistent AmrProgramContext before its next attempt; no stale context state is reused.
   POPS_EXPORT void restore_program_accepted_state(const std::vector<std::uint8_t>& state);
+  /// Strict checkpoint counterpart: authenticate the complete accepted image and its runtime-owned
+  /// tagging payload before atomically publishing either. A rejected payload changes neither bytes,
+  /// revision nor the live AMR hysteresis state.
+  POPS_EXPORT void restore_checkpoint_accepted_state(const std::vector<std::uint8_t>& state);
   /// Validate the exact history registry encoded by @p state and materialize its native per-level
   /// rings on the already rebuilt restart hierarchy. This is a transactional restart seam: it never
   /// advances the Program and refuses any name/depth/component/owner mismatch before allocation.

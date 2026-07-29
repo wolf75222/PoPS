@@ -34,6 +34,7 @@
 #include <pops/runtime/amr_system.hpp>  // facade AmrSystem (deverrouillage multi-blocs + regrid_every>0)
 #include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 
 #include "amr_transfer_test_authority.hpp"
 #include "amr_tagging_test_authority.hpp"
@@ -297,22 +298,25 @@ static void check_persistent_tagging_three_level_cycle_and_suffix_restore() {
       /*regrid_every=*/0, /*regrid_grow=*/0, /*regrid_margin=*/1, /*level_count=*/3,
       /*explicit_bootstrap=*/true);
   AmrRuntime& runtime = *sim->engine();
-  test::install_prepared_threshold_decisions(
-      runtime,
-      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above},
-       {1, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
-      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below},
-       {1, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
-      provider_identity, minimum_cycles);
+  const auto install_hysteresis = [&] {
+    test::install_prepared_threshold_decisions(
+        runtime,
+        {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above},
+         {1, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
+        {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below},
+         {1, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
+        provider_identity, minimum_cycles);
+  };
+  install_hysteresis();
 
   // One committed bootstrap_next_level is one accepted tagging transaction. A hierarchy-wide
   // regrid is also exactly one transaction, independent of the number of active parent levels.
   // Consequently the second bootstrap advances the same canonical cycle once before the first
   // hierarchy-wide regrid.
   for (int expected_levels = 2; expected_levels <= 3; ++expected_levels) {
-    runtime.begin_bootstrap_plan();
-    ASSERT_TRUE(runtime.bootstrap_next_level(kAmrRefRatio));
-    runtime.commit_bootstrap_level();
+    sim->begin_bootstrap_plan();
+    ASSERT_TRUE(sim->bootstrap_next_level(kAmrRefRatio));
+    sim->commit_bootstrap_level();
     ASSERT_EQ(runtime.nlev(), expected_levels);
     if (expected_levels == 2)
       for (const char* block : {"a", "b"}) {
@@ -347,6 +351,50 @@ static void check_persistent_tagging_three_level_cycle_and_suffix_restore() {
   EXPECT_GT(decoded.active_entry_count(), static_cast<std::size_t>(N * N))
       << "the checkpoint must retain live parent-level-1 decisions after suffix removal";
   EXPECT_NO_THROW(runtime.restore_checkpoint_tagging_state(image));
+  EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
+
+  // A committed Program step publishes the runtime-owned image into the opaque accepted checkpoint
+  // bytes. This remains true with only the coarse level materialized and live parent-level-1 state.
+  sim->step(Real(1e-4));
+  const auto checkpoint = sim->program_accepted_state();
+  ASSERT_FALSE(checkpoint.empty());
+  const auto accepted = pops::runtime::program::deserialize_amr_program_accepted_state(checkpoint);
+  EXPECT_EQ(accepted.tagging_hysteresis_state, image);
+
+  // A malformed nested payload is rejected before either the opaque bytes or the runtime state
+  // changes. The outer restart transaction then remains exactly rollbackable.
+  auto malformed = accepted;
+  malformed.tagging_hysteresis_state.pop_back();
+  const auto malformed_checkpoint =
+      pops::runtime::program::serialize_amr_program_accepted_state(malformed);
+  install_hysteresis();
+  const auto reset_image = runtime.checkpoint_tagging_state();
+  ASSERT_NE(reset_image, image);
+  const auto accepted_bytes_before = sim->program_accepted_state();
+  const auto accepted_revision_before = sim->program_accepted_state_revision();
+  sim->begin_restart_transaction();
+  EXPECT_THROW(sim->restore_checkpoint_accepted_state(malformed_checkpoint), std::invalid_argument);
+  sim->rollback_restart_transaction();
+  EXPECT_EQ(runtime.checkpoint_tagging_state(), reset_image);
+  EXPECT_EQ(sim->program_accepted_state(), accepted_bytes_before);
+  EXPECT_EQ(sim->program_accepted_state_revision(), accepted_revision_before);
+
+  // Valid restore publishes bytes and tagging state together. Rollback restores both; commit keeps
+  // both, and the first post-restart Program attempt imports the same authenticated image.
+  sim->begin_restart_transaction();
+  ASSERT_NO_THROW(sim->restore_checkpoint_accepted_state(checkpoint));
+  EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
+  sim->rollback_restart_transaction();
+  EXPECT_EQ(runtime.checkpoint_tagging_state(), reset_image);
+  EXPECT_EQ(sim->program_accepted_state(), accepted_bytes_before);
+  EXPECT_EQ(sim->program_accepted_state_revision(), accepted_revision_before);
+
+  sim->begin_restart_transaction();
+  ASSERT_NO_THROW(sim->restore_checkpoint_accepted_state(checkpoint));
+  sim->commit_restart_transaction();
+  EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
+  EXPECT_EQ(sim->program_accepted_state(), checkpoint);
+  sim->step(Real(1e-4));
   EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
 }
 
