@@ -305,17 +305,14 @@ POPS_EXPORT void System::install_block_state_route(const std::string& name,
   P->block_state_identities_.emplace(name, state_identity);
 }
 
-POPS_EXPORT void System::install_boundary_plan(const std::string& name, const std::string& identity,
-                                               int required_depth,
-                                               const std::vector<std::string>& face_types,
-                                               const std::vector<double>& face_values,
-                                               const std::vector<std::string>& face_identities,
-                                               const std::vector<std::string>& component_roles,
-                                               const std::vector<int>& omitted_interface_faces,
-                                               const std::string& state_identity,
-                                               PreparedBoundaryReadDependencies read_dependencies,
-                                               std::vector<PeriodicIdentification2D>
-                                                   periodic_identifications) {
+POPS_EXPORT void System::install_boundary_plan(
+    const std::string& name, const std::string& identity, int required_depth,
+    const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+    const std::vector<std::string>& face_identities,
+    const std::vector<std::string>& component_roles,
+    const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
+    PreparedBoundaryReadDependencies read_dependencies,
+    std::vector<PeriodicIdentification2D> periodic_identifications) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_boundary_plan");
   if (name.empty() || state_identity.empty())
@@ -328,8 +325,7 @@ POPS_EXPORT void System::install_boundary_plan(const std::string& name, const st
   if (P->boundary_plans_.count(name) != 0)
     throw std::runtime_error("System::install_boundary_plan duplicate block '" + name + "'");
   auto hyperbolic = prepare_hyperbolic_boundary<2>(
-      face_types, face_values, face_identities, component_roles,
-      !periodic_identifications.empty());
+      face_types, face_values, face_identities, component_roles, !periodic_identifications.empty());
   auto plan = std::make_shared<PreparedBoundaryPlan>(
       identity, required_depth, std::move(hyperbolic), omitted_interface_faces, state_identity,
       std::move(read_dependencies), std::move(periodic_identifications));

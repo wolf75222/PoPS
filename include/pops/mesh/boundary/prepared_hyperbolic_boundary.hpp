@@ -447,9 +447,8 @@ class PreparedHyperbolicBoundary {
     for (int axis = 0; axis < Dim; ++axis) {
       const auto& low = faces_[static_cast<std::size_t>(2 * axis)];
       const auto& high = faces_[static_cast<std::size_t>(2 * axis + 1)];
-      if (!allow_mapped_periodicity_ &&
-          (low.law == HyperbolicBoundaryLaw::Periodic) !=
-              (high.law == HyperbolicBoundaryLaw::Periodic))
+      if (!allow_mapped_periodicity_ && (low.law == HyperbolicBoundaryLaw::Periodic) !=
+                                            (high.law == HyperbolicBoundaryLaw::Periodic))
         throw std::invalid_argument(
             "prepared hyperbolic periodic topology requires complete axis pairs");
     }

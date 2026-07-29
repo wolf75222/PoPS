@@ -202,9 +202,7 @@ class PreparedBoundaryPlan {
   const std::string& state_identity() const { return state_identity_; }
   int required_depth() const { return required_depth_; }
   int ncomp() const { return hyperbolic_boundary_.ncomp(); }
-  const PreparedHyperbolicBoundary<2>& hyperbolic_boundary() const {
-    return hyperbolic_boundary_;
-  }
+  const PreparedHyperbolicBoundary<2>& hyperbolic_boundary() const { return hyperbolic_boundary_; }
   const std::vector<PeriodicIdentification2D>& periodic_identifications() const noexcept {
     return periodic_identifications_;
   }

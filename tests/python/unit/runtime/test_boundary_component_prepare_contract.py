@@ -159,6 +159,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         "faces": [
             {
                 "ordinal": ordinal,
+                "producer": "case::block::reflected-periodic::face::%d" % ordinal,
                 "type": "periodic" if ordinal < 2 else "foextrap",
                 "values": [0.0],
             }
@@ -204,7 +205,8 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     native = Native()
     engine = SimpleNamespace(_s=native)
     artifact = SimpleNamespace(
-        blocks=(SimpleNamespace(name="block", model=SimpleNamespace(n_vars=1)),),
+        blocks=(SimpleNamespace(
+            name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
         layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
     )
@@ -219,4 +221,11 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
 
     assert native.installed is not None
     assert native.installed[3] == ["periodic", "periodic", "foextrap", "foextrap"]
-    assert native.installed[8] == [[0, 1, 0, 1, 1, -1]]
+    assert native.installed[5] == [
+        "case::block::reflected-periodic::face::0",
+        "case::block::reflected-periodic::face::1",
+        "case::block::reflected-periodic::face::2",
+        "case::block::reflected-periodic::face::3",
+    ]
+    assert native.installed[6] == ["Scalar"]
+    assert native.installed[9] == [[0, 1, 0, 1, 1, -1]]

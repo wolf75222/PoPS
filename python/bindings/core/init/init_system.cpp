@@ -174,11 +174,11 @@ void bind_system_assembly(py::class_<System>& cls) {
              const std::vector<std::string>& component_roles,
              const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
              const std::vector<std::array<int, 6>>& periodic_identifications) {
-            system.install_boundary_plan(name, identity, required_depth, face_types, face_values,
-                                         face_identities, component_roles, omitted_interface_faces,
-                                         state_identity, PreparedBoundaryReadDependencies{},
-                                         decode_periodic_identification_rows(
-                                             periodic_identifications));
+            system.install_boundary_plan(
+                name, identity, required_depth, face_types, face_values, face_identities,
+                component_roles, omitted_interface_faces, state_identity,
+                PreparedBoundaryReadDependencies{},
+                decode_periodic_identification_rows(periodic_identifications));
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
           py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),

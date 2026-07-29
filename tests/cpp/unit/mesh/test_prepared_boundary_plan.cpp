@@ -29,13 +29,19 @@ PreparedHyperbolicBoundary<2> physical_boundary(std::vector<double> xhi_values =
                                         roles);
 }
 
-BCRec reflected_x_periodic_bc() {
-  BCRec bc;
-  bc.xlo = BCType::Periodic;
-  bc.xhi = BCType::Periodic;
-  bc.ylo = BCType::Foextrap;
-  bc.yhi = BCType::Foextrap;
-  return bc;
+PreparedHyperbolicBoundary<2> periodic_x_boundary() {
+  return prepare_hyperbolic_boundary<2>({"periodic", "periodic", "foextrap", "foextrap"},
+                                        std::vector<double>(4, 0.0),
+                                        {"case::periodic-x::xlo", "case::periodic-x::xhi",
+                                         "case::periodic-x::ylo", "case::periodic-x::yhi"},
+                                        {"Scalar"});
+}
+
+PreparedHyperbolicBoundary<2> rotated_periodic_boundary() {
+  return prepare_hyperbolic_boundary<2>(
+      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+      {"case::rotated::xlo", "case::rotated::xhi", "case::rotated::ylo", "case::rotated::yhi"},
+      {"Scalar"}, true);
 }
 
 PreparedBoundaryComponentSpec linearization_spec(bool jvp, std::string target, std::string output) {
@@ -273,7 +279,7 @@ TEST(test_prepared_boundary_plan, executes_reflected_periodic_ghosts_on_a_multib
   }
   const PeriodicIdentification2D reflected_x{0, 1, std::array<int, 2>{{0, 1}},
                                              std::array<int, 2>{{1, -1}}};
-  PreparedBoundaryPlan plan("case::block::reflected-x", 1, {reflected_x_periodic_bc()}, {}, "", {},
+  PreparedBoundaryPlan plan("case::block::reflected-x", 1, periodic_x_boundary(), {}, "", {},
                             {reflected_x});
 
   plan.fill_same_level_and_physical(state, domain);
@@ -314,9 +320,9 @@ TEST(test_prepared_boundary_plan, explicit_identity_periodicity_keeps_the_legacy
   }
   const PeriodicIdentification2D identity{0, 1, std::array<int, 2>{{0, 1}},
                                           std::array<int, 2>{{1, 1}}};
-  PreparedBoundaryPlan legacy_plan("case::block::legacy-periodic", 1, {reflected_x_periodic_bc()});
+  PreparedBoundaryPlan legacy_plan("case::block::legacy-periodic", 1, periodic_x_boundary());
   PreparedBoundaryPlan explicit_plan("case::block::explicit-identity-periodic", 1,
-                                     {reflected_x_periodic_bc()}, {}, "", {}, {identity});
+                                     periodic_x_boundary(), {}, "", {}, {identity});
 
   legacy_plan.fill_same_level_and_physical(legacy, domain);
   explicit_plan.fill_same_level_and_physical(explicit_identity, domain);
@@ -332,15 +338,10 @@ TEST(test_prepared_boundary_plan, explicit_identity_periodicity_keeps_the_legacy
 }
 
 TEST(test_prepared_boundary_plan, axis_permutation_refuses_incompatible_rectangular_geometry) {
-  BCRec rotated;
-  rotated.xlo = BCType::Periodic;
-  rotated.xhi = BCType::Foextrap;
-  rotated.ylo = BCType::Foextrap;
-  rotated.yhi = BCType::Periodic;
   const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
                                             std::array<int, 2>{{1, 1}}};
-  PreparedBoundaryPlan plan("case::block::rotated-periodic", 1, {rotated}, {}, "", {},
-                            {xlo_to_yhi});
+  PreparedBoundaryPlan plan("case::block::rotated-periodic", 1, rotated_periodic_boundary(), {}, "",
+                            {}, {xlo_to_yhi});
   const Box2D rectangular_domain = Box2D::from_extents(8, 6);
   MultiFab state = scalar_field(rectangular_domain, 1, 1);
 

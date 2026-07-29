@@ -346,17 +346,14 @@ class AmrSystem {
   /// Install the same executable per-block ghost authority as System.  Presence of a resolved plan
   /// selects the N-level AmrRuntime route, whose Program RHS composes same-level MPI, the authored
   /// coarse/fine transfer authority, and these physical faces.
-  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
-                                         int required_depth,
-                                         const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values,
-                                         const std::vector<std::string>& face_identities,
-                                         const std::vector<std::string>& component_roles,
-                                         const std::vector<int>& omitted_interface_faces = {},
-                                         const std::string& state_identity = {},
-                                         PreparedBoundaryReadDependencies read_dependencies = {},
-                                         std::vector<PeriodicIdentification2D>
-                                             periodic_identifications = {});
+  POPS_EXPORT void install_boundary_plan(
+      const std::string& name, const std::string& identity, int required_depth,
+      const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+      const std::vector<std::string>& face_identities,
+      const std::vector<std::string>& component_roles,
+      const std::vector<int>& omitted_interface_faces = {}, const std::string& state_identity = {},
+      PreparedBoundaryReadDependencies read_dependencies = {},
+      std::vector<PeriodicIdentification2D> periodic_identifications = {});
   /// Compatibility adapter for the historical component-count ABI.
   POPS_EXPORT void install_boundary_plan(
       const std::string& name, const std::string& identity, int required_depth,

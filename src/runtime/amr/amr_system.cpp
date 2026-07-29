@@ -1348,8 +1348,7 @@ POPS_EXPORT void AmrSystem::install_boundary_plan(
     throw std::runtime_error(
         "AmrSystem::install_boundary_plan state differs from the exact block state route");
   auto hyperbolic = prepare_hyperbolic_boundary<2>(
-      face_types, face_values, face_identities, component_roles,
-      !periodic_identifications.empty());
+      face_types, face_values, face_identities, component_roles, !periodic_identifications.empty());
   auto plan = std::make_shared<PreparedBoundaryPlan>(
       identity, required_depth, std::move(hyperbolic), omitted_interface_faces, state_identity,
       std::move(read_dependencies), std::move(periodic_identifications));

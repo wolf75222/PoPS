@@ -321,17 +321,14 @@ class System {
   POPS_EXPORT GridContext grid_context(int block);
   /// Install one executable built-in hyperbolic ghost plan. Face identities remain block/owner
   /// qualified and component roles declare reflection behavior; no component index is interpreted.
-  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
-                                         int required_depth,
-                                         const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values,
-                                         const std::vector<std::string>& face_identities,
-                                         const std::vector<std::string>& component_roles,
-                                         const std::vector<int>& omitted_interface_faces = {},
-                                         const std::string& state_identity = {},
-                                         PreparedBoundaryReadDependencies read_dependencies = {},
-                                         std::vector<PeriodicIdentification2D>
-                                             periodic_identifications = {});
+  POPS_EXPORT void install_boundary_plan(
+      const std::string& name, const std::string& identity, int required_depth,
+      const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+      const std::vector<std::string>& face_identities,
+      const std::vector<std::string>& component_roles,
+      const std::vector<int>& omitted_interface_faces = {}, const std::string& state_identity = {},
+      PreparedBoundaryReadDependencies read_dependencies = {},
+      std::vector<PeriodicIdentification2D> periodic_identifications = {});
   /// Compatibility adapter for the historical component-count ABI.
   POPS_EXPORT void install_boundary_plan(
       const std::string& name, const std::string& identity, int required_depth,
