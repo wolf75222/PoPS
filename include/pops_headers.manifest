@@ -91,14 +91,14 @@ sdk-support pops/numerics/elliptic/linear/scaled_scalar.hpp
 api pops/numerics/elliptic/linear/solve_outcome.hpp
 api pops/numerics/elliptic/linear/solve_report.hpp
 api pops/numerics/elliptic/linear/vector_distribution.hpp
-api pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
-api pops/numerics/elliptic/mg/composite_fac_poisson.hpp
-api pops/numerics/elliptic/mg/geometric_mg.hpp
+sdk-support pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
+sdk-support pops/numerics/elliptic/mg/composite_fac_poisson.hpp
+sdk-support pops/numerics/elliptic/mg/geometric_mg.hpp
 api pops/numerics/elliptic/poisson/poisson_fft.hpp
 api pops/numerics/elliptic/poisson/poisson_fft_solver.hpp
 api pops/numerics/elliptic/poisson/poisson_operator.hpp
 api pops/numerics/elliptic/polar/polar_poisson_solver.hpp
-api pops/numerics/elliptic/polar/polar_tensor_operator.hpp
+sdk-support pops/numerics/elliptic/polar/polar_tensor_operator.hpp
 api pops/numerics/fv/flux_interfaces.hpp
 api pops/numerics/fv/flux_failure.hpp
 api pops/numerics/fv/numerical_flux.hpp
@@ -235,4 +235,5 @@ sdk-support pops/runtime/system/system_field_solver.hpp
 sdk-support pops/runtime/system/system_lifecycle.hpp
 sdk-support pops/runtime/system/system_poisson_options.hpp
 sdk-support pops/runtime/system/system_program_driver.hpp
+test-only pops/validation/numerics/geometric_mg.hpp
 test-only pops/validation/physics/advection_diffusion.hpp
