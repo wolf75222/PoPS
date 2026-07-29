@@ -452,7 +452,9 @@ class _AmrSystemInstall(_AmrSystem):
             slot,
             [row["owner_block"] for row in dependencies["states"]],
             [row["component"] for row in dependencies["states"]],
-            [], [], [])
+            [row["owner_block"] for row in dependencies["fields"]],
+            [row["output_key"] for row in dependencies["fields"]],
+            [row["component"] for row in dependencies["fields"]])
         self._install_field_nullspace(slot, field_plan)
         nonlinear = options.get("nonlinear")
         if nonlinear is not None:

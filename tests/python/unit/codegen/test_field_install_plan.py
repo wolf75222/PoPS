@@ -493,7 +493,11 @@ def test_multilevel_amr_level_local_boundary_state_has_exact_level_route() -> No
     assert solver_binding.facts.boundary["state_dependent"] is True
     assert solver_binding.provider["use_policy"]["capabilities"][
         "amr_boundary_dependencies"
-    ] == ("level-local-state@1", "logical-timepoint@1")
+    ] == (
+        "level-local-state@1",
+        "level-local-field@1",
+        "logical-timepoint@1",
+    )
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
 
@@ -536,7 +540,7 @@ def test_multilevel_amr_composite_boundary_state_fails_closed() -> None:
         )
 
 
-def test_multilevel_amr_boundary_field_dependency_remains_fail_closed() -> None:
+def test_multilevel_amr_level_local_boundary_field_has_exact_level_route() -> None:
     model = Model("amr-field-boundary-model")
     state = model.state("U", components=["rho"])
     (rho,) = state
@@ -569,13 +573,33 @@ def test_multilevel_amr_boundary_field_dependency_remains_fail_closed() -> None:
         hierarchy_policy=LevelByLevelSolve(),
     ))
 
-    with pytest.raises(LoweringRejection, match="depending on another solved field"):
-        capture_field_plans(
-            problem,
-            lambda value: value,
-            target="amr_system",
-            layout=_MULTILEVEL_AMR_LAYOUT,
-        )
+    plan = capture_field_plans(
+        problem,
+        lambda value: value,
+        target="amr_system",
+        layout=_MULTILEVEL_AMR_LAYOUT,
+    )["potential"]
+
+    dependencies = plan.native_options["boundary_dependencies"]
+    assert [
+        (row["owner_block"], row["output_key"], row["component"])
+        for row in dependencies["fields"]
+    ] == [("material", "driver", 0)]
+    dependency_evidence = [
+        output
+        for row in plan.coverage
+        if "boundary-dependency" in row.source
+        for output in row.targets
+    ]
+    assert dependency_evidence == [
+        "field-install:potential:boundary-buffer:fields:level-qualified"
+    ]
+
+    from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+
+    source = emit_field_boundaries(None, None, {"potential": plan}, "amr_system")
+    assert "context.fields[0]->local_index_of(iterate.global_index(li))" in source
+    assert "field0(i, j, 0)" in source
 
 
 def test_multilevel_amr_level_local_nonlinear_boundary_fails_closed() -> None:

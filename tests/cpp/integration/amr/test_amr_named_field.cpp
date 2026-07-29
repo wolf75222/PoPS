@@ -39,6 +39,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>   // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
+#include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 #include "load_balance_test_authority.hpp"
 
@@ -59,8 +60,8 @@
 using namespace pops;
 
 static SolveReport consume_expected_solved(SolveOutcome outcome) {
-  const SolveConsumption action = outcome.report().solved() ? SolveConsumption::kAccept
-                                                            : SolveConsumption::kFailRun;
+  const SolveConsumption action =
+      outcome.report().solved() ? SolveConsumption::kAccept : SolveConsumption::kFailRun;
   return outcome.consume(action);
 }
 
@@ -192,6 +193,165 @@ class ExternalGraphIdentityProvider final : public AmrFieldSolverProvider {
   std::unique_ptr<AmrPreparedFieldSolver> build(
       const AmrFieldSolverBuildRequest& request) const override {
     return std::make_unique<ExternalGraphIdentityPrepared>(request,
+                                                           expected_prepared_contract(request));
+  }
+};
+
+static void boundary_carrier_prepare_noop(int face, const MultiFab& iterate,
+                                          MultiFab& operator_view, const Geometry& geometry,
+                                          const FieldBoundaryExecutionContext& context) {
+  (void)face;
+  (void)iterate;
+  (void)operator_view;
+  (void)geometry;
+  (void)context;
+}
+
+static void boundary_carrier_residual_noop(int face, const MultiFab& iterate, MultiFab& residual,
+                                           const Geometry& geometry,
+                                           const FieldBoundaryExecutionContext& context) {
+  (void)face;
+  (void)iterate;
+  (void)residual;
+  (void)geometry;
+  (void)context;
+}
+
+class ExternalLevelBoundaryPrepared final : public AmrPreparedFieldSolver {
+ public:
+  ExternalLevelBoundaryPrepared(const AmrFieldSolverBuildRequest& request, std::string contract)
+      : contract_(std::move(contract)),
+        expects_field_dependency_(!request.plan.boundary_field_blocks.empty()) {
+    const int levels = request.hierarchy.nlev();
+    rhs_.reserve(static_cast<std::size_t>(levels));
+    phi_.reserve(static_cast<std::size_t>(levels));
+    distributions_.reserve(static_cast<std::size_t>(levels));
+    observed_context_.assign(static_cast<std::size_t>(levels), false);
+    for (int level = 0; level < levels; ++level) {
+      const std::size_t slot = static_cast<std::size_t>(level);
+      rhs_.emplace_back(request.hierarchy.ba[slot], request.hierarchy.dm[slot], 1, 0);
+      phi_.emplace_back(request.hierarchy.ba[slot], request.hierarchy.dm[slot], 1, 1);
+      rhs_.back().set_val(Real(0));
+      phi_.back().set_val(Real(0));
+      distributions_.push_back(level == 0 && request.replicated_coarse
+                                   ? FieldDistribution::Replicated
+                                   : FieldDistribution::Distributed);
+    }
+  }
+
+  std::string_view provider_identity() const noexcept override {
+    return "tests.amr.field-solver.level-boundary";
+  }
+  std::string_view exact_prepared_contract() const noexcept override { return contract_; }
+  bool couples_hierarchy_levels() const noexcept override { return false; }
+  int level_count() const noexcept override { return static_cast<int>(rhs_.size()); }
+  FieldDistribution level_distribution(int level) const override {
+    return distributions_.at(static_cast<std::size_t>(level));
+  }
+  MultiFab& rhs_level(int level) override { return rhs_.at(static_cast<std::size_t>(level)); }
+  MultiFab& phi_level(int level) override { return phi_.at(static_cast<std::size_t>(level)); }
+  void set_boundary_context(const FieldBoundaryExecutionContext& context) override {
+    if (level_count() != 1)
+      throw std::runtime_error(
+          "external level-boundary provider requires one exact context per AMR level");
+    set_boundary_context_at_level(0, context);
+  }
+  void set_boundary_context_at_level(int level,
+                                     const FieldBoundaryExecutionContext& context) override {
+    if (level < 0 || level >= level_count())
+      throw std::out_of_range("external level-boundary context level is out of range");
+    if (!expects_field_dependency_)
+      return;
+    if (context.field_count != 1 || context.fields == nullptr ||
+        context.field_distributions == nullptr || context.fields[0] == nullptr)
+      throw std::runtime_error(
+          "external level-boundary provider did not receive its exact field dependency");
+    const MultiFab& dependency = *context.fields[0];
+    const MultiFab& expected = rhs_level(level);
+    if (dependency.box_array().boxes() != expected.box_array().boxes() ||
+        dependency.dmap().ranks() != expected.dmap().ranks() || dependency.ncomp() != 1 ||
+        context.field_distributions[0] != level_distribution(level))
+      throw std::runtime_error(
+          "external level-boundary provider received a field from the wrong AMR level");
+    if (!(norm_inf(dependency) > Real(0)))
+      throw std::runtime_error(
+          "external level-boundary provider received an unsolved field dependency");
+    observed_context_[static_cast<std::size_t>(level)] = true;
+  }
+  SolveReport solve() override {
+    if (expects_field_dependency_ &&
+        !std::all_of(observed_context_.begin(), observed_context_.end(),
+                     [](bool value) { return value; })) {
+      report_ = SolveReport::capability_failure();
+      return report_;
+    }
+    for (int level = 0; level < level_count(); ++level) {
+      phi_level(level).set_val(Real(0));
+      parallel_copy(phi_level(level), rhs_level(level));
+    }
+    report_.iters = 0;
+    report_.reference_residual_norm = norm_inf(rhs_level(0));
+    report_.residual_norm = Real(0);
+    report_.rel_residual = Real(0);
+    report_.mark_solved("external level-qualified boundary carrier");
+    return report_;
+  }
+  const SolveReport& last_solve_report() const noexcept override { return report_; }
+
+ private:
+  std::string contract_;
+  bool expects_field_dependency_ = false;
+  std::vector<MultiFab> rhs_;
+  std::vector<MultiFab> phi_;
+  std::vector<FieldDistribution> distributions_;
+  std::vector<bool> observed_context_;
+  SolveReport report_{};
+};
+
+class ExternalLevelBoundaryProvider final : public AmrFieldSolverProvider {
+ public:
+  std::string_view identity() const noexcept override {
+    return "tests.amr.field-solver.level-boundary";
+  }
+  std::uint64_t interface_version() const noexcept override { return 1; }
+  std::string_view collective_contract() const noexcept override {
+    return "tests.amr.field-solver.level-boundary@1";
+  }
+  std::vector<std::string> capability_contracts() const override {
+    return {"tests.amr.field-solver.level-boundary.level-qualified-fields@1"};
+  }
+  AmrFieldSolverOptions default_field_options() const override {
+    return {"tests.amr.field-solver.level-boundary.options@1", {}};
+  }
+  std::optional<AmrFieldHierarchyPolicyAuthority> default_hierarchy_policy(
+      std::string_view) const override {
+    return level_local_hierarchy_policy();
+  }
+  PreparedProviderSupport accepts_options(
+      const AmrFieldSolverOptions& options) const noexcept override {
+    return options.schema_identity == "tests.amr.field-solver.level-boundary.options@1" &&
+                   options.values.empty()
+               ? PreparedProviderSupport::accept()
+               : PreparedProviderSupport::reject(1, "level-boundary options are invalid");
+  }
+  PreparedProviderSupport supports(
+      const AmrFieldSolverBuildRequest& request) const noexcept override {
+    const bool accepted =
+        request.use_contract_identity == "pops.amr.field-solver-use.named@1" &&
+        request.hierarchy.nlev() >= 1 && accepts_options(request.plan.solver_options).accepted() &&
+        request.plan.hierarchy_policy.policy_id == "pops.field-hierarchy.level-local";
+    return accepted ? PreparedProviderSupport::accept()
+                    : PreparedProviderSupport::reject(
+                          2, "level-boundary provider requires a named level-local hierarchy");
+  }
+  std::string expected_prepared_contract(const AmrFieldSolverBuildRequest& request) const override {
+    if (!supports(request).accepted())
+      throw std::invalid_argument("external level-boundary provider rejected the request");
+    return make_amr_field_solver_contract(identity(), request);
+  }
+  std::unique_ptr<AmrPreparedFieldSolver> build(
+      const AmrFieldSolverBuildRequest& request) const override {
+    return std::make_unique<ExternalLevelBoundaryPrepared>(request,
                                                            expected_prepared_contract(request));
   }
 };
@@ -524,6 +684,125 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential(selected), expected), Real(0));
 }
 
+TEST(test_amr_named_field, ExternalProviderReceivesSolvedFieldDependencyOnEveryLevel) {
+  constexpr int n = 16;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks[0].state_identity = "test://amr-named-field/plasma/state/U";
+  blocks[0].aux_ncomp = kAuxNamedBase + 2;
+
+  auto registry = make_default_amr_field_solver_registry();
+  registry->add(std::make_shared<ExternalLevelBoundaryProvider>());
+  const auto provider = registry->resolve("tests.amr.field-solver.level-boundary");
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall, registry);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+
+  auto plan = [&](const std::string& field, int component) {
+    AmrFieldSolveConfig result;
+    result.plan_identity = "tests:plasma/" + field + ":plan@1";
+    result.provider_identity = "tests:plasma/" + field;
+    result.topology_provider_kind = "tests.level-qualified-topology";
+    result.topology_provenance = "tests:level-qualified-boundary";
+    result.topology_digest = "tests:level-qualified-boundary:layout@1";
+    result.output_owner_identity = "tests:plasma";
+    result.output_block = "plasma";
+    result.output_key = field;
+    result.solver = "tests.amr.field-solver.level-boundary";
+    result.hierarchy_policy = level_local_hierarchy_policy();
+    result.solver_options = provider->default_field_options();
+    result.nullspace = operator_topology_zero_mean_nullspace();
+    result.has_reaction = true;
+    result.reaction = Real(1);
+    result.providers.push_back(
+        FieldProviderBinding{"tests:plasma/" + field + "/rhs", "plasma", field, Real(1)});
+    runtime.install_field_plan(field, result);
+    runtime.register_named_field("plasma", field, component, -1, -1, /*gradient_sign=*/1);
+    runtime.set_block_named_elliptic_rhs(0, field, [](const MultiFab& state, MultiFab& rhs) {
+      add_scaled_component(state, Real(1), 0, rhs);
+    });
+  };
+
+  // The producer sorts after the consumer by slot name. The runtime must therefore use the
+  // dependency graph, not std::map iteration order, to solve the producer first.
+  plan("z_driver", kAuxNamedBase);
+
+  AmrFieldSolveConfig dependent;
+  dependent.plan_identity = "tests:plasma/a_potential:plan@1";
+  dependent.provider_identity = "tests:plasma/a_potential";
+  dependent.topology_provider_kind = "tests.level-qualified-topology";
+  dependent.topology_provenance = "tests:level-qualified-boundary";
+  dependent.topology_digest = "tests:level-qualified-boundary:layout@1";
+  dependent.output_owner_identity = "tests:plasma";
+  dependent.output_block = "plasma";
+  dependent.output_key = "a_potential";
+  dependent.solver = "tests.amr.field-solver.level-boundary";
+  dependent.hierarchy_policy = level_local_hierarchy_policy();
+  dependent.solver_options = provider->default_field_options();
+  dependent.nullspace = operator_topology_zero_mean_nullspace();
+  dependent.has_reaction = true;
+  dependent.reaction = Real(1);
+  dependent.has_boundary_kernel = true;
+  dependent.boundary_kernel = CompiledFieldBoundaryKernel{
+      "tests:a_potential/field-dependent-boundary@1",
+      "tests:a_potential/field-dependent-boundary-residual@1",
+      "",
+      boundary_carrier_prepare_noop,
+      nullptr,
+      boundary_carrier_residual_noop,
+      nullptr,
+      false,
+  };
+  dependent.boundary_field_blocks = {"plasma"};
+  dependent.boundary_field_keys = {"z_driver"};
+  dependent.boundary_field_components = {0};
+  dependent.providers.push_back(
+      FieldProviderBinding{"tests:plasma/a_potential/rhs", "plasma", "a_potential", Real(1)});
+  runtime.install_field_plan("a_potential", dependent);
+  runtime.register_named_field("plasma", "a_potential", kAuxNamedBase + 1, -1, -1,
+                               /*gradient_sign=*/1);
+  runtime.set_block_named_elliptic_rhs(0, "a_potential", [](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(0.5), 0, rhs);
+  });
+
+  SolveOutcome outcome = runtime.solve_named_fields();
+  const SolveReport report = consume_expected_solved(std::move(outcome));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_EQ(runtime.provider_potential_levels("z_driver"), runtime.nlev());
+  ASSERT_EQ(runtime.provider_potential_levels("a_potential"), runtime.nlev());
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("z_driver", level)), Real(0));
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("a_potential", level)), Real(0));
+  }
+
+  // A topology change destroys and rematerializes both prepared providers. The semantic dependency
+  // pack must survive that invalidation, and the rebuilt consumer must receive the producer from
+  // each new exact level rather than retaining pointers into the retired hierarchy.
+  runtime.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(1.1)}});
+  runtime.regrid();
+  ASSERT_GE(runtime.regrid_count(), 1);
+
+  SolveOutcome regridded_outcome = runtime.solve_named_fields();
+  const SolveReport regridded_report = consume_expected_solved(std::move(regridded_outcome));
+  ASSERT_TRUE(regridded_report.solved()) << regridded_report.reason;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("z_driver", level)), Real(0));
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("a_potential", level)), Real(0));
+  }
+}
+
 TEST(test_amr_named_field, Runs) {
   const int N = 64;
   const double L = 1.0, B0 = 1.0, q = -1.0;
@@ -707,10 +986,10 @@ TEST(test_amr_named_field, Runs) {
   context.set_level(0);
   std::string context_diagnostic;
   try {
-  {
-    auto outcome = context.solve_fields();
-    (void)outcome.consume(SolveConsumption::kAccept);
-  }
+    {
+      auto outcome = context.solve_fields();
+      (void)outcome.consume(SolveConsumption::kAccept);
+    }
     FAIL() << "periodic default RHS with non-zero mean was accepted or silently projected";
   } catch (const FieldNullspaceIncompatibleRhs& error) {
     context_diagnostic = error.what();

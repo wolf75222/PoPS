@@ -263,13 +263,6 @@ def _resolve(
         name, plan, rows, request.layout, request.operator.unknown
     )
     dependencies = boundary_dependency_pack(plan, request.operator.unknown)
-    if target == "amr_system" and dependencies["fields"]:
-        _reject(
-            rows, "field:%s:boundaries" % name,
-            "field.boundary.amr_field_dependency_not_native",
-            "field %r has a boundary law depending on another solved field; the AMR "
-            "provider has no exact composite materialization route" % name,
-        )
     boundary_dynamic = faces is not None and any(face["dynamic"] for face in faces)
     boundary_iterate = faces is not None and any(
         face["iterate_dependent"] for face in faces
@@ -303,13 +296,13 @@ def _resolve(
     if (
         target == "amr_system"
         and layout_contract.levels > 1
-        and dependencies["states"]
+        and (dependencies["states"] or dependencies["fields"])
         and policy != "pops.field-hierarchy.level-local"
     ):
         _reject(
             rows, "field:%s:boundaries" % name,
             "field.boundary.amr_composite_state_dependency_not_native",
-            "field %r has a state-dependent boundary law on a multilevel composite "
+            "field %r has a state/field-dependent boundary law on a multilevel composite "
             "hierarchy; select LevelByLevelSolve for exact per-level dependency views"
             % name,
         )
@@ -321,7 +314,7 @@ def _resolve(
     for kind in ("states", "fields"):
         for dependency in dependencies[kind]:
             route = "field-install:%s:boundary-buffer:%s" % (name, kind)
-            if target == "amr_system" and kind == "states":
+            if target == "amr_system":
                 route += ":level-qualified"
             rows.append(LoweringCoverageRow(
                 "field:%s:boundary-dependency:%s:%d" % (
