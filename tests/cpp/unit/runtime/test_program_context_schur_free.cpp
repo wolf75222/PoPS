@@ -64,11 +64,15 @@ class ExecutionServicesFixture
   using SharedServices =
       pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
 
-  explicit ExecutionServicesFixture(int active_level) : active_level_(active_level) {}
+  explicit ExecutionServicesFixture(int active_level) : active_level_(active_level) {
+    program_runtime_state_.block_map_ = {1, 0};
+    program_runtime_state_.seed_params(1, {2.5});
+  }
 
-  int last_params_block() const { return last_params_block_; }
   int field_update_count() const { return field_update_count_; }
-  pops::Real diagnostic(const std::string& name) const { return diagnostics_.at(name); }
+  pops::Real diagnostic(const std::string& name) const {
+    return program_runtime_state_.diagnostic(name, "ExecutionServicesFixture");
+  }
   double logical_dt() const { return logical_dt_; }
   void fail_next_logical_apply() { fail_logical_apply_ = true; }
   int rhs_group_identity() const { return rhs_group_identity_; }
@@ -291,16 +295,11 @@ class ExecutionServicesFixture
                                                           const pops::MultiFab*) const {
     throw std::logic_error("shared Cartesian fixture cannot execute a polar tensor stencil");
   }
-  const std::vector<int>& program_execution_block_map_() const { return block_map_; }
+  pops::runtime::program::ProgramRuntimeState& program_execution_runtime_state_() const {
+    return program_runtime_state_;
+  }
   int program_execution_block_count_() const { return 2; }
   pops::Real program_execution_physical_time_() const { return pops::Real(3.5); }
-  void program_execution_record_scalar_(const std::string& name, pops::Real value) const {
-    diagnostics_[name] = value;
-  }
-  pops::RuntimeParams program_execution_params_(int block) const {
-    last_params_block_ = block;
-    return {};
-  }
   void program_execution_set_field_timepoint_(const std::string&,
                                               const pops::FieldLogicalTimePoint&) const {
     ++field_update_count_;
@@ -352,7 +351,6 @@ class ExecutionServicesFixture
     ++history_rotate_count_;
     history_rotation_clock_ = clock_identity;
   }
-  pops::runtime::program::Profiler& program_execution_profiler_() const { return profiler_; }
   int program_execution_macro_step_() const { return 4; }
   int program_execution_active_level_() const { return active_level_; }
   typename SharedServices::ProgramResourceTopology program_execution_resource_topology_()
@@ -381,9 +379,7 @@ class ExecutionServicesFixture
 
   int active_level_ = -1;
   mutable int resource_level_ = Amr ? 1 : 0;
-  std::vector<int> block_map_{1, 0};
-  mutable std::map<std::string, pops::Real> diagnostics_;
-  mutable int last_params_block_ = -1;
+  mutable pops::runtime::program::ProgramRuntimeState program_runtime_state_;
   mutable int field_update_count_ = 0;
   mutable int history_register_count_ = 0;
   mutable int history_read_count_ = 0;
@@ -394,7 +390,6 @@ class ExecutionServicesFixture
   mutable pops::Real history_outgoing_dt_ = pops::Real(-1);
   mutable std::string history_rotation_clock_;
   mutable pops::MultiFab history_field_;
-  mutable pops::runtime::program::Profiler profiler_;
   mutable double logical_dt_ = 0.4;
   mutable bool fail_logical_apply_ = false;
   mutable int rhs_group_identity_ = -1;
@@ -513,8 +508,9 @@ void expect_shared_program_services(Context& context, bool amr) {
   context.set_stage_time(1, 2);
   context.record_scalar("mass", pops::Real(9));
   EXPECT_EQ(context.diagnostic("mass"), pops::Real(9));
-  (void)context.program_params(1);
-  EXPECT_EQ(context.last_params_block(), 1);
+  const pops::RuntimeParams params = context.program_params(1);
+  ASSERT_EQ(params.count, 1);
+  EXPECT_EQ(params.values[0], pops::Real(2.5));
   context.set_field_logical_timepoint("potential", {});
   context.set_field_boundary_parameters("potential", {1.0, 2.0});
   context.set_field_boundary_kernel("potential", {});
