@@ -386,7 +386,8 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "one prepared 2D model-aware plan serves Uniform/AMR native and compiled "
                 "transport boundaries; executable built-ins are periodic, extrapolation, "
                 "constant/RuntimeParam fixed state, model primitive-to-conservative fixed-state "
-                "conversion, and typed-role slip wall, with "
+                "conversion, and typed-role slip wall; dynamic AMR regrid keeps internal "
+                "coarse-fine ghosts under the prepared transfer authority on MPI ranks, with "
                 "double-physical corners explicitly not required by dimension-split FV stencils"
             ),
             source=source,
