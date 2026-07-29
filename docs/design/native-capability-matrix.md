@@ -140,6 +140,20 @@ Explicit unsupported rows include:
   GPU Kokkos execution space before constructing `System`/`AmrSystem`; build-time availability is
   not launch authorization. The native providers do accept an explicit, authenticated
   `MPI_COMM_WORLD` context; custom communicators remain unavailable.
+- `amr:external_field_solver_v2`: the generated ABI already carries a `level` in every global patch
+  metadata row, but the installed external-component adapter materializes one uniform `System`
+  `MultiFab`. There is no authenticated bridge from the component pair to
+  `AmrFieldSolverProvider`, no complete coarse/fine topology materialization, and no collective
+  hierarchy solve ownership. The provider authority therefore advertises `max_levels=1`,
+  `hierarchy_materialization=false` and `amr_provider_bridge=false`; any AMR target or non-level-local
+  hierarchy policy is rejected during field-plan resolution rather than dispatched to a builtin.
+  Closing this row does not start by flipping that capability: it requires an AMR component installer
+  in `_PreparedAmrFieldSolverInstall`, a native `AmrFieldSolverProvider`/`AmrPreparedFieldSolver`
+  adapter over the component pair, one regrid-aware all-level topology/request lifetime replacing the
+  single-`MultiFab` cache in `PreparedFieldSolverComponent`, and communicator-wide
+  declaration/materialization/solve consensus. The existing v2 patch metadata may remain the data
+  carrier for the restricted full-material case, but that bridge must prove coarse/fine coverage and
+  ownership before the public capability can become available.
 - `amr:field_coupled_rhs_jacvec`: AMR level greater than zero is explicitly unavailable because the
   provider ABI does not transport a level-qualified tangent field. The reported error identifies
   the level-0 field-coupled route as the available route; a multi-level request must fail rather

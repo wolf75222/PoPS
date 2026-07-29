@@ -11,9 +11,11 @@ from pops.codegen.lowering_coverage import LoweringRejection
 from pops.external import build_source_package_manifest, load
 from pops.fields import (
     CellCenteredSecondOrder,
+    CompositeHierarchySolve,
     ExternalFieldSolver,
     FieldDiscretization,
     FieldOutput,
+    LevelByLevelSolve,
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Dirichlet
 from pops.layouts import Uniform
@@ -21,7 +23,7 @@ from pops.math import laplacian
 from pops.model import ComponentManifest
 from pops.physics import Model
 from pops.problem import Case
-from tests.python.support.layout_plan import cartesian_grid
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
 
 def _component(
@@ -60,7 +62,7 @@ def _component(
     return factory(**({} if instance_parameters is None else instance_parameters))
 
 
-def _case(solver):
+def _case(solver, *, hierarchy_policy=None):
     model = Model("external-field-solver-model")
     (rho,) = model.state("U", components=("rho",))
     unknown = model.field("potential")
@@ -72,11 +74,15 @@ def _case(solver):
     )
     case = Case("external-field-solver-case")
     case.block("material", model)
+    options = {}
+    if hierarchy_policy is not None:
+        options["hierarchy_policy"] = hierarchy_policy
     case.field(operator, FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(
             AllPhysicalBoundaries(), Dirichlet(0.0)),),
         solver=solver,
+        **options,
     ))
     return case
 
@@ -120,6 +126,26 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
         plan.native_options["solver_provider"]
     )
     assert external.provider["provider_id"] == "pops.fields.external-field-solver"
+    assert external.provider["version"] == 2
+    provider_authority = external.to_data()["provider"]
+    assert provider_authority["use_policy"] == {
+        "policy_id": "pops.fields.external-field-solver.use",
+        "version": 3,
+        "capabilities": {
+            "provider_id": "pops.fields.external-field-solver",
+            "provider_version": 2,
+            "adapter_identity": ("pops.fields.external-field-solver.system-host-serial@1"),
+            "targets": ["system"],
+            "layout_kinds": ["uniform"],
+            "max_levels": 1,
+            "hierarchy_policies": ["pops.field-hierarchy.level-local"],
+            "abi_patch_level_metadata": True,
+            "hierarchy_materialization": False,
+            "amr_provider_bridge": False,
+            "execution": "host-serial-multi-patch-batch",
+            "components": ["FieldTopology@2", "FieldSolver@2"],
+        },
+    }
     topology_binding, solver_binding = plan.component_bindings()
     assert topology_binding["component_id"] == topology.component_manifest.component_id
     assert solver_binding["component_id"] == solver.component_manifest.component_id
@@ -131,6 +157,16 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
     assert external.resolution.native_contract["schema_identity"] == (
         "pops.external.field-solver-request@2"
     )
+    assert external.resolution.native_contract["provider_id"] == external.provider["provider_id"]
+    assert external.resolution.topology_contract["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.level-local"
+    )
+    assert provider.to_data()["provider"] == provider_authority
+    capabilities = provider.capabilities().to_dict()
+    assert capabilities["provider"] == provider_authority
+    assert capabilities["adapter"] == provider_authority["use_policy"]["capabilities"]
+    assert capabilities["supports_amr"] is False
+    assert capabilities["max_levels"] == 1
     plan.require_component_inputs((topology, solver))
 
     # Artifact state is recursively immutable, but the Python/native boundary must receive an
@@ -197,15 +233,39 @@ def test_external_pair_canonicalizes_nested_parameters_without_weakening_identit
         plan.require_component_inputs((topology, substituted_solver))
 
 
-def test_external_field_solver_v2_refuses_amr_during_resolve(tmp_path):
+@pytest.mark.parametrize(
+    "hierarchy_policy",
+    (LevelByLevelSolve(), CompositeHierarchySolve()),
+)
+def test_external_field_solver_v2_refuses_real_amr_during_resolve(
+    tmp_path,
+    hierarchy_policy,
+):
     provider, _topology, _solver = _provider(tmp_path)
 
-    with pytest.raises(LoweringRejection, match="hierarchy-aware") as error:
+    with pytest.raises(LoweringRejection, match="no AMR provider bridge") as error:
         capture_field_plans(
-            _case(provider), lambda value: value, target="amr_system",
+            _case(provider, hierarchy_policy=hierarchy_policy),
+            lambda value: value,
+            target="amr_system",
+            layout=final_amr_layout(cartesian_grid(n=8, periodic=False), max_levels=2, ratio=2),
+        )
+    assert error.value.gate == "field.solver.provider_incompatible"
+    assert "FieldSolver@2 patch-level metadata is only a carrier" in str(error.value)
+
+
+def test_external_field_solver_refuses_unsupported_hierarchy_policy_at_resolve(tmp_path):
+    provider, _topology, _solver = _provider(tmp_path)
+
+    with pytest.raises(LoweringRejection, match="supports only hierarchy policy") as error:
+        capture_field_plans(
+            _case(provider, hierarchy_policy=CompositeHierarchySolve()),
+            lambda value: value,
+            target="system",
             layout=Uniform(cartesian_grid(n=8, periodic=False)),
         )
     assert error.value.gate == "field.solver.provider_incompatible"
+    assert "pops.field-hierarchy.composite" in str(error.value)
 
 
 def test_external_solver_and_topology_roles_are_not_interchangeable(tmp_path):

@@ -72,6 +72,14 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert amr_implicit.status == "unavailable"
     assert "no temporal fallback" in amr_implicit.limitation
     assert amr_implicit.layout == "amr"
+    external_amr = routes["amr:external_field_solver_v2"]
+    assert external_amr.status == "unavailable"
+    assert external_amr.layout == "amr"
+    assert external_amr.mpi is False
+    assert "no AmrFieldSolverProvider" in external_amr.limitation
+    assert external_amr.available_route == (
+        "external FieldSolver@2 on one uniform host/serial level"
+    )
 
 
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):
