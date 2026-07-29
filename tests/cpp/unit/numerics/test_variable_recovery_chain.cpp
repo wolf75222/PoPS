@@ -175,6 +175,30 @@ TEST(PreparedVariableRecovery, tentative_publication_rolls_back_solution_and_war
   EXPECT_NEAR(cache.value[0], Real(2), Real(1e-10));
 }
 
+TEST(PreparedVariableRecovery, scope_exit_rolls_back_an_uncommitted_publication) {
+  const auto plan = pops::prepare_variable_recovery<1>(
+      AcceptPositive<1>{},
+      pops::recovery_methods(pops::prepared_local_nonlinear_recovery<1>(SquareProblemFactory{})));
+  const Real conserved[1] = {Real(4)};
+  const Real initial_guess[1] = {Real(1)};
+  const auto outcome = pops::recover_prepared_variable(plan, conserved, initial_guess);
+  ASSERT_TRUE(outcome.recovered());
+
+  Real accepted[1] = {Real(9)};
+  pops::RecoveryWarmStartSlot<1> cache;
+  const Real cached[1] = {Real(8)};
+  cache.store(cached, 3, 7);
+  {
+    pops::RecoveryPublicationTransaction<1> transaction(accepted, cache);
+    ASSERT_TRUE(transaction.publish_tentative(outcome, 4, 8));
+    EXPECT_NEAR(accepted[0], Real(2), Real(1e-10));
+  }
+  EXPECT_EQ(accepted[0], Real(9));
+  EXPECT_EQ(cache.value[0], Real(8));
+  EXPECT_EQ(cache.topology_generation, std::uint64_t{3});
+  EXPECT_EQ(cache.state_generation, std::uint64_t{7});
+}
+
 TEST(PreparedVariableRecovery, stale_warm_start_is_an_explicit_non_mutating_miss) {
   pops::RecoveryWarmStartSlot<2> cache;
   const Real cached[2] = {Real(3), Real(4)};
