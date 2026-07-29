@@ -323,8 +323,9 @@ def test_historical_version_refusal_happens_before_restart_transaction(
     calls = []
 
     class _Executor:
-        def _prepare_checkpoint_restart(self, _payload):
+        def _prepare_checkpoint_restart(self, _payload, *, bit_identical):
             calls.append("prepare")
+            assert bit_identical is True
             require_exact_payload_version(
                 {key: np.array(expected - 1, dtype=np.int64)},
                 key=key,
@@ -353,7 +354,12 @@ def test_historical_version_refusal_happens_before_restart_transaction(
         )
     )
     with pytest.raises(ValueError, match="historical checkpoints require offline migration"):
-        restore_checkpoint_payload(owner, _Executor(), b"historical")
+        restore_checkpoint_payload(
+            owner,
+            _Executor(),
+            b"historical",
+            bit_identical=True,
+        )
     assert calls == ["prepare"]
 
 
