@@ -1259,7 +1259,7 @@ TEST(test_amr_named_field, Runs) {
   std::string context_diagnostic;
   try {
     {
-      auto outcome = context.solve_fields();
+      auto outcome = context.solve_default_field_on_coarse_level();
       (void)outcome.consume(SolveConsumption::kAccept);
     }
     FAIL() << "periodic default RHS with non-zero mean was accepted or silently projected";

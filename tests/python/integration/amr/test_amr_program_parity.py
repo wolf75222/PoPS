@@ -33,6 +33,7 @@ Kokkos CPU (Serial/OpenMP) locally -- unlike GPU (the CUDA run is the ROMEO step
 acceptance preflights those native requirements once, then every compile/install/run leg is mandatory.
 Pytest + ``__main__`` guard (CI runs ``python3 <file>``).
 """
+
 import sys
 from fractions import Fraction
 
@@ -99,8 +100,7 @@ def _nonlinear_model(name="adc508_nonlinear_model"):
     from pops.math import ddt, div, laplacian, unknown
     from pops.physics import Model
 
-    frame = Rectangle(
-        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     model = Model(name, frame=frame)
     state = model.state("U", components=("rho",))
@@ -132,8 +132,9 @@ def _ssprk2_program(
     refresh_final_field=False,
 ):
     """The canonical SSPRK2 (Heun) Program on one block 'plasma' -- the SAME scheme the native explicit
-    AMR advance uses. solve_fields(); R=rhs(U); U1=U+dt R; solve_fields(U1); R1=rhs(U1);
-    U <<= 0.5 U + 0.5 (U1 + dt R1)."""
+    AMR advance uses. solve_field(U); R=rhs(U); U1=U+dt R; solve_field(U1); R1=rhs(U1);
+    U <<= 0.5 U + 0.5 (U1 + dt R1). Each solve is provider/level/stage-qualified."""
+
     def factory(state, rate, fields):
         program = libtime.SSPRK2(
             state,
@@ -147,9 +148,7 @@ def _ssprk2_program(
             # consumes the committed candidate before the commit is published.  No private runtime
             # solve seam is needed after the step.
             (committed_state,) = tuple(program.commits().values())
-            fields(committed_state, name="final_committed_fields").consume(
-                action=FailRun()
-            )
+            fields(committed_state, name="final_committed_fields").consume(action=FailRun())
         return program
 
     return resolve_periodic_field_program(
@@ -166,7 +165,8 @@ def _midpoint_program(model, name="adc508_midpoint", *, target="amr_system"):
     """A CUSTOM 2-stage scheme (midpoint RK2): U1 = U + 0.5 dt R(U); U <<= U + dt R(U1). A DIFFERENT
     combine through the same seam -- proves the Program text drives the integrator."""
     midpoint = RungeKuttaTableau(
-        A=[[], [Fraction(1, 2)]], b=[0, 1], c=[0, Fraction(1, 2)], name="midpoint")
+        A=[[], [Fraction(1, 2)]], b=[0, 1], c=[0, Fraction(1, 2)], name="midpoint"
+    )
     return resolve_periodic_field_program(
         model,
         lambda state, rate, fields: libtime.RungeKutta(
@@ -203,20 +203,32 @@ def test_codegen_emits_amr_install_wrapper():
     )
     chk("pops_install_program_amr" in src, "the AMR .so exports pops_install_program_amr")
     body = src.split("pops_install_program_amr", 1)[1]
-    chk("make_shared<pops::runtime::program::AmrProgramContext>(sys)" in body,
-        "the AMR install constructs an AmrProgramContext over the AmrSystem")
-    chk("ctx.advance_hierarchy(dt, _advance_level)" in body,
-        "the wrapper delegates to the explicit parent/child clock driver")
-    chk("ctx.set_stage_time(0, 1)" in body and "ctx.set_stage_time(1, 1)" in body,
-        "exact SSPRK2 stage abscissae are emitted")
-    chk("_make_level_program" in body and "ctx.program_resource_topology_epoch()" in body
+    chk(
+        "make_shared<pops::runtime::program::AmrProgramContext>(sys)" in body,
+        "the AMR install constructs an AmrProgramContext over the AmrSystem",
+    )
+    chk(
+        "ctx.advance_hierarchy(dt, _advance_level)" in body,
+        "the wrapper delegates to the explicit parent/child clock driver",
+    )
+    chk(
+        "ctx.set_stage_time(0, 1)" in body and "ctx.set_stage_time(1, 1)" in body,
+        "exact SSPRK2 stage abscissae are emitted",
+    )
+    chk(
+        "_make_level_program" in body
+        and "ctx.program_resource_topology_epoch()" in body
         and "ctx.program_resource_topology_generation()" in body,
-        "per-level Program resources refresh after regrid, rollback, and checkpoint rebuild")
-    chk("ctx.set_level(level)" in body and "ctx.couple_levels(" not in body,
-        "generated traversal only materializes level-local resources; native sync remains owned")
-    chk("the per-level AMR macro-step driver" not in body
-        and "is not yet available" not in body,
-        "the fail-loud throw is gone (the real driver is emitted)")
+        "per-level Program resources refresh after regrid, rollback, and checkpoint rebuild",
+    )
+    chk(
+        "ctx.set_level(level)" in body and "ctx.couple_levels(" not in body,
+        "generated traversal only materializes level-local resources; native sync remains owned",
+    )
+    chk(
+        "the per-level AMR macro-step driver" not in body and "is not yet available" not in body,
+        "the fail-loud throw is gone (the real driver is emitted)",
+    )
     # The System target still emits NO AMR entry.
     system_model = _euler_model("adc508_wrapper_system")
     system_plan = _ssprk2_program(system_model, target="system")
@@ -243,9 +255,12 @@ def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         return None, "compile (System): %s" % str(exc)[:140]
     for field, field_plan in plan.field_plans.items():
         sim._install_field_plan(field, field_plan)
-    sim.add_equation("plasma", block_cm,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="ssprk2"))
+    sim.add_equation(
+        "plasma",
+        block_cm,
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method="ssprk2"),
+    )
     sim.set_density("plasma", u0)
     sim.install_program(compiled.so_path)
     for _ in range(nsteps):
@@ -283,9 +298,12 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         # install the compiled time Program on the hierarchy.
         for field, field_plan in plan.field_plans.items():
             amr._install_field_plan(field, field_plan)
-        amr.add_equation("plasma", block_cm,
-                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                         time=engine.Explicit(method="ssprk2"))
+        amr.add_equation(
+            "plasma",
+            block_cm,
+            spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+            time=engine.Explicit(method="ssprk2"),
+        )
         amr.set_density("plasma", u0)
         amr.install_program(compiled.so_path)
     except RuntimeError as exc:
@@ -294,8 +312,7 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         amr.step(dt)
     (provider_slot,) = tuple(amr.field_provider_slots())
     coarse_potential = np.array(amr.field_potential_global(provider_slot)).reshape(N, N)
-    return (np.array(amr.density("plasma")), coarse_potential,
-            float(amr.mass("plasma"))), None
+    return (np.array(amr.density("plasma")), coarse_potential, float(amr.mass("plasma"))), None
 
 
 def test_single_level_bit_identical_parity():
@@ -311,7 +328,8 @@ def test_single_level_bit_identical_parity():
     u0 = _init_density()
 
     sys_out, sys_err = _system_run(
-        _ssprk2_program(model, target="system", refresh_final_field=True), model, u0)
+        _ssprk2_program(model, target="system", refresh_final_field=True), model, u0
+    )
     assert sys_out is not None, sys_err
     amr_model = _euler_model("adc508_parity_ssprk2")
     amr_out, amr_err = _amr_run(
@@ -330,15 +348,21 @@ def test_single_level_bit_identical_parity():
     sys_rho = sys_state[0]  # density = component 0
 
     drho = float(np.abs(sys_rho - amr_rho).max())
-    chk(np.array_equal(sys_rho, amr_rho),
-        "the evolved coarse density is BIT-IDENTICAL System vs AMR (max|diff| = %.3e)" % drho)
+    chk(
+        np.array_equal(sys_rho, amr_rho),
+        "the evolved coarse density is BIT-IDENTICAL System vs AMR (max|diff| = %.3e)" % drho,
+    )
+
     # The two independent iterative solves have different warm-start histories.  Validate the same
     # discrete periodic equation independently instead of comparing their non-unique iterates.
     def relative_poisson_residual(phi, rho):
         h = 1.0 / N
         laplacian = (
-            np.roll(phi, -1, axis=0) + np.roll(phi, 1, axis=0)
-            + np.roll(phi, -1, axis=1) + np.roll(phi, 1, axis=1) - 4.0 * phi
+            np.roll(phi, -1, axis=0)
+            + np.roll(phi, 1, axis=0)
+            + np.roll(phi, -1, axis=1)
+            + np.roll(phi, 1, axis=1)
+            - 4.0 * phi
         ) / (h * h)
         source = rho - 1.0
         residual = -laplacian - source
@@ -346,11 +370,16 @@ def test_single_level_bit_identical_parity():
 
     sys_residual = relative_poisson_residual(sys_phi, sys_rho)
     amr_residual = relative_poisson_residual(amr_phi, amr_rho)
-    chk(sys_residual < 1e-7 and amr_residual < 1e-7,
+    chk(
+        sys_residual < 1e-7 and amr_residual < 1e-7,
         "both potentials satisfy the same discrete Poisson equation independently "
-        "(System %.3e, AMR %.3e)" % (sys_residual, amr_residual))
-    chk(np.all(np.isfinite(amr_rho)) and float(amr_rho.min()) > 0.0,
-        "the AMR Program kept a finite, strictly-positive density (min = %.4f)" % float(amr_rho.min()))
+        "(System %.3e, AMR %.3e)" % (sys_residual, amr_residual),
+    )
+    chk(
+        np.all(np.isfinite(amr_rho)) and float(amr_rho.min()) > 0.0,
+        "the AMR Program kept a finite, strictly-positive density (min = %.4f)"
+        % float(amr_rho.min()),
+    )
 
 
 def test_custom_two_stage_runs_and_differs():
@@ -358,49 +387,57 @@ def test_custom_two_stage_runs_and_differs():
     and DIFFERS from the SSPRK2 Program -- the Program text drives the integrator, not a hard-coded
     scheme. Also bit-identical vs the same midpoint Program on System (the duck-typing holds for a
     second, different combine)."""
-    print("== custom 2-stage (midpoint RK2) Program on AMR: runs, conserves, differs from SSPRK2 ==")
+    print(
+        "== custom 2-stage (midpoint RK2) Program on AMR: runs, conserves, differs from SSPRK2 =="
+    )
     model = _nonlinear_model("adc508_parity_mid")
     u0 = _init_density()
     m0 = float(u0.mean())  # mean density == coarse mass / area (L=1)
 
-    mid_amr, err = _amr_run(
-        _midpoint_program(model, target="amr_system"), model, u0)
+    mid_amr, err = _amr_run(_midpoint_program(model, target="amr_system"), model, u0)
     assert mid_amr is not None, err
     mid_rho, mid_phi, mid_mass = mid_amr
 
     # SSPRK2 on the SAME AMR for the differ-check (same model name -> same .so cache key per Program).
     ss_model = _nonlinear_model("adc508_parity_mid")
-    ss_amr, err2 = _amr_run(
-        _ssprk2_program(ss_model, target="amr_system"), ss_model, u0)
+    ss_amr, err2 = _amr_run(_ssprk2_program(ss_model, target="amr_system"), ss_model, u0)
     assert ss_amr is not None, err2
     ss_rho = ss_amr[0]
 
     chk(np.all(np.isfinite(mid_rho)), "the midpoint Program produced a finite state")
     # Mass conservation (periodic, no flux through the boundary): coarse mass == initial to round-off.
-    chk(abs(mid_mass - m0) < 1e-9,
-        "the midpoint Program conserves the coarse mass (|m - m0| = %.2e)" % abs(mid_mass - m0))
+    chk(
+        abs(mid_mass - m0) < 1e-9,
+        "the midpoint Program conserves the coarse mass (|m - m0| = %.2e)" % abs(mid_mass - m0),
+    )
     # A DIFFERENT scheme must give a DIFFERENT trajectory (proves the Program drives the integrator).
     diff = float(np.abs(mid_rho - ss_rho).max())
-    chk(diff > 1e-12,
-        "the midpoint scheme DIFFERS from SSPRK2 through the SAME seam (max|diff| = %.3e)" % diff)
+    chk(
+        diff > 1e-12,
+        "the midpoint scheme DIFFERS from SSPRK2 through the SAME seam (max|diff| = %.3e)" % diff,
+    )
 
     # Bit-identical vs the same midpoint Program on System (the duck-typing holds for a 2nd combine).
     sys_model = _nonlinear_model("adc508_parity_mid")
-    sys_out, sys_err = _system_run(
-        _midpoint_program(sys_model, target="system"), sys_model, u0)
+    sys_out, sys_err = _system_run(_midpoint_program(sys_model, target="system"), sys_model, u0)
     assert sys_out is not None, sys_err
     sys_rho = sys_out[0][0]
-    chk(np.array_equal(sys_rho, mid_rho),
+    chk(
+        np.array_equal(sys_rho, mid_rho),
         "the midpoint Program is bit-identical System vs AMR (max|diff| = %.3e)"
-        % float(np.abs(sys_rho - mid_rho).max()))
+        % float(np.abs(sys_rho - mid_rho).max()),
+    )
     ss_sys_model = _nonlinear_model("adc508_parity_mid")
     ss_sys_out, ss_sys_err = _system_run(
-        _ssprk2_program(ss_sys_model, target="system"), ss_sys_model, u0)
+        _ssprk2_program(ss_sys_model, target="system"), ss_sys_model, u0
+    )
     assert ss_sys_out is not None, ss_sys_err
     ss_sys_rho = ss_sys_out[0][0]
-    chk(np.array_equal(ss_sys_rho, ss_rho),
+    chk(
+        np.array_equal(ss_sys_rho, ss_rho),
         "the SSPRK2 Program is bit-identical System vs AMR (max|diff| = %.3e)"
-        % float(np.abs(ss_sys_rho - ss_rho).max()))
+        % float(np.abs(ss_sys_rho - ss_rho).max()),
+    )
 
 
 def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
@@ -423,9 +460,12 @@ def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
     try:
         for field, field_plan in plan.field_plans.items():
             amr._install_field_plan(field, field_plan)
-        amr.add_equation("plasma", block_cm,
-                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                         time=engine.Explicit(method="ssprk2"))
+        amr.add_equation(
+            "plasma",
+            block_cm,
+            spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+            time=engine.Explicit(method="ssprk2"),
+        )
         amr.set_density("plasma", u0)
         amr.install_program(compiled.so_path)
         last_dt = 0.0
@@ -445,24 +485,29 @@ def test_step_cfl_routes_through_installed_program():
     a hidden runtime scheme. A custom midpoint Program is compared with the explicit SSPRK2 Program on
     a nonlinear Burgers flux, so a measurable difference proves the installed Program drove the step.
     Host/CPU-runnable; self-skips without a compiler / Kokkos."""
-    print("== step_cfl routes through the installed AMR Program (fix 1: no silent native bypass) ==")
+    print(
+        "== step_cfl routes through the installed AMR Program (fix 1: no silent native bypass) =="
+    )
     model = _nonlinear_model("adc508_stepcfl")
     u0 = _init_density()
 
     prog_out, err = _amr_run_cfl(
-        _midpoint_program(
-            model, "adc508_stepcfl_midpoint", target="amr_system"),
+        _midpoint_program(model, "adc508_stepcfl_midpoint", target="amr_system"),
         model,
         u0,
     )
     assert prog_out is not None, err
     prog_rho, prog_hash, prog_dt = prog_out
     chk(prog_hash != "", "step_cfl on an installed-Program AMR system records the program hash")
-    chk(np.isfinite(prog_dt) and prog_dt > 0.0,
-        "step_cfl returned a finite, positive CFL dt (%.3e)" % prog_dt)
-    chk(np.all(np.isfinite(prog_rho)) and float(prog_rho.min()) > 0.0,
+    chk(
+        np.isfinite(prog_dt) and prog_dt > 0.0,
+        "step_cfl returned a finite, positive CFL dt (%.3e)" % prog_dt,
+    )
+    chk(
+        np.all(np.isfinite(prog_rho)) and float(prog_rho.min()) > 0.0,
         "the Program-driven step_cfl kept a finite, strictly-positive density (min = %.4f)"
-        % float(prog_rho.min()))
+        % float(prog_rho.min()),
+    )
 
     ss_model = _nonlinear_model("adc508_stepcfl")
     ss_out, ss_err = _amr_run_cfl(
@@ -480,17 +525,19 @@ def test_step_cfl_routes_through_installed_program():
     chk(np.isfinite(ss_dt) and ss_dt > 0.0, "SSPRK2 Program returned a finite positive CFL dt")
     # The evolved densities must differ: the two installed Program bodies own distinct tableaux.
     diff = float(np.abs(prog_rho - ss_rho).max())
-    chk(diff > 1e-14,
-        "midpoint and SSPRK2 Program-driven step_cfl densities differ (max|diff| = %.3e)" % diff)
+    chk(
+        diff > 1e-14,
+        "midpoint and SSPRK2 Program-driven step_cfl densities differ (max|diff| = %.3e)" % diff,
+    )
 
 
 def _run_all():
-    fns = [v for k, v in sorted(globals().items())
-           if k.startswith("test_") and callable(v)]
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
         fn()
-    print("\n%s test_amr_program_parity (%d check failures)"
-          % ("FAIL" if _fails else "PASS", _fails))
+    print(
+        "\n%s test_amr_program_parity (%d check failures)" % ("FAIL" if _fails else "PASS", _fails)
+    )
     return _fails
 
 

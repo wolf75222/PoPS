@@ -4,13 +4,20 @@ Split out of :mod:`pops.codegen.program_codegen` so that module stays under the 
 budget. ``_emit_amr_install`` is the only public name; ``program_codegen`` re-imports it and calls
 it from ``emit_cpp_program`` when ``target='amr_system'``.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 
-def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
-                      hierarchy_bodies: Any = None, dt_bound_body: str | None = None) -> str:
+def _emit_amr_install(
+    program: Any,
+    target: Any,
+    prelude: Any,
+    body: Any,
+    hierarchy_bodies: Any = None,
+    dt_bound_body: str | None = None,
+) -> str:
     """C++ source of the AMR install entry the .so exports (epic ADC-511 / ADC-508, Spec 6).
 
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).
@@ -31,20 +38,27 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
     Shape: one macro-step recursively advances each child on its declared parent/child clock relation,
     with exact stage abscissae and mandatory temporal interpolation from parent old/new snapshots, then
     synchronizes finest-first by conservative reflux followed by average-down. Authored single-state
-    field nodes use the exact point/provider-qualified solve at each active level; the separate
-    context ``solve_fields()`` seam retains the explicitly requested OncePerStep coarse-provider
-    cadence for legacy/manual drivers. The C/F interface is now conservative to round-off: the
+    field nodes use the exact point/provider-qualified solve at each active level. The context exposes
+    only an explicitly level-0-only default-field route for legacy/manual drivers, so coarse auxiliary
+    injection can never masquerade as a requested fine-level solve. The C/F interface is now conservative to round-off: the
     per-level effective flux is captured through the Program's own linear combination and routed
     through the native ``route_reflux`` at level sync (ADC-639), so mass/momentum/energy are conserved
     across the interface on a genuinely multilevel run; a coarse-only / flat Program stays
     bit-identical."""
     if target != "amr_system":
         return ""
+
     def walk(values: Any) -> Any:
         for value in values:
             yield value
-            for key in ("cond_block", "body_block", "apply_block", "residual_block",
-                        "true_block", "false_block"):
+            for key in (
+                "cond_block",
+                "body_block",
+                "apply_block",
+                "residual_block",
+                "true_block",
+                "false_block",
+            ):
                 nested = value.attrs.get(key)
                 if isinstance(nested, (list, tuple)):
                     yield from walk(nested)
@@ -53,77 +67,82 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
     transform_refresh_guard = ""
     if any(value.op == "local_transform" for value in walk(program._values)):
         transform_guard = (
-            '  auto _require_local_transform_level_contract = [ctx_owner]() {\n'
-            '    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-            '    if (ctx.nlev() > 1)\n'
+            "  auto _require_local_transform_level_contract = [ctx_owner]() {\n"
+            "    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+            "    if (ctx.nlev() > 1)\n"
             '      throw std::runtime_error("local_transform on multi-level AMR requires a typed '
             'post-synchronization Program phase; refusing pre-reflux execution");\n'
-            '  };\n'
-            '  _require_local_transform_level_contract();\n')
-        transform_refresh_guard = (
-            '    _require_local_transform_level_contract();\n')
+            "  };\n"
+            "  _require_local_transform_level_contract();\n"
+        )
+        transform_refresh_guard = "    _require_local_transform_level_contract();\n"
     if hierarchy_bodies is None:
-        phase_fields = '    std::function<void(double)> step;\n'
+        phase_fields = "    std::function<void(double)> step;\n"
         phase_initializers = (
-            '      [=](double dt) {\n'
-            '        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-            '        (void)dt;\n' + body + '\n'
-            '      }\n')
+            "      [=](double dt) {\n"
+            "        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+            "        (void)dt;\n" + body + "\n"
+            "      }\n"
+        )
         installed_driver = (
-            '    auto _advance_level = [&](double level_dt) {\n'
-            '      _refresh_level_programs();\n'
-            '      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n'
-            '    };\n'
-            '    ctx.advance_hierarchy(dt, _advance_level);\n')
+            "    auto _advance_level = [&](double level_dt) {\n"
+            "      _refresh_level_programs();\n"
+            "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
+            "    };\n"
+            "    ctx.advance_hierarchy(dt, _advance_level);\n"
+        )
     else:
         gather, solve, publish = hierarchy_bodies
         phase_fields = (
-            '    std::function<void(double)> step;\n'
-            '    std::function<void(double)> gather;\n'
-            '    std::function<void(double)> solve;\n'
-            '    std::function<void(double)> publish;\n')
+            "    std::function<void(double)> step;\n"
+            "    std::function<void(double)> gather;\n"
+            "    std::function<void(double)> solve;\n"
+            "    std::function<void(double)> publish;\n"
+        )
         phase_initializers = (
-            '      [=](double dt) {\n'
-            '        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-            '        (void)dt;\n' + body + '\n'
-            '      },\n'
-            '      [=](double dt) {\n'
-            '        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-            '        (void)dt;\n' + gather + '\n'
-            '      },\n'
-            '      [=](double dt) {\n'
-            '        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-            '        (void)dt;\n' + solve + '\n'
-            '      },\n'
-            '      [=](double dt) {\n'
-            '        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-            '        (void)dt;\n' + publish + '\n'
-            '      }\n')
+            "      [=](double dt) {\n"
+            "        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+            "        (void)dt;\n" + body + "\n"
+            "      },\n"
+            "      [=](double dt) {\n"
+            "        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+            "        (void)dt;\n" + gather + "\n"
+            "      },\n"
+            "      [=](double dt) {\n"
+            "        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+            "        (void)dt;\n" + solve + "\n"
+            "      },\n"
+            "      [=](double dt) {\n"
+            "        pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+            "        (void)dt;\n" + publish + "\n"
+            "      }\n"
+        )
         installed_driver = (
-            '    auto _advance_hierarchy = [&](double hierarchy_dt) {\n'
-            '      _refresh_level_programs();\n'
-            '      const int _nlev = ctx.nlev();\n'
-            '      if (ctx.uses_prepared_krylov_fallback()) {\n'
-            '        for (int _k = 0; _k < _nlev; ++_k) {\n'
-            '          ctx.set_level(_k);\n'
-            '          _level_programs->at(static_cast<std::size_t>(_k)).step(hierarchy_dt);\n'
-            '        }\n'
-            '      } else {\n'
-            '        // Gather every level before the unique hierarchy-scoped solve.\n'
-            '        for (int _k = 0; _k < _nlev; ++_k) {\n'
-            '          ctx.set_level(_k);\n'
-            '          _level_programs->at(static_cast<std::size_t>(_k)).gather(hierarchy_dt);\n'
-            '        }\n'
-            '        ctx.set_level(0);\n'
-            '        _level_programs->front().solve(hierarchy_dt);\n'
-            '        // The composite solution is complete before any level reconstructs or commits.\n'
-            '        for (int _k = 0; _k < _nlev; ++_k) {\n'
-            '          ctx.set_level(_k);\n'
-            '          _level_programs->at(static_cast<std::size_t>(_k)).publish(hierarchy_dt);\n'
-            '        }\n'
-            '      }\n'
-            '    };\n'
-            '    ctx.advance_synchronized_hierarchy(dt, _advance_hierarchy);\n')
+            "    auto _advance_hierarchy = [&](double hierarchy_dt) {\n"
+            "      _refresh_level_programs();\n"
+            "      const int _nlev = ctx.nlev();\n"
+            "      if (ctx.uses_prepared_krylov_fallback()) {\n"
+            "        for (int _k = 0; _k < _nlev; ++_k) {\n"
+            "          ctx.set_level(_k);\n"
+            "          _level_programs->at(static_cast<std::size_t>(_k)).step(hierarchy_dt);\n"
+            "        }\n"
+            "      } else {\n"
+            "        // Gather every level before the unique hierarchy-scoped solve.\n"
+            "        for (int _k = 0; _k < _nlev; ++_k) {\n"
+            "          ctx.set_level(_k);\n"
+            "          _level_programs->at(static_cast<std::size_t>(_k)).gather(hierarchy_dt);\n"
+            "        }\n"
+            "        ctx.set_level(0);\n"
+            "        _level_programs->front().solve(hierarchy_dt);\n"
+            "        // The composite solution is complete before any level reconstructs or commits.\n"
+            "        for (int _k = 0; _k < _nlev; ++_k) {\n"
+            "          ctx.set_level(_k);\n"
+            "          _level_programs->at(static_cast<std::size_t>(_k)).publish(hierarchy_dt);\n"
+            "        }\n"
+            "      }\n"
+            "    };\n"
+            "    ctx.advance_synchronized_hierarchy(dt, _advance_hierarchy);\n"
+        )
 
     # Every generated prelude allocation is layout-bound. Materialize one complete closure bundle
     # per level before the first advance, and rebuild the set exactly once after a topology epoch or
@@ -131,70 +150,71 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
     # condensed coefficients, matrix-free
     # apply captures, prepared problems and Krylov workspaces all follow the same lifetime protocol.
     level_resources = (
-        '  struct _PopsAmrLevelProgram {\n' + phase_fields + '  };\n'
-        '  auto _make_level_program = [ctx_owner]() {\n'
-        '    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-        + prelude + '\n'
-        '    return _PopsAmrLevelProgram{\n' + phase_initializers + '    };\n'
-        '  };\n'
-        '  auto _level_programs = std::make_shared<std::vector<_PopsAmrLevelProgram>>();\n'
-        '  auto _level_program_epoch = std::make_shared<std::uint64_t>(\n'
-        '      std::numeric_limits<std::uint64_t>::max());\n'
-        '  auto _level_program_generation = std::make_shared<std::uint64_t>(\n'
-        '      std::numeric_limits<std::uint64_t>::max());\n'
-        '  auto _refresh_level_programs = [=]() {\n'
-        '    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-        '    const std::uint64_t epoch = ctx.program_resource_topology_epoch();\n'
-        '    const std::uint64_t generation = ctx.program_resource_topology_generation();\n'
-        '    const int levels = ctx.nlev();\n'
-        + transform_refresh_guard +
-        '    if (levels <= 0)\n'
+        "  struct _PopsAmrLevelProgram {\n" + phase_fields + "  };\n"
+        "  auto _make_level_program = [ctx_owner]() {\n"
+        "    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n" + prelude + "\n"
+        "    return _PopsAmrLevelProgram{\n" + phase_initializers + "    };\n"
+        "  };\n"
+        "  auto _level_programs = std::make_shared<std::vector<_PopsAmrLevelProgram>>();\n"
+        "  auto _level_program_epoch = std::make_shared<std::uint64_t>(\n"
+        "      std::numeric_limits<std::uint64_t>::max());\n"
+        "  auto _level_program_generation = std::make_shared<std::uint64_t>(\n"
+        "      std::numeric_limits<std::uint64_t>::max());\n"
+        "  auto _refresh_level_programs = [=]() {\n"
+        "    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+        "    const std::uint64_t epoch = ctx.program_resource_topology_epoch();\n"
+        "    const std::uint64_t generation = ctx.program_resource_topology_generation();\n"
+        "    const int levels = ctx.nlev();\n" + transform_refresh_guard + "    if (levels <= 0)\n"
         '      throw std::runtime_error("AMR Program resource refresh requires at least one level");\n'
-        '    if (*_level_program_epoch == epoch &&\n'
-        '        *_level_program_generation == generation &&\n'
-        '        _level_programs->size() == static_cast<std::size_t>(levels))\n'
-        '      return;\n'
-        '    const int saved_level = ctx.level();\n'
-        '    const int restored_level =\n'
-        '        saved_level >= 0 && saved_level < levels ? saved_level : 0;\n'
-        '    _level_programs->clear();\n'
-        '    _level_programs->reserve(static_cast<std::size_t>(levels));\n'
-        '    try {\n'
-        '      for (int level = 0; level < levels; ++level) {\n'
-        '        ctx.set_level(level);\n'
-        '        _level_programs->emplace_back(_make_level_program());\n'
-        '      }\n'
-        '    } catch (...) {\n'
-        '      ctx.set_level(restored_level);\n'
-        '      throw;\n'
-        '    }\n'
-        '    ctx.set_level(restored_level);\n'
-        '    *_level_program_epoch = epoch;\n'
-        '    *_level_program_generation = generation;\n'
-        '  };\n'
-        '  _refresh_level_programs();\n')
+        "    if (*_level_program_epoch == epoch &&\n"
+        "        *_level_program_generation == generation &&\n"
+        "        _level_programs->size() == static_cast<std::size_t>(levels))\n"
+        "      return;\n"
+        "    const int saved_level = ctx.level();\n"
+        "    const int restored_level =\n"
+        "        saved_level >= 0 && saved_level < levels ? saved_level : 0;\n"
+        "    _level_programs->clear();\n"
+        "    _level_programs->reserve(static_cast<std::size_t>(levels));\n"
+        "    try {\n"
+        "      for (int level = 0; level < levels; ++level) {\n"
+        "        ctx.set_level(level);\n"
+        "        _level_programs->emplace_back(_make_level_program());\n"
+        "      }\n"
+        "    } catch (...) {\n"
+        "      ctx.set_level(restored_level);\n"
+        "      throw;\n"
+        "    }\n"
+        "    ctx.set_level(restored_level);\n"
+        "    *_level_program_epoch = epoch;\n"
+        "    *_level_program_generation = generation;\n"
+        "  };\n"
+        "  _refresh_level_programs();\n"
+    )
     return (
-        '\n#include <pops/runtime/program/amr_program_context.hpp>  // AmrProgramContext (the AMR driver, ADC-508)\n'
-        '// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target=\'amr_system\' counterpart\n'
-        '// of pops_install_program. AmrSystem::install_program resolves + calls it after binding the\n'
-        '// blocks by name and seeding the runtime params. It constructs an AmrProgramContext backed\n'
-        '// by the shared ProgramExecutionServices and installs the parent/child clock driver: the SAME\n'
-        '// lowered body is recursively subcycled, temporally interpolated and conservatively synced.\n'
+        "\n#include <pops/runtime/program/amr_program_context.hpp>  // AmrProgramContext (the AMR driver, ADC-508)\n"
+        "// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target='amr_system' counterpart\n"
+        "// of pops_install_program. AmrSystem::install_program resolves + calls it after binding the\n"
+        "// blocks by name and seeding the runtime params. It constructs an AmrProgramContext backed\n"
+        "// by the shared ProgramExecutionServices and installs the parent/child clock driver: the SAME\n"
+        "// lowered body is recursively subcycled, temporally interpolated and conservatively synced.\n"
         'extern "C" void pops_install_program_amr(void* sys) {\n'
-        '  auto ctx_owner = std::make_shared<pops::runtime::program::AmrProgramContext>(sys);\n'
-        '  pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-        + transform_guard + level_resources +
-        '\n  ctx.install([=](double dt) {\n'
-        '    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
-        '    _refresh_level_programs();\n'
-        + installed_driver +
-        '  }, ctx_owner, _refresh_level_programs);\n'
-        '}\n'
-        '// AMR counterpart of pops_program_dt_bound. The generated module owns the concrete\n'
-        '// AmrProgramContext type; the runtime loader passes only its stable AmrSystem facade.\n'
-        '// The body is the identical read-only scalar IR used by the uniform Program ABI.\n'
+        "  auto ctx_owner = std::make_shared<pops::runtime::program::AmrProgramContext>(sys);\n"
+        "  pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+        + transform_guard
+        + level_resources
+        + "\n  ctx.install([=](double dt) {\n"
+        "    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n"
+        "    _refresh_level_programs();\n"
+        + installed_driver
+        + "  }, ctx_owner, _refresh_level_programs);\n"
+        "}\n"
+        "// AMR counterpart of pops_program_dt_bound. The generated module owns the concrete\n"
+        "// AmrProgramContext type; the runtime loader passes only its stable AmrSystem facade.\n"
+        "// The body is the identical read-only scalar IR used by the uniform Program ABI.\n"
         'extern "C" pops::Real pops_program_dt_bound_amr(void* sys, pops::Real cfl) {\n'
-        '  pops::runtime::program::AmrProgramContext ctx(sys);\n'
-        '  (void)ctx; (void)cfl;\n'
-        + (dt_bound_body or '    return std::numeric_limits<pops::Real>::infinity();') + '\n'
-        '}\n')
+        "  pops::runtime::program::AmrProgramContext ctx(sys);\n"
+        "  (void)ctx; (void)cfl;\n"
+        + (dt_bound_body or "    return std::numeric_limits<pops::Real>::infinity();")
+        + "\n"
+        "}\n"
+    )

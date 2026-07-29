@@ -266,8 +266,8 @@ static void install_native_ab2_program(AmrSystem& system,
   context.install([&context, after_level = std::move(after_level)](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&context, &after_level](double level_dt) {
       context.set_stage_time(0, 1);
-      {
-        auto outcome = context.solve_fields();
+      if (context.level() == 0) {
+        auto outcome = context.solve_default_field_on_coarse_level();
         (void)outcome.consume(SolveConsumption::kAccept);
       }
       MultiFab& state = context.state(0);
@@ -305,7 +305,8 @@ static void install_transaction_probe_program(AmrSystem& system,
                    after_hierarchy = std::move(after_hierarchy)](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&context](double level_dt) {
       context.set_stage_time(0, 1);
-      (void)consume_solve_outcome(context.solve_fields());
+      if (context.level() == 0)
+        (void)consume_solve_outcome(context.solve_default_field_on_coarse_level());
       std::vector<MultiFab*> states;
       std::vector<MultiFab*> rates;
       states.reserve(static_cast<std::size_t>(context.n_blocks()));
@@ -762,7 +763,7 @@ TEST(test_amr_history_ring, BootstrapRefreshFailureRollsBackAcceptedStateAndCanR
   EXPECT_EQ(sim.program_accepted_state_revision(), revision_before + 1);
 }
 
-TEST(test_amr_history_ring, FineFieldReuseWaitsForCoarseOutcomeConsumption) {
+TEST(test_amr_history_ring, DefaultFieldSolveIsExplicitlyCoarseOnly) {
   constexpr int n = 8;
   AmrSystemConfig cfg;
   cfg.n = n;
@@ -776,13 +777,17 @@ TEST(test_amr_history_ring, FineFieldReuseWaitsForCoarseOutcomeConsumption) {
 
   runtime::program::AmrProgramContext context(runtime, &sim);
   context.configure_primary_clock("clock.macro");
+  context.set_level(1);
+  EXPECT_THROW((void)context.solve_default_field_on_coarse_level(), std::logic_error)
+      << "coarse auxiliary injection must not masquerade as a requested fine-level solve";
+
   context.set_level(0);
-  SolveOutcome coarse = context.solve_fields();
+  SolveOutcome coarse = context.solve_default_field_on_coarse_level();
   ASSERT_TRUE(coarse.report().solved_value_available()) << coarse.report().reason;
 
   context.set_level(1);
-  EXPECT_THROW((void)context.solve_fields(), std::logic_error)
-      << "a cached report must not expose the private coarse candidate before Accept";
+  EXPECT_THROW((void)context.solve_default_field_on_coarse_level(), std::logic_error)
+      << "a pending coarse candidate must not create a fine-level solve result";
 
   MultiFab& destination = runtime->phi();
   const BoxArray boxes = destination.box_array();
@@ -796,8 +801,8 @@ TEST(test_amr_history_ring, FineFieldReuseWaitsForCoarseOutcomeConsumption) {
   destination = MultiFab(boxes, mapping, components, ghosts);
   EXPECT_TRUE(coarse.consume(SolveConsumption::kAccept).solved_value_available());
   context.set_level(1);
-  SolveOutcome fine = context.solve_fields();
-  EXPECT_TRUE(fine.consume(SolveConsumption::kAccept).solved_value_available());
+  EXPECT_THROW((void)context.solve_default_field_on_coarse_level(), std::logic_error)
+      << "an accepted coarse publication is still not a fine-level solve";
 }
 
 TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace) {
@@ -848,8 +853,8 @@ TEST(test_amr_history_ring, ExactLayoutSnapshotReusesStorageAndCaptureWorkspace)
   bool measured_coarse_capture = false;
   context.advance_hierarchy(dt, [&](double level_dt) {
     context.set_stage_time(0, 1);
-    {
-      auto outcome = context.solve_fields();
+    if (context.level() == 0) {
+      auto outcome = context.solve_default_field_on_coarse_level();
       (void)outcome.consume(SolveConsumption::kAccept);
     }
     MultiFab& state = context.state(0);
@@ -1236,8 +1241,8 @@ TEST(test_amr_history_ring, Ab2RegridRebindsLaggedResidualAndFluxOnTheNewTopolog
         [&context, &initial_patches, &lagged_rate_before_regrid, &lagged_rate_spread_after_regrid,
          &nonflux_carry_kept_old_fine_overlap, rt, n](double level_dt) {
           context.set_stage_time(0, 1);
-          {
-            auto outcome = context.solve_fields();
+          if (context.level() == 0) {
+            auto outcome = context.solve_default_field_on_coarse_level();
             (void)outcome.consume(SolveConsumption::kAccept);
           }
           MultiFab& state = context.state(0);
@@ -1704,11 +1709,13 @@ TEST(test_amr_history_ring, FineNonFiniteAfterCoarseSuccessRestoresCompleteAccep
   context.install([&](double macro_dt) {
     context.advance_hierarchy(macro_dt, [&](double level_dt) {
       context.set_stage_time(0, 1);
-      const SolveReport field_report = consume_solve_outcome(context.solve_fields());
-      if (!field_report.solved())
-        throw std::runtime_error("quadratic rollback fixture field solve did not succeed");
-      if (context.level() == 0)
+      if (context.level() == 0) {
+        const SolveReport field_report =
+            consume_solve_outcome(context.solve_default_field_on_coarse_level());
+        if (!field_report.solved())
+          throw std::runtime_error("quadratic rollback fixture field solve did not succeed");
         coarse_solve_succeeded = true;
+      }
 
       MultiFab& live = context.state(0);
       if (context.level() == 1)

@@ -5,6 +5,7 @@
 error-policy exceptions are not capability declarations. This gate locks the explicit identifiers
 against ``DEFERRED_GROUPS`` without importing ``pops`` or the compiled extension.
 """
+
 import importlib.util
 import pathlib
 import re
@@ -15,8 +16,12 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SUPPORT_PY = REPO_ROOT / "python" / "pops" / "runtime" / "amr_program_support.py"
-CONTEXT_HPP = (REPO_ROOT / "include" / "pops" / "runtime" / "program"
-               / "amr_program_context.hpp")
+CONTEXT_HPP = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_context.hpp"
+PRODUCTION_CODEGEN = (
+    REPO_ROOT / "python" / "pops" / "codegen" / "program_codegen.py",
+    REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_ops.py",
+    REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_amr.py",
+)
 
 
 def _load_support_module():
@@ -79,12 +84,14 @@ def test_support_module_loads_standalone_and_stays_import_free():
     offender = re.search(r"(?m)^\s*(?:import\s+pops|from\s+pops)\b", source)
     assert offender is None, (
         "amr_program_support.py must load source-only before _pops exists; found %r"
-        % (offender.group(0) if offender else None))
+        % (offender.group(0) if offender else None)
+    )
 
     groups = _load_support_module().deferred_groups()
     assert groups
     assert set(groups.values()) <= {"green"} | {
-        value for value in groups.values() if value.startswith("pending")}
+        value for value in groups.values() if value.startswith("pending")
+    }
 
 
 def test_header_deferred_set_matches_the_python_mirror():
@@ -94,7 +101,8 @@ def test_header_deferred_set_matches_the_python_mirror():
     assert header == mirror, (
         "AMR Program explicit-deferral drift:\n"
         "  only in header: %s\n"
-        "  only in mirror: %s" % (sorted(header - mirror), sorted(mirror - header)))
+        "  only in mirror: %s" % (sorted(header - mirror), sorted(mirror - header))
+    )
 
 
 def test_parser_finds_only_explicit_known_deferrals():
@@ -129,11 +137,29 @@ def test_projection_is_green_after_the_real_amr_implementation_landed():
     assert module.deferred_groups()["projection"] == "green"
 
 
+def test_generated_programs_cannot_use_coarse_injection_as_a_fine_solve():
+    header = CONTEXT_HPP.read_text(encoding="utf-8")
+    assert "SolveOutcome solve_fields() const" not in header
+    assert header.count("SolveOutcome solve_default_field_on_coarse_level() const") == 1
+    coarse_route = header.split("SolveOutcome solve_default_field_on_coarse_level() const", 1)[
+        1
+    ].split("SolveOutcome solve_fields_from_state_at(", 1)[0]
+    assert "if (level_ != 0)" in coarse_route
+    assert "coarse-to-fine auxiliary injection is not a " in coarse_route
+    assert '"fine-level solve"' in coarse_route
+    assert "return eng_->solve_default_field();" in coarse_route
+    assert "default_solve_report_" not in header
+
+    generated = "\n".join(path.read_text(encoding="utf-8") for path in PRODUCTION_CODEGEN)
+    assert "ctx.solve_fields(" not in generated
+    assert "solve_default_field_on_coarse_level" not in generated
+    assert "ctx.solve_fields_from_state_at(" in generated
+
+
 class _Program:
     def __init__(self, nodes, *, recursive_nodes=None):
         self._nodes = list(nodes)
-        self._recursive_nodes = list(
-            self._nodes if recursive_nodes is None else recursive_nodes)
+        self._recursive_nodes = list(self._nodes if recursive_nodes is None else recursive_nodes)
 
     def ir_nodes(self, *, recursive=False):
         return list(self._recursive_nodes if recursive else self._nodes)
@@ -163,26 +189,29 @@ def test_context_sensitive_routes_report_green_or_pending_from_resolved_hierarch
             {"op": "rhs_jacvec", "attrs": {"field_coupled": True}},
         ],
     )
+    assert (
+        module.amr_program_op_support(field_jacobian, context=_context(module, refined=False)) == {}
+    )
+    assert (
+        module.amr_program_op_support(field_jacobian, context=_context(module, refined=True)) == {}
+    )
     assert module.amr_program_op_support(
-        field_jacobian, context=_context(module, refined=False)) == {}
-    assert module.amr_program_op_support(
-        field_jacobian, context=_context(module, refined=True)) == {}
-    assert module.amr_program_op_support(
-        _Program([]), context=_context(module, refined=True, interfaces=True)) == {
-            "refined_shared_block_interfaces": "pending",
-        }
+        _Program([]), context=_context(module, refined=True, interfaces=True)
+    ) == {
+        "refined_shared_block_interfaces": "pending",
+    }
 
 
 def test_ir_ops_mirror_the_codegen_op_group_sets():
     module = _load_support_module()
-    kernels = (REPO_ROOT / "python" / "pops" / "codegen"
-               / "program_emit_kernels.py").read_text(encoding="utf-8")
+    kernels = (REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_kernels.py").read_text(
+        encoding="utf-8"
+    )
     match = re.search(r"_CONDENSED_OPS\s*=\s*frozenset\(\{([^}]*)\}\)", kernels, re.S)
     assert match is not None
     codegen_condensed = set(re.findall(r'"([A-Za-z_]\w*)"', match.group(1)))
     assert set(module.DEFERRED_GROUPS["condensed"]["ir_ops"]) == codegen_condensed
-    assert module.DEFERRED_GROUPS["named_field_solve"]["ir_ops"] == frozenset(
-        {"solve_fields"})
+    assert module.DEFERRED_GROUPS["named_field_solve"]["ir_ops"] == frozenset({"solve_fields"})
     assert module.amr_program_op_support(
         _Program([{"op": "solve_fields", "attrs": {"field": "potential"}}]),
         context=_context(module),

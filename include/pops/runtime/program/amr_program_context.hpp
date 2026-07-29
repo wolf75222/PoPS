@@ -242,7 +242,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
   /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
   void reset_step() const {
-    default_solve_report_.reset();
     // Keep exact-layout EdgeFlux storage resident across accepted macro steps.  Presence is tracked
     // separately, so stale numerical values are unreachable while their pinned allocations remain
     // available to the next replay.
@@ -594,24 +593,20 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return eng_->level_max_speed(static_cast<std::size_t>(sys_block(b)), level_, u);
   }
 
-  // --- field solve (the SHARED coarse Poisson) ------------------------------------------------------
-  /// The default head-of-step elliptic solve: the coarse system Poisson + coarse->fine aux injection.
-  /// The AMR runtime runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard):
-  /// calling it again at fine levels within the same macro-step is a no-op cache-hit (parity: the
-  /// body stays atomic, the solve fires once -- the OncePerStep cadence the native AMR step uses).
-  SolveOutcome solve_fields() const {
-    if (level_ == 0 || !default_solve_report_) {
-      default_solve_report_.reset();
-      SolveOutcome outcome = eng_->solve_default_field();
-      const SolveReport report = outcome.report();
-      if (report.solved())
-        default_solve_report_ = report;
-      return outcome;
-    }
-    if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
+  // --- explicitly coarse-only default field solve ---------------------------------------------------
+  /// Legacy/manual driver route for the hierarchy's default coarse-provider solve. This is not a
+  /// level-qualified Program solve: generated Programs use solve_fields_from_state_at() or
+  /// solve_fields_from_blocks_at() with an exact provider and evaluation point. In particular, the
+  /// coarse-to-fine auxiliary publication performed by the native default solve must never be
+  /// reported as if a requested fine-level solve had executed.
+  SolveOutcome solve_default_field_on_coarse_level() const {
+    if (level_ != 0)
       throw std::logic_error(
-          "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
-    return SolveOutcome::collective_world(*default_solve_report_);
+          "AmrProgramContext::solve_default_field_on_coarse_level is level-0-only; a fine-level "
+          "field request requires solve_fields_from_state_at or solve_fields_from_blocks_at with "
+          "an exact provider and evaluation point; coarse-to-fine auxiliary injection is not a "
+          "fine-level solve");
+    return eng_->solve_default_field();
   }
   SolveOutcome solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                           const std::string& provider_slot, int b,
@@ -2481,7 +2476,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     ClockScheduleState clock_schedule;
     std::vector<LiveStateRing> live_state_rings;
     bool rotate_pending = false;
-    std::optional<SolveReport> default_solve_report;
     int level = 0;
     amr::Rational stage_time{0, 1};
     std::optional<ActiveParentWindow> active_parent;
@@ -2737,7 +2731,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     clock_schedule_.copy_into(snapshot.clock_schedule);
     copy_vector_values_in_place_(snapshot.live_state_rings, live_state_rings_);
     snapshot.rotate_pending = rotate_pending_;
-    snapshot.default_solve_report = default_solve_report_;
     snapshot.level = level_;
     snapshot.stage_time = stage_time_;
     snapshot.active_parent = active_parent_;
@@ -2786,7 +2779,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     snapshot.clock_schedule.copy_into(clock_schedule_);
     copy_vector_values_in_place_(live_state_rings_, snapshot.live_state_rings);
     rotate_pending_ = snapshot.rotate_pending;
-    default_solve_report_ = snapshot.default_solve_report;
     level_ = snapshot.level;
     stage_time_ = snapshot.stage_time;
     active_parent_ = snapshot.active_parent;
@@ -3863,7 +3855,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   AmrSystem* facade_;
   AmrRuntime* eng_;
   mutable int level_ = 0;
-  mutable std::optional<SolveReport> default_solve_report_;
   mutable CouplingWorkspace coupling_workspace_;
   mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
   mutable std::map<ProgramScratchKey, ProgramScratchSlot> program_scratch_;
