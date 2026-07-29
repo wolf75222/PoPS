@@ -26,6 +26,8 @@ _SolveStatus: TypeAlias = Literal[
     "breakdown",
     "iteration_limit",
     "invalid_evaluation",
+    "inadmissible_candidate",
+    "safeguard_failure",
     "capability_failure",
     "invalid_input",
     "incompatible_rhs",
