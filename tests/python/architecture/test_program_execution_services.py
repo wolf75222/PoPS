@@ -131,6 +131,7 @@ SHARED_SIGNATURES = (
 )
 
 SHARED_OVERLOAD_COUNTS = {
+    "void neg_div_flux_into(": 4,
     "void rhs_core_into_at(": 2,
     "void boundary_residual_into_at(": 2,
     "void boundary_jvp_into_at(": 2,
@@ -276,6 +277,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_boundary_residual_into_at_",
             "program_execution_boundary_jvp_into_at_",
             "program_execution_neg_div_flux_default_into_",
+            "program_execution_neg_div_named_flux_into_",
             "program_execution_operator_topology_",
             "program_execution_operator_evaluation_snapshot_",
             "program_execution_rhs_group_",
@@ -373,6 +375,21 @@ def test_generated_cartesian_guard_is_shared_and_providers_own_only_terminal_top
     assert "current AMR engine supports Cartesian hierarchy layouts only" in amr
     assert "void require_cartesian_generated_operator(" not in uniform
     assert "void require_cartesian_generated_operator(" not in amr
+
+
+def test_named_flux_divergence_surface_is_shared_and_amr_fails_closed_at_runtime():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    emitter = _read(CODEGEN / "program_emit_ops.py")
+    assert shared.count("void neg_div_flux_into(") == 4
+    assert "program_execution_neg_div_named_flux_into_(" in shared
+    assert "void neg_div_flux_into(" not in uniform
+    assert "void neg_div_flux_into(" not in amr
+    assert "fill_ghosts(flux_x, context.geom.domain, context.bc" in uniform
+    assert "Program named-flux divergence scratch must match" in uniform
+    assert '"a named-flux (-div F) Program on AMR is deferred' in amr
+    assert "ctx.neg_div_flux_into(%s, %s, %s, %s);" in emitter
 
 
 def test_prepared_operator_policy_is_shared_while_storage_stays_provider_owned():
