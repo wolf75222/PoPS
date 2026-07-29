@@ -23,6 +23,11 @@ SHARED_SIGNATURES = (
     "MultiFab& rhs_scratch(",
     "MultiFab& scratch_state(",
     "MultiFab& scalar_scratch(",
+    "const MultiFab* pointwise_active_mask(",
+    "Real pointwise_status_max(",
+    "Real norm2(",
+    "Real norm_inf(",
+    "Real dot(",
     "void commit_many(",
     "void set_stage_time(",
     "void configure_primary_clock(",
@@ -51,8 +56,27 @@ SHARED_SIGNATURES = (
     "static void require_rate_identity_(",
     "static void require_group_identity_(",
     "static std::runtime_error block_map_error_(",
+    "RelativeCellMeasure relative_cell_measure_(",
+    "void require_unqualified_reduction_safe_(",
+    "const MultiFab* active_domain_mask_(",
     "[[noreturn]] static void throw_field_solve_failure_(",
+    "static bool embedded_domain_enabled_(",
+    "static const MultiFab* active_mask_from_context_(",
 )
+
+SHARED_OVERLOAD_COUNTS = {
+    "void axpy(": 2,
+    "void lincomb(": 2,
+    "Real sum_component(": 2,
+    "Real max_component(": 2,
+    "Real min_component(": 2,
+    "Real abs_sum_component(": 2,
+    "Real sum(": 2,
+    "Real max(": 2,
+    "Real min(": 2,
+    "Real abs_sum(": 2,
+    "void fill_boundary(": 2,
+}
 
 
 def _read(path):
@@ -91,6 +115,20 @@ def test_extracted_operations_have_one_source_definition():
             signature,
             ", ".join(offenders),
         )
+    for signature, expected_count in SHARED_OVERLOAD_COUNTS.items():
+        assert shared.count(signature) == expected_count, (
+            "%r must have %d overloads in program_execution_services.hpp"
+            % (signature, expected_count)
+        )
+        offenders = [
+            path.relative_to(ROOT).as_posix()
+            for path in context_headers
+            if signature in _read(path)
+        ]
+        assert not offenders, "%r was reimplemented in a topology context: %s" % (
+            signature,
+            ", ".join(offenders),
+        )
 
 
 def test_clock_state_is_owned_only_by_the_shared_service():
@@ -117,6 +155,12 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_restore_logical_evaluation_",
             "program_execution_solve_fields_from_state_at_",
             "program_execution_scratch_",
+            "program_execution_default_grid_context_",
+            "program_execution_block_grid_context_",
+            "program_execution_publish_axpy_",
+            "program_execution_publish_exact_axpy_",
+            "program_execution_publish_lincomb_",
+            "program_execution_publish_exact_lincomb_",
             "program_execution_validate_commit_aliases_",
             "program_execution_commit_copy_",
             "program_execution_block_map_",
