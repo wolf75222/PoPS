@@ -350,83 +350,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     eng_->level_boundary_jvp_into_at(static_cast<std::size_t>(sys_block(b)), point.level, point, u,
                                      v, j, boundary);
   }
-  struct RhsGroupRequest {
-    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
-                    int flux_only_value)
-        : block(block_value),
-          state(state_value),
-          rhs(rhs_value),
-          rate_id(rate_id_value),
-          flux_only(flux_only_value) {}
-
-    int block;
-    MultiFab* state;
-    MultiFab* rhs;
-    int rate_id;
-    int flux_only;
-  };
-  /// @p group_id identifies the authored atomic evaluation independently of each request's exact
-  /// rate-node identity.  Neither identity may be anonymous or inferred from iteration order.
-  void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
-    require_group_identity_(group_id);
-    if (requests.size() == 0)
-      throw std::invalid_argument("AMR Program RHS group cannot be empty");
-    std::vector<int> rate_ids;
-    rate_ids.reserve(requests.size());
-    for (const auto& request : requests) {
-      require_rate_identity_(request.rate_id);
-      if (request.rate_id == group_id ||
-          std::find(rate_ids.begin(), rate_ids.end(), request.rate_id) != rate_ids.end())
-        throw std::invalid_argument(
-            "AMR Program RHS group and member rate identities must be distinct");
-      if (request.state == nullptr || request.rhs == nullptr ||
-          (request.flux_only != 0 && request.flux_only != 1))
-        throw std::invalid_argument("AMR Program RHS group contains an invalid request");
-      rate_ids.push_back(request.rate_id);
-    }
-    std::vector<int> blocks;
-    std::vector<MultiFab*> states;
-    std::vector<MultiFab*> rhs;
-    std::vector<int> flux_only;
-    blocks.reserve(requests.size());
-    states.reserve(requests.size());
-    rhs.reserve(requests.size());
-    flux_only.reserve(requests.size());
-    for (const auto& request : requests) {
-      blocks.push_back(sys_block(request.block));
-      states.push_back(request.state);
-      rhs.push_back(request.rhs);
-      flux_only.push_back(request.flux_only);
-    }
-    if (capturing()) {
-      const bool has_interfaces = eng_->has_level_interfaces(level_);
-      if (has_interfaces && nlev() != 2)
-        deferred_op("refined_shared_block_interfaces",
-                    "shared block interface-fragment publication currently requires exactly two "
-                    "fixed hierarchy levels");
-      if (has_interfaces)
-        register_interface_flux_group_(group_id, blocks, rate_ids);
-      const auto group_point = boundary_point_(group_id);
-      eng_->with_boundary_stage_states(group_point, blocks, states, [&] {
-        for (const auto& request : requests) {
-          count_kernel();
-          capture_into_(request.block, *request.state, *request.rhs,
-                        request.flux_only ? ResidualCapture::FluxOnly : ResidualCapture::FullRate,
-                        request.rate_id, &group_point);
-        }
-        if (has_interfaces) {
-          auto publication = interface_flux_publication_(group_id);
-          eng_->publish_level_interface_flux_fragments(level_, group_point, blocks, states, rhs,
-                                                       publication);
-        }
-      });
-      return;
-    }
-    for (const auto& request : requests) {
-      count_kernel();
-    }
-    eng_->level_rhs_group(level_, boundary_point_(group_id), blocks, states, rhs, flux_only);
-  }
   void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
     require_rate_identity_(rate_id);
     count_kernel();
@@ -3511,6 +3434,37 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   friend class ProgramExecutionServices<AmrProgramContext>;
+
+  void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
+    if (capturing()) {
+      const bool has_interfaces = eng_->has_level_interfaces(level_);
+      if (has_interfaces && nlev() != 2)
+        deferred_op("refined_shared_block_interfaces",
+                    "shared block interface-fragment publication currently requires exactly two "
+                    "fixed hierarchy levels");
+      const auto group_point = boundary_point_(batch.group_id);
+      eng_->with_boundary_stage_states(group_point, batch.runtime_blocks, batch.states, [&] {
+        for (std::size_t index = 0; index < batch.states.size(); ++index) {
+          const auto& request = batch.requests.begin()[index];
+          count_kernel();
+          capture_into_(
+              request.block, *batch.states[index], *batch.rhs[index],
+              batch.flux_only[index] ? ResidualCapture::FluxOnly : ResidualCapture::FullRate,
+              batch.rate_ids[index], &group_point);
+        }
+        if (has_interfaces) {
+          auto publication = interface_flux_publication_(batch.group_id);
+          eng_->publish_level_interface_flux_fragments(level_, group_point, batch.runtime_blocks,
+                                                       batch.states, batch.rhs, publication);
+        }
+      });
+      return;
+    }
+    count_kernel(static_cast<std::int64_t>(batch.requests.size()));
+    eng_->level_rhs_group(level_, boundary_point_(batch.group_id), batch.runtime_blocks,
+                          batch.states, batch.rhs, batch.flux_only);
+  }
+
   struct LogicalEvaluationRollback {
     std::optional<amr::ClockWindow> window;
     double parent_dt = 0.0;
