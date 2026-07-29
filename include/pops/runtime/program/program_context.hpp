@@ -875,7 +875,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   CacheManager& program_execution_cache_(SchedulerCacheOperation /*operation*/) const {
     return sys_->program_cache();
   }
-  ProgramResourceTopology program_execution_resource_topology_() const noexcept {
+  ProgramResourceTopology program_execution_resource_topology_() const {
     return {0, 0, 1, sys_->n_blocks()};
   }
   int program_execution_resource_level_() const noexcept { return 0; }
