@@ -451,8 +451,8 @@ class AmrSystem {
 
   /// Install the exact prepared AMRTagging program resolved from the layout authority.
   /// This is the only tagging installation seam: the runtime never synthesizes a scalar
-  /// threshold, component-zero default, or shared-potential fallback. `min_cycles > 0` remains
-  /// fail-closed here until the public checkpoint and rank-migration adapter owns that state.
+  /// threshold, component-zero default, or shared-potential fallback. The native tagger owns
+  /// `min_cycles > 0` as accepted sparse state and persists it through AMR checkpoint/restart.
   void set_bootstrap_tagging(
       const std::vector<std::string>& leaf_subject_kinds,
       const std::vector<std::string>& leaf_subject_identities,

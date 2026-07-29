@@ -19,12 +19,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ### Changed
 
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
-  non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
-  executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
-  policy restores and authenticates the recorded accepted state before one artifact-owned
-  scientific regrid, emits a global before/after receipt, and derives a distinct continuation run
-  identity. This first operational slice is one AMR layout, unchanged MPI cardinality, and refuses
-  fields, shared interfaces, and bootstrap staggered caches.
+  non-bit-identical rank-count rematerialization with Dense persisted histories. Native
+  `SymbolicTagger` hysteresis is a checkpointed accepted-state capability. The M3 gate executes a
+  persisted two-rank to one-rank restart proof with non-empty hysteresis state, exact source-rank
+  consensus, and byte-exact rematerialization. MPI capture validates common accepted-state bytes on
+  every producer before sealing, so a divergent tagging payload fails collectively without a partial
+  file; external Tagger components remain fail-closed for non-zero hysteresis. The explicit
+  `RegridOnRestart()` policy separately restores and authenticates the recorded accepted state before
+  one artifact-owned scientific regrid, emits a global before/after receipt, and derives a distinct
+  continuation run identity. This first operational slice is one AMR layout, unchanged MPI
+  cardinality, and refuses fields, shared interfaces, and bootstrap staggered caches.
 - Add an explicit offline-only migration for the byte-exact frozen Uniform-v2 checkpoint fixture.
   Migration requires a complete authenticated current-v5 authority plus a reviewed mapping that pins
   both artifacts, all lifecycle/ABI/Program identities, every block/component/history

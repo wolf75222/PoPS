@@ -323,22 +323,39 @@ def _capture_v3(owner, sim, prepared):
         "AMR rank-local owner maps",
         value={"dmaps": [list(row) for row in prepared.local_dmaps]},
     )
+    rank_dmaps = []
     for row in rank_rows:
-        rank = int(row["rank"])
         metadata = row["value"]
         if not isinstance(metadata, dict) or set(metadata) != {"dmaps"}:
             raise RuntimeError("checkpoint AMR rank-local metadata has an invalid schema")
         dmaps = metadata["dmaps"]
         if not isinstance(dmaps, list) or len(dmaps) != prepared.levels:
             raise ValueError("checkpoint AMR rank-local owner maps have an invalid level count")
-        out["program_accepted_state_rank_%d" % rank] = np.frombuffer(
-            program_states[rank], dtype=np.uint8
-        ).copy()
-        for level, ranks in enumerate(dmaps):
+        normalized_dmaps = []
+        for ranks in dmaps:
             if not isinstance(ranks, list) or any(
                 isinstance(value, bool) or not isinstance(value, int) for value in ranks
             ):
                 raise TypeError("checkpoint AMR rank-local owner map must contain integers")
+            normalized_dmaps.append(tuple(ranks))
+        rank_dmaps.append(tuple(normalized_dmaps))
+    if any(dmaps != rank_dmaps[0] for dmaps in rank_dmaps[1:]):
+        raise ValueError("checkpoint AMR owner maps disagree across source ranks")
+    if prepared.local_program_state:
+        rematerialize = getattr(sim, "rematerialize_program_accepted_state", None)
+        if not callable(rematerialize):
+            raise TypeError(
+                "checkpoint AMR engine lacks accepted-state consensus validation"
+            )
+        # Re-materializing onto the unchanged ownership is a non-mutating validation pass. It
+        # authenticates every rank-independent accepted field, including persistent tagging,
+        # before any rank may seal or publish a checkpoint.
+        rematerialize(program_states, rank_dmaps[0], rank_dmaps[0])
+    for rank, dmaps in enumerate(rank_dmaps):
+        out["program_accepted_state_rank_%d" % rank] = np.frombuffer(
+            program_states[rank], dtype=np.uint8
+        ).copy()
+        for level, ranks in enumerate(dmaps):
             out["dmap_rank_%d_level_%d" % (rank, level)] = np.asarray(ranks, dtype=np.int64)
     if prepared.multi:
         for name in prepared.names:

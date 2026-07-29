@@ -95,7 +95,7 @@
     "maximum_stencil_terms": 16,
     "maximum_instruction_count": 128,
     "non_finite_policy": "reject",
-    "persistent_hysteresis": false
+    "persistent_hysteresis": true
   },
   "native_interface_abis": [
     {
