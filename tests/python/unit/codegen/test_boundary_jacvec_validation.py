@@ -102,15 +102,12 @@ def test_boundary_jacvec_accepts_multiple_frozen_primal_fields() -> None:
     )
 
 
-def test_boundary_jacvec_rejects_field_coupling_without_field_tangents() -> None:
-    with pytest.raises(
-            NotImplementedError,
-            match=r"no field-tangent materializer for field_coupled=True"):
-        _validate(
-            [_component_row("residual", fields=(FIELD_A,)),
-             _component_row("jvp", fields=(FIELD_A,))],
-            field_coupled=True,
-        )
+def test_boundary_jacvec_accepts_field_coupling_with_solved_field_dependencies() -> None:
+    _validate(
+        [_component_row("residual", fields=(FIELD_A,)),
+         _component_row("jvp", fields=(FIELD_A,))],
+        field_coupled=True,
+    )
 
 
 def test_boundary_jacvec_rejects_cross_block_state_dependency() -> None:

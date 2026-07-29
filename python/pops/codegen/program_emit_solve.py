@@ -180,6 +180,18 @@ def _validate_matrix_free_contract(v: Any, model: Any) -> None:
                 raise ValueError(
                     "rhs_jacvec field coupling requires one unambiguous field context solved "
                     "only from the frozen iterate")
+            if len(r0.inputs) != 2:
+                raise ValueError(
+                    "field-coupled rhs_jacvec requires one complete rhs(iterate, fields) base")
+            fields = r0.inputs[1]
+            if (getattr(fields, "vtype", None) != "fields"
+                    or getattr(fields, "field_context", None) != context):
+                raise ValueError(
+                    "field-coupled rhs_jacvec base must consume its exact solved-field provider")
+            if fields.block != iterate.block or fields.point != iterate.point:
+                raise ValueError(
+                    "field-coupled rhs_jacvec base field must share the frozen iterate's exact "
+                    "block and temporal point")
         elif context is not None:
             raise ValueError(
                 "rhs_jacvec field_coupled=False requires an r0 with no field-solve provenance")
@@ -296,8 +308,10 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
       - ``rhs_jacvec(out, in, iterate, r0, ...)`` (ADC-431) -> a finite-difference Jacobian-vector
         product over the core residual plus the exact prepared-boundary JVP.  The lambda captures one
         shared ``BoundaryEvaluationPoint`` refreshed from r0's exact stage in the step body, freezing
-        that point even if later operators advance the shared context stage. Boundary-only scratch is
-        allocated once and only when that block has an installed boundary linearization;
+        that point even if later operators advance the shared context stage.  A field-coupled apply
+        instead finite-differences the complete boundary residual before restoring its perturbed
+        provider publication. Boundary-only scratch is allocated once and only when that block has
+        an installed boundary linearization;
       - the apply RESULT (the affine the body returned, e.g. ``in - alpha*Lap(in)``) is written into
         ``out`` via the same accumulate-then-lincomb idiom as a linear_combine commit.
 
@@ -452,9 +466,13 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         # Krylov invokes this ApplyFn sequentially.  Reuse one boundary buffer first for C(U^k) in
         # the step-body refresh, then for C'(U^k)v in each matvec.  Both conditional allocations are
         # skipped entirely for the ordinary no-boundary-linearization path.
-        r0_core = "jac_r0_core%d_%d" % (apply_id, w.id)
+        r0_core = None
         boundary_work = "jac_boundary_work%d_%d" % (apply_id, w.id)
-        for sp in (r0_core, boundary_work):
+        optional_boundary_scratch = [boundary_work]
+        if not w.attrs["field_coupled"]:
+            r0_core = "jac_r0_core%d_%d" % (apply_id, w.id)
+            optional_boundary_scratch.insert(0, r0_core)
+        for sp in optional_boundary_scratch:
             prelude.append(
                 "auto %s = %s ? std::make_shared<pops::MultiFab>("
                 "ctx.alloc_scalar_field(%d, %s)) : std::shared_ptr<pops::MultiFab>{};"
@@ -608,25 +626,44 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                             % (point, field_slot, block_idx, up, uk))
                 body.append("    ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s, *%s);"
                             % (point, block_idx, up, rp, flux_only, boundary_session))
+                # Keep the perturbed provider publication active while evaluating the boundary
+                # contribution.  This finite-differences the complete residual, including a
+                # boundary law that reads a solved field, instead of applying its analytic JVP
+                # after evaluate_with_field_state_at() has restored the frozen provider.
+                body.append("    if (%s) {" % has_boundary)
+                body.append("      pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
+                body.append(
+                    "      ctx.boundary_residual_into_at(*%s, %d, *%s, *%s, *%s);"
+                    % (point, block_idx, up, boundary_work, boundary_session))
+                body.append(
+                    "      pops::PureFieldAlgebra::axpy(*%s, pops::Real(1), *%s);"
+                    % (rp, boundary_work))
+                body.append("    }")
                 body.append("  });")
             else:
                 body.append("  ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s, *%s);"
                             % (point, block_idx, up, rp, flux_only, boundary_session))
-            # out = v - (c*dt/h)(Rcore(U^k + h*v) - Rcore(U^k)).  The boundary contribution uses its
-            # exact JVP contract below, avoiding an invalid finite difference of ghost/action effects.
+            # A field-coupled apply finite-differences the complete residual while the perturbed
+            # provider publication is active.  The ordinary state-only route keeps the split core
+            # difference plus its exact prepared boundary JVP, avoiding an invalid finite
+            # difference of ghost/action effects.
             body.append("  const pops::Real jc = *%s / jh;" % cdt)
             body.append("  pops::PureFieldAlgebra::lincomb(%s, pops::Real(1), %s, -jc, *%s);"
                         % (out_tok, in_arg, rp))
-            body.append("  if (%s) {" % has_boundary)
-            body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0_core))
-            body.append("    pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
-            body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s, *%s);"
-                        % (point, block_idx, uk, in_arg, boundary_work, boundary_session))
-            body.append("    pops::PureFieldAlgebra::axpy(%s, -*%s, *%s);"
-                        % (out_tok, cdt, boundary_work))
-            body.append("  } else {")
-            body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0))
-            body.append("  }")
+            if w.attrs["field_coupled"]:
+                body.append("  pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0))
+            else:
+                body.append("  if (%s) {" % has_boundary)
+                body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);"
+                            % (out_tok, r0_core))
+                body.append("    pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
+                body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s, *%s);"
+                            % (point, block_idx, uk, in_arg, boundary_work, boundary_session))
+                body.append("    pops::PureFieldAlgebra::axpy(%s, -*%s, *%s);"
+                            % (out_tok, cdt, boundary_work))
+                body.append("  } else {")
+                body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0))
+                body.append("  }")
             body.append("}")
         else:
             raise NotImplementedError(
@@ -703,16 +740,17 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         (uk, r0, _up, _rp, r0_core, boundary_work, point, has_boundary,
          _field_slot, _cdt, block_idx, _metric_scratch) = jac_scratch[w.id]
         boundary_session = boundary_sessions[block_idx]
-        prelude.append("    if (%s) {" % has_boundary)
-        prelude.append("      pops::PureFieldAlgebra::copy(*%s, *%s);" % (r0_core, r0))
-        prelude.append("      pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
-        prelude.append(
-            "      ctx.boundary_residual_into_at(*%s, %d, *%s, *%s, *%s);"
-            % (point, block_idx, uk, boundary_work, boundary_session))
-        prelude.append(
-            "      pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
-            % (r0_core, boundary_work))
-        prelude.append("    }")
+        if not w.attrs["field_coupled"]:
+            prelude.append("    if (%s) {" % has_boundary)
+            prelude.append("      pops::PureFieldAlgebra::copy(*%s, *%s);" % (r0_core, r0))
+            prelude.append("      pops::PureFieldAlgebra::zero_valid(*%s);" % boundary_work)
+            prelude.append(
+                "      ctx.boundary_residual_into_at(*%s, %d, *%s, *%s, *%s);"
+                % (point, block_idx, uk, boundary_work, boundary_session))
+            prelude.append(
+                "      pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
+                % (r0_core, boundary_work))
+            prelude.append("    }")
     prelude.append("  };")
     # Apply sees only its private session state.  The outer template snapshots are refresh inputs
     # for prepare() and must not bloat every hot matvec closure.

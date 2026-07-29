@@ -107,10 +107,14 @@ Supported native routes include:
   `BoundaryEvaluationPoint` is transported into the apply closure, the core RHS is
   finite-differenced, and the authenticated state-only boundary JVP is added once with persistent
   conditional scratch. Field-coupled `rhs_jacvec` re-solves its exact prepared provider from the
-  perturbed state on level zero and every refined level. Dynamic physical field boundaries may read
-  level-qualified conservative states, already-solved fields and the exact stage/local time under
-  both `LevelByLevelSolve` and `CompositeHierarchySolve`; the composite FAC provider requires one
-  exact dependency carrier per materialized level before entering a solve. Partially refined FAC
+  perturbed state on level zero and every refined level; if a transport boundary reads that solved
+  field, its complete residual is finite-differenced before the perturbed provider is restored.
+  Dynamic physical field boundaries may read level-qualified conservative states, already-solved
+  fields and the exact stage/local time under both `LevelByLevelSolve` and
+  `CompositeHierarchySolve`; the composite FAC provider requires one exact dependency carrier per
+  materialized level before entering a solve. The generated resolve/source contract covers the
+  field-dependent transport-boundary JVP route; an end-to-end native L0/L1 finite-difference oracle
+  for that combined route remains outstanding. Partially refined FAC
   patches carrying a dynamic physical boundary must remain strictly interior; a patch touching a
   non-periodic domain face fails closed. A selected solve with a field dependency also fails closed
   until its complete dependency closure can share one transaction.
