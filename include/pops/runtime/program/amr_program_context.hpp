@@ -198,14 +198,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         });
   }
 
-  /// Register the macro-step body (forwards to AmrSystem::install_program_step). @p step is the per-level
-  /// loop wrapper the codegen emits; it runs ONE macro-step over dt.
-  void install(std::function<void(double)> step) const {
-    ensure_level_clocks_();
-    if (facade_->program_accepted_state().empty())
-      publish_program_accepted_state_();
-    facade_->install_program_step(std::move(step));
-  }
+  using ProgramExecutionServices<AmrProgramContext>::install;
 
   /// Generated AMR artifacts retain their context in @p owner and install a second closure beside
   /// the macro-step. Explicit bootstrap can then requalify the accepted level axes immediately,
@@ -727,13 +720,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
             std::to_string(child) + " resolved ratio " + std::to_string(ratio) +
             ". Select a provider whose declared capabilities cover that transition.");
     }
-  }
-  static SolveReport consume_field_outcome_(SolveOutcome outcome) {
-    return outcome.consume(outcome.report().solved_value_available()
-                               ? SolveConsumption::kAccept
-                               : (outcome.report().action == SolveAction::kRejectAttempt
-                                      ? SolveConsumption::kRejectAttempt
-                                      : SolveConsumption::kFailRun));
   }
   struct CaptureFluxScratchKey {
     std::size_t block = 0;
@@ -3055,6 +3041,13 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   friend class ProgramExecutionServices<AmrProgramContext>;
+
+  void program_execution_install_(std::function<void(double)> step) const {
+    ensure_level_clocks_();
+    if (facade_->program_accepted_state().empty())
+      publish_program_accepted_state_();
+    facade_->install_program_step(std::move(step));
+  }
 
   runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
       int stage_id) const {
