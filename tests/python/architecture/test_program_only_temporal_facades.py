@@ -44,6 +44,7 @@ BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
 HEADERS_MANIFEST = ROOT / "include/pops_headers.manifest"
+PUBLIC_COUPLING_ROOT = ROOT / "include/pops/coupling"
 
 LEGACY_DIRECT_AMR_STEP_TESTS = set()
 NONLINEAR_AMR_TEST = ROOT / "tests/python/integration/amr/test_amr_newton_full.py"
@@ -74,6 +75,11 @@ def _python_function_source(source: str, name: str) -> str:
             assert segment is not None
             return segment
     raise AssertionError("missing Python function %r" % name)
+
+
+def _cpp_without_comments(source: str) -> str:
+    """Remove C++ comments before matching executable temporal syntax."""
+    return re.sub(r"//[^\n]*|/\*.*?\*/", "", source, flags=re.DOTALL)
 
 
 def test_system_temporal_facades_dispatch_only_through_an_installed_program():
@@ -131,6 +137,46 @@ def test_static_system_temporal_driver_is_test_only():
     assert "class ReferenceSystemDriver" in reference
     assert "Real step_adaptive(" in reference
     assert REFERENCE_SYSTEM_DRIVER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
+
+
+def test_public_coupling_headers_are_spatial_only():
+    """Public coupling services may prepare fields/residuals, never select a time method."""
+    public_headers = []
+    for row in HEADERS_MANIFEST.read_text(encoding="utf-8").splitlines():
+        if not row or row.startswith("#"):
+            continue
+        surface, relative = row.split(maxsplit=1)
+        if surface == "api" and relative.startswith("pops/coupling/"):
+            public_headers.append(ROOT / "include" / relative)
+
+    assert public_headers
+    assert all(path.is_relative_to(PUBLIC_COUPLING_ROOT) for path in public_headers)
+
+    forbidden = {
+        "temporal driver call or method": re.compile(
+            r"\b(?:advance(?:_[A-Za-z0-9_]+)?|step(?:_cfl|_adaptive)?)\s*\("
+        ),
+        "time integrator include": re.compile(
+            r"#include\s+<pops/numerics/time/(?:integrators|schemes)/"
+        ),
+        "native stepper invocation": re.compile(r"\b(?:take_step|run_explicit_substeps)\s*\("),
+        "native time-policy selector": re.compile(
+            r"\b(?:TimePolicyTraits|PerStageCoupling|OncePerStepCoupling)\b"
+        ),
+    }
+    violations = set()
+    for path in public_headers:
+        source = _cpp_without_comments(path.read_text(encoding="utf-8"))
+        violations.update(
+            (path.relative_to(ROOT).as_posix(), label)
+            for label, pattern in forbidden.items()
+            if pattern.search(source)
+        )
+    assert violations == set()
+
+    single = (PUBLIC_COUPLING_ROOT / "single/coupler.hpp").read_text(encoding="utf-8")
+    assert "void solve_fields(const MultiFab& U)" in single
+    assert "void assemble_residual(MultiFab& state, MultiFab& residual)" in single
 
 
 def test_local_implicit_solve_has_one_typed_options_route():
