@@ -10,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -48,61 +49,84 @@ class ProgramExecutionServices {
 
   enum class ScratchKind : std::uint8_t { Rhs = 0, State = 1, Scalar = 2 };
 
-  /// Provider-owned state captured before entering one logical child-clock interval.
-  ///
-  /// The lifetime and rollback semantics are topology-independent. Uniform execution uses the
-  /// rational phase fields; AMR execution uses ``window``. Providers translate this shared record to
-  /// their native clock/storage representation.
-  struct LogicalEvaluationState {
-    std::optional<amr::ClockWindow> window;
+  /// One topology-independent subdivision of the active logical interval.
+  struct LogicalEvaluationInterval {
+    int iteration = 0;
+    int count = 1;
     double parent_dt = 0.0;
-    amr::Rational stage{0, 1};
-    amr::Rational phase_begin{0, 1};
-    amr::Rational phase_span{1, 1};
-    double physical_time_offset = 0.0;
     double child_dt = 0.0;
+    amr::Rational child_begin{0, 1};
+    amr::Rational child_end{1, 1};
+    amr::Rational child_span{1, 1};
   };
 
   /// One exact logical child-clock interval.
   ///
-  /// Program semantics own validation, move-only lifetime and rollback exactly once. The provider
-  /// only maps the interval to its uniform or hierarchy clock/storage representation.
+  /// Program semantics own validation, subdivision, move-only lifetime and rollback exactly once.
+  /// ``Rollback`` is an opaque provider token: the shared authority neither names nor inspects
+  /// topology state.
+  template <class Rollback>
   class LogicalEvaluationScope {
    public:
-    LogicalEvaluationScope(const Provider& owner, int iteration, int count) : owner_(&owner) {
-      if (count <= 0 || iteration < 0 || iteration >= count)
-        throw std::invalid_argument("Program logical evaluation requires a valid child iteration");
-      state_ = owner_->program_execution_begin_logical_evaluation_(iteration, count);
-      if (!std::isfinite(state_.child_dt) || state_.child_dt <= 0.0)
-        throw std::logic_error("Program logical evaluation provider returned an invalid child dt");
+    LogicalEvaluationScope(const Provider& owner, double child_dt, Rollback rollback)
+        : owner_(&owner), child_dt_(child_dt), rollback_(std::move(rollback)) {
+      static_assert(std::is_nothrow_move_constructible_v<Rollback>,
+                    "Program logical-evaluation rollback tokens must be nothrow movable");
     }
     LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
     LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
     LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
-        : owner_(std::exchange(other.owner_, nullptr)), state_(std::move(other.state_)) {}
+        : owner_(std::exchange(other.owner_, nullptr)),
+          child_dt_(other.child_dt_),
+          rollback_(std::move(other.rollback_)) {}
     LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
     ~LogicalEvaluationScope() noexcept { restore_(); }
 
     Real dt() const {
       if (owner_ == nullptr)
         throw std::logic_error("Program logical evaluation scope is no longer active");
-      return static_cast<Real>(state_.child_dt);
+      return static_cast<Real>(child_dt_);
     }
 
    private:
     void restore_() noexcept {
       if (owner_ == nullptr)
         return;
-      owner_->program_execution_restore_logical_evaluation_(state_);
+      owner_->program_execution_restore_logical_evaluation_(rollback_);
       owner_ = nullptr;
     }
 
     const Provider* owner_ = nullptr;
-    LogicalEvaluationState state_;
+    double child_dt_ = 0.0;
+    Rollback rollback_;
   };
 
-  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
-    return LogicalEvaluationScope(provider_(), iteration, count);
+  [[nodiscard]] auto logical_evaluation_scope(int iteration, int count) const {
+    if (count <= 0 || iteration < 0 || iteration >= count)
+      throw std::invalid_argument("Program logical evaluation requires a valid child iteration");
+    const double parent_dt = provider_().program_execution_logical_parent_dt_();
+    if (!std::isfinite(parent_dt) || parent_dt <= 0.0)
+      throw std::logic_error("Program logical evaluation requires a prepared parent dt");
+    const double child_dt = parent_dt / static_cast<double>(count);
+    if (!std::isfinite(child_dt) || child_dt <= 0.0)
+      throw std::overflow_error("Program logical evaluation child dt is not finite");
+    const LogicalEvaluationInterval interval{
+        iteration,
+        count,
+        parent_dt,
+        child_dt,
+        amr::Rational(iteration, count),
+        amr::Rational(iteration + 1, count),
+        amr::Rational(1, count),
+    };
+
+    // Capture first, arm rollback second, mutate last. If applying the provider-specific clock
+    // projection throws after any partial mutation, the local scope restores the exact parent state.
+    auto rollback = provider_().program_execution_capture_logical_evaluation_();
+    using Rollback = decltype(rollback);
+    LogicalEvaluationScope<Rollback> scope(provider_(), child_dt, std::move(rollback));
+    provider_().program_execution_apply_logical_evaluation_(interval);
+    return scope;
   }
 
   template <class Body>
@@ -111,13 +135,13 @@ class ProgramExecutionServices {
                                     MultiFab& evaluation_state, MultiFab& restore_state,
                                     Body&& body) const {
     const auto restore = [&]() {
-      const SolveReport restored =
-          provider_().solve_fields_from_state_at(point, provider_slot, block, restore_state);
+      const SolveReport restored = provider_().program_execution_solve_fields_from_state_at_(
+          point, provider_slot, block, restore_state);
       if (!restored.solved_value_available())
         throw_field_solve_failure_(restored, "restoring the frozen field state");
     };
-    const SolveReport prepared =
-        provider_().solve_fields_from_state_at(point, provider_slot, block, evaluation_state);
+    const SolveReport prepared = provider_().program_execution_solve_fields_from_state_at_(
+        point, provider_slot, block, evaluation_state);
     if (!prepared.solved_value_available()) {
       restore();
       throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
@@ -169,14 +193,43 @@ class ProgramExecutionServices {
         throw std::invalid_argument("Program commit_many received a null state");
       if (std::find(targets.begin(), targets.end(), target) != targets.end())
         throw std::invalid_argument("Program commit_many received a duplicate target");
-      if (target->ncomp() != source->ncomp() ||
-          target->box_array().boxes() != source->box_array().boxes())
+      if (target->box_array().boxes() != source->box_array().boxes() ||
+          target->dmap().ranks() != source->dmap().ranks() || target->ncomp() != source->ncomp())
         throw std::invalid_argument("Program commit_many state layout mismatch");
       targets.push_back(target);
     }
-    for (const auto& [target, source] : commits)
-      if (target != source)
-        provider_().lincomb(*target, Real(0), *target, Real(1), *source);
+    const bool has_aliased_source =
+        std::any_of(commits.begin(), commits.end(), [&targets](const auto& commit) {
+          return commit.first != commit.second &&
+                 std::find(targets.begin(), targets.end(), commit.second) != targets.end();
+        });
+    provider_().program_execution_validate_commit_aliases_(has_aliased_source);
+
+    if (!has_aliased_source) {
+      for (const auto& [target, source] : commits)
+        if (target != source)
+          provider_().program_execution_commit_copy_(*target, *source);
+      return;
+    }
+
+    std::vector<std::pair<MultiFab*, const MultiFab*>> prepared(commits);
+    std::vector<MultiFab> aliased_sources;
+    aliased_sources.reserve(prepared.size());
+    for (auto& [target, source] : prepared) {
+      if (target != source && std::find(targets.begin(), targets.end(), source) != targets.end()) {
+        source->sync_host();
+        aliased_sources.emplace_back(*source);
+        aliased_sources.back().sync_device();
+        source = &aliased_sources.back();
+      }
+    }
+    for (const auto& [target, source] : prepared) {
+      if (target != source) {
+        provider_().program_execution_commit_copy_(*target, *source);
+        // Aliased snapshots are function-local. Complete their consumers before destruction.
+        device_fence();
+      }
+    }
   }
 
   void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {

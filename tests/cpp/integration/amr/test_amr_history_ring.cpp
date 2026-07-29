@@ -400,6 +400,83 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
       << "the conservative per-level count reaches full depth together";
 }
 
+TEST(test_amr_history_ring, CommitManySnapshotsSourcesThatAreAlsoTargetsOnAFlatHierarchy) {
+  constexpr int n = 16;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  cfg.level_count = 2;
+  cfg.explicit_bootstrap = true;
+  AmrSystem sim(cfg);
+  install_history_state_authorities(sim);
+  sim.set_temporal_relations({1}, {1}, {"integral_only"});
+  sim.add_block("a", exb_spec(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_spec(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  const auto neutral_density = blob(n, 0.35, 0.5, 0.5, 1.0, 0.12);
+  sim.set_density("a", neutral_density);
+  sim.set_density("b", neutral_density);
+  sim.set_program_block_map({0, 1});
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* rt = sim.engine();
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 1);
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.set_level(0);
+  ASSERT_FALSE(context.capturing());
+  MultiFab first = rt->level_state(0, 0);
+  MultiFab second = rt->level_state(1, 0);
+  first.set_val(Real(5));
+  second.set_val(Real(11));
+
+  context.commit_many({{&first, &second}, {&second, &first}});
+
+  ASSERT_GT(first.local_size(), 0);
+  ASSERT_GT(second.local_size(), 0);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(11));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(5));
+
+  MultiFab different_ghost_width(first.box_array(), first.dmap(), first.ncomp(),
+                                 first.n_grow() + 1);
+  different_ghost_width.set_val(Real(17));
+  context.commit_many({{&first, &different_ghost_width}});
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(17));
+
+  MultiFab wrong_components(first.box_array(), first.dmap(), first.ncomp() + 1, first.n_grow());
+  EXPECT_THROW(context.commit_many({{&first, &wrong_components}}), std::invalid_argument);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(17));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(5));
+}
+
+TEST(test_amr_history_ring, CommitManyRejectsAliasedSourcesBeforeMultilevelPublication) {
+  constexpr int n = 8;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 2);
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.set_level(0);
+  ASSERT_TRUE(context.capturing());
+
+  MultiFab first = rt->level_state(0, 0);
+  MultiFab second = rt->level_state(1, 0);
+  first.set_val(Real(19));
+  second.set_val(Real(23));
+  EXPECT_THROW(context.commit_many({{&first, &second}, {&second, &first}}), std::invalid_argument);
+
+  ASSERT_GT(first.local_size(), 0);
+  ASSERT_GT(second.local_size(), 0);
+  EXPECT_EQ(first.fab(0).const_array()(first.box(0).lo[0], first.box(0).lo[1], 0), Real(19));
+  EXPECT_EQ(second.fab(0).const_array()(second.box(0).lo[0], second.box(0).lo[1], 0), Real(23));
+}
+
 TEST(test_amr_history_ring, CheckpointRoundTrip) {
   AmrRuntime rt = make_two_block(32, 1.0, 1.0);
   detail::AmrHistoryOps::register_history(rt, 0, "R", 2);  // depth 3

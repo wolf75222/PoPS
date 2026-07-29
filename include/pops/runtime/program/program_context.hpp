@@ -1417,45 +1417,57 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
 
   friend class ProgramExecutionServices<ProgramContext>;
-  LogicalEvaluationState program_execution_begin_logical_evaluation_(int iteration,
-                                                                     int count) const {
-    LogicalEvaluationState state;
-    state.parent_dt = current_dt_;
-    state.stage = stage_time_;
-    state.phase_begin = logical_phase_begin_;
-    state.phase_span = logical_phase_span_;
-    state.physical_time_offset = logical_physical_time_offset_;
-    if (!std::isfinite(state.parent_dt) || state.parent_dt <= 0.0)
-      throw std::logic_error("Program logical evaluation requires a prepared parent dt");
-    state.child_dt = state.parent_dt / static_cast<double>(count);
+  struct LogicalEvaluationRollback {
+    double parent_dt = 0.0;
+    amr::Rational stage{0, 1};
+    amr::Rational phase_begin{0, 1};
+    amr::Rational phase_span{1, 1};
+    double physical_time_offset = 0.0;
+  };
+
+  double program_execution_logical_parent_dt_() const noexcept { return current_dt_; }
+  LogicalEvaluationRollback program_execution_capture_logical_evaluation_() const noexcept {
+    return {current_dt_, stage_time_, logical_phase_begin_, logical_phase_span_,
+            logical_physical_time_offset_};
+  }
+  void program_execution_apply_logical_evaluation_(
+      const LogicalEvaluationInterval& interval) const {
     const double child_offset =
-        state.physical_time_offset + static_cast<double>(iteration) * state.child_dt;
-    if (!std::isfinite(state.child_dt) || state.child_dt <= 0.0 || !std::isfinite(child_offset))
+        logical_physical_time_offset_ + static_cast<double>(interval.iteration) * interval.child_dt;
+    if (!std::isfinite(child_offset))
       throw std::overflow_error("Program logical evaluation child window is not finite");
-    const amr::Rational child_fraction(iteration, count);
-    const amr::Rational child_span = state.phase_span * amr::Rational(1, count);
-    const amr::Rational child_begin = state.phase_begin + state.phase_span * child_fraction;
+    const amr::Rational child_span = logical_phase_span_ * interval.child_span;
+    const amr::Rational child_begin =
+        logical_phase_begin_ + logical_phase_span_ * interval.child_begin;
 
     invalidate_active_operator_snapshot_();
-    current_dt_ = state.child_dt;
+    current_dt_ = interval.child_dt;
     stage_time_ = amr::Rational(0, 1);
     logical_phase_begin_ = child_begin;
     logical_phase_span_ = child_span;
     logical_physical_time_offset_ = child_offset;
-    return state;
   }
   void program_execution_restore_logical_evaluation_(
-      const LogicalEvaluationState& state) const noexcept {
-    current_dt_ = state.parent_dt;
-    stage_time_ = state.stage;
-    logical_phase_begin_ = state.phase_begin;
-    logical_phase_span_ = state.phase_span;
-    logical_physical_time_offset_ = state.physical_time_offset;
+      const LogicalEvaluationRollback& rollback) const noexcept {
+    current_dt_ = rollback.parent_dt;
+    stage_time_ = rollback.stage;
+    logical_phase_begin_ = rollback.phase_begin;
+    logical_phase_span_ = rollback.phase_span;
+    logical_physical_time_offset_ = rollback.physical_time_offset;
     invalidate_active_operator_snapshot_();
+  }
+  SolveReport program_execution_solve_fields_from_state_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      int block, MultiFab& state) const {
+    return solve_fields_from_state_at(point, provider_slot, block, state);
   }
   MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
                                        const MultiFab& prototype, int n_comp, int n_ghost) const {
     return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
+  }
+  void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
+  void program_execution_commit_copy_(MultiFab& target, const MultiFab& source) const {
+    lincomb(target, Real(0), target, Real(1), source);
   }
   const std::vector<int>& program_execution_block_map_() const { return sys_->program_block_map(); }
   int program_execution_block_count_() const { return sys_->n_blocks(); }
