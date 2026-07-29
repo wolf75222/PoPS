@@ -27,4 +27,5 @@ pops/coupling/
 ```
 
 `system_coupler.hpp` now contains only `SystemAssembler`: the historical static temporal driver
-lives exclusively in `tests/cpp/support/reference_system_driver.hpp` as a numerical oracle.
+lives exclusively in `tests/cpp/support/reference_time_scheduler.hpp` and
+`tests/cpp/support/reference_system_driver.hpp` as a numerical oracle.

@@ -23,6 +23,10 @@ SYSTEM_HEADER = ROOT / "include/pops/runtime/system.hpp"
 SYSTEM_BINDING = ROOT / "python/bindings/core/init/init_system.cpp"
 STATIC_SYSTEM_ASSEMBLER = ROOT / "include/pops/coupling/system/system_coupler.hpp"
 REFERENCE_SYSTEM_DRIVER = ROOT / "tests/cpp/support/reference_system_driver.hpp"
+REFERENCE_TIME_SCHEDULER = ROOT / "tests/cpp/support/reference_time_scheduler.hpp"
+LEGACY_PUBLIC_TIME_SCHEDULER = (
+    ROOT / "include/pops/numerics/time/schemes/scheduler.hpp"
+)
 AMR_SYSTEM_CPP = ROOT / "src/runtime/amr/amr_system.cpp"
 AMR_SYSTEM_HEADER = ROOT / "include/pops/runtime/amr_system.hpp"
 AMR_RUNTIME = ROOT / "include/pops/runtime/amr/amr_runtime.hpp"
@@ -137,6 +141,32 @@ def test_static_system_temporal_driver_is_test_only():
     assert "class ReferenceSystemDriver" in reference
     assert "Real step_adaptive(" in reference
     assert REFERENCE_SYSTEM_DRIVER.relative_to(ROOT).as_posix().startswith("tests/cpp/support/")
+
+
+def test_historical_block_scheduler_is_not_an_installed_temporal_authority():
+    """The old TimePolicy scheduler remains only as a test oracle."""
+    assert not LEGACY_PUBLIC_TIME_SCHEDULER.exists()
+    assert (
+        "pops/numerics/time/schemes/scheduler.hpp"
+        not in HEADERS_MANIFEST.read_text(encoding="utf-8")
+    )
+
+    public_sources = tuple((ROOT / "include/pops").rglob("*.hpp"))
+    violations = {
+        path.relative_to(ROOT).as_posix()
+        for path in public_sources
+        if "advance_subcycled(" in _cpp_without_comments(path.read_text(encoding="utf-8"))
+    }
+    assert violations == set()
+
+    reference_scheduler = REFERENCE_TIME_SCHEDULER.read_text(encoding="utf-8")
+    reference_driver = REFERENCE_SYSTEM_DRIVER.read_text(encoding="utf-8")
+    assert "namespace pops::test_support" in reference_scheduler
+    assert "void advance_subcycled(" in reference_scheduler
+    assert '#include "reference_time_scheduler.hpp"' in reference_driver
+    assert REFERENCE_TIME_SCHEDULER.relative_to(ROOT).as_posix().startswith(
+        "tests/cpp/support/"
+    )
 
 
 def test_public_coupling_headers_are_spatial_only():

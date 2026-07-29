@@ -7,7 +7,8 @@
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
-#include <pops/numerics/time/schemes/scheduler.hpp>
+
+#include "reference_time_scheduler.hpp"
 
 #include <algorithm>
 #include <type_traits>
@@ -63,12 +64,12 @@ class ReferenceSystemDriver {
     const Real macro_dt = cfl * h / std::max(wmax, kCflSpeedFloor);
     assembler_.system().for_each_block([&](auto& block) {
       using Block = std::decay_t<decltype(block)>;
-      if constexpr (block_time_treatment_v<Block> != TimeTreatment::Prescribed) {
+      if constexpr (reference_block_time_treatment_v<Block> != TimeTreatment::Prescribed) {
         const Real wave_speed = max_wave_speed_mf(block.model, block.U(), assembler_.aux());
         const int stride =
             wave_speed <= Real(0) ? 1 : std::max(1, static_cast<int>(wmax / wave_speed));
         if (macro_step_ % stride == 0) {
-          constexpr int count = block_substeps_v<Block>;
+          constexpr int count = reference_block_substeps_v<Block>;
           const Real h_substep = (macro_dt * static_cast<Real>(stride)) / static_cast<Real>(count);
           for (int substep = 0; substep < count; ++substep)
             advance_block_dispatch(block, h_substep, substep, count, advance_implicit);
@@ -136,7 +137,7 @@ class ReferenceSystemDriver {
   template <class Block, class ImplicitAdvance>
   void advance_block_dispatch(Block& block, Real dt, int substep, int count,
                               ImplicitAdvance& advance_implicit) {
-    constexpr TimeTreatment treatment = block_time_treatment_v<Block>;
+    constexpr TimeTreatment treatment = reference_block_time_treatment_v<Block>;
     if constexpr (treatment == TimeTreatment::Explicit) {
       advance_explicit_block(block, dt);
     } else if constexpr (treatment == TimeTreatment::Implicit || treatment == TimeTreatment::IMEX) {
