@@ -70,6 +70,9 @@ class ExecutionServicesFixture
   const std::vector<int>& rhs_group_runtime_blocks() const { return rhs_group_runtime_blocks_; }
   const std::vector<int>& rhs_group_rate_ids() const { return rhs_group_rate_ids_; }
   const std::vector<int>& rhs_group_flux_only() const { return rhs_group_flux_only_; }
+  int source_runtime_block() const { return source_runtime_block_; }
+  const pops::MultiFab* source_state() const { return source_state_; }
+  const pops::MultiFab* source_rhs() const { return source_rhs_; }
 
  private:
   friend class pops::runtime::program::ProgramExecutionServices<ExecutionServicesFixture<Amr>>;
@@ -95,6 +98,7 @@ class ExecutionServicesFixture
     logical_dt_ = rollback.dt;
   }
   void program_execution_rhs_group_(const typename SharedServices::RhsGroupBatch& batch) const {
+    this->count_kernel(static_cast<std::int64_t>(batch.requests.size()));
     rhs_group_identity_ = batch.group_id;
     rhs_group_program_blocks_.clear();
     for (const auto& request : batch.requests)
@@ -102,6 +106,12 @@ class ExecutionServicesFixture
     rhs_group_runtime_blocks_ = batch.runtime_blocks;
     rhs_group_rate_ids_ = batch.rate_ids;
     rhs_group_flux_only_ = batch.flux_only;
+  }
+  void program_execution_source_default_into_(int runtime_block, pops::MultiFab& state,
+                                              pops::MultiFab& rhs) const {
+    source_runtime_block_ = runtime_block;
+    source_state_ = &state;
+    source_rhs_ = &rhs;
   }
   const std::vector<int>& program_execution_block_map_() const { return block_map_; }
   int program_execution_block_count_() const { return 2; }
@@ -151,6 +161,9 @@ class ExecutionServicesFixture
   mutable std::vector<int> rhs_group_runtime_blocks_;
   mutable std::vector<int> rhs_group_rate_ids_;
   mutable std::vector<int> rhs_group_flux_only_;
+  mutable int source_runtime_block_ = -1;
+  mutable const pops::MultiFab* source_state_ = nullptr;
+  mutable const pops::MultiFab* source_rhs_ = nullptr;
 };
 
 template <class Context>
@@ -232,6 +245,11 @@ void expect_shared_program_services(Context& context, bool amr) {
   EXPECT_EQ(context.rhs_group_flux_only(), std::vector<int>({0, 1}));
   EXPECT_THROW(context.rhs_group(20, {{0, &state_a, &rhs_a, 11, 0}, {1, &state_b, &rhs_b, 11, 1}}),
                std::invalid_argument);
+  context.source_default_into(0, state_a, rhs_a);
+  EXPECT_EQ(context.source_runtime_block(), 1);
+  EXPECT_EQ(context.source_state(), &state_a);
+  EXPECT_EQ(context.source_rhs(), &rhs_a);
+  EXPECT_EQ(context.profiler().counter("kernels"), 3);
 
   context.set_stage_time(1, 2);
   context.record_scalar("mass", pops::Real(9));
@@ -247,7 +265,7 @@ void expect_shared_program_services(Context& context, bool amr) {
   EXPECT_EQ(context.profiler().counter("nodes_due"), 1);
   EXPECT_EQ(context.profiler().counter("cache_misses"), 1);
   context.count_kernel(2);
-  EXPECT_EQ(context.profiler().counter("kernels"), 4);
+  EXPECT_EQ(context.profiler().counter("kernels"), 5);
 
   EXPECT_THROW(context.set_stage_time(2, 1), std::runtime_error);
   EXPECT_THROW(

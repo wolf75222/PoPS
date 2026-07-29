@@ -360,10 +360,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     eng_->level_neg_div_flux_into_at(static_cast<std::size_t>(sys_block(b)), level_,
                                      boundary_point_(rate_id), u, r);
   }
-  void source_default_into(int b, MultiFab& u, MultiFab& r) const {
-    count_kernel();
-    eng_->level_source_into(static_cast<std::size_t>(sys_block(b)), level_, u, r);
-  }
   void apply_projection(int b, MultiFab& u) const {
     eng_->project_level_state(static_cast<std::size_t>(sys_block(b)), level_, u);
   }
@@ -3463,6 +3459,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     count_kernel(static_cast<std::int64_t>(batch.requests.size()));
     eng_->level_rhs_group(level_, boundary_point_(batch.group_id), batch.runtime_blocks,
                           batch.states, batch.rhs, batch.flux_only);
+  }
+  void program_execution_source_default_into_(int runtime_block, MultiFab& state,
+                                              MultiFab& rhs) const {
+    eng_->level_source_into(static_cast<std::size_t>(runtime_block), level_, state, rhs);
   }
 
   struct LogicalEvaluationRollback {
