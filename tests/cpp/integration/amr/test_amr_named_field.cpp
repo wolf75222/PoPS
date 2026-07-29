@@ -845,12 +845,13 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
                                               "plasma", blob(n, 0.25),
                                               /*has_density=*/true, 1.4, 1, false));
   blocks[0].state_identity = "test://amr-named-field/plasma/state/U";
-  blocks[0].aux_ncomp = kAuxNamedBase + 2;
+  blocks[0].aux_ncomp = kAuxNamedBase + 3;
 
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
                      layout.base_per, layout.replicated_coarse, layout.wall);
   test::install_second_order_amr_transfer_authorities(runtime, 1);
 
+  auto driver_rhs_calls = std::make_shared<int>(0);
   auto plan = [&](const std::string& field, int component) {
     AmrFieldSolveConfig result;
     result.solver_options =
@@ -871,9 +872,11 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
         FieldProviderBinding{"tests:plasma/" + field + "/rhs", "plasma", field, Real(1)});
     runtime.install_field_plan(field, result);
     runtime.register_named_field("plasma", field, component, -1, -1, /*gradient_sign=*/1);
-    runtime.set_block_named_elliptic_rhs(0, field, [](const MultiFab& state, MultiFab& rhs) {
-      add_scaled_component(state, Real(1), 0, rhs);
-    });
+    runtime.set_block_named_elliptic_rhs(0, field,
+                                         [driver_rhs_calls](const MultiFab& state, MultiFab& rhs) {
+                                           ++*driver_rhs_calls;
+                                           add_scaled_component(state, Real(1), 0, rhs);
+                                         });
   };
 
   // The dependency sorts after its consumer. Exact graph traversal must still solve z_driver first,
@@ -917,9 +920,12 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
   runtime.install_field_plan("a_potential", dependent);
   runtime.register_named_field("plasma", "a_potential", kAuxNamedBase + 1, -1, -1,
                                /*gradient_sign=*/1);
-  runtime.set_block_named_elliptic_rhs(0, "a_potential", [](const MultiFab& state, MultiFab& rhs) {
-    add_scaled_component(state, Real(0.5), 0, rhs);
-  });
+  auto dependent_rhs_calls = std::make_shared<int>(0);
+  runtime.set_block_named_elliptic_rhs(0, "a_potential",
+                                       [dependent_rhs_calls](const MultiFab& state, MultiFab& rhs) {
+                                         ++*dependent_rhs_calls;
+                                         add_scaled_component(state, Real(0.5), 0, rhs);
+                                       });
   runtime.set_field_logical_timepoint(
       "a_potential", FieldLogicalTimePoint{Real(0.25), Real(0.01), 1, 0, 2, 3, 1, 0});
 
@@ -927,14 +933,21 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
   ASSERT_TRUE(initial_report.solved()) << initial_report.reason;
   std::vector<MultiFab> accepted_driver;
   std::vector<MultiFab> accepted_potential;
+  std::vector<MultiFab> accepted_aux;
   for (int level = 0; level < runtime.nlev(); ++level) {
     accepted_driver.push_back(runtime.provider_potential_level("z_driver", level));
     accepted_potential.push_back(runtime.provider_potential_level("a_potential", level));
+    accepted_aux.push_back(runtime.aux(level));
+    scale(runtime.level_state(level, 0), Real(1.25));
   }
 
+  *driver_rhs_calls = 0;
+  *dependent_rhs_calls = 0;
   const std::string selected = "a_potential";
-  EXPECT_THROW((void)runtime.solve_named_fields(&selected), std::runtime_error)
-      << "a selected transaction must not reuse an already-published field dependency";
+  SolveOutcome selected_outcome = runtime.solve_named_fields(&selected);
+  ASSERT_TRUE(selected_outcome.report().solved()) << selected_outcome.report().reason;
+  EXPECT_EQ(*driver_rhs_calls, runtime.nlev());
+  EXPECT_EQ(*dependent_rhs_calls, runtime.nlev());
   for (int level = 0; level < runtime.nlev(); ++level) {
     EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("z_driver", level),
                                     accepted_driver[static_cast<std::size_t>(level)]),
@@ -942,16 +955,91 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
     EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("a_potential", level),
                                     accepted_potential[static_cast<std::size_t>(level)]),
               Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.aux(level), accepted_aux[static_cast<std::size_t>(level)]),
+              Real(0));
   }
 
-  const SolveReport report = consume_expected_solved(runtime.solve_named_fields());
+  const SolveReport report = selected_outcome.consume(SolveConsumption::kAccept);
   ASSERT_TRUE(report.solved()) << report.reason;
   ASSERT_EQ(runtime.nlev(), 2);
   ASSERT_EQ(runtime.provider_potential_levels("z_driver"), runtime.nlev());
   ASSERT_EQ(runtime.provider_potential_levels("a_potential"), runtime.nlev());
   for (int level = 0; level < runtime.nlev(); ++level) {
-    EXPECT_GT(norm_inf(runtime.provider_potential_level("z_driver", level)), Real(0));
-    EXPECT_GT(norm_inf(runtime.provider_potential_level("a_potential", level)), Real(0));
+    EXPECT_GT(max_valid_scalar_diff(runtime.provider_potential_level("z_driver", level),
+                                    accepted_driver[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_GT(max_valid_scalar_diff(runtime.provider_potential_level("a_potential", level),
+                                    accepted_potential[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_GT(max_abs_component_diff(runtime.aux(level),
+                                     accepted_aux[static_cast<std::size_t>(level)], kAuxNamedBase),
+              Real(0));
+    EXPECT_GT(
+        max_abs_component_diff(runtime.aux(level), accepted_aux[static_cast<std::size_t>(level)],
+                               kAuxNamedBase + 1),
+        Real(0));
+  }
+
+  // A selected failure after its producer has run must restore the complete bounded closure and
+  // leave an unrelated consumer untouched. One FAC iteration cannot meet this deliberately strict
+  // tolerance, so the outcome exercises the ordinary RejectAttempt path rather than an exception.
+  AmrFieldSolveConfig failing = dependent;
+  failing.solver_options.values["fac.rel_tol"] = 1e-30;
+  failing.solver_options.values["fac.abs_tol"] = 0.0;
+  failing.solver_options.values["fac.max_iters"] = std::int64_t{1};
+  failing.plan_identity = "tests:plasma/zz_failure:composite-plan@1";
+  failing.provider_identity = "tests:plasma/zz_failure";
+  failing.output_key = "zz_failure";
+  failing.boundary_kernel = CompiledFieldBoundaryKernel{
+      "tests:zz_failure/composite-field-dependent-boundary@1",
+      "tests:zz_failure/composite-field-dependent-boundary-residual@1",
+      "",
+      composite_boundary_prepare,
+      nullptr,
+      composite_boundary_residual,
+      nullptr,
+      false,
+  };
+  failing.providers = {
+      FieldProviderBinding{"tests:plasma/zz_failure/rhs", "plasma", "zz_failure", Real(1)}};
+  runtime.install_field_plan("zz_failure", failing);
+  runtime.register_named_field("plasma", "zz_failure", kAuxNamedBase + 2, -1, -1,
+                               /*gradient_sign=*/1);
+  runtime.set_block_named_elliptic_rhs(0, "zz_failure", [](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(1), 0, rhs);
+  });
+
+  std::vector<MultiFab> rollback_driver;
+  std::vector<MultiFab> rollback_potential;
+  std::vector<MultiFab> rollback_aux;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    rollback_driver.push_back(runtime.provider_potential_level("z_driver", level));
+    rollback_potential.push_back(runtime.provider_potential_level("a_potential", level));
+    rollback_aux.push_back(runtime.aux(level));
+    scale(runtime.level_state(level, 0), Real(1.25));
+  }
+  *driver_rhs_calls = 0;
+  *dependent_rhs_calls = 0;
+  const std::string failing_selected = "zz_failure";
+  SolveOutcome failed_outcome = runtime.solve_named_fields(&failing_selected);
+  const SolveReport failed = failed_outcome.consume(SolveConsumption::kRejectAttempt);
+  EXPECT_EQ(failed.status, SolveStatus::kIterationLimit);
+  EXPECT_EQ(failed.action, SolveAction::kRejectAttempt);
+  EXPECT_EQ(failed.iters, 1);
+  EXPECT_EQ(*driver_rhs_calls, runtime.nlev())
+      << "the dependency closure must solve the producer before the late failure";
+  EXPECT_EQ(*dependent_rhs_calls, 0)
+      << "the bounded closure must not solve an unrelated field consumer";
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("z_driver", level),
+                                    rollback_driver[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("a_potential", level),
+                                    rollback_potential[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.aux(level), rollback_aux[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(norm_inf(runtime.provider_potential_level("zz_failure", level)), Real(0));
   }
 }
 

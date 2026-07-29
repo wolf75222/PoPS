@@ -3688,42 +3688,57 @@ class AmrRuntime {
   /// by the blocks' add_elliptic_rhs closures (Sum_b elliptic_rhs_b(U_b)) not a compile-time RhsAssembler.
   SolveOutcome solve_fields() {
     return run_field_solve_transaction(
-        FieldSolveScope{true, NamedFieldSnapshotScope::kAll, nullptr}, [&]() {
+        FieldSolveScope{true, NamedFieldSnapshotScope::kAll, {}}, [&]() {
           SolveReport report = solve_default_field_uncommitted();
           if (!report.solved() || named_fields_.empty())
             return report;
-          return solve_named_fields_uncommitted();
+          return solve_named_fields_uncommitted(named_field_solve_order_(nullptr));
         });
   }
 
   SolveOutcome solve_default_field() {
-    return run_field_solve_transaction(
-        FieldSolveScope{true, NamedFieldSnapshotScope::kNone, nullptr},
-        [&]() { return solve_default_field_uncommitted(); });
+    return run_field_solve_transaction(FieldSolveScope{true, NamedFieldSnapshotScope::kNone, {}},
+                                       [&]() { return solve_default_field_uncommitted(); });
   }
 
   SolveOutcome solve_named_fields(const std::string* selected = nullptr) {
-    // A selected solve snapshots and publishes only that exact field. Reusing an already-published
-    // boundary-field dependency here would make stage/JVP evaluations silently consume a stale
-    // value, while solving it first would escape the selected transaction. Refuse this narrow route
-    // before provider materialization; the all-fields route below owns the complete topological
-    // closure and publishes it atomically.
-    long selected_dependency_closure_is_unsupported = 0;
-    if (selected != nullptr) {
-      const auto found = named_fields_.find(*selected);
-      if (found != named_fields_.end() && !found->second.plan.boundary_field_blocks.empty())
-        selected_dependency_closure_is_unsupported = 1;
+    const std::string_view selection_kind = selected == nullptr ? "all" : "selected";
+    const std::string_view selection_identity =
+        selected == nullptr ? std::string_view{} : std::string_view(*selected);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-named-field-selection-kind", selection_kind},
+             {"amr-named-field-selection", selection_identity}}))
+      throw std::runtime_error("AmrRuntime: named-field selection differs across MPI ranks");
+
+    std::vector<std::string> solve_order;
+    std::vector<ExactOrderedBytePair> closure_contract;
+    std::exception_ptr order_error;
+    long order_failed_local = 0;
+    try {
+      solve_order = named_field_solve_order_(selected);
+      closure_contract.reserve(solve_order.size());
+      for (const std::string& field : solve_order)
+        closure_contract.emplace_back("amr-named-field-closure", field);
+    } catch (...) {
+      order_error = std::current_exception();
+      order_failed_local = 1;
     }
-    if (all_reduce_max(selected_dependency_closure_is_unsupported) != 0)
+    if (all_reduce_max(order_failed_local) != 0) {
+      if (n_ranks() == 1 && order_error != nullptr)
+        std::rethrow_exception(order_error);
       throw std::runtime_error(
-          "AmrRuntime: a selected named-field solve cannot consume a boundary-field dependency "
-          "outside its transaction; solve the complete named-field dependency graph");
+          "AmrRuntime: named-field dependency closure failed on at least one MPI rank");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(closure_contract))
+      throw std::runtime_error(
+          "AmrRuntime: named-field dependency closure differs across MPI ranks");
+
     return run_field_solve_transaction(
         FieldSolveScope{false,
                         selected == nullptr ? NamedFieldSnapshotScope::kAll
                                             : NamedFieldSnapshotScope::kSelected,
-                        selected},
-        [&]() { return solve_named_fields_uncommitted(selected); });
+                        selected == nullptr ? std::vector<std::string>{} : solve_order},
+        [&]() { return solve_named_fields_uncommitted(solve_order); });
   }
 
   /// Re-evaluate one exact named-field provider from a stage state on any materialized hierarchy
@@ -3850,56 +3865,18 @@ class AmrRuntime {
     return report;
   }
 
-  /// Solves every registered NAMED elliptic field (ADC-428) on the coarse, writes phi (+ centered grad)
-  /// into the field's own aux components, ghost-fills them and injects coarse->fine. Mirror of the
-  /// default Poisson block above (steps 2-4), but each named field uses its resolved prepared provider.
-  /// The default phi/grad (comps 0..2) are never touched. No-op without a named field (default-only
-  /// path stays bit-identical).
-  SolveReport solve_named_fields_uncommitted(const std::string* selected = nullptr) {
+  /// Solves the prevalidated dependency order of NAMED elliptic fields (ADC-428), writes each
+  /// potential (+ centered gradient) into its own aux components, ghost-fills them and injects
+  /// coarse->fine. Mirror of the default Poisson block above (steps 2-4), but each named field uses
+  /// its resolved prepared provider. The default phi/grad (comps 0..2) are never touched.
+  SolveReport solve_named_fields_uncommitted(const std::vector<std::string>& solve_order) {
     SolveReport completed;
     bool has_completed_solve = false;
     if (named_fields_.empty())
       throw std::runtime_error("AmrRuntime::solve_named_fields has no registered field");
-    std::vector<std::string> solve_order;
-    if (selected != nullptr) {
-      if (named_fields_.find(*selected) == named_fields_.end())
-        throw std::runtime_error("AmrRuntime::solve_named_fields selected an unknown field");
-      solve_order.push_back(*selected);
-    } else {
-      enum class VisitState { kUnseen, kVisiting, kDone };
-      std::map<std::string, VisitState> visit;
-      std::function<void(const std::string&)> append_with_dependencies =
-          [&](const std::string& field) {
-            const VisitState state = visit[field];
-            if (state == VisitState::kDone)
-              return;
-            if (state == VisitState::kVisiting)
-              throw std::runtime_error(
-                  "AmrRuntime: named-field boundary dependency graph contains a cycle");
-            visit[field] = VisitState::kVisiting;
-            const NamedField& consumer = named_fields_.at(field);
-            for (std::size_t index = 0; index < consumer.plan.boundary_field_blocks.size();
-                 ++index) {
-              if (index >= consumer.plan.boundary_field_keys.size())
-                throw std::runtime_error(
-                    "AmrRuntime: named-field boundary dependency pack is incomplete");
-              const std::string* dependency_slot = unique_boundary_field_dependency_slot_(
-                  consumer, consumer.plan.boundary_field_blocks[index],
-                  consumer.plan.boundary_field_keys[index]);
-              if (dependency_slot == nullptr)
-                throw std::runtime_error(
-                    "AmrRuntime: named-field boundary dependency is missing, ambiguous, or "
-                    "recursive");
-              append_with_dependencies(*dependency_slot);
-            }
-            visit[field] = VisitState::kDone;
-            solve_order.push_back(field);
-          };
-      for (const auto& [field, unused] : named_fields_) {
-        (void)unused;
-        append_with_dependencies(field);
-      }
-    }
+    const auto included = [&](const std::string& field) {
+      return std::find(solve_order.begin(), solve_order.end(), field) != solve_order.end();
+    };
     const Real dx = geom_.dx(), dy = geom_.dy();
     for (const std::string& field : solve_order) {
       auto& nf = named_fields_.at(field);
@@ -4174,7 +4151,7 @@ class AmrRuntime {
     // Composite and level-local fields own a solved potential on every level. Write every valid
     // value before materialising halos so no coarse injection can overwrite refined solutions.
     for (auto& [field, nf] : named_fields_) {
-      if (selected != nullptr && field != *selected)
+      if (!included(field))
         continue;
       if (nf.solver->level_count() <= 1)
         continue;
@@ -4209,7 +4186,7 @@ class AmrRuntime {
         components.insert(component);
     };
     for (const auto& [field, nf] : named_fields_) {
-      if (selected != nullptr && field != *selected)
+      if (!included(field))
         continue;
       add_component(nf.phi_comp);
       add_component(nf.gx_comp);
@@ -5516,6 +5493,54 @@ class AmrRuntime {
     return result;
   }
 
+  [[nodiscard]] std::vector<std::string> named_field_solve_order_(
+      const std::string* selected) const {
+    if (named_fields_.empty())
+      throw std::runtime_error("AmrRuntime::solve_named_fields has no registered field");
+    if (selected != nullptr && named_fields_.find(*selected) == named_fields_.end())
+      throw std::runtime_error("AmrRuntime::solve_named_fields selected an unknown field");
+
+    enum class VisitState { kUnseen, kVisiting, kDone };
+    std::map<std::string, VisitState> visit;
+    std::vector<std::string> solve_order;
+    std::function<void(const std::string&)> append_with_dependencies =
+        [&](const std::string& field) {
+          const VisitState state = visit[field];
+          if (state == VisitState::kDone)
+            return;
+          if (state == VisitState::kVisiting)
+            throw std::runtime_error(
+                "AmrRuntime: named-field boundary dependency graph contains a cycle");
+          visit[field] = VisitState::kVisiting;
+          const NamedField& consumer = named_fields_.at(field);
+          for (std::size_t index = 0; index < consumer.plan.boundary_field_blocks.size(); ++index) {
+            if (index >= consumer.plan.boundary_field_keys.size())
+              throw std::runtime_error(
+                  "AmrRuntime: named-field boundary dependency pack is incomplete");
+            const std::string* dependency_slot = unique_boundary_field_dependency_slot_(
+                consumer, consumer.plan.boundary_field_blocks[index],
+                consumer.plan.boundary_field_keys[index]);
+            if (dependency_slot == nullptr)
+              throw std::runtime_error(
+                  "AmrRuntime: named-field boundary dependency is missing, ambiguous, or "
+                  "recursive");
+            append_with_dependencies(*dependency_slot);
+          }
+          visit[field] = VisitState::kDone;
+          solve_order.push_back(field);
+        };
+
+    if (selected != nullptr) {
+      append_with_dependencies(*selected);
+    } else {
+      for (const auto& [field, unused] : named_fields_) {
+        (void)unused;
+        append_with_dependencies(field);
+      }
+    }
+    return solve_order;
+  }
+
   enum class NamedFieldSnapshotScope { kNone, kSelected, kAll };
 
   struct FieldSolveSnapshot {
@@ -5535,7 +5560,7 @@ class AmrRuntime {
     std::uint64_t topology_generation = 0;
     bool scope_default_field = false;
     NamedFieldSnapshotScope scope_named_fields = NamedFieldSnapshotScope::kNone;
-    std::string scope_selected_named_field;
+    std::vector<std::string> scope_selected_named_fields;
     bool candidate_slot = false;
     AmrRuntime* publication_owner = nullptr;
     FieldSolveSnapshot* publication_candidate = nullptr;
@@ -5544,11 +5569,12 @@ class AmrRuntime {
   struct FieldSolveScope {
     bool default_field = false;
     NamedFieldSnapshotScope named_fields = NamedFieldSnapshotScope::kNone;
-    const std::string* selected_named_field = nullptr;
+    std::vector<std::string> selected_named_fields;
   };
 
   std::vector<int> default_aux_components() const;
   std::vector<int> named_aux_components(const std::string* selected) const;
+  std::vector<int> named_aux_components(const std::vector<std::string>& selected) const;
   std::vector<int> field_solve_aux_components(const FieldSolveScope& scope) const;
   std::vector<MultiFab> allocate_aux_component_carriers_(const std::vector<int>& components) const;
   void copy_aux_components_to_(std::vector<MultiFab>& packed,
