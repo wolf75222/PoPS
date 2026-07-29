@@ -876,7 +876,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->program_cache();
   }
   ProgramResourceTopology program_execution_resource_topology_() const noexcept {
-    return {0, 0, 1};
+    return {0, 0, 1, sys_->n_blocks()};
   }
   int program_execution_resource_level_() const noexcept { return 0; }
   void program_execution_select_resource_level_(int /*level*/) const noexcept {}
@@ -940,7 +940,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   ProgramRuntimeState& program_execution_runtime_state_() const {
     return sys_->program_runtime_state_();
   }
-  int program_execution_block_count_() const { return sys_->n_blocks(); }
   ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {static_cast<Real>(sys_->time()), sys_->macro_step(), -1};
   }
