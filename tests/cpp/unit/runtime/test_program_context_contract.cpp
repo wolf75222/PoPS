@@ -130,6 +130,7 @@ TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFail
   cfg.n = 2;
   cfg.L = 1.0;
   System sim(cfg);
+  ProgramContext context(&sim);
   const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '1');
   const std::array<std::pair<const char*, double>, 5> terms{{
       {"storage_change", 11.0},
@@ -142,9 +143,9 @@ TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFail
   sim.begin_step_transaction();
   sim.begin_step_projection_report();
   for (const auto& [name, value] : terms)
-    sim.record_program_diagnostic("pops.balance-term.v1:" + route + ":" + name, 0.25 * value);
+    context.record_balance_term(route, name, 0.25 * value);
   for (const auto& [name, value] : terms)
-    sim.record_program_diagnostic("pops.balance-term.v1:" + route + ":" + name, 0.75 * value);
+    context.record_balance_term(route, name, 0.75 * value);
   const auto accepted = sim.accepted_balance_terms(route);
   EXPECT_EQ(accepted.size(), terms.size());
   for (const auto& [name, value] : terms)
@@ -159,8 +160,22 @@ TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFail
   sim.begin_step_transaction();
   sim.begin_step_projection_report();
   for (std::size_t index = 0; index + 1 < terms.size(); ++index)
-    sim.record_program_diagnostic("pops.balance-term.v1:" + route + ":" + terms[index].first,
-                                  terms[index].second);
+    context.record_balance_term(route, terms[index].first, terms[index].second);
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  sim.rollback_step_transaction();
+
+  sim.begin_step_transaction();
+  sim.begin_step_projection_report();
+  for (const std::string& forged :
+       {"pops.balance-term", "pops.balance-term.v1", "pops.balance-term.v1:forged"}) {
+    EXPECT_THROW(sim.record_program_diagnostic(forged, 1.0), std::invalid_argument);
+    EXPECT_EQ(sim.program_diagnostics().count(forged), 0u);
+  }
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  EXPECT_THROW(
+      context.record_balance_term("pops.balance-ledger-route.v1:sha256:bad", "storage_change", 1.0),
+      std::invalid_argument);
+  EXPECT_THROW(context.record_balance_term(route, "unknown", 1.0), std::invalid_argument);
   EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
   sim.rollback_step_transaction();
 }

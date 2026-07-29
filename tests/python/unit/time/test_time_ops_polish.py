@@ -329,7 +329,8 @@ def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
     source = emit_cpp_program(P)
-    assert source.count("ctx.record_scalar(") == 5
+    assert source.count("ctx.record_balance_term(") == 5
+    assert "ctx.record_scalar(" not in source
     assert route.token in source
 
 
@@ -339,6 +340,13 @@ def test_record_balance_rejects_non_reduced_or_incomplete_evidence(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
     total = P.sum(U)
+    for forged in (
+        "pops.balance-term",
+        "pops.balance-term.v1",
+        "pops.balance-term.v1:forged",
+    ):
+        with pytest.raises(ValueError, match="reserved for Program.record_balance"):
+            P.record_scalar(forged, total)
     with pytest.raises(ValueError, match="global reduction"):
         P.record_balance(
             BalanceLedger("mass"),
