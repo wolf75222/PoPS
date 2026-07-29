@@ -184,6 +184,16 @@ class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
     for (auto& solver : level_solvers_)
       solver->set_boundary_context(context);
   }
+  void set_boundary_context_at_level(int level,
+                                     const FieldBoundaryExecutionContext& context) override {
+    if (level < 0 || level >= level_count())
+      throw std::out_of_range(
+          "geometric-MG boundary context level is outside the prepared hierarchy");
+    if (fac_)
+      throw std::runtime_error(
+          "composite FAC has no level-qualified dynamic-boundary context route");
+    level_solvers_.at(static_cast<std::size_t>(level))->set_boundary_context(context);
+  }
   SolveReport solve() override {
     if (fac_) {
       if (plan_.has_boundary_kernel && plan_.boundary_kernel.observes_iteration) {
@@ -241,6 +251,7 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
         "pops.amr.field-solver.geometric-mg.distributed-coarse@1",
         "pops.amr.field-solver.geometric-mg.dynamic-boundary@1",
         "pops.amr.field-solver.geometric-mg.exact-preparation@1",
+        "pops.amr.field-solver.geometric-mg.level-qualified-dynamic-boundary@1",
         "pops.amr.field-solver.geometric-mg.level-local-hierarchy@1",
         "pops.amr.field-solver.geometric-mg.nonlinear-boundary@1",
         "pops.amr.field-solver.geometric-mg.reaction@1",
@@ -292,10 +303,12 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
         (!request.replicated_coarse || static_cast<bool>(request.active)))
       return PreparedProviderSupport::reject(
           14, "composite hierarchy cannot represent this coarse distribution or active region");
-    if (level_local && request.hierarchy.nlev() > 1 &&
-        (request.plan.has_boundary_kernel || request.plan.has_newton))
+    if (level_local && request.hierarchy.nlev() > 1 && request.plan.has_newton)
       return PreparedProviderSupport::reject(
-          15, "multi-level local hierarchy cannot represent dynamic or nonlinear boundaries");
+          15, "multi-level local hierarchy has no qualified nonlinear-boundary transaction");
+    if (composite && request.hierarchy.nlev() > 1 && !request.plan.boundary_state_blocks.empty())
+      return PreparedProviderSupport::reject(
+          16, "composite hierarchy has no level-qualified boundary-state carrier");
     return PreparedProviderSupport::accept();
   }
   [[nodiscard]] std::string expected_prepared_contract(
