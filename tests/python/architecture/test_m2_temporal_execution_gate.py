@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.python.conftest import _requires_process_collection
+
 
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "tests/gates/m2_temporal_execution.toml"
@@ -24,7 +26,7 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 28
+    assert len(data["check"]) == 34
 
 
 def test_m2_final_gate_has_no_deferred_requirement():
@@ -34,6 +36,42 @@ def test_m2_final_gate_has_no_deferred_requirement():
     assert {row["issue"] for row in data["check"]} == {
         "ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666",
         "ADC-667", "ADC-668",
+    }
+
+
+def test_m2_fallible_solver_evaluations_use_exact_native_proofs():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    checks = {
+        (row["requirement"], row["polarity"]): (
+            row["target"], row.get("test_regex"),
+        )
+        for row in data["check"]
+        if row["requirement"] in {
+            "fallible_nonlinear_evaluation", "fallible_linear_evaluation",
+        }
+    }
+    assert checks == {
+        ("fallible_nonlinear_evaluation", "positive"): (
+            "test_newton_robustness",
+            r"^NewtonRobustnessTest\.fallible_analytic_jacobian_"
+            r"rejects_privately_and_success_keeps_legacy_result$",
+        ),
+        ("fallible_nonlinear_evaluation", "refusal"): (
+            "test_newton_robustness",
+            r"^NewtonRobustnessTest\.fallible_source_propagates_"
+            r"retry_reject_fail_and_invalid_without_publication$",
+        ),
+        ("fallible_linear_evaluation", "positive"): (
+            "test_coupled_fieldsolve",
+            r"^test_coupled_fieldsolve\."
+            r"named_solve_honors_every_qualified_stage_without_live_mutation$",
+        ),
+        ("fallible_linear_evaluation", "refusal"): (
+            "test_krylov_collective_contract",
+            r"^test_krylov_collective_contract\."
+            r"RankLocalFailuresAreUniformBeforeScientificCollectives$",
+        ),
     }
 
 
@@ -67,18 +105,61 @@ def test_m2_native_pytest_execution_rejects_every_skip_or_xfail(tmp_path, monkey
         runner._run_pytest(["tests/python/unit/time/test_exact_program_graph.py::proof"])
 
 
-def test_m2_restart_refusal_and_program_only_routes_use_real_exact_proofs():
+def test_m2_pytest_nodeids_are_individually_collectible():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    process_collected = {
+        row["nodeid"].split("::", 1)[0]
+        for row in data["check"]
+        if row["kind"] == "pytest"
+        and _requires_process_collection(ROOT / row["nodeid"].split("::", 1)[0])
+    }
+    assert process_collected == set()
+
+
+def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
     checks = data["check"]
+    restart_positive = {
+        row.get("nodeid")
+        for row in checks
+        if row["requirement"] == "restart" and row["polarity"] == "positive"
+    }
+    assert restart_positive == {
+        "tests/python/unit/runtime/test_temporal_restart_state.py"
+        "::test_uniform_native_linear_history_uses_bracketing_slots_and_restarts_exactly"
+    }
     restart_refusals = {
         row.get("nodeid")
         for row in checks
         if row["requirement"] == "restart" and row["polarity"] == "refusal"
     }
     assert restart_refusals == {
-        "tests/python/integration/io/test_time_history_checkpoint.py"
-        "::test_uniform_restart_refuses_a_different_compiled_program"
+        "tests/python/unit/runtime/test_temporal_restart_state.py"
+        "::test_restart_rejects_a_different_installed_nested_clock_schedule"
+    }
+    hierarchy_ordering = {
+        row["polarity"]: (
+            row["kind"],
+            row["target"],
+            row.get("nodeid", row.get("test_regex")),
+        )
+        for row in checks
+        if row["requirement"] == "refined_hierarchy_native_ordering"
+    }
+    assert hierarchy_ordering == {
+        "positive": (
+            "pytest",
+            "solve",
+            "tests/python/unit/codegen/test_composite_tensor_fac_provider.py"
+            "::test_header_only_hierarchy_extension_compiles_its_own_generic_provider_identity",
+        ),
+        "refusal": (
+            "ctest",
+            "test_amr_history_ring",
+            r"^test_amr_history_ring\.FineNonFiniteAfterCoarseSuccessRestoresCompleteAcceptedState$",
+        ),
     }
     temporal_routes = {
         row["nodeid"]
