@@ -24,6 +24,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   artifact-owned scientific regrid, emits a global before/after receipt, and derives a distinct
   continuation run identity. This first operational slice is one AMR layout, unchanged MPI
   cardinality, and refuses fields, shared interfaces, and bootstrap staggered caches.
+- Native `SymbolicTagger` hysteresis is now a checkpointed accepted-state capability. The M3 gate
+  executes a persisted two-rank to one-rank
+  restart proof with non-empty hysteresis state, exact source-rank consensus, and byte-exact
+  rematerialization. MPI capture now validates common accepted-state bytes on every producer before
+  sealing, so a divergent tagging payload fails collectively without a partial file; external
+  Tagger components remain fail-closed for non-zero hysteresis.
 - Internal frozen two-level serial AMR shared-interface transactions now retain endpoint-qualified
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second

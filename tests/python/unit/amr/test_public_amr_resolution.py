@@ -599,16 +599,15 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
     assert engine.installed == ([3], [1], ["integral_only"])
 
 
-def test_tagging_resolution_refuses_unimplemented_persistent_hysteresis():
+def test_tagging_resolution_preserves_native_persistent_hysteresis():
     from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis
 
     authored = Hysteresis(min_cycles=3, equality=EqualityPolicy.COARSEN)
-    with pytest.raises(
-            NotImplementedError, match="persistent tagging state; it is never accepted"):
-        _resolved_target(
-            hysteresis=authored,
-            conflict_policy=ConflictPolicy.ERROR,
-        )
+    _, _, _, authorities = _resolved_target(
+        hysteresis=authored,
+        conflict_policy=ConflictPolicy.ERROR,
+    )
+    assert authorities.tagging.graph.graph.hysteresis == authored
 
 
 def test_tagging_authority_requires_exact_explicit_policy_types():
