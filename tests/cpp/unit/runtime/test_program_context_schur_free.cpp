@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <pops/mesh/layout/box_array.hpp>
+#include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/runtime/program/program_context.hpp>
 
 #include <map>
@@ -121,6 +123,23 @@ class ExecutionServicesFixture
     source_runtime_block_ = runtime_block;
     source_state_ = &state;
     source_rhs_ = &rhs;
+  }
+  bool program_execution_is_polar_geometry_() const noexcept { return false; }
+  pops::GridContext program_execution_default_grid_context_() const {
+    const pops::Box2D domain = pops::Box2D::from_extents(4, 4);
+    pops::GridContext context;
+    context.dom = domain;
+    context.bc = pops::BCRec{};
+    context.geom =
+        pops::Geometry{domain, pops::Real(0), pops::Real(1), pops::Real(0), pops::Real(1)};
+    return context;
+  }
+  [[noreturn]] void program_execution_apply_polar_tensor_(pops::MultiFab&, pops::MultiFab&,
+                                                          const pops::MultiFab*,
+                                                          const pops::MultiFab*,
+                                                          const pops::MultiFab*,
+                                                          const pops::MultiFab*) const {
+    throw std::logic_error("shared Cartesian fixture cannot execute a polar tensor stencil");
   }
   const std::vector<int>& program_execution_block_map_() const { return block_map_; }
   int program_execution_block_count_() const { return 2; }
@@ -353,6 +372,55 @@ void expect_shared_program_services(Context& context, bool amr) {
   EXPECT_THROW(context.scheduler_error("stale value"), std::runtime_error);
 }
 
+template <class Context>
+void expect_shared_spatial_services(Context& context) {
+  const pops::Box2D domain = pops::Box2D::from_extents(4, 4);
+  const pops::BoxArray boxes(std::vector<pops::Box2D>{domain});
+  const pops::DistributionMapping mapping(std::vector<int>{0});
+  pops::MultiFab phi(boxes, mapping, 1, 1);
+  pops::MultiFab laplacian(boxes, mapping, 1, 0);
+  pops::MultiFab gradient(boxes, mapping, 2, 1);
+  pops::MultiFab divergence(boxes, mapping, 1, 0);
+  pops::MultiFab a_xx(boxes, mapping, 1, 1);
+  pops::MultiFab a_yy(boxes, mapping, 1, 1);
+  pops::MultiFab a_xy(boxes, mapping, 1, 1);
+  pops::MultiFab a_yx(boxes, mapping, 1, 1);
+  phi.set_val(pops::Real(2));
+  a_xx.set_val(pops::Real(1));
+  a_yy.set_val(pops::Real(1));
+  a_xy.set_val(pops::Real(0));
+  a_yx.set_val(pops::Real(0));
+
+  const pops::ExecutionLane lane = pops::ExecutionLane::world();
+  pops::PreparedGridBoundarySession boundary(context.grid_context(), lane);
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{};
+
+  context.profiler().enable();
+  context.laplacian(laplacian, phi);
+  context.laplacian(laplacian, phi, lane);
+  context.laplacian(laplacian, phi, boundary);
+  context.laplacian(laplacian, phi, boundary, point);
+  context.tensor_laplacian(laplacian, phi, a_xx, a_yy, a_xy, a_yx);
+  context.tensor_laplacian(laplacian, phi, a_xx, a_yy, a_xy, a_yx, lane);
+  context.tensor_laplacian(laplacian, phi, a_xx, a_yy, a_xy, a_yx, boundary);
+  context.tensor_laplacian(laplacian, phi, a_xx, a_yy, a_xy, a_yx, boundary, point);
+  context.gradient(gradient, phi);
+  context.gradient(gradient, phi, lane);
+  context.gradient(gradient, phi, boundary);
+  context.gradient(gradient, phi, boundary, point);
+  context.divergence(divergence, gradient, gradient);
+  context.divergence(divergence, gradient, gradient, lane);
+  context.divergence(divergence, gradient, gradient, boundary);
+  context.divergence(divergence, gradient, gradient, boundary, point);
+
+  EXPECT_EQ(context.profiler().counter("kernels"), 16);
+  EXPECT_NEAR(context.max_component(laplacian, 0), pops::Real(0), 1e-12);
+  EXPECT_NEAR(context.min_component(laplacian, 0), pops::Real(0), 1e-12);
+  EXPECT_NEAR(context.max_component(gradient, 0), pops::Real(0), 1e-12);
+  EXPECT_NEAR(context.max_component(gradient, 1), pops::Real(0), 1e-12);
+  EXPECT_NEAR(context.max_component(divergence, 0), pops::Real(0), 1e-12);
+}
+
 }  // namespace
 
 TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameContractFixture) {
@@ -360,4 +428,11 @@ TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameContractFixture) 
   ExecutionServicesFixture<true> amr(1);
   expect_shared_program_services(uniform, false);
   expect_shared_program_services(amr, true);
+}
+
+TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameSpatialFixture) {
+  ExecutionServicesFixture<false> uniform(-1);
+  ExecutionServicesFixture<true> amr(1);
+  expect_shared_spatial_services(uniform);
+  expect_shared_spatial_services(amr);
 }
