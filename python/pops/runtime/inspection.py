@@ -218,9 +218,15 @@ def _program(sim: Any) -> Any:
         "step_transaction": dict(report.step_transaction),
         "block_map": list(report.block_map),
         "params": [dict(row) for row in report.params],
+        "diagnostics": dict(report.diagnostics),
         "histories": [dict(row) for row in report.histories],
         "cache": [dict(row) for row in report.cache],
         "profiler": dict(report.profiler),
+        "clocks": [dict(row) for row in report.clocks],
+        "level_relations": [dict(row) for row in report.level_relations],
+        "flux_ledger": [dict(row) for row in report.flux_ledger],
+        "synchronization": [dict(row) for row in report.synchronization],
+        "temporal": dict(report.temporal),
     }
 
 
