@@ -7,13 +7,19 @@ operation macOS may kill when a wheel rewrite has invalidated the extension sign
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
+import hashlib
 import importlib.machinery
 import importlib.util
+import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Sequence
+from typing import Any
+
+
+CODESIGN_EVIDENCE_SCHEMA_VERSION = 1
 
 
 class CodesignError(RuntimeError):
@@ -97,17 +103,40 @@ def codesign_imported_extensions(*, if_present: bool = False) -> tuple[Path, ...
     return extensions
 
 
+def codesign_evidence(extensions: Sequence[Path]) -> dict[str, Any]:
+    """Describe the exact post-sign extension bytes authenticated by this process."""
+    return {
+        "schema_version": CODESIGN_EVIDENCE_SCHEMA_VERSION,
+        "platform": sys.platform,
+        "extensions": [
+            {
+                "path": str(extension.resolve()),
+                "sha256": hashlib.sha256(extension.read_bytes()).hexdigest(),
+                "signature": "adhoc",
+            }
+            for extension in extensions
+        ],
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--if-present", action="store_true",
         help="skip only when the pops package is absent (a present package without _pops fails)")
+    parser.add_argument(
+        "--json", action="store_true",
+        help="print machine-authenticated post-sign paths and hashes")
     args = parser.parse_args(argv)
     try:
         extensions = codesign_imported_extensions(if_present=args.if_present)
-    except CodesignError as error:
+        evidence = codesign_evidence(extensions)
+    except (CodesignError, OSError) as error:
         print("ERROR: %s" % error, file=sys.stderr)
         return 1
+    if args.json:
+        print(json.dumps(evidence, sort_keys=True))
+        return 0
     if sys.platform == "darwin":
         if extensions:
             for extension in extensions:

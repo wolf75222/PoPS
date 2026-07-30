@@ -330,7 +330,53 @@ def test_installed_wheel_gate_precedes_codesign_and_conformance():
 
     assert gates.index("official_build") < gates.index("installed_wheel")
     assert gates.index("installed_wheel") < gates.index("codesign")
+    assert gates.index("codesign") < gates.index("doctor")
     assert gates.index("codesign") < gates.index("native_conformance")
+
+
+def test_release_preflight_binds_codesign_to_live_runtime(tmp_path):
+    log = tmp_path / "logs" / "codesign.log"
+    log.parent.mkdir()
+    log.write_text('{"platform": "darwin"}\n', encoding="utf-8")
+    runtime = {
+        "python_executable": "/proof/bin/python",
+        "pops_file": "/proof/site-packages/pops/__init__.py",
+        "native_extension": "/proof/site-packages/pops/_pops.so",
+        "native_sha256": "a" * 64,
+    }
+    gates = {
+        "codesign": {
+            "commands": [
+                {
+                    "argv": [
+                        "/proof/conda",
+                        "run",
+                        "python",
+                        "scripts/codesign_pops_extensions.py",
+                        "--json",
+                    ],
+                    "log": str(log.relative_to(tmp_path)),
+                    "sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+                }
+            ],
+            "evidence": {
+                "schema_version": 1,
+                "platform": "darwin",
+                "extensions": [
+                    {
+                        "path": runtime["native_extension"],
+                        "sha256": runtime["native_sha256"],
+                        "signature": "adhoc",
+                    }
+                ],
+            },
+        },
+    }
+
+    preflight._codesign_evidence(tmp_path, gates, runtime)
+    gates["codesign"]["evidence"]["extensions"][0]["sha256"] = "b" * 64
+    with pytest.raises(preflight.PreflightError, match="live native extension"):
+        preflight._codesign_evidence(tmp_path, gates, runtime)
 
 
 def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate():

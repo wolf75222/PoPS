@@ -38,8 +38,8 @@ PYTHON_REQUIRED_SELECTION = "not mpi and not hdf5"
 REQUIRED_RELEASE_GATES = (
     "official_build",
     "installed_wheel",
-    "doctor",
     "codesign",
+    "doctor",
     "native_conformance",
     "python_conformance",
     "examples",

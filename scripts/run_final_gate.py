@@ -38,7 +38,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 5
+EVIDENCE_SCHEMA_VERSION = 6
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -487,6 +487,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder.rows["installed_wheel"]["evidence"] = _json_evidence(
             installed_wheel_stdout, gate="installed_wheel"
         )
+        codesign_stdout = recorder.run(
+            "codesign",
+            _conda_command([
+                "python", "scripts/codesign_pops_extensions.py", "--json",
+            ]),
+        )
+        recorder.rows["codesign"]["evidence"] = _json_evidence(
+            codesign_stdout, gate="codesign"
+        )
         recorder.run("official_build", _conda_command(["cmake", "--preset", "serial"]))
         recorder.run("official_build", _conda_command(["cmake", "--build", "--preset", "serial"]))
         doctor_code = (
@@ -497,8 +506,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             "print('doctor package=' + pops.__version__)"
         )
         recorder.run("doctor", _conda_command(["python", "-c", doctor_code]))
-        recorder.run("codesign", _conda_command(
-            ["python", "scripts/codesign_pops_extensions.py"]))
 
         ctest_dir = _resolve_ctest_dir(args.ctest_dir)
         native_junit = evidence_root / "reports" / "native-conformance.xml"

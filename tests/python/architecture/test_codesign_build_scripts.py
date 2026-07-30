@@ -1,6 +1,7 @@
 """ADC-647 source-only tests for post-install Darwin code-signing."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -77,6 +78,27 @@ def test_darwin_signs_then_verifies_and_authenticates_ad_hoc_signature(tmp_path,
         ("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(extension)),
         ("/usr/bin/codesign", "--display", "--verbose=4", str(extension)),
     ]
+
+
+def test_structured_evidence_binds_the_post_sign_extension_bytes(tmp_path, monkeypatch):
+    helper = _helper()
+    extension = tmp_path / "_pops.so"
+    extension.write_bytes(b"signed extension")
+    monkeypatch.setattr(helper.sys, "platform", "darwin")
+
+    evidence = helper.codesign_evidence((extension,))
+
+    assert evidence == {
+        "schema_version": 1,
+        "platform": "darwin",
+        "extensions": [
+            {
+                "path": str(extension.resolve()),
+                "sha256": hashlib.sha256(extension.read_bytes()).hexdigest(),
+                "signature": "adhoc",
+            }
+        ],
+    }
 
 
 @pytest.mark.parametrize("failure_call", [0, 1])

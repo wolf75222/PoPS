@@ -32,7 +32,7 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 5
+EVIDENCE_SCHEMA_VERSION = 6
 
 
 class PreflightError(RuntimeError):
@@ -304,6 +304,38 @@ def _installed_wheel_evidence(
         raise PreflightError("installed wheel native member hash drifted")
 
 
+def _codesign_evidence(
+    directory: Path,
+    gates: dict[str, Any],
+    runtime: dict[str, str],
+) -> None:
+    row = gates["codesign"]
+    evidence = row["evidence"]
+    if not isinstance(evidence, dict) or set(evidence) != {
+            "schema_version", "platform", "extensions"}:
+        raise PreflightError("codesign evidence is malformed")
+    if evidence["schema_version"] != 1 or evidence["platform"] != "darwin":
+        raise PreflightError("codesign evidence must authenticate the Darwin release lane")
+    extensions = evidence["extensions"]
+    if not isinstance(extensions, list) or len(extensions) != 1:
+        raise PreflightError("codesign evidence must authenticate exactly one extension")
+    extension = extensions[0]
+    if not isinstance(extension, dict) or set(extension) != {
+            "path", "sha256", "signature"}:
+        raise PreflightError("codesign extension evidence is malformed")
+    if extension != {
+        "path": runtime["native_extension"],
+        "sha256": runtime["native_sha256"],
+        "signature": "adhoc",
+    }:
+        raise PreflightError("codesign evidence does not authenticate the live native extension")
+    commands = row["commands"]
+    logs = _command_evidence(directory, commands, gate="codesign")
+    suffix = ["python", "scripts/codesign_pops_extensions.py", "--json"]
+    if len(logs) != 1 or commands[0]["argv"][-len(suffix):] != suffix:
+        raise PreflightError("codesign gate did not run the exact structured verifier")
+
+
 def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
     examples = gates["examples"]["evidence"]
     reopen = gates["artifact_reopen"]["evidence"]
@@ -409,6 +441,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
             _command_evidence(directory, commands, gate=name)
     _wheel_evidence(directory, gates, contract)
     _installed_wheel_evidence(directory, gates, contract, runtime)
+    _codesign_evidence(directory, gates, runtime)
     for name in ("native_conformance", "python_conformance"):
         evidence = gates[name]["evidence"]
         expected = {"required_lane"} if name == "native_conformance" \
