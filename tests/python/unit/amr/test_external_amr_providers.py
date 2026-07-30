@@ -12,7 +12,7 @@ import pops
 import pytest
 
 from pops import interfaces
-from pops.amr import ClusteringProvider, TaggerProvider
+from pops.amr import ClusteringProvider, RefluxProvider, TaggerProvider
 from pops.external import build_source_package_manifest, load
 from pops.layouts import AMR
 from pops.model import ComponentManifest
@@ -141,13 +141,14 @@ def test_external_tagger_native_backend_accepts_an_exact_gpu_target(tmp_path):
         TaggerProvider(mismatched)
 
 
-def _layout(authored, *, tagger, clustering):
+def _layout(authored, *, tagger, clustering, reflux=None):
     return AMR(
         grid=authored.grid,
         hierarchy=authored.hierarchy,
         tagging=authored.tagging,
         tagger=tagger,
         clustering=clustering,
+        reflux=authored.reflux if reflux is None else reflux,
         regrid=authored.regrid,
         transfer=authored.transfer,
         execution=authored.execution,
@@ -160,21 +161,25 @@ def test_external_amr_providers_survive_resolution_with_exact_components(tmp_pat
         tmp_path, name="tagger", interface=interfaces.Tagger)
     clustering_component = _component(
         tmp_path, name="clustering", interface=interfaces.Clustering)
+    reflux_component = _component(
+        tmp_path, name="reflux", interface=interfaces.Reflux)
     layout = _layout(
         target.layout,
         tagger=TaggerProvider(tagger_component),
         clustering=ClusteringProvider(clustering_component),
+        reflux=RefluxProvider(reflux_component),
     )
 
     resolved = pops.resolve(
         pops.validate(target.authoring.case),
         layout=layout,
-        components=(tagger_component, clustering_component),
+        components=(tagger_component, clustering_component, reflux_component),
     )
 
-    assert tuple(resolved.amr_providers) == ("clustering", "tagger")
+    assert tuple(resolved.amr_providers) == ("clustering", "tagger", "reflux")
     tagger = resolved.amr_providers["tagger"]
     clustering = resolved.amr_providers["clustering"]
+    reflux = resolved.amr_providers["reflux"]
     assert tagger["provider_type"] == "external_amr_tagger"
     assert tagger["component_id"] == tagger_component.component_manifest.component_id
     assert tagger["tagging_graph_identity"] == resolved.bootstrap_plan.tagging.qualified_id
@@ -184,6 +189,10 @@ def test_external_amr_providers_survive_resolution_with_exact_components(tmp_pat
     assert clustering["provider_type"] == "external_amr_clustering"
     assert clustering["component_id"] == clustering_component.component_manifest.component_id
     assert clustering["native_interface"] == interfaces.Clustering.to_data()
+    assert reflux["provider_type"] == "external_amr_reflux"
+    assert reflux["component_id"] == reflux_component.component_manifest.component_id
+    assert reflux["native_interface"] == interfaces.Reflux.to_data()
+    assert reflux["clock_identity"] == target.authoring.program.clock.qualified_id
     from pops.identity.semantic import semantic_value
 
     assert resolved.resolved_hierarchy.plan.clustering.options.to_data() == {
@@ -465,18 +474,21 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
             "interface_version": interface.version,
             "layout_identity": layout_identity,
         }
+        if slot in {"tagger", "reflux"}:
+            row["clock_identity"] = clock_identity
         if slot == "tagger":
             row.update({
-                "clock_identity": clock_identity,
                 "tagging_graph_identity": graph_identity,
                 "tagging_capability": normalized_capability,
             })
         row["provider_identity"] = amr_provider_binding_identity(slot, row)
         return row
 
-    tagger_handle, clustering_handle = object(), object()
-    tagger_id, clustering_id = "test::tagger", "test::clustering"
-    tagger_manifest, clustering_manifest = "manifest::tagger", "manifest::clustering"
+    tagger_handle, clustering_handle, reflux_handle = object(), object(), object()
+    tagger_id, clustering_id, reflux_id = "test::tagger", "test::clustering", "test::reflux"
+    tagger_manifest = "manifest::tagger"
+    clustering_manifest = "manifest::clustering"
+    reflux_manifest = "manifest::reflux"
     installed = {
         tagger_id: SimpleNamespace(
             component_manifest=SimpleNamespace(token=tagger_manifest),
@@ -488,6 +500,12 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
             component_manifest=SimpleNamespace(token=clustering_manifest),
             interface=interfaces.Clustering,
             native_handle=clustering_handle,
+            runtime_contract=SimpleNamespace(capabilities=()),
+        ),
+        reflux_id: SimpleNamespace(
+            component_manifest=SimpleNamespace(token=reflux_manifest),
+            interface=interfaces.Reflux,
+            native_handle=reflux_handle,
             runtime_contract=SimpleNamespace(capabilities=()),
         ),
     }
@@ -506,6 +524,8 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
                 clustering_id, clustering_manifest),
             "tagger": binding(
                 "tagger", interfaces.Tagger, tagger_id, tagger_manifest),
+            "reflux": binding(
+                "reflux", interfaces.Reflux, reflux_id, reflux_manifest),
         },
         components=installed,
         execution_context=execution,
@@ -528,6 +548,9 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
         def _install_amr_tagger_component(self, *args):
             self.calls.append(("tagger", args))
 
+        def _install_amr_reflux_component(self, *args):
+            self.calls.append(("reflux", args))
+
         def _discard_amr_provider_components(self):
             self.calls.clear()
             self.discarded = True
@@ -535,10 +558,11 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
     native = Native()
     engine = SimpleNamespace(_s=native)
     _install_amr_provider_authorities(engine, plan)
-    assert [name for name, _ in native.calls] == ["clustering", "tagger"]
+    assert [name for name, _ in native.calls] == ["clustering", "tagger", "reflux"]
     assert native.calls[0][1][0] is clustering_handle
     assert native.calls[1][1][0] is tagger_handle
-    assert tuple(engine._amr_provider_authorities) == ("clustering", "tagger")
+    assert native.calls[2][1][0] is reflux_handle
+    assert tuple(engine._amr_provider_authorities) == ("clustering", "tagger", "reflux")
 
     missing = SimpleNamespace(**vars(plan))
     missing.components = {clustering_id: installed[clustering_id]}
@@ -547,3 +571,15 @@ def test_external_amr_provider_install_is_prevalidated_and_transactional():
         _install_amr_provider_authorities(SimpleNamespace(_s=untouched), missing)
     assert untouched.calls == []
     assert not untouched.discarded
+
+    missing_reflux = SimpleNamespace(**vars(plan))
+    missing_reflux.components = {
+        clustering_id: installed[clustering_id],
+        tagger_id: installed[tagger_id],
+    }
+    untouched_reflux = Native()
+    with pytest.raises(ValueError, match="AMR reflux provider.*not installed"):
+        _install_amr_provider_authorities(
+            SimpleNamespace(_s=untouched_reflux), missing_reflux)
+    assert untouched_reflux.calls == []
+    assert not untouched_reflux.discarded

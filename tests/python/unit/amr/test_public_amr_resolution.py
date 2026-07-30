@@ -590,6 +590,19 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
                     "memory_spaces": list(tagging_abi["memory_spaces"]),
                 },
             },
+            "reflux": {
+                "schema_version": 1,
+                "provider_type": "builtin_amr_reflux",
+                "runtime_installation": {
+                    "schema_version": 1,
+                    "protocol": "builtin",
+                },
+                "provider_id": "pops.lib.amr::flux_register_reflux",
+                "provider_identity": "test::reflux-provider",
+                "native_interface": interfaces.Reflux.to_data(),
+                "layout_identity": layout_identity,
+                "clock_identity": "test::clock",
+            },
         },
     )
     for role, binding in install_plan.amr_providers.items():

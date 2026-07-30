@@ -396,6 +396,7 @@ class AMR(MeshDescriptor):
         load_balance: Any = None,
         tagger: Any = None,
         clustering: Any = None,
+        reflux: Any = None,
     ) -> None:
         # Structural snapshots consume ``options()``.  Keeping authorities private prevents the
         # generic snapshotter from recursively treating Schedule implementation helpers as public
@@ -407,15 +408,22 @@ class AMR(MeshDescriptor):
         self._transfer = transfer
         self._execution = execution
         self._patch_layout = PatchLayout() if patch_layout is None else patch_layout
-        if load_balance is None or tagger is None or clustering is None:
-            from pops.lib.amr import BergerRigoutsos, SpaceFillingCurve, SymbolicTagger
+        if load_balance is None or tagger is None or clustering is None or reflux is None:
+            from pops.lib.amr import (
+                BergerRigoutsos,
+                FluxRegisterReflux,
+                SpaceFillingCurve,
+                SymbolicTagger,
+            )
 
             load_balance = SpaceFillingCurve() if load_balance is None else load_balance
             tagger = SymbolicTagger() if tagger is None else tagger
             clustering = BergerRigoutsos() if clustering is None else clustering
+            reflux = FluxRegisterReflux() if reflux is None else reflux
         self._load_balance = load_balance
         self._tagger = tagger
         self._clustering = clustering
+        self._reflux = reflux
 
     @property
     def grid(self) -> Any:
@@ -457,6 +465,10 @@ class AMR(MeshDescriptor):
     def clustering(self) -> Any:
         return self._clustering
 
+    @property
+    def reflux(self) -> Any:
+        return self._reflux
+
     def _validate_authorities(self) -> None:
         authorities = {
             "hierarchy": self.hierarchy, "tagging": self.tagging,
@@ -468,6 +480,7 @@ class AMR(MeshDescriptor):
         _load_balance_data(self.load_balance)
         _provider_data(self.tagger, "tagger")
         _provider_data(self.clustering, "clustering")
+        _provider_data(self.reflux, "reflux")
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
             if not callable(getattr(self.grid, method, None)):
                 raise TypeError("AMR.grid must implement %s()" % method)
@@ -516,6 +529,7 @@ class AMR(MeshDescriptor):
             "load_balance": _load_balance_data(self.load_balance),
             "tagger": self.tagger.inspect(),
             "clustering": self.clustering.inspect(),
+            "reflux": self.reflux.inspect(),
         }
 
     def _summary(self) -> str:
@@ -567,6 +581,7 @@ class AMR(MeshDescriptor):
             load_balance=self.load_balance,
             tagger=self.tagger.resolve_references(resolved),
             clustering=self.clustering.resolve_references(resolved),
+            reflux=self.reflux.resolve_references(resolved),
         )
 
     def resolve_amr_authorities(self, context: Any) -> Any:
@@ -583,6 +598,7 @@ class AMR(MeshDescriptor):
             load_balance=self.load_balance,
             tagger=self.tagger,
             clustering=self.clustering,
+            reflux=self.reflux,
             context=context,
         )
 

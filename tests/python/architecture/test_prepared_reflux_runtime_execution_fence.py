@@ -26,6 +26,7 @@ PROGRAM_CONTEXT = (
 AMR_SYSTEM = ROOT / "src" / "runtime" / "amr" / "amr_system.cpp"
 AMR_BINDING = ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp"
 RUNTIME_AUTHORITIES = ROOT / "python" / "pops" / "runtime" / "_runtime_authorities.py"
+AMR_PROVIDER_PROTOCOLS = ROOT / "python" / "pops" / "amr" / "providers.py"
 
 
 def _between(text: str, begin: str, end: str) -> str:
@@ -116,10 +117,11 @@ def test_runtime_installation_reprepares_transitions_and_routes_logical_time() -
     )
 
 
-def test_internal_install_seam_exists_without_claiming_public_resolution() -> None:
+def test_reflux_uses_the_public_normalized_amr_provider_resolution() -> None:
     system = AMR_SYSTEM.read_text()
     binding = AMR_BINDING.read_text()
     authorities = RUNTIME_AUTHORITIES.read_text()
+    protocols = AMR_PROVIDER_PROTOCOLS.read_text()
     assert "install_amr_reflux_component(" in system
     assert "runtime->install_external_reflux(amr_reflux_component_);" in system
     assert "if (amr_reflux_component_)" not in _between(
@@ -128,5 +130,6 @@ def test_internal_install_seam_exists_without_claiming_public_resolution() -> No
         "if (!boundary_plans_.empty())",
     )
     assert '"_install_amr_reflux_component"' in binding
+    assert 'component_installer="_install_amr_reflux_component"' in protocols
     assert '"_install_amr_reflux_component"' not in authorities
-    assert 'tuple(providers) != ("clustering", "tagger")' in authorities
+    assert 'tuple(providers) != ("clustering", "tagger", "reflux")' in authorities
