@@ -71,7 +71,7 @@ def test_m3_gate_pins_metric_weighted_composite_diagnostic_proof():
     assert "std::fabs(integral - 1.25)" in source
 
 
-def test_m3_gate_pins_fail_closed_persistent_hysteresis_proofs():
+def test_m3_gate_pins_persistent_hysteresis_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
     checks = data["check"]
@@ -82,8 +82,8 @@ def test_m3_gate_pins_fail_closed_persistent_hysteresis_proofs():
         "kind": "pytest",
         "target": "accepted_state",
         "nodeid": (
-            "tests/python/unit/amr/test_public_amr_resolution.py::"
-            "test_tagging_resolution_refuses_unimplemented_persistent_hysteresis"
+            "tests/python/unit/amr/test_external_amr_providers.py::"
+            "test_external_tagger_requires_exact_candidate_program_capability"
         ),
     } in checks
     assert {
@@ -98,12 +98,15 @@ def test_m3_gate_pins_fail_closed_persistent_hysteresis_proofs():
         ),
     } in checks
 
-    authoring_source = (
-        ROOT / "tests/python/unit/amr/test_public_amr_resolution.py"
+    provider_source = (
+        ROOT / "tests/python/unit/amr/test_external_amr_providers.py"
     ).read_text(encoding="utf-8")
-    assert "test_tagging_resolution_refuses_unimplemented_persistent_hysteresis" in (
-        authoring_source
-    )
+    assert "external AMR Tagger persistent_hysteresis is not implemented" in provider_source
+    runtime_source = (
+        ROOT / "tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp"
+    ).read_text(encoding="utf-8")
+    assert "check_persistent_tagging_hysteresis_and_rollback()" in runtime_source
+    assert "check_persistent_tagging_equality_at_inclusive_boundary()" in runtime_source
     native_source = (
         ROOT
         / "tests/cpp/integration/native_loader/test_amr_native_loader.cpp"

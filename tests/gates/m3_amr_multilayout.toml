@@ -196,7 +196,7 @@ requirement = "accepted_state"
 polarity = "refusal"
 kind = "pytest"
 target = "accepted_state"
-nodeid = "tests/python/unit/amr/test_public_amr_resolution.py::test_tagging_resolution_refuses_unimplemented_persistent_hysteresis"
+nodeid = "tests/python/unit/amr/test_external_amr_providers.py::test_external_tagger_requires_exact_candidate_program_capability"
 
 [[check]]
 issue = "ADC-678"

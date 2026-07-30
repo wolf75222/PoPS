@@ -459,13 +459,13 @@ Dense; source ranks must agree on the runtime-owned tagging payload and rank-cou
 preserves it exactly. Native `SymbolicTagger` therefore accepts non-zero temporal hysteresis.
 External Tagger components still refuse non-zero hysteresis until their adapter owns that persistent
 route. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity; the
-builtin accepted-state-v6 provider first restores and validates the recorded accepted hierarchy,
-state, histories, counters, clock, and tagging payload, then requests one artifact-owned scientific
-regrid at that accepted coordinate. It verifies composite conservation, publishes a rank-consensus
-before/after topology receipt and derives a new continuation run identity. The bounded route requires
-one AMR layout, unchanged MPI cardinality and no elliptic provider, shared-interface flux group, or
-bootstrap staggered cache. PoPS never silently changes patch geometry under
-`RestoreRecordedHierarchy()`.
+builtin `pops.restart.accepted-state-v5` provider first restores and validates the recorded AMR v6
+accepted hierarchy, state, histories, counters, clock, and tagging payload, then requests one
+artifact-owned scientific regrid at that accepted coordinate. It verifies composite conservation,
+publishes a rank-consensus before/after topology receipt and derives a new continuation run identity.
+The bounded route requires one AMR layout, unchanged MPI cardinality and no elliptic provider,
+shared-interface flux group, or bootstrap staggered cache. PoPS never silently changes patch geometry
+under `RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
 `assemble_rhs` (limited reconstruction then numerical flux -> $R = -\mathrm{div} F + S$).
