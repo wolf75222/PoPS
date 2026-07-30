@@ -79,8 +79,8 @@ PopsExecutionContextV1 execution_view(const SystemLayoutTransferExecution& execu
           execution.communicator_datatype_identity.c_str()};
 }
 
-void validate_world_execution(const SystemLayoutTransferExecution& execution,
-                              const CommunicatorView& world) {
+CommunicatorView resolve_execution_communicator(const SystemLayoutTransferExecution& execution,
+                                                const CommunicatorView& field_rank_space) {
   const PopsExecutionContextV1 view = execution_view(execution);
   component::validate_execution_context(view);
   if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 &&
@@ -88,43 +88,54 @@ void validate_world_execution(const SystemLayoutTransferExecution& execution,
     throw std::invalid_argument(
         "prepared System layout transfer requires host-addressable native field storage");
   if (execution.communicator_identity == "serial") {
-    if (world.active())
+    if (field_rank_space.active())
       throw std::invalid_argument(
           "serial layout-transfer execution requires native MPI to be inactive");
-    return;
+    return CommunicatorView{};
   }
-  if (execution.communicator_identity != "MPI_COMM_WORLD")
+  if (execution.communicator_identity == POPS_EXECUTION_NONCOLLECTIVE_IDENTITY_V1)
     throw std::invalid_argument(
-        "prepared System layout transfer supports serial or exact MPI_COMM_WORLD execution");
+        "prepared System layout transfer requires collective execution authority");
 #ifdef POPS_HAS_MPI
-  if (!world.active())
+  if (!field_rank_space.active())
     throw std::invalid_argument(
-        "MPI_COMM_WORLD layout-transfer execution requires initialized native MPI");
-  if (execution.communicator_f_handle != static_cast<std::int64_t>(MPI_Comm_c2f(MPI_COMM_WORLD)) ||
-      execution.communicator_datatype_f_handle !=
-          static_cast<std::int64_t>(MPI_Type_c2f(MPI_DOUBLE)) ||
+        "collective layout-transfer execution requires initialized native MPI");
+  const MPI_Comm communicator =
+      MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle));
+  if (communicator == MPI_COMM_NULL ||
+      MPI_Type_f2c(static_cast<MPI_Fint>(execution.communicator_datatype_f_handle)) != MPI_DOUBLE ||
       execution.communicator_datatype_identity != "MPI_DOUBLE")
     throw std::invalid_argument(
-        "layout-transfer execution handles are not exact MPI_COMM_WORLD/MPI_DOUBLE authorities");
+        "layout-transfer execution handles do not identify a live communicator/MPI_DOUBLE "
+        "authority");
+  int relation = MPI_UNEQUAL;
+  ::pops::detail::require_mpi_success(
+      MPI_Comm_compare(communicator, field_rank_space.native_handle(), &relation),
+      "MPI_Comm_compare(layout-transfer field rank space)");
+  if (relation != MPI_IDENT && relation != MPI_CONGRUENT)
+    throw std::invalid_argument(
+        "layout-transfer execution communicator must preserve the field rank space");
+  return CommunicatorView{communicator};
 #else
-  (void)world;
+  (void)field_rank_space;
   throw std::invalid_argument(
-      "MPI_COMM_WORLD layout-transfer execution requires an MPI-enabled PoPS build");
+      "collective layout-transfer execution requires an MPI-enabled PoPS build");
 #endif
 }
 
 template <class Function>
-void collectively_validate(const CommunicatorView& world, const char* where, Function&& function) {
+void collectively_validate(const CommunicatorView& communicator, const char* where,
+                           Function&& function) {
   std::exception_ptr failure;
   try {
     std::forward<Function>(function)();
   } catch (...) {
     failure = std::current_exception();
   }
-  const long failures = all_reduce_sum(failure ? 1L : 0L, world);
+  const long failures = all_reduce_sum(failure ? 1L : 0L, communicator);
   if (failures == 0)
     return;
-  if (world.size() == 1 && failure)
+  if (communicator.size() == 1 && failure)
     std::rethrow_exception(failure);
   throw std::runtime_error(std::string(where) + " failed on at least one MPI rank");
 }
@@ -172,14 +183,14 @@ std::uint64_t checked_elements(const Box2D& box, int components) {
   return static_cast<std::uint64_t>(cells) * static_cast<std::uint64_t>(components);
 }
 
-std::uint64_t collective_elements(std::uint64_t local, const CommunicatorView& world) {
-  const auto ranks = static_cast<std::uint64_t>(world.size());
+std::uint64_t collective_elements(std::uint64_t local, const CommunicatorView& communicator) {
+  const auto ranks = static_cast<std::uint64_t>(communicator.size());
   const std::uint64_t per_rank_limit =
       static_cast<std::uint64_t>(std::numeric_limits<long>::max()) / ranks;
-  const long invalid = all_reduce_max(local > per_rank_limit ? 1L : 0L, world);
+  const long invalid = all_reduce_max(local > per_rank_limit ? 1L : 0L, communicator);
   if (invalid != 0)
     throw std::overflow_error("layout-transfer global element count exceeds MPI long capacity");
-  const long global = all_reduce_sum(static_cast<long>(local), world);
+  const long global = all_reduce_sum(static_cast<long>(local), communicator);
   return static_cast<std::uint64_t>(global);
 }
 
@@ -196,7 +207,7 @@ struct PreparedSystemLayoutTransfer::Impl {
   SystemLayoutTransferSpec spec;
   SystemLayoutTransferExecution execution;
   PopsExecutionContextV1 execution_abi{};
-  CommunicatorView world;
+  CommunicatorView communicator;
   int source_block_index = -1;
   int target_block_index = -1;
   int components = 0;
@@ -211,7 +222,8 @@ struct PreparedSystemLayoutTransfer::Impl {
 
   Impl(System& source_system, System& target_system,
        std::shared_ptr<component::LoadedComponent> loaded, SystemLayoutTransferSpec transfer_spec,
-       SystemLayoutTransferExecution transfer_execution)
+       SystemLayoutTransferExecution transfer_execution,
+       const CommunicatorView& transfer_communicator)
       : source_owner(&source_system),
         target_owner(&target_system),
         source(source_system.p_.get()),
@@ -220,7 +232,7 @@ struct PreparedSystemLayoutTransfer::Impl {
         spec(std::move(transfer_spec)),
         execution(std::move(transfer_execution)),
         execution_abi(execution_view(execution)),
-        world(world_communicator_view()) {
+        communicator(transfer_communicator) {
     validate_static_contract();
     source_block_index = source->blocks_.index(spec.source_block);
     target_block_index = target->blocks_.index(spec.target_block);
@@ -299,7 +311,6 @@ struct PreparedSystemLayoutTransfer::Impl {
     if (source_owner->lifecycle_state() == "assembling" ||
         target_owner->lifecycle_state() == "assembling")
       throw std::invalid_argument("prepared System transfer requires bound native Systems");
-    validate_world_execution(execution, world);
     const PopsComponentApiV1& api = component_handle->api();
     if (api.component_id == nullptr || api.manifest_identity == nullptr ||
         api.semantic_identity == nullptr || api.catalog_sha256 == nullptr ||
@@ -381,23 +392,28 @@ PreparedSystemLayoutTransfer::~PreparedSystemLayoutTransfer() = default;
 std::shared_ptr<PreparedSystemLayoutTransfer> PreparedSystemLayoutTransfer::prepare(
     System& source, System& target, std::shared_ptr<component::LoadedComponent> component,
     SystemLayoutTransferSpec spec, SystemLayoutTransferExecution execution) {
-  const CommunicatorView world = world_communicator_view();
+  const CommunicatorView field_rank_space = world_communicator_view();
+  CommunicatorView communicator;
+  collectively_validate(field_rank_space, "layout-transfer execution communicator", [&] {
+    communicator = resolve_execution_communicator(execution, field_rank_space);
+  });
   std::unique_ptr<Impl> pending;
-  collectively_validate(world, "prepared System layout-transfer allocation", [&] {
+  collectively_validate(communicator, "prepared System layout-transfer allocation", [&] {
     pending = std::make_unique<Impl>(source, target, std::move(component), std::move(spec),
-                                     std::move(execution));
+                                     std::move(execution), communicator);
   });
   const std::string payload = pending->consensus_payload();
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"prepared-system-layout-transfer-v1", payload}},
-                                                world))
+                                                communicator))
     throw std::invalid_argument(
         "prepared System layout-transfer contract differs between MPI ranks");
-  collectively_validate(world, "native Transfer provider preparation",
+  collectively_validate(communicator, "native Transfer provider preparation",
                         [&] { pending->prepare_provider(); });
   // Warm the persistent copy schedule and MPI buffers before the first run step.  This copy is
   // observationally inert: the carrier is private until capture() authenticates an attempt.
-  collectively_validate(world, "prepared System layout-transfer warmup",
-                        [&] { parallel_copy(pending->source_snapshot, pending->source_state()); });
+  collectively_validate(communicator, "prepared System layout-transfer warmup", [&] {
+    parallel_copy(pending->source_snapshot, pending->source_state(), communicator);
+  });
   return std::shared_ptr<PreparedSystemLayoutTransfer>(
       new PreparedSystemLayoutTransfer(std::move(pending)));
 }
@@ -407,7 +423,7 @@ const SystemLayoutTransferSpec& PreparedSystemLayoutTransfer::spec() const noexc
 }
 
 void PreparedSystemLayoutTransfer::begin_transaction(std::uint64_t generation) {
-  collectively_validate(p_->world, "layout-transfer begin", [&] {
+  collectively_validate(p_->communicator, "layout-transfer begin", [&] {
     if (p_->active)
       throw std::logic_error("layout-transfer transaction is already active");
     if (generation == 0 || generation <= p_->last_generation)
@@ -425,7 +441,7 @@ void PreparedSystemLayoutTransfer::begin_transaction(std::uint64_t generation) {
 }
 
 void PreparedSystemLayoutTransfer::capture(std::uint64_t generation, std::uint64_t attempt) {
-  collectively_validate(p_->world, "layout-transfer capture", [&] {
+  collectively_validate(p_->communicator, "layout-transfer capture", [&] {
     p_->validate_active(generation, attempt, "layout-transfer capture");
     if (p_->applied)
       throw std::logic_error(
@@ -433,14 +449,15 @@ void PreparedSystemLayoutTransfer::capture(std::uint64_t generation, std::uint64
     if (p_->captured_attempt != 0 && p_->captured_attempt != attempt)
       throw std::logic_error("layout-transfer source was already captured for another attempt");
   });
-  collectively_validate(p_->world, "layout-transfer source capture",
-                        [&] { parallel_copy(p_->source_snapshot, p_->source_state()); });
+  collectively_validate(p_->communicator, "layout-transfer source capture", [&] {
+    parallel_copy(p_->source_snapshot, p_->source_state(), p_->communicator);
+  });
   p_->captured_attempt = attempt;
 }
 
 SystemLayoutTransferReceipt PreparedSystemLayoutTransfer::apply(std::uint64_t generation,
                                                                 std::uint64_t attempt) {
-  collectively_validate(p_->world, "layout-transfer apply preflight", [&] {
+  collectively_validate(p_->communicator, "layout-transfer apply preflight", [&] {
     p_->validate_active(generation, attempt, "layout-transfer apply");
     if (p_->captured_attempt != attempt)
       throw std::logic_error("layout-transfer apply requires the exact captured attempt");
@@ -450,7 +467,7 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer::apply(std::uint64_t ge
 
   std::uint64_t local_source_elements = 0;
   std::uint64_t local_target_elements = 0;
-  collectively_validate(p_->world, "native Transfer apply", [&] {
+  collectively_validate(p_->communicator, "native Transfer apply", [&] {
     MultiFab& destination = p_->target_state();
     try {
       for (int local = 0; local < p_->source_snapshot.local_size(); ++local) {
@@ -549,13 +566,13 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer::apply(std::uint64_t ge
   receipt.operation = p_->spec.operation;
   receipt.generation = generation;
   receipt.attempt = attempt;
-  receipt.source_element_count = collective_elements(local_source_elements, p_->world);
-  receipt.destination_element_count = collective_elements(local_target_elements, p_->world);
+  receipt.source_element_count = collective_elements(local_source_elements, p_->communicator);
+  receipt.destination_element_count = collective_elements(local_target_elements, p_->communicator);
   return receipt;
 }
 
 void PreparedSystemLayoutTransfer::reject_attempt(std::uint64_t generation, std::uint64_t attempt) {
-  collectively_validate(p_->world, "layout-transfer rejected-attempt reset", [&] {
+  collectively_validate(p_->communicator, "layout-transfer rejected-attempt reset", [&] {
     p_->validate_active(generation, attempt, "layout-transfer rejected-attempt reset");
     if (p_->captured_attempt != attempt)
       throw std::logic_error(

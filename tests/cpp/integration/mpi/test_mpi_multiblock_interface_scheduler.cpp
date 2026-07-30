@@ -16,7 +16,33 @@ using namespace pops::runtime::multiblock;
 
 namespace {
 
-PopsExecutionContextV1 mpi_world_execution() {
+class ScopedMpiCommunicator {
+ public:
+  explicit ScopedMpiCommunicator(MPI_Comm source) {
+    if (MPI_Comm_dup(source, &communicator_) != MPI_SUCCESS)
+      throw std::runtime_error("MPI_Comm_dup failed for the interface scheduler test lane");
+    if (MPI_Comm_set_errhandler(communicator_, MPI_ERRORS_RETURN) != MPI_SUCCESS) {
+      MPI_Comm_free(&communicator_);
+      throw std::runtime_error(
+          "MPI_Comm_set_errhandler failed for the interface scheduler test lane");
+    }
+  }
+
+  ~ScopedMpiCommunicator() {
+    if (communicator_ != MPI_COMM_NULL)
+      MPI_Comm_free(&communicator_);
+  }
+
+  ScopedMpiCommunicator(const ScopedMpiCommunicator&) = delete;
+  ScopedMpiCommunicator& operator=(const ScopedMpiCommunicator&) = delete;
+
+  MPI_Comm get() const { return communicator_; }
+
+ private:
+  MPI_Comm communicator_ = MPI_COMM_NULL;
+};
+
+PopsExecutionContextV1 mpi_lane_execution(MPI_Comm communicator) {
   return {sizeof(PopsExecutionContextV1),
           1u,
           "test::mpi-multiblock-execution",
@@ -30,9 +56,9 @@ PopsExecutionContextV1 mpi_world_execution() {
           POPS_PRECISION_FLOAT64_V1,
           0,
           "host::synchronous",
-          static_cast<std::int64_t>(MPI_Comm_c2f(MPI_COMM_WORLD)),
+          static_cast<std::int64_t>(MPI_Comm_c2f(communicator)),
           static_cast<std::int64_t>(MPI_Type_c2f(MPI_DOUBLE)),
-          "MPI_COMM_WORLD",
+          "test::mpi-multiblock-interface-lane",
           "MPI_DOUBLE"};
 }
 
@@ -95,6 +121,11 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
   {
     try {
       require(n_ranks() == 2);
+      const ScopedMpiCommunicator interface_lane(MPI_COMM_WORLD);
+      int world_relation = MPI_UNEQUAL;
+      require(MPI_Comm_compare(interface_lane.get(), MPI_COMM_WORLD, &world_relation) ==
+              MPI_SUCCESS);
+      require(world_relation == MPI_CONGRUENT);
 
       const Box2D left_domain{{0, 0}, {1, 3}};
       const Box2D right_domain{{2, 0}, {3, 3}};
@@ -124,7 +155,7 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
 
       const Geometry left_geometry{left_domain, Real(0), Real(1), Real(0), Real(1)};
       const Geometry right_geometry{right_domain, Real(1), Real(2), Real(0), Real(1)};
-      const PopsExecutionContextV1 execution = mpi_world_execution();
+      const PopsExecutionContextV1 execution = mpi_lane_execution(interface_lane.get());
       const BoundaryEvaluationPoint point{"clock.mpi-interface", 3,     0,    0, 1,
                                           amr::Rational(1, 1),   0.125, 0.375};
 
