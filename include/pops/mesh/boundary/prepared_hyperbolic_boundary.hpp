@@ -411,6 +411,60 @@ class PreparedHyperbolicBoundary {
   static_assert(Dim >= 1 && Dim <= 3);
   using Transform = HyperbolicComponentTransform<Dim>;
 
+  /// Opaque proof that every fallible physical-face check, including the collective finite-value
+  /// scan of analytic programs, completed for one exact state/layout.  PreparedBoundaryPlan obtains
+  /// this proof before mutating same-level, periodic or MPI halos, then consumes it immediately.
+  class PhysicalFillPreflight final {
+   public:
+    PhysicalFillPreflight(const PhysicalFillPreflight&) = delete;
+    PhysicalFillPreflight& operator=(const PhysicalFillPreflight&) = delete;
+    PhysicalFillPreflight(PhysicalFillPreflight&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)),
+          state_(std::exchange(other.state_, nullptr)),
+          domain_(other.domain_),
+          geometry_(other.geometry_),
+          has_geometry_(other.has_geometry_),
+          physical_time_(other.physical_time_),
+          ncomp_(other.ncomp_),
+          depth_(other.depth_) {}
+    PhysicalFillPreflight& operator=(PhysicalFillPreflight&& other) noexcept {
+      if (this == &other)
+        return *this;
+      owner_ = std::exchange(other.owner_, nullptr);
+      state_ = std::exchange(other.state_, nullptr);
+      domain_ = other.domain_;
+      geometry_ = other.geometry_;
+      has_geometry_ = other.has_geometry_;
+      physical_time_ = other.physical_time_;
+      ncomp_ = other.ncomp_;
+      depth_ = other.depth_;
+      return *this;
+    }
+
+   private:
+    friend class PreparedHyperbolicBoundary;
+
+    PhysicalFillPreflight(const PreparedHyperbolicBoundary* owner, const MultiFab* state,
+                          Box2D domain, const Geometry* geometry, Real physical_time)
+        : owner_(owner),
+          state_(state),
+          domain_(domain),
+          geometry_(geometry == nullptr ? Geometry{} : *geometry),
+          has_geometry_(geometry != nullptr),
+          physical_time_(physical_time),
+          ncomp_(state->ncomp()),
+          depth_(state->n_grow()) {}
+
+    const PreparedHyperbolicBoundary* owner_ = nullptr;
+    const MultiFab* state_ = nullptr;
+    Box2D domain_{};
+    Geometry geometry_{};
+    bool has_geometry_ = false;
+    Real physical_time_ = Real(0);
+    int ncomp_ = 0;
+    int depth_ = 0;
+  };
+
   PreparedHyperbolicBoundary() = default;
 
   PreparedHyperbolicBoundary(
@@ -514,10 +568,8 @@ class PreparedHyperbolicBoundary {
   /// The explicit NotRequired corner policy excludes double-physical corners. Periodic tangential
   /// ghosts are included because they were already produced by fill_boundary and are valid inputs.
   void fill_physical(MultiFab& state, const Box2D& domain) const {
-    if (has_analytic_state())
-      throw std::logic_error(
-          "analytic hyperbolic boundary requires physical Geometry at execution");
-    fill_physical_impl_(state, domain, nullptr, Real(0), {}, false, world_communicator_view());
+    auto preflight = preflight_physical(state, domain);
+    fill_physical_preflighted(state, std::move(preflight));
   }
 
   void fill_physical(MultiFab& state, const Geometry& geometry) const {
@@ -526,7 +578,8 @@ class PreparedHyperbolicBoundary {
 
   void fill_physical(MultiFab& state, const Geometry& geometry,
                      CommunicatorView communicator) const {
-    fill_physical_impl_(state, geometry.domain, &geometry, Real(0), {}, false, communicator);
+    auto preflight = preflight_physical(state, geometry, communicator);
+    fill_physical_preflighted(state, std::move(preflight));
   }
 
   void fill_physical(MultiFab& state, const Geometry& geometry, Real physical_time,
@@ -536,14 +589,58 @@ class PreparedHyperbolicBoundary {
 
   void fill_physical(MultiFab& state, const Geometry& geometry, Real physical_time,
                      std::string_view clock, CommunicatorView communicator) const {
-    fill_physical_impl_(state, geometry.domain, &geometry, physical_time, clock, true,
-                        communicator);
+    auto preflight = preflight_physical(state, geometry, physical_time, clock, communicator);
+    fill_physical_preflighted(state, std::move(preflight));
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Box2D& domain) const {
+    if (has_analytic_state())
+      throw std::logic_error(
+          "analytic hyperbolic boundary requires physical Geometry at execution");
+    return preflight_physical_impl_(state, domain, nullptr, Real(0), {}, false,
+                                    world_communicator_view());
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Geometry& geometry) const {
+    return preflight_physical(state, geometry, world_communicator_view());
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Geometry& geometry,
+                                           CommunicatorView communicator) const {
+    return preflight_physical_impl_(state, geometry.domain, &geometry, Real(0), {}, false,
+                                    communicator);
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Geometry& geometry,
+                                           Real physical_time, std::string_view clock) const {
+    return preflight_physical(state, geometry, physical_time, clock, world_communicator_view());
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Geometry& geometry,
+                                           Real physical_time, std::string_view clock,
+                                           CommunicatorView communicator) const {
+    return preflight_physical_impl_(state, geometry.domain, &geometry, physical_time, clock, true,
+                                    communicator);
+  }
+
+  /// Consume one exact preflight after the owning PreparedBoundaryPlan has produced native halos.
+  /// No validation or host allocation remains on this commit path.
+  void fill_physical_preflighted(MultiFab& state, PhysicalFillPreflight&& preflight) const {
+    if (preflight.owner_ != this || preflight.state_ != &state ||
+        preflight.ncomp_ != state.ncomp() || preflight.depth_ != state.n_grow())
+      throw std::logic_error(
+          "prepared hyperbolic boundary received a foreign or stale physical preflight");
+    preflight.owner_ = nullptr;
+    fill_physical_preflighted_impl_(state, preflight.domain_,
+                                    preflight.has_geometry_ ? &preflight.geometry_ : nullptr,
+                                    preflight.physical_time_);
   }
 
  private:
-  void fill_physical_impl_(MultiFab& state, const Box2D& domain, const Geometry* geometry,
-                           Real physical_time, std::string_view clock, bool has_evaluation_point,
-                           CommunicatorView communicator) const {
+  PhysicalFillPreflight preflight_physical_impl_(MultiFab& state, const Box2D& domain,
+                                                 const Geometry* geometry, Real physical_time,
+                                                 std::string_view clock, bool has_evaluation_point,
+                                                 CommunicatorView communicator) const {
     static_assert(Dim == 2, "the current MultiFab storage is two-dimensional");
     if (requires_fixed_state_conversion())
       throw std::logic_error(
@@ -553,7 +650,7 @@ class PreparedHyperbolicBoundary {
           "prepared hyperbolic boundary component count differs from the state");
     const int depth = state.n_grow();
     if (depth == 0)
-      return;
+      return PhysicalFillPreflight(this, &state, domain, geometry, physical_time);
     if (has_analytic_state()) {
       if (geometry == nullptr || geometry->domain != domain)
         throw std::invalid_argument(
@@ -591,7 +688,15 @@ class PreparedHyperbolicBoundary {
                                                 1, faces_[2].law, faces_[3].law, table, component);
       }
     }
+    return PhysicalFillPreflight(this, &state, domain, geometry, physical_time);
+  }
 
+  void fill_physical_preflighted_impl_(MultiFab& state, const Box2D& domain,
+                                       const Geometry* geometry, Real physical_time) const {
+    const int depth = state.n_grow();
+    if (depth == 0)
+      return;
+    const auto table = table_view();
     for (int local = 0; local < state.local_size(); ++local) {
       Fab2D& fab = state.fab(local);
       const Box2D valid = fab.box();

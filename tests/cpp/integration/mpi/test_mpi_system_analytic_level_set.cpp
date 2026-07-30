@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -280,6 +283,60 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   }
   require(all_reduce_sum(valid_amr_boundary_installed ? 1L : 0L) == n_ranks(),
           "a rejected AMR boundary mismatch must not publish a partial plan");
+
+  // The analytic finite-value scan must precede every same-level, periodic and MPI halo write.
+  // This distributed multibox field exercises all three paths and compares the complete grown
+  // storage after the collective refusal.
+  const Box2D halo_domain = Box2D::from_extents(8, 4);
+  const Geometry halo_geometry(halo_domain, Real(0), Real(8), Real(0), Real(4));
+  const BoxArray halo_boxes = BoxArray::from_domain(halo_domain, 2);
+  MultiFab halo_state(halo_boxes, DistributionMapping(halo_boxes.size(), n_ranks()), 1, 1);
+  halo_state.set_val(Real(-99));
+  for (int local = 0; local < halo_state.local_size(); ++local) {
+    const Array4 values = halo_state.fab(local).array();
+    for_each_cell(halo_state.box(local),
+                  [=](int i, int j) { values(i, j, 0) = Real(2 + i + 10 * j); });
+  }
+  device_fence();
+  const MultiFab halo_before = halo_state;
+  PreparedBoundaryPlan invalid_halo_plan(
+      "case::boundary::invalid-halo-plan", 1,
+      prepare_hyperbolic_boundary<2>(
+          {"dirichlet", "foextrap", "periodic", "periodic"}, std::vector<double>(4, 0.0),
+          {"case::invalid-halo::xlo", "case::invalid-halo::xhi", "case::invalid-halo::ylo",
+           "case::invalid-halo::yhi"},
+          {"Scalar"}, false, {}, {},
+          {{"constant", "log"},
+           std::vector<std::string>{},
+           std::vector<std::string>{},
+           std::vector<std::string>{}},
+          {{-1.0, 0.0}, std::vector<double>{}, std::vector<double>{}, std::vector<double>{}},
+          {"", "", "", ""}));
+  const auto invalid_halo_lane = ExecutionLane::world("case::boundary::invalid-halo-lane");
+  auto invalid_halo_session = invalid_halo_plan.make_session(invalid_halo_lane);
+  const runtime::multiblock::BoundaryEvaluationPoint halo_point{"clock.boundary",    1,   0,   0, 0,
+                                                                amr::Rational(0, 1), 0.1, 0.25};
+  bool invalid_halo_rejected = false;
+  try {
+    invalid_halo_session.fill_same_level_and_physical(halo_state, halo_geometry, halo_point);
+  } catch (const std::runtime_error&) {
+    invalid_halo_rejected = true;
+  }
+  require(all_reduce_sum(invalid_halo_rejected ? 1L : 0L) == n_ranks(),
+          "non-finite analytic halo values must reject collectively");
+  halo_state.sync_host();
+  halo_before.sync_host();
+  long local_halo_mutations = 0;
+  for (int local = 0; local < halo_state.local_size(); ++local) {
+    const Fab2D& observed = halo_state.fab(local);
+    const Fab2D& expected = halo_before.fab(local);
+    const Box2D grown = observed.grown_box();
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        local_halo_mutations += observed(i, j, 0) == expected(i, j, 0) ? 0L : 1L;
+  }
+  require(all_reduce_sum(local_halo_mutations) == 0,
+          "analytic refusal must preserve complete same-level, periodic, MPI and physical storage");
 
   const long failures = all_reduce_sum(local_failures);
   comm_finalize();

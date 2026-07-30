@@ -105,7 +105,11 @@ Supported native routes include:
   through the exact compiled block-model `to_conservative` provider, and typed-role slip wall.
   Analytic programs are immutable postfix tables evaluated in native device kernels at the exact
   `BoundaryEvaluationPoint`; no Python callback or hot-loop allocation is retained. The analytic
-  route remains `partial`: primitive per-point conversion and discrete state/field/input reads are
+  finite-value contract is strictly non-mutating: one device preflight and one communicator
+  reduction complete before any same-level, periodic, MPI or physical halo write. The commit kernel
+  then evaluates the program again; this deliberate two-pass route avoids a per-cell scratch field
+  but retains one blocking collective per analytic boundary fill.
+  The analytic route remains `partial`: primitive per-point conversion and discrete state/field/input reads are
   rejected, as is an analytic ghost depth larger than the normal domain extent. Analytic faces with
   axis-permuted periodic coordinates also fail closed until a prepared coordinate map exists. The
   conversion route is explicitly `partial`: conservative-to-primitive recovery and arbitrary

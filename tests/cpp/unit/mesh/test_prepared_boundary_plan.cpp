@@ -44,10 +44,12 @@ PreparedHyperbolicBoundary<2> periodic_boundary(
 
 PreparedHyperbolicBoundary<2> analytic_xlo_boundary(
     std::vector<std::string> opcodes = {"x", "y", "add", "input", "add"},
-    std::vector<double> literals = {0.0, 0.0, 0.0, 0.0, 0.0}) {
+    std::vector<double> literals = {0.0, 0.0, 0.0, 0.0, 0.0}, bool periodic_tangent = false) {
   const bool reads_time = std::find(opcodes.begin(), opcodes.end(), "input") != opcodes.end();
   return prepare_hyperbolic_boundary<2>(
-      {"dirichlet", "foextrap", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+      periodic_tangent ? std::vector<std::string>{"dirichlet", "foextrap", "periodic", "periodic"}
+                       : std::vector<std::string>{"dirichlet", "foextrap", "foextrap", "foextrap"},
+      std::vector<double>(4, 0.0),
       {"case::analytic::xlo", "case::analytic::xhi", "case::analytic::ylo", "case::analytic::yhi"},
       {"Scalar"}, false, {}, {},
       {std::move(opcodes), std::vector<std::string>{}, std::vector<std::string>{},
@@ -204,25 +206,38 @@ TEST(test_prepared_boundary_plan,
   EXPECT_EQ(after, before);
 }
 
-TEST(test_prepared_boundary_plan, analytic_inflow_preflights_nonfinite_values_before_mutation) {
+TEST(test_prepared_boundary_plan, analytic_inflow_preflights_nonfinite_values_before_any_mutation) {
   const Box2D domain = Box2D::from_extents(4, 3);
   const Geometry geometry(domain, Real(0), Real(4), Real(0), Real(3));
-  MultiFab state = scalar_field(domain, 1, 1);
+  const BoxArray boxes = BoxArray::from_domain(domain, 2);
+  MultiFab state(boxes, DistributionMapping(boxes.size(), n_ranks()), 1, 1);
   state.set_val(Real(-99));
   for (int local = 0; local < state.local_size(); ++local) {
     const Array4 values = state.fab(local).array();
-    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(2); });
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(2 + i + 10 * j); });
   }
+  device_fence();
+  const MultiFab before = state;
   PreparedBoundaryPlan plan("case::analytic::invalid-plan", 1,
-                            analytic_xlo_boundary({"constant", "log"}, {-1.0, 0.0}));
+                            analytic_xlo_boundary({"constant", "log"}, {-1.0, 0.0}, true));
   const auto lane = ExecutionLane::world("case::analytic::invalid-lane");
   auto session = plan.make_session(lane);
   const runtime::multiblock::BoundaryEvaluationPoint point{"clock.analytic",    1,   0,   0, 0,
                                                            amr::Rational(0, 1), 0.1, 0.25};
 
   EXPECT_THROW(session.fill_same_level_and_physical(state, geometry, point), std::runtime_error);
-  if (state.local_size() > 0)
-    EXPECT_EQ(state.fab(0)(-1, 1, 0), Real(-99));
+  state.sync_host();
+  before.sync_host();
+  ASSERT_EQ(state.local_size(), before.local_size());
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& observed = state.fab(local);
+    const Fab2D& expected = before.fab(local);
+    const Box2D grown = observed.grown_box();
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        EXPECT_EQ(observed(i, j, 0), expected(i, j, 0))
+            << "analytic refusal mutated local fab " << local << " at (" << i << ", " << j << ")";
+  }
 }
 
 TEST(test_prepared_boundary_plan, analytic_inflow_authenticates_one_clock_and_time_slot_per_plan) {
