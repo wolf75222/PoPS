@@ -227,16 +227,12 @@ void System::block_boundary_residual_into_at(
   if (!block_has_boundary_linearization(b))
     throw std::runtime_error("System block has no executable boundary residual/JVP pair");
   auto& block = p_->sp[static_cast<std::size_t>(b)];
-  if (block.boundary_session) {
-    if (!block.boundary_residual_at_point_prepared)
-      throw std::runtime_error("System block lacks its prepared boundary residual closure");
-    block.boundary_residual_at_point_prepared(point, U, C, *block.boundary_session);
-    return;
-  }
-  auto& closure = block.boundary_residual_at_point;
-  if (!closure)
-    throw std::runtime_error("System block lacks its boundary residual closure");
-  closure(point, U, C);
+  if (!block.boundary_session)
+    throw std::runtime_error(
+        "System boundary residual requires its persistent prepared boundary session");
+  if (!block.boundary_residual_at_point_prepared)
+    throw std::runtime_error("System block lacks its prepared boundary residual closure");
+  block.boundary_residual_at_point_prepared(point, U, C, *block.boundary_session);
 }
 
 void System::block_boundary_residual_into_at(
@@ -262,16 +258,12 @@ void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvalu
   if (!block_has_boundary_linearization(b))
     throw std::runtime_error("System block has no executable boundary residual/JVP pair");
   auto& block = p_->sp[static_cast<std::size_t>(b)];
-  if (block.boundary_session) {
-    if (!block.boundary_jvp_at_point_prepared)
-      throw std::runtime_error("System block lacks its prepared boundary JVP closure");
-    block.boundary_jvp_at_point_prepared(point, U, V, J, *block.boundary_session);
-    return;
-  }
-  auto& closure = block.boundary_jvp_at_point;
-  if (!closure)
-    throw std::runtime_error("System block lacks its boundary JVP closure");
-  closure(point, U, V, J);
+  if (!block.boundary_session)
+    throw std::runtime_error(
+        "System boundary JVP requires its persistent prepared boundary session");
+  if (!block.boundary_jvp_at_point_prepared)
+    throw std::runtime_error("System block lacks its prepared boundary JVP closure");
+  block.boundary_jvp_at_point_prepared(point, U, V, J, *block.boundary_session);
 }
 void System::block_boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
                                         int b, MultiFab& U, const MultiFab& V, MultiFab& J,
