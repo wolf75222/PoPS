@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 using namespace pops;
@@ -40,6 +41,35 @@ static double u_exact(double x, double y) {
 }
 static double f_rhs(double x, double y) {  // Lap u = -(9+9) pi^2 u
   return -18.0 * kPi * kPi * u_exact(x, y);
+}
+
+static int fully_refined_boundary_visits[2] = {0, 0};
+static int fully_refined_jvp_visits[2] = {0, 0};
+
+static void prepare_fully_refined_level_boundary(int, const MultiFab&, MultiFab&, const Geometry&,
+                                                 const FieldBoundaryExecutionContext& context) {
+  if (context.point.level < 0 || context.point.level > 1)
+    throw std::runtime_error("fully refined boundary received an invalid AMR level");
+  ++fully_refined_boundary_visits[context.point.level];
+}
+
+static void add_noop_fully_refined_boundary(int, const MultiFab&, MultiFab&, const Geometry&,
+                                            const FieldBoundaryExecutionContext&) {}
+
+static void prepare_noop_fully_refined_boundary_jvp(int, const MultiFab&, const MultiFab&,
+                                                    MultiFab&, const Geometry&,
+                                                    const FieldBoundaryExecutionContext& context) {
+  if (context.point.level < 0 || context.point.level > 1)
+    throw std::runtime_error("fully refined boundary JVP received an invalid AMR level");
+  ++fully_refined_jvp_visits[context.point.level];
+}
+
+static void apply_noop_fully_refined_boundary_jvp(int, const MultiFab&, const MultiFab&, MultiFab&,
+                                                  const Geometry&,
+                                                  const FieldBoundaryExecutionContext& context) {
+  if (context.point.level < 0 || context.point.level > 1)
+    throw std::runtime_error("fully refined boundary JVP received an invalid AMR level");
+  ++fully_refined_jvp_visits[context.point.level];
 }
 
 TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
@@ -178,6 +208,134 @@ TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
 
   if (me == 0)
     std::printf("OK test_composite_fac_poisson\n");
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, fully_refined_boundary_uses_finest_level_context) {
+  comm_init();
+  constexpr int n = 8;
+  constexpr int ratio = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry coarse_geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse_boxes = BoxArray::from_domain(domain, n);
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  const Box2D fully_refined_box = coarse_geometry.refine(ratio).domain;
+
+  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, boundary, fully_refined_box, ratio);
+  fac.set_reaction(Real(1));
+  fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+      "tests.fac.fully-refined-level-boundary", "tests.fac.fully-refined-level-boundary.residual",
+      "", prepare_fully_refined_level_boundary, nullptr, add_noop_fully_refined_boundary, nullptr,
+      false});
+  FieldBoundaryExecutionContext coarse_context;
+  coarse_context.point.level = -1;
+  FieldBoundaryExecutionContext fine_context;
+  fine_context.point.level = -1;
+  fac.set_boundary_context_for_level(0, coarse_context);
+  fac.set_boundary_context_for_level(1, fine_context);
+
+  fac.rhs_level(0).set_val(Real(0));
+  fac.rhs_level(1).set_val(Real(0));
+  fac.phi_level(0).set_val(Real(0));
+  fac.phi_level(1).set_val(Real(0));
+  fully_refined_boundary_visits[0] = 0;
+  fully_refined_boundary_visits[1] = 0;
+  const Real residual = fac.solve(/*max_iters=*/2, /*fine_sweeps=*/2, /*rel_tol=*/Real(1e-10),
+                                  /*abs_tol=*/Real(0));
+
+  EXPECT_EQ(residual, Real(0));
+  EXPECT_EQ(fully_refined_boundary_visits[0], 0);
+  EXPECT_GT(fully_refined_boundary_visits[1], 0);
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, partially_refined_dynamic_boundary_refuses_fac_correction) {
+  comm_init();
+  constexpr int n = 8;
+  constexpr int ratio = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry coarse_geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse_boxes = BoxArray::from_domain(domain, n);
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  const Box2D fine_box{{4, 4}, {11, 11}};
+  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, boundary, fine_box, ratio);
+  fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+      "tests.fac.partial-level-boundary-refusal",
+      "tests.fac.partial-level-boundary-refusal.residual", "", prepare_fully_refined_level_boundary,
+      nullptr, add_noop_fully_refined_boundary, nullptr, false});
+
+  std::string diagnostic;
+  try {
+    (void)fac.solve(/*max_iters=*/2, /*fine_sweeps=*/2, /*rel_tol=*/Real(1e-10),
+                    /*abs_tol=*/Real(0));
+    ADD_FAILURE() << "partially refined dynamic FAC must refuse an inhomogeneous correction";
+  } catch (const std::runtime_error& error) {
+    diagnostic = error.what();
+  }
+  EXPECT_NE(diagnostic.find("homogeneous/JVP boundary operator"), std::string::npos) << diagnostic;
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, fully_refined_nonlinear_boundary_uses_finest_jvp_context) {
+  comm_init();
+  constexpr int n = 8;
+  constexpr int ratio = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry coarse_geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse_boxes = BoxArray::from_domain(domain, n);
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  const Box2D fully_refined_box = coarse_geometry.refine(ratio).domain;
+  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, boundary, fully_refined_box, ratio);
+  fac.set_reaction(Real(1));
+  fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+      "tests.fac.fully-refined-nonlinear-jvp", "tests.fac.fully-refined-nonlinear-jvp.residual",
+      "tests.fac.fully-refined-nonlinear-jvp.jvp", prepare_fully_refined_level_boundary,
+      prepare_noop_fully_refined_boundary_jvp, add_noop_fully_refined_boundary,
+      apply_noop_fully_refined_boundary_jvp, true});
+  FieldBoundaryExecutionContext coarse_context;
+  coarse_context.point.level = -1;
+  FieldBoundaryExecutionContext fine_context;
+  fine_context.point.level = -1;
+  fac.set_boundary_context_for_level(0, coarse_context);
+  fac.set_boundary_context_for_level(1, fine_context);
+  const FieldNewtonOptions options;
+  fac.set_field_nonlinear_options(options);
+  fac.rhs_level(0).set_val(Real(-1));
+  fac.rhs_level(1).set_val(Real(-1));
+  fac.phi_level(0).set_val(Real(0));
+  fac.phi_level(1).set_val(Real(0));
+  fully_refined_jvp_visits[0] = 0;
+  fully_refined_jvp_visits[1] = 0;
+
+  const SolveReport report = fac.solve_boundary_fas(options);
+  EXPECT_NE(report.status, SolveStatus::kCapabilityFailure);
+  EXPECT_EQ(fully_refined_jvp_visits[0], 0);
+  EXPECT_GT(fully_refined_jvp_visits[1], 0);
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, partially_refined_nonlinear_jvp_boundary_remains_fail_closed) {
+  comm_init();
+  constexpr int n = 8;
+  constexpr int ratio = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry coarse_geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse_boxes = BoxArray::from_domain(domain, n);
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  const Box2D fine_box{{4, 4}, {11, 11}};
+  CompositeFacPoisson fac(coarse_geometry, coarse_boxes, boundary, fine_box, ratio);
+  fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+      "tests.fac.nonlinear-jvp-refusal", "tests.fac.nonlinear-jvp-refusal.residual",
+      "tests.fac.nonlinear-jvp-refusal.jvp", prepare_fully_refined_level_boundary,
+      prepare_noop_fully_refined_boundary_jvp, add_noop_fully_refined_boundary,
+      apply_noop_fully_refined_boundary_jvp, true});
+
+  const SolveReport report = fac.solve_boundary_fas(FieldNewtonOptions{});
+  EXPECT_EQ(report.status, SolveStatus::kCapabilityFailure);
   comm_finalize();
 }
 
