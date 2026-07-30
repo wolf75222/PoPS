@@ -36,6 +36,7 @@
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
 #include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime (the engine the driver wraps)
+#include <pops/runtime/amr/composite_reduction.hpp>
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>  // AmrSystem (the facade: params / block map / engine)
@@ -3164,6 +3165,45 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
     eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);
   }
+  std::optional<std::vector<Real>> program_execution_projection_balance_integrals_(
+      int program_block, const MultiFab& state) const {
+    const std::size_t runtime_block = static_cast<std::size_t>(sys_block(program_block));
+    if (level_ < 0 || level_ >= nlev())
+      throw std::out_of_range("AMR Program projection balance active level is out of range");
+    const MultiFab& live = eng_->level_state(runtime_block, level_);
+    if (state.box_array().boxes() != live.box_array().boxes() ||
+        state.dmap().ranks() != live.dmap().ranks() || state.ncomp() != live.ncomp() ||
+        state.n_grow() != live.n_grow() || state.local_size() != live.local_size())
+      throw std::invalid_argument(
+          "AMR Program projection balance candidate changed its exact level layout");
+
+    std::vector<pops::runtime::amr::composite_detail::CompositeLevelView> views;
+    views.reserve(static_cast<std::size_t>(nlev()));
+    for (int level = 0; level < nlev(); ++level) {
+      const Geometry geometry = eng_->level_geom(level);
+      const MultiFab* values = level == level_ ? &state : &eng_->level_state(runtime_block, level);
+      views.push_back({values, geometry.dx(), geometry.dy()});
+    }
+    const int next = level_ + 1 < nlev() ? level_ + 1 : -1;
+    MultiFab mask = pops::runtime::amr::composite_detail::active_mask(views, level_, next);
+    std::vector<double> result(static_cast<std::size_t>(state.ncomp()), 0.0);
+    for (int component = 0; component < state.ncomp(); ++component)
+      result[static_cast<std::size_t>(component)] =
+          static_cast<double>(pops::runtime::amr::composite_detail::local_sum(
+              state, mask, component, pops::runtime::amr::composite_detail::CompositeSumKind::Sum));
+    if (!eng_->level_is_replicated(level_))
+      all_reduce_sum_inplace(result.data(), result.size());
+    const Geometry geometry = eng_->level_geom(level_);
+    const double cell_measure =
+        static_cast<double>(geometry.dx()) * static_cast<double>(geometry.dy());
+    if (!std::isfinite(cell_measure) || cell_measure <= 0.0)
+      throw std::runtime_error(
+          "AMR Program projection balance requires a positive finite cell measure");
+    std::vector<Real> integrated(result.size(), Real(0));
+    for (std::size_t component = 0; component < result.size(); ++component)
+      integrated[component] = static_cast<Real>(cell_measure * result[component]);
+    return integrated;
+  }
   Real program_execution_hmin_() const { return eng_->level_hmin(level_); }
   Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
     return eng_->level_max_speed(static_cast<std::size_t>(runtime_block), level_, state);
@@ -3273,8 +3313,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       const HistoryRegistration& registration) const {
     return pops::detail::AmrHistoryOps::initialized(*eng_, registration.name);
   }
-  double program_execution_history_slot_dt_storage_(
-      const HistoryRegistration& registration, int lag) const {
+  double program_execution_history_slot_dt_storage_(const HistoryRegistration& registration,
+                                                    int lag) const {
     return pops::detail::AmrHistoryOps::slot_dt(*eng_, registration.name, lag);
   }
   void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,

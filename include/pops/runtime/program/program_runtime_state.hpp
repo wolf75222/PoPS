@@ -300,6 +300,11 @@ struct ProgramRuntimeState {
   /// by accepted_balance_terms(). The owning facade snapshots this map with the rest of the attempt,
   /// so rejection cannot leak automatic evidence into a retry.
   std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
+  /// Monotone attempt-local decision emitted by generated code before any Program operator runs.
+  /// It is the OR of the exact ConsumerGraph-derived route decisions for this public step. Keeping
+  /// this separate from step_balance_terms_ lets projection operators execute before their later
+  /// Program.record_balance sinks without losing due automatic evidence.
+  bool automatic_balance_due_ = false;
   /// Attempt-local outer accepted-step target used by ConsumerGraph-fused balance guards. Program
   /// substeps temporarily publish their window-start macro step through the facade, so generated
   /// balance code must not infer the public target from `macro_step()+1`.
@@ -852,13 +857,30 @@ struct ProgramRuntimeState {
       entry->second += value;
   }
 
-  /// Whether a compiled Program has actually emitted a due Balance route in this attempt.
+  /// Whether generated code proved that at least one Balance route is due in this attempt.
   ///
-  /// Generated balance records are cadence-guarded before their reductions. Reflux executes after
-  /// the Program body, so observing a non-empty authored mailbox here avoids every extra native
-  /// reduction on an off-cadence or replay step without introducing a second scheduler.
+  /// The exact ConsumerGraph-derived decision is emitted before any Program operator, so both an
+  /// in-body projection and post-body reflux observe the same cadence without a second scheduler.
   [[nodiscard]] bool automatic_balance_capture_due() const noexcept {
-    return !balance_replay_active_ && !step_balance_terms_.empty();
+    return !balance_replay_active_ && automatic_balance_due_;
+  }
+
+  /// Publish one generated ConsumerGraph due decision before Program operators execute.
+  ///
+  /// Several compiled Program invocations may share one outer accepted-step window. The marker is
+  /// therefore monotone inside an attempt and is reset only at attempt entry. Static-false routes
+  /// emit no call, so a run without Balance consumers retains no generated hot-path branch.
+  void note_automatic_balance_capture_due(bool due, const std::string& runtime) {
+    if (balance_replay_active_) {
+      if (due)
+        throw std::logic_error(runtime +
+                               "::note_automatic_balance_capture_due cannot enable replay capture");
+      return;
+    }
+    if (!balance_due_window_active_)
+      throw std::logic_error(
+          runtime + "::note_automatic_balance_capture_due requires an active public-step window");
+    automatic_balance_due_ = automatic_balance_due_ || due;
   }
 
   /// Accumulate one signed, metric-integrated native operator contribution.
@@ -904,6 +926,7 @@ struct ProgramRuntimeState {
     step_projections_.clear();
     step_balance_terms_.clear();
     automatic_balance_terms_.clear();
+    automatic_balance_due_ = false;
     balance_due_window_active_ = false;
     balance_due_target_step_ = 0;
     balance_step_completed_ = false;
