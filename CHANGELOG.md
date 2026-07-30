@@ -18,6 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ADC-749 carries exact periodic face identifications through the model-aware hyperbolic boundary
+  plan. Uniform scalar layouts execute mapped periodic halos (including cross-axis maps); mapped
+  vector/axial component transforms and AMR mapped periodic fill-patch/regrid remain explicit
+  fail-closed capabilities until their model-aware component and hierarchy contracts are available.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
   executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`

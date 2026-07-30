@@ -5,6 +5,9 @@ from typing import Any
 
 
 ROLE_TO_CANONICAL = {
+    "AxialX": "axial_x",
+    "AxialY": "axial_y",
+    "AxialZ": "axial_z",
     "Density": "density",
     "MomentumX": "momentum_x",
     "MomentumY": "momentum_y",

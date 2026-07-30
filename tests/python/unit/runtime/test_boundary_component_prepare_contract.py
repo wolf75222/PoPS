@@ -50,7 +50,12 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         "state": {"qualified_id": "case::block::state"},
         "required_depth": 1,
         "faces": [
-            {"ordinal": ordinal, "type": "foextrap", "values": [0.0]}
+            {
+                "ordinal": ordinal,
+                "producer": "case::block::boundary::face::%d" % ordinal,
+                "type": "foextrap",
+                "values": [0.0],
+            }
             for ordinal in range(4)
         ],
         "omitted_interface_faces": [],
@@ -109,7 +114,8 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         interface=Interface(), native_handle=native_handle,
     )
     artifact = SimpleNamespace(
-        blocks=(SimpleNamespace(name="block", model=SimpleNamespace(n_vars=1)),),
+        blocks=(SimpleNamespace(
+            name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
         layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
     )
@@ -130,7 +136,17 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
     assert native.prepare_overrides == ("", "")
 
 
-def test_signed_periodic_identification_reaches_native_install_without_callback():
+@pytest.mark.parametrize(
+    ("target_axis", "target_face", "permutation", "signs", "face_types"),
+    (
+        (0, 1, [0, 1], [1, -1],
+         ["periodic", "periodic", "foextrap", "foextrap"]),
+        (1, 3, [1, 0], [1, 1],
+         ["periodic", "foextrap", "foextrap", "periodic"]),
+    ),
+)
+def test_signed_periodic_identification_reaches_native_install_without_callback(
+        target_axis, target_face, permutation, signs, face_types):
     def boundary_identity(name, axis, side):
         return {
             "qualified_id": "case::%s" % name,
@@ -143,7 +159,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         }
 
     source = boundary_identity("xlo", 0, "lower")
-    target = boundary_identity("xhi", 0, "upper")
+    target = boundary_identity("target", target_axis, "upper")
     runtime_data = {
         "schema_version": 1,
         "authority_type": "prepared_boundary_plan",
@@ -153,7 +169,8 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         "faces": [
             {
                 "ordinal": ordinal,
-                "type": "periodic" if ordinal < 2 else "foextrap",
+                "producer": "case::block::reflected-periodic::face::%d" % ordinal,
+                "type": face_types[ordinal],
                 "values": [0.0],
             }
             for ordinal in range(4)
@@ -163,9 +180,9 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
             "source": source,
             "target": target,
             "source_face": 0,
-            "target_face": 1,
-            "permutation": [0, 1],
-            "signs": [1, -1],
+            "target_face": target_face,
+            "permutation": permutation,
+            "signs": signs,
         }],
         "component_regions": [],
         "interface_component_bindings": [],
@@ -198,7 +215,8 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     native = Native()
     engine = SimpleNamespace(_s=native)
     artifact = SimpleNamespace(
-        blocks=(SimpleNamespace(name="block", model=SimpleNamespace(n_vars=1)),),
+        blocks=(SimpleNamespace(
+            name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
         layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
     )
@@ -212,5 +230,12 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     install_runtime_authorities(engine, install_plan)
 
     assert native.installed is not None
-    assert native.installed[3] == ["periodic", "periodic", "foextrap", "foextrap"]
-    assert native.installed[8] == [[0, 1, 0, 1, 1, -1]]
+    assert native.installed[3] == face_types
+    assert native.installed[5] == [
+        "case::block::reflected-periodic::face::0",
+        "case::block::reflected-periodic::face::1",
+        "case::block::reflected-periodic::face::2",
+        "case::block::reflected-periodic::face::3",
+    ]
+    assert native.installed[6] == ["Scalar"]
+    assert native.installed[9] == [[0, target_face, *permutation, *signs]]

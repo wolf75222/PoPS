@@ -211,7 +211,7 @@ class ResolvedTransportCondition:
 
         if not isinstance(self.geometry, DomainBoundary):
             raise TypeError("ResolvedTransportCondition.geometry must be a DomainBoundary")
-        if self.condition_type not in {"inflow", "outflow"}:
+        if self.condition_type not in {"inflow", "outflow", "slip_wall"}:
             raise ValueError("unsupported built-in transport condition type")
         _state(self.state, where="ResolvedTransportCondition.state")
         if not self.state.is_resolved:
@@ -248,6 +248,7 @@ def _resolved_condition(
 ) -> ResolvedTransportCondition:
     from pops.mesh.boundaries import (
         BoundaryDependencies,
+        GhostFormula,
         GhostState,
         Inflow as LowLevelInflow,
         Outflow as LowLevelOutflow,
@@ -275,7 +276,11 @@ def _resolved_condition(
         characteristic=_closure(),
     )
     output = GhostState(boundary=boundary, subject=state, representation=target)
-    factory = LowLevelInflow if condition_type == "inflow" else LowLevelOutflow
+    factory = {
+        "inflow": LowLevelInflow,
+        "outflow": LowLevelOutflow,
+        "slip_wall": GhostFormula,
+    }[condition_type]
     provider = factory(
         handle=_provider_handle(state, geometry, condition_type),
         outputs=(output,),
@@ -424,6 +429,87 @@ class Outflow:
         )
 
 
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class SlipWall:
+    """Model-aware reflective wall: reverse the normal polar-vector component only."""
+
+    condition_type: ClassVar[str] = "slip_wall"
+    state: Handle
+    values: tuple[Expr, ...]
+    representation: Representation | None
+    converter: Handle | None
+
+    def __init__(self, *, state: Any) -> None:
+        object.__setattr__(self, "state", _state(state, where="SlipWall.state"))
+        object.__setattr__(self, "values", ())
+        object.__setattr__(self, "representation", None)
+        object.__setattr__(self, "converter", None)
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return (self.state,)
+
+    def resolve_references(self, resolver: Any) -> SlipWall:
+        if not callable(resolver):
+            raise TypeError("SlipWall.resolve_references requires a callable resolver")
+        return type(self)(state=resolver(self.state))
+
+    def inspect(self) -> dict[str, Any]:
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "condition_type": self.condition_type,
+            "state": self.state.inspect(),
+        }
+
+    def resolve_condition(
+        self,
+        *,
+        geometry: DomainBoundary,
+        boundary: Any,
+        requirement: BoundaryStencilRequirement,
+    ) -> ResolvedTransportCondition:
+        from pops.physics.roles import ComponentRole, native_role_token
+
+        components = _state_components(self.state, where="SlipWall")
+        space = getattr(self.state, "space", None)
+        roles = getattr(space, "roles", None)
+        if not isinstance(roles, Mapping) or set(roles) != set(components):
+            raise ValueError(
+                "SlipWall requires one explicit typed physical role for every state component")
+        tokens = {
+            component: (
+                native_role_token(role) if isinstance(role, ComponentRole) else role)
+            for component, role in roles.items()
+        }
+        supported = {
+            "AxialX", "AxialY", "AxialZ", "Density", "MomentumX", "MomentumY",
+            "MomentumZ", "Energy", "VelocityX", "VelocityY", "VelocityZ", "Pressure",
+            "Temperature", "Scalar",
+        }
+        if any(not isinstance(token, str) or token not in supported for token in tokens.values()):
+            raise ValueError(
+                "SlipWall requires one explicit typed physical role for every state component")
+        normal_token = ("MomentumX", "MomentumY", "MomentumZ")[geometry.axis.index]
+        normal_velocity = ("VelocityX", "VelocityY", "VelocityZ")[geometry.axis.index]
+        normal = [
+            component
+            for component, token in tokens.items()
+            if token in {normal_token, normal_velocity}
+        ]
+        if not normal:
+            raise ValueError(
+                "SlipWall on %s requires a declared normal polar-vector component"
+                % geometry.name
+            )
+        return _resolved_condition(
+            self,
+            condition_type=self.condition_type,
+            geometry=geometry,
+            boundary=boundary,
+            requirement=requirement,
+            include_state_dependency=True,
+        )
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class ResolvedTransportBoundarySet:
     domain_geometry_id: str
@@ -543,8 +629,11 @@ class ResolvedTransportBoundarySet:
                     "condition_type": row.condition_type,
                     "producer": row.provider.qualified_id,
                     "geometry": row.geometry.canonical_identity(),
-                    "type": ("foextrap" if row.condition_type == "outflow"
-                             else "dirichlet"),
+                    "type": {
+                        "outflow": "foextrap",
+                        "inflow": "dirichlet",
+                        "slip_wall": "slip_wall",
+                    }[row.condition_type],
                     "values": (
                         [] if row.condition_type == "outflow" else
                         [_expression_data(expression, qualified=True)["value"]
@@ -578,9 +667,10 @@ class ResolvedTransportBoundarySet:
         for condition in conditions:
             geometry = condition.geometry
             face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)
-            if condition.condition_type == "outflow":
+            if condition.condition_type in {"outflow", "slip_wall"}:
                 values = [0.0] * ncomp
-                face_type = "foextrap"
+                face_type = (
+                    "foextrap" if condition.condition_type == "outflow" else "slip_wall")
             else:
                 values = []
                 for index, expression in enumerate(condition.values):
@@ -830,5 +920,6 @@ __all__ = [
     "Outflow",
     "ResolvedTransportBoundarySet",
     "ResolvedTransportCondition",
+    "SlipWall",
     "TransportBoundarySet",
 ]

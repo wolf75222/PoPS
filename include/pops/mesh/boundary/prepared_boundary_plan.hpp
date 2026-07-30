@@ -17,7 +17,7 @@
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/boundary/boundary_component_executor.hpp>
-#include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
 #include <algorithm>
@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -85,9 +86,8 @@ struct PreparedBoundaryReadDependencies {
   std::vector<std::string> fields;
 };
 
-/// Native boundary plan captured by every block closure.  Component BCs permit systems with
-/// different Dirichlet data per conservative component while the topology (periodic vs physical)
-/// remains common to the state.
+/// Native boundary plan captured by every block closure. The built-in physical-face authority is
+/// one model-aware hyperbolic plan; field/elliptic BCRec data is not a transport semantic here.
 class PreparedBoundaryPlan {
  public:
   /// Move-only, lane-bound executable state for this immutable plan.
@@ -179,13 +179,14 @@ class PreparedBoundaryPlan {
 
   PreparedBoundaryPlan() = default;
 
-  PreparedBoundaryPlan(std::string identity, int required_depth, std::vector<BCRec> component_bc,
+  PreparedBoundaryPlan(std::string identity, int required_depth,
+                       PreparedHyperbolicBoundary<2> hyperbolic_boundary,
                        std::vector<int> omitted_face_ordinals = {}, std::string state_identity = {},
                        PreparedBoundaryReadDependencies read_dependencies = {},
                        std::vector<PeriodicIdentification2D> periodic_identifications = {})
       : identity_(std::move(identity)),
         required_depth_(required_depth),
-        component_bc_(std::move(component_bc)),
+        hyperbolic_boundary_(std::move(hyperbolic_boundary)),
         state_identity_(std::move(state_identity)),
         read_dependencies_(std::move(read_dependencies)),
         periodic_identifications_(std::move(periodic_identifications)) {
@@ -201,9 +202,20 @@ class PreparedBoundaryPlan {
   const std::string& identity() const { return identity_; }
   const std::string& state_identity() const { return state_identity_; }
   int required_depth() const { return required_depth_; }
-  int ncomp() const { return static_cast<int>(component_bc_.size()); }
+  int ncomp() const { return hyperbolic_boundary_.ncomp(); }
+  const PreparedHyperbolicBoundary<2>& hyperbolic_boundary() const { return hyperbolic_boundary_; }
   const std::vector<PeriodicIdentification2D>& periodic_identifications() const noexcept {
     return periodic_identifications_;
+  }
+  bool has_mapped_periodicity() const noexcept { return has_mapped_periodicity_(); }
+  std::optional<Periodicity> axis_aligned_periodicity() const noexcept {
+    const bool xlo = hyperbolic_boundary_.face(0, -1).law == HyperbolicBoundaryLaw::Periodic;
+    const bool xhi = hyperbolic_boundary_.face(0, 1).law == HyperbolicBoundaryLaw::Periodic;
+    const bool ylo = hyperbolic_boundary_.face(1, -1).law == HyperbolicBoundaryLaw::Periodic;
+    const bool yhi = hyperbolic_boundary_.face(1, 1).law == HyperbolicBoundaryLaw::Periodic;
+    if (xlo != xhi || ylo != yhi)
+      return std::nullopt;
+    return Periodicity{xlo, ylo};
   }
   /// Validate that an already allocated state can execute this prepared plan.  Installation-time
   /// consumers use the same invariant as the fill path, without performing or probing a fill.
@@ -216,22 +228,6 @@ class PreparedBoundaryPlan {
     if (axis < 0 || axis >= 2 || (side != -1 && side != 1))
       throw std::invalid_argument("PreparedBoundaryPlan face selector is invalid");
     return omitted_faces_[static_cast<std::size_t>(2 * axis + (side > 0 ? 1 : 0))];
-  }
-
-  const BCRec& component_bc(int comp) const {
-    if (comp < 0 || comp >= ncomp())
-      throw std::runtime_error("PreparedBoundaryPlan component index out of range");
-    return component_bc_[static_cast<std::size_t>(comp)];
-  }
-
-  /// Materialize the immutable face law on one exact grid metric.  BCRec stores spacing because
-  /// Robin extensions need the cell-to-face distance; that spacing is execution geometry, not part
-  /// of a reusable boundary plan's identity.
-  BCRec component_bc(int comp, const Geometry& geometry) const {
-    BCRec result = component_bc(comp);
-    result.dx = geometry.dx();
-    result.dy = geometry.dy();
-    return result;
   }
 
   void install_ghost_component(PreparedBoundaryComponentSpec spec,
@@ -259,9 +255,9 @@ class PreparedBoundaryPlan {
     return !ghost_components_.empty() || !residual_components_.empty() || !jvp_components_.empty();
   }
 
-  /// The built-in BCRec laws fill every ghost layer allocated by the state. A dynamically loaded
-  /// ghost component is prepared only for this plan's authenticated required_depth(), so it keeps
-  /// the bounded-depth contract even though residual/JVP-only components do not affect ghost fill.
+  /// The built-in hyperbolic laws fill every ghost layer allocated by the state. A dynamically
+  /// loaded ghost component is prepared only for this plan's authenticated required_depth(), so it
+  /// keeps the bounded-depth contract even though residual/JVP-only components do not affect fill.
   bool fills_all_allocated_physical_ghosts() const noexcept { return ghost_components_.empty(); }
 
   /// Whether this plan owns an executable residual/JVP pair for an implicit operator.  A partial
@@ -394,22 +390,11 @@ class PreparedBoundaryPlan {
 
   Periodicity periodicity() const {
     validate_topology();
-    const BCRec& bc = component_bc_.front();
-    const bool xlo = bc.xlo == BCType::Periodic;
-    const bool xhi = bc.xhi == BCType::Periodic;
-    const bool ylo = bc.ylo == BCType::Periodic;
-    const bool yhi = bc.yhi == BCType::Periodic;
-    if (xlo != xhi || ylo != yhi)
+    const auto result = axis_aligned_periodicity();
+    if (!result)
       throw std::logic_error(
           "axis-permuted periodic topology has no per-axis runtime Periodicity projection");
-    return Periodicity{xlo, ylo};
-  }
-
-  bool requires_grid_metric() const {
-    return std::any_of(component_bc_.begin(), component_bc_.end(), [](const BCRec& bc) {
-      return bc.xlo == BCType::Robin || bc.xhi == BCType::Robin || bc.ylo == BCType::Robin ||
-             bc.yhi == BCType::Robin;
-    });
+    return *result;
   }
 
   /// Same-level/MPI and prepared periodic production are performed by the memoized native halo
@@ -419,13 +404,9 @@ class PreparedBoundaryPlan {
     if (has_component_boundaries())
       throw std::runtime_error(
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
-    if (requires_grid_metric())
-      throw std::invalid_argument(
-          "PreparedBoundaryPlan Robin boundaries require an exact Geometry metric");
     validate_for(state);
     fill_native_halos_(state, domain);
-    for (int comp = 0; comp < state.ncomp(); ++comp)
-      fill_physical_bc(state, domain, component_bc(comp), comp);
+    hyperbolic_boundary_.fill_physical(state, domain);
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Box2D& domain,
@@ -433,13 +414,9 @@ class PreparedBoundaryPlan {
     if (has_component_boundaries())
       throw std::runtime_error(
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
-    if (requires_grid_metric())
-      throw std::invalid_argument(
-          "PreparedBoundaryPlan Robin boundaries require an exact Geometry metric");
     validate_for(state);
     fill_native_halos_(state, domain, lane);
-    for (int comp = 0; comp < state.ncomp(); ++comp)
-      fill_physical_bc(state, domain, component_bc(comp), comp);
+    hyperbolic_boundary_.fill_physical(state, domain);
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry) const {
@@ -448,8 +425,7 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
     fill_native_halos_(state, geometry.domain);
-    for (int comp = 0; comp < state.ncomp(); ++comp)
-      fill_physical_bc(state, geometry.domain, component_bc(comp, geometry), comp);
+    hyperbolic_boundary_.fill_physical(state, geometry.domain);
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry,
@@ -459,8 +435,7 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
     fill_native_halos_(state, geometry.domain, lane);
-    for (int comp = 0; comp < state.ncomp(); ++comp)
-      fill_physical_bc(state, geometry.domain, component_bc(comp, geometry), comp);
+    hyperbolic_boundary_.fill_physical(state, geometry.domain);
   }
 
   /// One-shot control/diagnostic adapter. It materializes a fresh component session and workspace;
@@ -575,7 +550,7 @@ class PreparedBoundaryPlan {
 
   std::string identity_;
   int required_depth_ = 0;
-  std::vector<BCRec> component_bc_;
+  PreparedHyperbolicBoundary<2> hyperbolic_boundary_;
   std::array<bool, 4> omitted_faces_{{false, false, false, false}};
   std::string state_identity_;
   PreparedBoundaryReadDependencies read_dependencies_;
@@ -667,10 +642,6 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan residual/JVP direction identities are not executable");
   }
 
-  static std::array<BCType, 4> face_types(const BCRec& bc) {
-    return {bc.xlo, bc.xhi, bc.ylo, bc.yhi};
-  }
-
   bool has_mapped_periodicity_() const noexcept {
     return std::any_of(periodic_identifications_.begin(), periodic_identifications_.end(),
                        [](const PeriodicIdentification2D& identification) {
@@ -691,14 +662,14 @@ class PreparedBoundaryPlan {
     else
       fill_boundary(state, domain, lane, periodicity());
   }
-
   void validate_base() const {
     if (identity_.empty())
       throw std::runtime_error("PreparedBoundaryPlan requires a canonical identity");
     if (required_depth_ < 1)
       throw std::runtime_error("PreparedBoundaryPlan required depth must be >= 1");
-    if (component_bc_.empty())
-      throw std::runtime_error("PreparedBoundaryPlan requires one BC record per component");
+    if (hyperbolic_boundary_.ncomp() < 1)
+      throw std::runtime_error(
+          "PreparedBoundaryPlan requires one model-aware component transform per state component");
     validate_read_dependencies_(read_dependencies_.states, "state");
     validate_read_dependencies_(read_dependencies_.fields, "field");
     validate_topology();
@@ -720,22 +691,13 @@ class PreparedBoundaryPlan {
   }
 
   void validate_topology() const {
-    if (component_bc_.empty())
-      throw std::runtime_error("PreparedBoundaryPlan has no component BCs");
-    const auto expected = face_types(component_bc_.front());
-    for (std::size_t comp = 1; comp < component_bc_.size(); ++comp) {
-      const auto actual = face_types(component_bc_[comp]);
-      for (std::size_t face = 0; face < actual.size(); ++face) {
-        const bool expected_periodic = expected[face] == BCType::Periodic;
-        const bool actual_periodic = actual[face] == BCType::Periodic;
-        if (expected_periodic != actual_periodic)
-          throw std::runtime_error(
-              "PreparedBoundaryPlan periodic/physical topology differs between components");
-      }
-    }
+    std::array<bool, 4> periodic{};
+    for (int face = 0; face < 4; ++face)
+      periodic[static_cast<std::size_t>(face)] =
+          hyperbolic_boundary_.face(face / 2, face % 2 == 0 ? -1 : 1).law ==
+          HyperbolicBoundaryLaw::Periodic;
     if (periodic_identifications_.empty()) {
-      if ((expected[0] == BCType::Periodic) != (expected[1] == BCType::Periodic) ||
-          (expected[2] == BCType::Periodic) != (expected[3] == BCType::Periodic))
+      if (periodic[0] != periodic[1] || periodic[2] != periodic[3])
         throw std::runtime_error(
             "axis-aligned PreparedBoundaryPlan requires periodic faces in complete axis pairs");
       return;
@@ -749,21 +711,27 @@ class PreparedBoundaryPlan {
           throw std::runtime_error(
               "PreparedBoundaryPlan assigns one face to multiple periodic identifications");
         claimed[static_cast<std::size_t>(face)] = true;
-        if (expected[static_cast<std::size_t>(face)] != BCType::Periodic)
+        if (!periodic[static_cast<std::size_t>(face)])
           throw std::runtime_error(
               "PreparedBoundaryPlan periodic identification endpoint is not a periodic face");
       }
     }
-    for (std::size_t face = 0; face < expected.size(); ++face)
-      if ((expected[face] == BCType::Periodic) != claimed[face])
+    for (std::size_t face = 0; face < periodic.size(); ++face)
+      if (periodic[face] != claimed[face])
         throw std::runtime_error(
             "PreparedBoundaryPlan periodic face table differs from explicit identifications");
     if (has_mapped_periodicity_() && periodic_identifications_.size() != 1)
       throw std::runtime_error(
           "PreparedBoundaryPlan mapped periodic topology currently requires one identification; "
           "mixed periodic corners need a composed scheduler");
+    if (has_mapped_periodicity_())
+      for (int component = 0; component < hyperbolic_boundary_.ncomp(); ++component)
+        if (hyperbolic_boundary_.component_transform(component).parity !=
+            HyperbolicComponentParity::Scalar)
+          throw std::runtime_error(
+              "mapped periodic topology currently supports scalar component transforms only; "
+              "vector and axial states require a model-aware component map");
   }
-
   void validate_for(const MultiFab& state) const {
     if (state.ncomp() != ncomp())
       throw std::runtime_error("PreparedBoundaryPlan component count does not match block state");
@@ -801,13 +769,9 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(MultiFab
   if (!ghost_components_.empty())
     throw std::invalid_argument(
         "PreparedBoundaryPlan component session requires an exact BoundaryEvaluationPoint");
-  if (plan_->requires_grid_metric())
-    throw std::invalid_argument(
-        "PreparedBoundaryPlan Robin boundaries require an exact Geometry metric");
   plan_->validate_for(state);
   plan_->fill_native_halos_(state, domain, *lane_);
-  for (int comp = 0; comp < state.ncomp(); ++comp)
-    fill_physical_bc(state, domain, plan_->component_bc(comp), comp);
+  plan_->hyperbolic_boundary_.fill_physical(state, domain);
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
@@ -818,8 +782,7 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
         "PreparedBoundaryPlan component session requires an exact BoundaryEvaluationPoint");
   plan_->validate_for(state);
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  for (int comp = 0; comp < state.ncomp(); ++comp)
-    fill_physical_bc(state, geometry.domain, plan_->component_bc(comp, geometry), comp);
+  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
@@ -828,8 +791,7 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
   validate_current_();
   plan_->validate_for(state);
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  for (int comp = 0; comp < state.ncomp(); ++comp)
-    fill_physical_bc(state, geometry.domain, plan_->component_bc(comp, geometry), comp);
+  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
   detail::BoundaryFieldRegistry fields;
   fields.configure_states(plan_->required_state_identities());
   fields.configure_fields(plan_->required_field_identities());
@@ -860,8 +822,7 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
   validate_current_();
   plan_->validate_for(state);
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  for (int comp = 0; comp < state.ncomp(); ++comp)
-    fill_physical_bc(state, geometry.domain, plan_->component_bc(comp, geometry), comp);
+  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
   if (ghost_workspaces_.size() != ghost_components_.size())
     throw std::logic_error(
         "PreparedBoundaryPlan ghost executor was not materialized before numerical execution");

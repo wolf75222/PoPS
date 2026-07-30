@@ -30,3 +30,29 @@ TEST(VariableRole, IndexOfResolvesEulerIsothermalAndExBRoles) {
       << "roles isotherme";
   EXPECT_EQ(pops::ExBVelocity::conservative_vars().index_of(R::Density), 0) << "role ExB";
 }
+
+TEST(VariableRole, AxialRolesRoundTripThroughStableTextAbi) {
+  EXPECT_STREQ(pops::role_name(R::AxialX), "axial_x");
+  EXPECT_STREQ(pops::role_name(R::AxialY), "axial_y");
+  EXPECT_STREQ(pops::role_name(R::AxialZ), "axial_z");
+  EXPECT_EQ(pops::role_from_name("axial_x"), R::AxialX);
+  EXPECT_EQ(pops::role_from_name("axial_y"), R::AxialY);
+  EXPECT_EQ(pops::role_from_name("axial_z"), R::AxialZ);
+
+  const pops::VariableSet original{
+      pops::VariableKind::Conservative,
+      {"rho", "bx", "by", "bz"},
+      4,
+      {R::Density, R::AxialX, R::AxialY, R::AxialZ},
+  };
+  EXPECT_EQ(pops::roles_csv(original), "density,axial_x,axial_y,axial_z");
+
+  pops::VariableSet restored{
+      pops::VariableKind::Conservative,
+      original.names,
+      original.size,
+  };
+  pops::parse_roles_into(restored, pops::roles_csv(original));
+  EXPECT_TRUE(restored.user_roles.empty());
+  EXPECT_EQ(restored.roles, original.roles);
+}
