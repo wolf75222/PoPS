@@ -460,7 +460,7 @@ def _installed_component_package_evidence(
             "release evidence installed component package JUnit path escapes its directory")
     _artifact_file(
         directory,
-        component_report.relative_to(directory),
+        component_report.relative_to(directory).as_posix(),
         lane["sha256"],
         label="installed component package JUnit",
     )
@@ -554,7 +554,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
         report = Path(lane["path"]).resolve()
         if not _inside(directory, report):
             raise PreflightError("release evidence %s JUnit path escapes its directory" % name)
-        _artifact_file(directory, report.relative_to(directory), lane["sha256"],
+        _artifact_file(directory, report.relative_to(directory).as_posix(), lane["sha256"],
                        label="%s JUnit" % name)
     if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
         raise PreflightError("release evidence Python required-lane selection drifted")
