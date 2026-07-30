@@ -11,7 +11,7 @@ These checks stay pure Python (no compiler / no ``.so``); they pin:
   1  a raw Module with a bodyless codegen operator raises the SAME error through
      ``lower_and_validate`` as through ``_module_to_model`` (one validation path);
   2  a facade Model resolves to its operator-first Module (``source_module``) with NO manual
-     ``to_module()`` / ``lower()`` and carries a ``module_hash``;
+     ``lower()`` and carries a ``module_hash``;
   3  a facade dependency error is remapped, citing the model name / states / operators;
   4  the emit model of a facade Model is BYTE-IDENTICAL through ``lower_and_validate`` vs direct.
 
@@ -85,7 +85,7 @@ def test_one_validation_bodyless_operator_same_error():
     assert direct == via_lower, "the SAME error text is raised via both entries (no divergence)"
 
 
-# --- 2: a facade Model resolves to its operator-first Module with no manual to_module -----------
+# --- 2: a facade Model resolves to its operator-first Module with no manual lower() -------------
 
 def test_facade_model_carries_operator_first_module():
     m = _facade_model()

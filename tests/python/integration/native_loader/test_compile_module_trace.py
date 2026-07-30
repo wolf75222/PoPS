@@ -2,7 +2,7 @@
 """ADC-557 real-compiler acceptance: the standard flow lowers the final model once.
 
 A final ``pops.physics.Model`` compiled through the internal ``compile_problem`` seam (no
-manual ``m.to_module()``) yields a handle that carries the operator-first Module as the lowered-module
+manual ``m.lower()``) yields a handle that carries the operator-first Module as the lowered-module
 trace (``compiled.inspect()``) and a compile-time ``module_hash`` for drift detection. The bounded
 native ``ModelSpec`` bridge is rejected before compilation because it has no canonical Module
 authority; a missing trace can therefore never be fabricated.
