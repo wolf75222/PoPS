@@ -73,6 +73,10 @@ The normative matrix is the generated `SUPPORTED_MATRIX` projection of
 and OpenMP source builds, a Serial OpenMPI source lane, and a macOS arm64 CPython 3.12 Serial wheel.
 CUDA/HIP, MPI and Windows wheels are explicitly not promised. A release may narrow or extend this
 matrix only by changing the versioned contract and proving every declared lane.
+`release_matrix_source_errors()` is the source-only preflight joining each declared language,
+compiler, backend, source-build and wheel lane to its exact CI/wheel/release workflow markers. An
+unimplemented lane or workflow drift fails both `release_preflight.py` and `run_final_gate.py`
+before the official build begins.
 
 ## Releasing
 

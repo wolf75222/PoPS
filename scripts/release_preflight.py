@@ -24,6 +24,7 @@ from final_release_contract import (
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
+    require_release_matrix_source_contract,
     require_source_contract,
 )
 
@@ -68,6 +69,7 @@ def _project_version() -> str:
 
 def _static_contract(contract: Any) -> list[str]:
     require_source_contract(ROOT)
+    require_release_matrix_source_contract(ROOT)
     package_version = _project_version()
     if contract.PACKAGE_VERSION != package_version or package_version == "unknown":
         raise PreflightError("generated/package CMake versions disagree")

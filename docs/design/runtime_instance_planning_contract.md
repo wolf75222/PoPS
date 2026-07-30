@@ -76,6 +76,11 @@ supported instance surface. Uniform integrals apply the resolved Cartesian cell 
 component reduction; adaptive integrals use the native volume-weighted composite reduction for the
 exact selected levels. Installation and execution must authenticate the bundle's plan, bind,
 component and layout identities without rebuilding or weakening them.
+Every native provider authenticates the exact bundle before reading backend state or constructing
+an execution engine; a missing or mismatched bundle therefore fails before execution. The complete
+bundle is retained in the array-free `RuntimeInstance.inspect()` report under `instance.runtime_plan`
+so derived halos, transfers, collectives, fences, buffers and determinism assumptions remain
+reviewable rather than becoming hidden installation state.
 
 For an accepted step, successful native finalization is an irreversible `native_finalized`
 boundary. The instance commits the engine state, accepted cursor set and consumer receipts across

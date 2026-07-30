@@ -155,28 +155,11 @@ def _require_conservative_cell_average_geometry(source: Any, target: Any) -> Non
 
 def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
     """Authenticate the exact bundle and its Transfer projection against one InstallPlan."""
-    from pops.identity import make_identity
-    from pops.runtime._runtime_plan_contracts import LayoutTransfer, RuntimePlanBundle
+    from pops.runtime._runtime_plan_contracts import LayoutTransfer
+    from pops.runtime._runtime_planning import require_runtime_plan_bundle
 
-    if type(runtime_plan) is not RuntimePlanBundle:
-        raise TypeError("multi-layout install requires an exact RuntimePlanBundle")
-    if runtime_plan.identity != make_identity("runtime-plan-bundle", runtime_plan._payload()):
-        raise ValueError("RuntimePlanBundle identity does not authenticate its payload")
-    expected_identities = (
-        (runtime_plan.install_identity, plan.bind_identity, "bind"),
-        (runtime_plan.platform_identity, plan.artifact.platform_manifest.identity, "platform"),
-        (
-            runtime_plan.execution_context_identity,
-            plan.execution_context.identity,
-            "execution context",
-        ),
-    )
-    for actual, expected, label in expected_identities:
-        if actual != expected:
-            raise ValueError("RuntimePlanBundle %s identity differs from InstallPlan" % label)
+    runtime_plan = require_runtime_plan_bundle(plan, runtime_plan)
     layout_plan = plan.artifact.layout_plan
-    if runtime_plan.layout_plan_id != layout_plan.qualified_id:
-        raise ValueError("RuntimePlanBundle layout identity differs from compiled LayoutPlan")
     transfers = tuple(runtime_plan.communication.transfers)
     mapping_ids = tuple(row.mapping_id for row in transfers)
     if len(mapping_ids) != len(set(mapping_ids)):

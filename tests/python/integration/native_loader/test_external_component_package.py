@@ -21,6 +21,7 @@ from pops.codegen.toolchain import (
 )
 from pops.external import (
     ComponentPackageError,
+    build_fixed_binary_manifest,
     build_source_package_manifest,
     compile_component,
     load,
@@ -37,18 +38,18 @@ ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
 
 
-def _manifest() -> ComponentManifest:
+def _manifest(*, generic: bool = True, device: str = "cpu") -> ComponentManifest:
     interface = interfaces.NumericalFlux
     return ComponentManifest(
         uri="pops://external.test/fluxes/average", component_type="numerical_flux",
         version="1.0.0", facets=interface.facets,
         signature={
-            "generic": True, "state_components": 2,
+            "generic": generic, "state_components": 2,
             "native_interface": interface.signature_declaration(),
         },
         interfaces=interface.manifest_declarations(),
         target={"variants": [{
-            "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
+            "dimension": 2, "scalar": "float64", "device": device, "features": [],
         }]},
         entry_points={"interface_table": "pops_component_interface_v1"},
     )
@@ -405,6 +406,109 @@ def test_source_component_executes_through_generic_native_loader_and_flux_consum
     collision.path.write_bytes(b"tampered")
     with pytest.raises(ComponentPackageError, match="content-addressed path has other bytes"):
         artifact.install(collision_root)
+
+
+def _compile_exact_flux(tmp_path: Path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    manifest = _manifest(generic=False)
+    source = _source(manifest)
+    source_name = "fixed_average.cpp"
+    (tmp_path / source_name).write_bytes(source)
+    package_data = build_source_package_manifest(
+        components={"average": manifest}, payloads={source_name: ("source", source)})
+    package_path = tmp_path / "fixed_average.source.pops.json"
+    package_path.write_text(json.dumps(package_data), encoding="utf-8")
+    component = load(package_path).require(
+        "average", interface=interfaces.NumericalFlux)()
+    return manifest, compile_component(component)
+
+
+def _write_fixed_package(
+    root: Path,
+    *,
+    manifest: ComponentManifest,
+    artifact,
+    binary: bytes | None = None,
+    symbols: tuple[str, ...] | None = None,
+) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    payload = artifact.binary if binary is None else binary
+    binary_name = "fixed_average" + artifact.suffix
+    (root / binary_name).write_bytes(payload)
+    data = build_fixed_binary_manifest(
+        components={"average": manifest},
+        platform=artifact.platform_manifest,
+        binary_path=binary_name,
+        binary=payload,
+        symbols=artifact.symbols if symbols is None else symbols,
+    )
+    package_path = root / "fixed_average.pops.json"
+    package_path.write_text(json.dumps(data), encoding="utf-8")
+    return package_path
+
+
+def test_fixed_binary_public_require_authenticates_before_installation(tmp_path):
+    manifest, compiled = _compile_exact_flux(tmp_path / "source")
+    package_path = _write_fixed_package(
+        tmp_path / "valid", manifest=manifest, artifact=compiled)
+
+    fixed = load(package_path)
+    artifact = fixed.require("average", interface=interfaces.NumericalFlux)
+    assert artifact.fixed_signature is True
+    assert artifact.source_package is None
+    installed = artifact.install(tmp_path / "installed")
+    assert installed.origin == "fixed"
+    assert installed.load().native_handle.report()["component_id"] == manifest.component_id
+
+    binary_path = package_path.parent / fixed.binary_path
+    binary_path.write_bytes(binary_path.read_bytes() + b"tampered")
+    with pytest.raises(ComponentPackageError) as error:
+        load(package_path)
+    assert error.value.code == "binary_digest"
+
+    missing_symbol = compiled.binary.replace(
+        b"pops_component_interface_v1", b"pops_component_interface_v0")
+    assert missing_symbol != compiled.binary
+    missing_path = _write_fixed_package(
+        tmp_path / "missing-symbol",
+        manifest=manifest,
+        artifact=compiled,
+        binary=missing_symbol,
+    )
+    with pytest.raises(ComponentPackageError) as error:
+        load(missing_path).require("average", interface=interfaces.NumericalFlux)
+    assert error.value.code == "symbols"
+
+    declared_path = _write_fixed_package(
+        tmp_path / "missing-declaration",
+        manifest=manifest,
+        artifact=compiled,
+        symbols=("other_symbol",),
+    )
+    with pytest.raises(ComponentPackageError) as error:
+        load(declared_path)
+    assert error.value.code == "symbols"
+
+    manifest_path = _write_fixed_package(
+        tmp_path / "tampered-manifest",
+        manifest=manifest,
+        artifact=compiled,
+    )
+    package_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    package_data["exports"] = {"renamed": manifest.component_id}
+    manifest_path.write_text(json.dumps(package_data), encoding="utf-8")
+    with pytest.raises(ComponentPackageError) as error:
+        load(manifest_path)
+    assert error.value.code == "package_digest"
+
+    wrong_target_path = _write_fixed_package(
+        tmp_path / "wrong-target",
+        manifest=_manifest(generic=False, device="cuda"),
+        artifact=compiled,
+    )
+    with pytest.raises(ComponentPackageError) as error:
+        load(wrong_target_path)
+    assert error.value.code == "target"
 
 
 def _compile_writer(tmp_path: Path, name: str):
