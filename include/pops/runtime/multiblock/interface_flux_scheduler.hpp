@@ -113,9 +113,15 @@ class InterfaceFluxScheduler {
                MultiFab& right_state, const Geometry& right_geometry,
                const PopsExecutionContextV1& execution,
                InterfaceFluxEvaluatorFactory evaluator_factory) {
-    const bool collective_world = comm_active() && n_ranks() > 1;
+    // MultiFab/DistributionMapping still stores owners in the process-world rank space.  Retain
+    // that storage authority under an explicit name for admission only: every numerical
+    // collective below runs on the communicator carried by ExecutionContext.  Once field storage
+    // owns a communicator-relative rank space, this single compatibility seam can disappear.
+    const CommunicatorView field_rank_space =
+        comm_active() ? world_communicator_view() : CommunicatorView{};
+    const bool collective_world = field_rank_space.active() && field_rank_space.size() > 1;
     const CommunicatorView admission_communicator =
-        collective_world ? world_communicator_view() : CommunicatorView{};
+        collective_world ? field_rank_space : CommunicatorView{};
     bool distributed = false;
     CommunicatorView execution_communicator;
     int communicator_rank = 0;
@@ -157,7 +163,8 @@ class InterfaceFluxScheduler {
               "communicator/MPI_DOUBLE authority");
         int communicator_relation = MPI_UNEQUAL;
         ::pops::detail::require_mpi_success(
-            MPI_Comm_compare(communicator, MPI_COMM_WORLD, &communicator_relation),
+            MPI_Comm_compare(communicator, field_rank_space.native_handle(),
+                             &communicator_relation),
             "MPI_Comm_compare(interface field rank space)");
         if (communicator_relation != MPI_IDENT && communicator_relation != MPI_CONGRUENT)
           throw std::invalid_argument(
