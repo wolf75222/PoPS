@@ -3210,12 +3210,9 @@ class AmrRuntime {
   std::vector<double> level_aux_flat(int k) const;
   std::vector<double> level_aux_flat_global(int k) const;
   void set_level_aux_flat(int k, const std::vector<double>& v);
-  /// Head-of-step union-tags regrid at the Program driver's cadence. @p macro_step gates it by
-  /// skipping step zero and honoring regrid_every_.
-  void regrid_if_due(int macro_step) {
-    if (regrid_every_ > 0 && macro_step > 0 && macro_step % regrid_every_ == 0)
-      regrid();
-  }
+  /// Prepared mesh-policy metadata consumed by the Program temporal authority.  The spatial runtime
+  /// deliberately does not compare this interval with an accepted clock or decide when to regrid.
+  int regrid_interval() const noexcept { return regrid_every_; }
   /// @}
 
   /// Activates the UNION-TAGS REGRID at the cadence @p every (in macro-steps): every @p every

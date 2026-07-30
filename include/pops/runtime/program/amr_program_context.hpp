@@ -246,7 +246,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       synchronize_level_pair_(child, 0, ledger_end, *current_sync_clock_);
     finalize_history_rotation_();
   }
-  /// Head-of-step regrid at the engine's cadence (the SAME union-tags regrid the native step runs).
+  /// Head-of-step regrid at the Program-owned cadence.  The spatial runtime exposes the prepared
+  /// interval and the immediate regrid primitive, but never compares an accepted clock itself.
   /// A changed topology also rebinds lagged conservative histories and their compact interface-flux
   /// authority before the Program reads prev(k); a layout-identical regrid remains bit-identical.
   void regrid_if_due(int macro_step) const {
@@ -257,23 +258,26 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
 
  private:
   void regrid_if_due_at_(std::int64_t macro_step, double physical_time) const {
+    if (!std::isfinite(physical_time))
+      throw std::logic_error("AMR Program regrid requires a finite accepted physical time");
+    if (macro_step < 0 || macro_step > std::numeric_limits<int>::max())
+      throw std::overflow_error(
+          "AMR Program regrid logical tick exceeds the runtime integer range");
+    const int interval = eng_->regrid_interval();
+    if (interval <= 0 || macro_step == 0 || macro_step % interval != 0)
+      return;
+
     const HistoryFluxTopology before = history_flux_topology_snapshot_();
     if (history_flux_topology_.bound() &&
         !same_history_flux_topology_(history_flux_topology_, before))
       throw std::runtime_error(
           "AMR lagged-flux topology authority differs from the accepted hierarchy");
     history_flux_topology_ = before;
-    if (!std::isfinite(physical_time))
-      throw std::logic_error("AMR Program regrid requires a finite accepted physical time");
-    if (macro_step < 0 || macro_step > std::numeric_limits<int>::max())
-      throw std::overflow_error(
-          "AMR Program regrid logical tick exceeds the runtime integer range");
     // The Program owns the accepted clock. Publish its exact evaluation coordinate only at the
     // tagger/regrid boundary so direct AmrProgramContext and restarted executions cannot inherit
     // stale facade metadata.
-    const int runtime_tick = static_cast<int>(macro_step);
-    eng_->set_component_logical_time(runtime_tick, physical_time);
-    eng_->regrid_if_due(runtime_tick);
+    eng_->set_component_logical_time(macro_step, physical_time);
+    eng_->regrid();
     // Regrid is a head-of-attempt operation.  Rebuild every layout-bound face field and its
     // redistribution scratch here, before the first Program stage, never lazily from capture_into_.
     materialize_capture_flux_scratch_();
