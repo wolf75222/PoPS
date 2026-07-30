@@ -106,11 +106,12 @@ Supported native routes include:
   Analytic programs are immutable postfix tables evaluated in native device kernels at the exact
   `BoundaryEvaluationPoint`; no Python callback or hot-loop allocation is retained. The analytic
   route remains `partial`: primitive per-point conversion and discrete state/field/input reads are
-  rejected, as is an analytic ghost depth larger than the normal domain extent. The conversion
-  route is explicitly `partial`: conservative-to-primitive recovery and arbitrary representation
-  components remain unavailable, and conversion does not invent a boundary admissibility
-  projection. Separate `unavailable` rows expose the missing characteristic no-inflow kernel and
-  post-Riemann flux transformation.
+  rejected, as is an analytic ghost depth larger than the normal domain extent. Analytic faces with
+  axis-permuted periodic coordinates also fail closed until a prepared coordinate map exists. The
+  conversion route is explicitly `partial`: conservative-to-primitive recovery and arbitrary
+  representation components remain unavailable, and conversion does not invent a boundary
+  admissibility projection. Separate `unavailable` rows expose the missing characteristic
+  no-inflow kernel and post-Riemann flux transformation.
   These requests fail during resolution or lowering; none silently degrades to component-wise
   ghost filling. A native rank-1/2/4 regrid fixture removes and recreates the fine hierarchy, then
   proves that uncovered internal fine ghosts retain the conservative coarse-fine transfer and are

@@ -440,7 +440,8 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "2D conservative fixed-state inflow accepts data-only analytic ScalarExpr "
                 "programs over typed coordinates, one exact logical Clock, and bound parameters; "
                 "primitive per-point conversion and discrete state/field/input reads remain "
-                "unavailable, and analytic ghost depth may not exceed the normal domain extent"
+                "unavailable, analytic ghost depth may not exceed the normal domain extent, and "
+                "axis-permuted periodic coordinates require a prepared coordinate map"
             ),
             source=source,
         ),

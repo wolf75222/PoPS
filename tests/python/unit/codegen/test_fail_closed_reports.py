@@ -107,6 +107,7 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert "analytic ScalarExpr" in analytic.limitation
     assert "exact logical Clock" in analytic.limitation
     assert "state/field/input reads remain unavailable" in analytic.limitation
+    assert "axis-permuted periodic coordinates" in analytic.limitation
 
     expected_unavailable = {
         "boundary:characteristic_no_inflow": (
