@@ -6,10 +6,6 @@
 
 #include <pops/parallel/comm.hpp>
 
-namespace pops {
-class WorldCommunicator;
-}
-
 namespace pops::runtime::output {
 
 /// Non-owning, contiguous NumPy-compatible array view used by the native HDF5 adapter.
@@ -56,8 +52,6 @@ struct ParallelHdf5Capability {
 /// rank is allowed to enter HDF5.  An empty string means that local validation succeeded.
 void collective_hdf5_input_consensus(const CommunicatorView& communicator,
                                      const std::string& local_error);
-void collective_hdf5_input_consensus(const WorldCommunicator& world,
-                                     const std::string& local_error);
 
 /// Write one exact scientific-output artifact collectively on an explicit native communicator.
 ///
@@ -68,10 +62,6 @@ void collective_hdf5_input_consensus(const WorldCommunicator& world,
 /// resolved platform produce byte-identical artifacts, and reports one consensus error on every
 /// rank.  It never initializes MPI and never accepts a Python or foreign communicator.
 void write_collective_hdf5(const CommunicatorView& communicator, const std::string& path,
-                           const std::string& manifest_json,
-                           const std::vector<NamedArrayView>& root_arrays,
-                           const std::vector<FieldView>& fields);
-void write_collective_hdf5(const WorldCommunicator& world, const std::string& path,
                            const std::string& manifest_json,
                            const std::vector<NamedArrayView>& root_arrays,
                            const std::vector<FieldView>& fields);
