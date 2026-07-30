@@ -402,9 +402,14 @@ and a device-invalid denominator is reduced to one rank-consistent witness befor
 publish. Uniform state/field dependencies and single-level AMR state dependencies are prepared
 outside the iteration. A linear dynamic boundary on a level-local AMR named-field solve receives one
 exact `FieldLogicalTimePoint.level` and state-provider storage materialized from that level before
-the solve. Composite-FAC boundary contexts, iterate-dependent multilevel boundaries, and AMR
-field-to-field providers remain explicit refusals until their own per-level carriers exist. No route
-falls through to a Python callback or a per-cell registry lookup.
+the solve. A composite hierarchy that fully refines every parent level carries every level context
+but executes the exact finest-level uniform operator; its linear residual and nonlinear/JVP route
+therefore receive only the finest time point, dependencies, and distribution. A partially refined
+CompositeFAC hierarchy remains an explicit refusal: its coarse/fine correction would need a
+level-qualified homogeneous/JVP boundary operator, and reusing the inhomogeneous primal closure would
+be mathematically wrong. Iterate-dependent level-local multilevel boundaries and AMR field-to-field
+providers remain explicit refusals. No route falls through to a Python callback or a per-cell
+registry lookup.
 For field-coupled finite-difference JVPs, the exact boundary evaluation level must also equal the
 active Program resource level before the perturbed field solve or the frozen-field restoration is
 allowed to dispatch. A fine-level caller therefore cannot forge a coarse point and reuse level 0.
