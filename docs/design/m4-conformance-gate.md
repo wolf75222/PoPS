@@ -80,14 +80,16 @@ selected proof contains no handwritten publisher or prepared-publication fake.
 
 The RuntimeInstance refusal no longer relies on `FailFirstStep`. A qualified
 native FieldTopology/FieldSolver pair is packaged, compiled, resolved, bound,
-and prepared through the production component ABI. Its first solve reports
-convergence while returning non-finite values, so the production field
-validation fails inside the native Program step. RuntimeInstance must restore
+and prepared through the production component ABI. An authenticated external
+fault marker makes its solve report convergence while returning non-finite
+values, so the production field validation fails inside the native Program
+step. RuntimeInstance must restore
 the conservative state, field potential, accepted clock, macro-step, temporal
-authority, consumer cursors, reports, and provider evidence exactly. The same
-prepared component then returns a finite result and the unchanged
-RuntimeInstance accepts the retry. The selected test defines no step wrapper
-and never replaces a native engine or step target.
+authority, consumer cursors, reports, and provider evidence exactly. The
+component's prepared state is not mutated by this failure. After the external
+fault is removed, the same prepared component returns a finite result and the
+unchanged RuntimeInstance accepts the retry. The selected test defines no step
+wrapper and never replaces a native engine or step target.
 
 ## Gate modes
 
