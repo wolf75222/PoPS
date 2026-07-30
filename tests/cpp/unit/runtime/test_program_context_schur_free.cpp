@@ -135,12 +135,10 @@ class ExecutionServicesFixture
   struct FieldFacade {
     int* update_count = nullptr;
 
-    void set_field_logical_timepoint(const std::string&,
-                                     const pops::FieldLogicalTimePoint&) const {
+    void set_field_logical_timepoint(const std::string&, const pops::FieldLogicalTimePoint&) const {
       ++*update_count;
     }
-    void set_field_boundary_parameters(const std::string&,
-                                       const std::vector<double>&) const {
+    void set_field_boundary_parameters(const std::string&, const std::vector<double>&) const {
       ++*update_count;
     }
     void set_field_boundary_kernel(const std::string&,
@@ -593,10 +591,9 @@ void expect_shared_install_and_field_services(Context& context) {
                                        [&]() { ++evaluated_bodies; });
   EXPECT_EQ(evaluated_bodies, 1);
   EXPECT_EQ(context.field_solve_dispatches(),
-            std::vector<std::string>({"default", "default-state", "qualified-state-at",
-                                      "named-state", "default-blocks", "named-blocks",
-                                      "generated-blocks", "qualified-state-at",
-                                      "qualified-state-at"}));
+            std::vector<std::string>(
+                {"default", "default-state", "qualified-state-at", "named-state", "default-blocks",
+                 "named-blocks", "generated-blocks", "qualified-state-at", "qualified-state-at"}));
 
   const int calls_before_invalid_provider = context.field_solve_dispatch_count();
   EXPECT_THROW((void)context.solve_fields_from_state_at(point, "", 0, state),
