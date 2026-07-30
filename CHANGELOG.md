@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Final release evidence now authenticates one exact mandatory Pytest node for each normative
+  example inside the all-pass installed-wheel JUnit lane. Missing, renamed, skipped, xfailed, mocked,
+  duplicated, or unattested example proofs fail before release publication.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
   executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
