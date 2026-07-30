@@ -722,7 +722,7 @@ jobs:
         run: python3 scripts/run_m3_gate.py --check-only
 
       - name: M4 native runtime and scientific I/O gate manifest
-        run: python3 scripts/run_m4_gate.py --audit-only
+        run: python3 scripts/run_m4_gate.py --check-only
 
       - name: Generated component catalog
         env:

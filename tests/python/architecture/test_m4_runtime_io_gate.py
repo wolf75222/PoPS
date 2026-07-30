@@ -33,13 +33,13 @@ def _mutated_manifest(tmp_path: Path, old: str, new: str) -> Path:
     return path
 
 
-def test_m4_manifest_is_an_audited_open_exact_matrix():
+def test_m4_manifest_is_a_closed_exact_matrix():
     runner = _load_runner()
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["deferred"]) == 1
-    assert len(data["check"]) == 50
+    assert data["deferred"] == []
+    assert len(data["check"]) == 51
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -55,16 +55,13 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     assert {
         (row["issue"], row["requirement"], row["polarity"])
         for row in data["deferred"]
-    } == {
-        ("ADC-687", "gate_execution", "positive"),
-    }
+    } == set()
 
     _, closure_errors = runner.validate_manifest(MANIFEST)
-    assert len(closure_errors) == len(data["deferred"])
-    assert all("remains deferred" in error for error in closure_errors)
+    assert closure_errors == []
 
 
-def test_m4_cli_reports_open_and_check_only_refuses_closure():
+def test_m4_cli_reports_closed_and_check_only_accepts_source_contract():
     audit = subprocess.run(
         [sys.executable, str(RUNNER), "--audit-only"],
         cwd=ROOT,
@@ -74,7 +71,7 @@ def test_m4_cli_reports_open_and_check_only_refuses_closure():
         check=False,
     )
     assert audit.returncode == 0
-    assert "M4 gate source matrix: AUDITED OPEN" in audit.stdout
+    assert "M4 gate source matrix: AUDITED CLOSED" in audit.stdout
 
     closure = subprocess.run(
         [sys.executable, str(RUNNER), "--check-only"],
@@ -84,9 +81,94 @@ def test_m4_cli_reports_open_and_check_only_refuses_closure():
         stderr=subprocess.STDOUT,
         check=False,
     )
-    assert closure.returncode == 2
-    assert "M4 gate is incomplete or invalid" in closure.stdout
-    assert "remains deferred" in closure.stdout
+    assert closure.returncode == 0
+    assert "M4 gate source matrix: CLOSED" in closure.stdout
+
+
+def test_m4_required_ci_lane_executes_the_complete_installed_gate():
+    data, errors = _load_runner().audit_manifest(MANIFEST)
+    assert not errors
+    nodeid = (
+        "tests/python/architecture/test_m4_runtime_io_gate.py::"
+        "test_m4_required_ci_lane_executes_the_complete_installed_gate"
+    )
+    assert [
+        row for row in data["check"] if row.get("nodeid") == nodeid
+    ] == [{
+        "issue": "ADC-687",
+        "requirement": "gate_execution",
+        "polarity": "positive",
+        "kind": "pytest",
+        "target": "gate_execution",
+        "nodeid": nodeid,
+    }]
+
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    mpi_job = workflow.split("\n  mpi:\n", 1)[1]
+    mpi_job = mpi_job.split("\n  gate-openmp-prewarm:\n", 1)[0]
+    assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_job
+    assert "python3-vtk9" in mpi_job
+    assert "/usr/bin/python3 scripts/run_m4_gate.py --list-ctest-targets" in mpi_job
+    assert 'cmake --build --preset ci-mpi --parallel 4 --target "${m4_targets[@]}"' in mpi_job
+
+    complete = mpi_job.split(
+        "- name: M4 complete native runtime and scientific I/O gate", 1
+    )[1]
+    complete = complete.split("- name: ccache stats (MPI)", 1)[0]
+    assert "POPS_REQUIRE_MPI_TESTS: \"1\"" in complete
+    assert "POPS_REQUIRE_NATIVE_TESTS: \"1\"" in complete
+    assert "vtkXMLPUnstructuredGridReader" in complete
+    assert "vtkXMLUnstructuredGridReader" in complete
+    assert "/usr/bin/python3 scripts/run_m4_gate.py \\" in complete
+    assert "--build-dir build-mpi" in complete
+    assert "--mpi-exec mpiexec" in complete
+    assert "--audit-only" not in complete
+    assert "--python-only" not in complete
+    assert "continue-on-error" not in complete
+
+    aggregator = workflow.split("\n  gate:\n", 1)[1]
+    aggregator = aggregator.split("\n  mpi:\n", 1)[0]
+    assert "mpi" in aggregator.split("needs:", 1)[1].splitlines()[0]
+    assert '--gate mpi "${{ needs.mpi.result }}"' in aggregator
+    assert '"${{ needs.set-mode.outputs.mpi_required }}"' in aggregator
+
+    mpi_filter = workflow.split("\n            mpi:\n", 1)[1]
+    mpi_filter = mpi_filter.split("\n            # full", 1)[0]
+    for protected_path in (
+        "tests/gates/m4_runtime_io.toml",
+        "tests/python/architecture/test_m4_runtime_io_gate.py",
+        "scripts/run_m4_gate.py",
+        ".github/workflows/ci.yml",
+    ):
+        assert "'%s'" % protected_path in mpi_filter
+
+
+def test_m4_closed_gate_lists_every_exact_native_build_target():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    expected = (
+        "test_amr_native_loader",
+        "test_brick_catalog",
+        "test_component_interfaces",
+        "test_flux_interfaces",
+        "test_mpi_hdf5_collective",
+        "test_native_loader_param_overflow",
+        "test_platform_manifest",
+        "test_program_context_contract",
+    )
+    assert runner._required_ctest_targets(data["check"]) == expected
+
+    listed = subprocess.run(
+        [sys.executable, str(RUNNER), "--list-ctest-targets"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert listed.returncode == 0
+    assert tuple(listed.stdout.splitlines()) == expected
 
 
 def test_m4_gate_pins_every_external_component_family():
@@ -422,7 +504,7 @@ def test_m4_gate_pins_real_writer_refusal_without_publication_fakes():
     )
 
 
-def test_m4_gate_keeps_real_tamper_capacity_proofs_and_defers_runtime_gaps():
+def test_m4_gate_keeps_real_tamper_and_capacity_refusals():
     data, errors = _load_runner().audit_manifest(MANIFEST)
     assert not errors
 
@@ -553,14 +635,14 @@ def test_m4_gate_pins_complete_program_only_dispatch_and_fallback_fences():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     job = workflow.split("\n  gate-python-architecture:\n", 1)[1]
     job = job.split("\n  gate-python-build:\n", 1)[0]
-    command = "run: python3 scripts/run_m4_gate.py --audit-only"
+    command = "run: python3 scripts/run_m4_gate.py --check-only"
     assert [line.strip() for line in job.splitlines()].count(command) == 1
-    assert "run: python3 scripts/run_m4_gate.py --check-only" not in job
+    assert "run: python3 scripts/run_m4_gate.py --audit-only" not in job
 
     documentation = (
         ROOT / "docs/design/m4-conformance-gate.md"
     ).read_text(encoding="utf-8")
-    assert "current status is **AUDITED OPEN**" in documentation
+    assert "current status is **CLOSED AND CI-EXECUTED**" in documentation
     assert "four serial proofs" in documentation
 
 
@@ -680,23 +762,14 @@ def test_m4_mpi_entrypoint_accepts_only_the_required_prerequisite_guard():
     assert not runner._has_authenticated_mpi_guard(untrusted)
 
 
-def test_m4_gate_rejects_every_explicit_deferred_gap():
+def test_m4_gate_has_no_explicit_deferred_gap():
     runner = _load_runner()
     data, audit_errors = runner.audit_manifest(MANIFEST)
     assert not audit_errors
-    assert data["deferred"]
+    assert data["deferred"] == []
 
     _, errors = runner.validate_manifest(MANIFEST)
-    expected = {
-        "%s/%s/%s" % (row["issue"], row["requirement"], row["polarity"])
-        for row in data["deferred"]
-    }
-    observed = {
-        error.split(" remains deferred:", 1)[0]
-        for error in errors
-        if " remains deferred:" in error
-    }
-    assert observed == expected
+    assert errors == []
 
 
 def test_m4_required_pytest_execution_rejects_junit_skips(monkeypatch):
@@ -766,7 +839,7 @@ def test_m4_required_ctest_execution_rejects_junit_skips(tmp_path, monkeypatch):
     assert calls == 2
 
 
-def test_m4_check_only_refuses_open_ledger_before_launcher_or_build(monkeypatch):
+def test_m4_check_only_accepts_closed_ledger_without_launcher_or_build(monkeypatch):
     runner = _load_runner()
 
     def forbidden_call(*_args, **_kwargs):
@@ -775,4 +848,4 @@ def test_m4_check_only_refuses_open_ledger_before_launcher_or_build(monkeypatch)
     monkeypatch.setattr(runner.shutil, "which", forbidden_call)
     monkeypatch.setattr(runner.subprocess, "run", forbidden_call)
 
-    assert runner.main(["--check-only"]) == 2
+    assert runner.main(["--check-only"]) == 0

@@ -12,16 +12,7 @@ issues = [
   "ADC-687",
 ]
 
-[[deferred]]
-issue = "ADC-687"
-requirement = "gate_execution"
-polarity = "positive"
-reason = "CI only audits the source ledger; no required lane installs VTK and executes every selected pytest and CTest proof with zero skips."
-evidence_paths = [
-  ".github/workflows/ci.yml",
-  "environment.yml",
-  "scripts/run_m4_gate.py",
-]
+deferred = []
 
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
@@ -340,6 +331,14 @@ polarity = "refusal"
 kind = "pytest"
 target = "diagnostics"
 nodeid = "tests/python/unit/output/test_exact_writers.py::test_composite_integrals_refuses_non_cartesian_cell_measure"
+
+[[check]]
+issue = "ADC-687"
+requirement = "gate_execution"
+polarity = "positive"
+kind = "pytest"
+target = "gate_execution"
+nodeid = "tests/python/architecture/test_m4_runtime_io_gate.py::test_m4_required_ci_lane_executes_the_complete_installed_gate"
 
 [[check]]
 issue = "ADC-687"
