@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Generated physical-flux bricks now make their qualified provider requirements executable native
+  ABI evidence: the binder validates every row at compile time and reads only its declared storage
+  slots instead of scanning the model's complete auxiliary width.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
   executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`

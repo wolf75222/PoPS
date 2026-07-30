@@ -132,6 +132,8 @@ def test_facade_and_formula_carrier_share_one_minimal_flux_provider_pack():
     assert rows[0]["key"]["owner_qid"] in source
     assert '"grad_x"' in source
     assert "true, 1" in source
+    assert "static constexpr int n_flux_providers = 1;" in source
+    assert "flux_provider_requirements" in source
 
 
 def test_field_dependent_flux_without_provider_fails_before_native_source():
