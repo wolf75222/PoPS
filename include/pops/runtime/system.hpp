@@ -117,6 +117,7 @@ namespace runtime::program {
 class Profiler;      // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
 class CacheManager;  // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
 class ProgramContext;
+struct ProgramRuntimeState;
 }  // namespace runtime::program
 
 namespace runtime::multiblock {
@@ -1363,6 +1364,7 @@ class System {
  private:
   friend class runtime::program::ProgramContext;
   friend class PreparedSystemLayoutTransfer;
+  POPS_EXPORT runtime::program::ProgramRuntimeState& program_runtime_state_();
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.

@@ -169,6 +169,22 @@ def test_all_four_controllers_execute_real_native_attempts():
     assert grid_native.calls == [("step", 0.125)]
 
 
+def test_fixed_dt_merges_a_roundoff_equivalent_final_landing():
+    native = _Native()
+    for _ in range(13):
+        native.step(0.01)
+    assert native.time() < 0.14
+    remaining = 0.14 - native.time()
+
+    report = run_step_attempt(
+        _Engine(), native, FixedDt(0.01), t_end=0.14
+    )
+
+    assert report.attempts == 1
+    assert native.time() == 0.14
+    assert native.calls[-1] == ("step", remaining)
+
+
 def test_error_controlled_exhaustion_preserves_rejection_and_exact_attempt_count():
     native = _Native(reject=4)
     engine = _Engine()
