@@ -1491,8 +1491,9 @@ scientifiques choisissent obligatoirement un `ParallelMode` typé :
 d'un unique writer rang 0, `COLLECTIVE` pour les hyperslabs HDF5 MPIO exacts, ou `PER_RANK` pour des
 artefacts locaux qualifiés par rang et un reçu agrégé. Le mode, le format, la sélection, la cible et
 l'identité de chaque pièce native (`global_box_index`, `owner_rank`, `replicated`) sont authentifiés
-entre rangs avant toute écriture. La route `COLLECTIVE` appelle le backend C++ HDF5 parallèle sur
-`MPI_COMM_WORLD`; `h5py` reste uniquement un lecteur/écrivain série optionnel et n'est jamais un
+entre rangs avant toute écriture. La route `COLLECTIVE` appelle le backend C++ HDF5 parallèle avec
+la lane MPI dupliquée possédée par la session observateur ; le writer ne redécouvre ni n'emprunte
+`MPI_COMM_WORLD`. `h5py` reste uniquement un lecteur/écrivain série optionnel et n'est jamais un
 transport MPI. Une dépendance HDF5 parallèle native absente, un mode incompatible ou un backend
 Kokkos GPU/device handle non supporté est refusé avant le
 constructeur de `System`/`AmrSystem`; aucune route série implicite ne remplace une demande MPI.
