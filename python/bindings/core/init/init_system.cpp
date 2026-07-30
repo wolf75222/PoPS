@@ -146,8 +146,8 @@ void bind_system_assembly(py::class_<System>& cls) {
           // bit-identical. Resolved on the C++ side against the block's names/roles (error on a missing name/role).
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // Options of the implicit IMEX source Newton. newton_diagnostics=True enables the report
-          // (newton_report(name)).
+          // Options of the implicit IMEX source Newton. The Program-only System runtime rejects
+          // newton_diagnostics=True until a typed consumer actually publishes that report.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
@@ -268,9 +268,7 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("level") = 0)
       .def("_discard_interface_flux_components", &System::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
-      // Newton report (IMEX diagnostics OPT-IN): dict {enabled, converged, max_residual,
-      // max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the substeps of the
-      // LAST advance of the block. failed_cell = (i, j) of ONE faulty cell or None.
+      // Compatibility query for a Newton report published by a typed implicit Program consumer.
       .def(
           "newton_report",
           [](const System& s, const std::string& name) {

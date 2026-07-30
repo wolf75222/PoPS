@@ -58,6 +58,10 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   const bool imexrk = (time == "imexrk_ars222");
   const bool imex = (time == "imex" || imexrk);  // both go through the implicit source step
   const bool recon_prim = (recon == "primitive");
+  if (newton_diagnostics)
+    throw std::runtime_error(
+        "System::add_block : newton_diagnostics=true is unavailable on the Program-only System "
+        "runtime because no typed implicit Program consumer publishes that report");
   // Wave speed cache (opt-in): only engages for the HLL residual. Requesting it
   // elsewhere would be SILENTLY without effect -> explicit error (no silent ignore). The polar path has
   // its own factory (make_block_polar) without this cache.
@@ -161,12 +165,6 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     P->ensure_aux_width(bb.aux_width);
   } else {
     const GridContext ctx = P->grid_ctx(name);
-    // Preserve the requested diagnostic carrier until the typed implicit Program primitive owns and
-    // writes it. The spatial closures never capture this state.
-    if (newton_diagnostics) {
-      auto rep = std::make_shared<NewtonReport>();
-      P->diagnostics_.newton_reports[name] = rep;
-    }
     // Transport-axis seam (ADC-335): each per-transport TU (python/system_<transport>.cpp) runs the
     // SAME source/elliptic dispatch + make_block + makers as before (detail::build_block_for), but
     // instantiates ONLY its own transport's leaves -- so the combinatorial product splits across files
@@ -618,14 +616,16 @@ std::array<double, 3> System::dt_hotspot(const std::string& name) {
   return {static_cast<double>(w), static_cast<double>(i), static_cast<double>(j)};
 }
 
-// Newton report (OPT-IN IMEX diagnostics) of the block. The carrier is written only by an installed
-// typed implicit Program primitive; spatial block construction owns no implicit solve.
+// Compatibility query for a typed implicit Program diagnostic carrier. The current Program-only
+// System runtime rejects newton_diagnostics=true until a consumer actually publishes this carrier.
 System::SourceNewtonReport System::newton_report(const std::string& name) const {
   p_->index(name);  // raises if unknown block
   const NewtonReport* rp = p_->diagnostics_.newton_report_ptr(name);
   if (rp == nullptr)
-    throw std::runtime_error("System::newton_report : Newton diagnostics not enabled for block '" +
-                             name + "' ; pass newton_diagnostics=True when installing the block");
+    throw std::runtime_error(
+        "System::newton_report : no typed implicit Program consumer published diagnostics for "
+        "block '" +
+        name + "'");
   const NewtonReport& r = *rp;
   return SourceNewtonReport{r.enabled,
                             r.converged,

@@ -13,16 +13,15 @@
 ///
 /// Extracted from three inline `std::map`s that lived on `System::Impl`. It groups the metadata a
 /// runtime report reads back: the effective numerical/physical block options captured at
-/// configuration time and the OPT-IN Newton (IMEX) per-block reports. None of these are read by
-/// SystemProgramDriver -> MockImpl-invisible.
+/// configuration time and compatibility carriers for a future typed Program diagnostic consumer.
+/// None of these are read by SystemProgramDriver -> MockImpl-invisible.
 ///
 /// OWNERSHIP CONTRACT
 ///  - block_options: FROZEN AT BIND. Populated only by structural block installation, refused once
 ///    bound, and read-only afterwards (effective_options_report).
-///  - newton_reports: the map ENTRIES are frozen at bind (allocated by add_block for a block that
-///    opted into diagnostics or a fail policy); the report CONTENTS are MUTABLE DURING RUN (the
-///    block IMEX advance closures write into them by raw pointer each step). The shared_ptr gives a
-///    STABLE address even when the map reallocates at a later add_block.
+///  - newton_reports: compatibility storage for a typed Program consumer. The current Program-only
+///    System runtime never allocates entries and rejects the public opt-in until such a consumer
+///    owns publication. The shared_ptr preserves a stable address for that future seam.
 ///  - NOT checkpointed: inspection metadata is re-derived by replaying the composition.
 ///
 /// KEY TYPING: keyed by the user-chosen BLOCK / STAGE NAME (no ADC-584 route id exists for a
@@ -37,9 +36,8 @@ struct SystemDiagnosticsRegistry {
   /// Effective numerical/physical block options captured when the block/stage is added. The closures
   /// are opaque, so inspection stores the user-facing route decisions here.
   std::map<std::string, EffectiveBlockOptions> block_options;
-  /// OPT-IN IMEX Newton report carrier reserved for the typed implicit Program primitive. Spatial
-  /// block closures never capture or write it. Absent (missing key) for a block without
-  /// newton_diagnostics -> newton_report raises a clear error.
+  /// Newton report carrier reserved for a typed implicit Program consumer. Spatial block closures
+  /// never capture or write it; the current runtime leaves the map empty and rejects the opt-in.
   std::map<std::string, std::shared_ptr<NewtonReport>> newton_reports;
 
   /// Effective block options of @p name, or nullptr if the block was never registered.

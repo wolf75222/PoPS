@@ -224,11 +224,10 @@ class System {
   ///                 rel_tol / abs_tol define the mandatory per-cell stopping criterion
   ///                 ||F||inf <= abs_tol + rel_tol*||F0||inf; fd_eps controls the finite-difference
   ///                 Jacobian and damping controls W -= damping*delta in (0, 1].
-  /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
-  ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
-  ///                 aggregated over the substeps of each advance and available via newton_report(name).
-  ///                 OPT-IN: false (default) omits the retained diagnostic summary. Stays
-  ///                 flat (a separate bool, outside the homogeneous family of convergence options).
+  /// @param newton_diagnostics Reserved compatibility flag. The Program-only System runtime rejects
+  ///                 true until a typed implicit Program consumer actually publishes a Newton
+  ///                 report; accepting it would otherwise allocate a carrier that no execution
+  ///                 route writes.
   /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
   ///                 every exact reconstructed face-trace pair, then reuses that interval from both
   ///                 adjacent residual cells. Net gain when wave_speeds is expensive (moment hierarchy).
@@ -247,9 +246,9 @@ class System {
                  double positivity_floor = 0.0, bool wave_speed_cache = false,
                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
-  /// Report of the implicit source Newton (IMEX) of a block, AGGREGATED over the substeps of the
-  /// LAST advance of the block. Only exists if the block was added with newton_diagnostics=true
-  /// (explicit error otherwise). Flat copy (no dependency on the numerics header).
+  /// Compatibility query for a report published by a typed implicit Program consumer. The current
+  /// Program-only System runtime rejects the opt-in request until such a consumer is installed.
+  /// Flat copy (no dependency on the numerics header).
   struct SourceNewtonReport {
     bool enabled;           ///< a report was computed (at least one IMEX advance played)
     bool converged;         ///< no failed cell on the last advance
