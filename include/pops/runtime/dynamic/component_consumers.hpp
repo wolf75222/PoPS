@@ -596,6 +596,81 @@ inline int apply_transfer(const PopsTransferApiV1& api, void* state,
   return api.apply(state, &request, &status);
 }
 
+template <class Left, class Right>
+inline bool same_reflux_face_shape(const Left& left, const Right& right) {
+  if (left.dimension != right.dimension || left.component_count != right.component_count ||
+      left.scalar_type != right.scalar_type || left.memory_space != right.memory_space)
+    return false;
+  for (std::int32_t axis = 0; axis < 3; ++axis)
+    if (left.extents[axis] != right.extents[axis] ||
+        left.ghost_lower[axis] != right.ghost_lower[axis] ||
+        left.ghost_upper[axis] != right.ghost_upper[axis])
+      return false;
+  return true;
+}
+
+inline int apply_reflux_interface_batch(const PopsRefluxApiV1& api, void* state,
+                                        const PopsRefluxRequestV1& request,
+                                        PopsComponentStatusV1& status) {
+  require_operation(api.apply_interface_batch != nullptr, "apply_interface_batch");
+  if (request.struct_size < sizeof(PopsRefluxRequestV1) ||
+      !component_text(request.transition_identity) || request.parent_level < 0 ||
+      request.child_level != request.parent_level + 1 || request.face_count == 0 ||
+      request.faces == nullptr || request.logical_time.level != request.parent_level)
+    throw std::invalid_argument("reflux request is incomplete");
+  validate_logical_time(request.logical_time);
+  validate_noncollective_execution_context(request.execution);
+
+  std::unordered_set<std::string> identities;
+  for (std::size_t index = 0; index < request.face_count; ++index) {
+    const auto& face = request.faces[index];
+    if (face.struct_size < sizeof(PopsRefluxFaceV1) || !component_text(face.interface_identity) ||
+        !identities.insert(face.interface_identity).second || face.axis < 0 || face.axis >= 2 ||
+        (face.side != POPS_REFLUX_FACE_LOW_V1 && face.side != POPS_REFLUX_FACE_HIGH_V1) ||
+        !std::isfinite(face.inverse_coarse_cell_spacing) || face.inverse_coarse_cell_spacing <= 0.0)
+      throw std::invalid_argument("reflux face descriptor is incomplete");
+
+    validate_execution_field(request.execution, face.coarse_integrated_flux,
+                             "reflux coarse integrated flux");
+    validate_execution_field(request.execution, face.fine_integrated_flux,
+                             "reflux fine integrated flux");
+    validate_execution_field(request.execution, face.correction, "reflux correction");
+    const auto centering_axis = 1u << static_cast<unsigned>(face.axis);
+    if (face.coarse_integrated_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+        face.fine_integrated_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+        face.coarse_integrated_flux.centering_axes != centering_axis ||
+        face.fine_integrated_flux.centering_axes != centering_axis ||
+        face.correction.centering != POPS_FIELD_CENTERING_CELL_V1 ||
+        face.correction.centering_axes != 0 ||
+        face.coarse_integrated_flux.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        face.fine_integrated_flux.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        face.correction.ownership != POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 ||
+        !same_reflux_face_shape(face.coarse_integrated_flux, face.fine_integrated_flux) ||
+        !same_reflux_face_shape(face.coarse_integrated_flux, face.correction) ||
+        face.coarse_integrated_flux.extents[face.axis] != 1 ||
+        std::string(face.coarse_integrated_flux.layout_identity) !=
+            face.correction.layout_identity ||
+        std::string(face.coarse_integrated_flux.patch_identity) != face.correction.patch_identity)
+      throw std::invalid_argument(
+          "reflux face fluxes and correction disagree on shape, centering or ownership");
+    for (std::int32_t axis = 0; axis < face.coarse_integrated_flux.dimension; ++axis)
+      if (face.coarse_integrated_flux.ghost_lower[axis] != 0 ||
+          face.coarse_integrated_flux.ghost_upper[axis] != 0)
+        throw std::invalid_argument("reflux face views cannot carry ghost cells");
+  }
+
+  status = unwritten_component_status();
+  const int code = api.apply_interface_batch(state, &request, &status);
+  if (!component_status_is_well_formed(status))
+    throw std::runtime_error("native Reflux component returned an invalid status");
+  if ((code == 0) != (status.code == 0) ||
+      (code == 0 && status.action != POPS_COMPONENT_CONTINUE_V1) ||
+      (code != 0 && status.action == POPS_COMPONENT_CONTINUE_V1) ||
+      (code != 0 && !component_text(status.reason)))
+    throw std::runtime_error("native Reflux component returned an inconsistent outcome");
+  return code;
+}
+
 inline std::string writer_geometry_key(const char* layout, std::int32_t level) {
   return std::string(layout) + "\n" + std::to_string(level);
 }

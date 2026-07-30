@@ -705,9 +705,13 @@ doivent couvrir exactement la hiérarchie.
 
 Le provider natif livré matérialise le coeur maillage/stockage en 2D et ses kernels de transfert,
 correction conservative et sous-cyclage AMR exigent un ratio de transition égal à 2. La correction
-coarse/fine reste l'unique ledger de flux détenu par PoPS : aucune interface externe `Reflux`
-n'existe, car déléguer ce dépôt créerait une seconde autorité conservative. Une autre dimension ou un autre
-ratio est refusé pendant la résolution ou le bind avec les capacités observées. Le coeur de
+coarse/fine reste l'unique ledger de flux détenu par PoPS. L'interface native `Reflux` ne peut
+déléguer qu'un kernel local et non collectif : PoPS lui fournit les flux coarse/fine déjà intégrés
+dans le temps et ramenés sur la même face coarse ; le kernel écrit la correction locale
+`side * (fine - coarse) / dx`. PoPS conserve exclusivement la topologie d'interface, le ledger, la
+réduction MPI, la transaction et l'application à l'état. Un provider `Reflux` ne devient donc jamais
+une seconde autorité conservative. Une autre dimension ou un autre ratio est refusé pendant la
+résolution ou le bind avec les capacités observées. Le coeur de
 planification ne normalise jamais la demande vers ce sous-ensemble. Défensivement,
 `AmrProgramContext` revalide aussi chaque transition à sa construction et refuse un ratio différent
 de 2 avant le premier pas : cette limite appartient au provider natif reflux/average-down installé,
@@ -1405,13 +1409,22 @@ paramètres, interfaces, requirements, capabilities, effets, layouts, clocks, d�
 restart et points d'entrée.
 
 Le même catalogue génère les IDs et tables C/POD versionnées des interfaces natives (flux numérique,
-ghost boundary, closure de champ, tagging, clustering, transfert, solveur de champ, writer et
-topologie de champ). Le reflux conservatif reste une autorité interne pilotée par le flux ledger ;
-aucune table externe `Reflux` n'est annoncée. Chaque famille possède sa propre version d'interface, indépendante de la version
+ghost boundary, closure de champ, tagging, clustering, transfert, kernel local de reflux, solveur de
+champ, writer et topologie de champ). Le reflux conservatif complet reste une autorité interne
+pilotée par le flux ledger ; la table externe `Reflux` ne couvre que la transformation locale,
+non collective, de flux intégrés en correction non appliquée. Chaque famille possède sa propre version d'interface, indépendante de la version
 du protocole enveloppe. Le loader authentifie identité sémantique, manifest, digest du catalogue,
 taille/header de table et opérations requises avant de conserver le handle de bibliothèque. Les tables
 sont résolues une fois à l'installation ; aucun `dlsym`, nom de classe ou dispatch Python n'entre dans
 une boucle de cellules.
+
+Le contrat `Reflux` v1 est volontairement livré avant son branchement dans
+`PreparedAmrProgramRefluxTransition` : catalogue, manifest, loader et consumer typé peuvent qualifier
+un conformer, mais le runtime AMR continue d'utiliser son kernel interne tant qu'un adaptateur préparé
+ne peut pas fournir les vues locales sans dupliquer le ledger ni transférer l'autorité collective. Une
+configuration AMR ne prétend donc pas encore avoir sélectionné un provider `Reflux` externe. Cette
+première qualification est limitée à la cible 2D, `float64`, CPU déjà admise par le loader de
+composants ; elle ne constitue pas une promesse GPU.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.
