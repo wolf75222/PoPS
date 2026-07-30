@@ -78,7 +78,9 @@ def _uniform_initial_sources(plan: Any) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _require_supported_execution_context(plan: Any) -> None:
+def _require_supported_execution_context(
+    plan: Any, native_facts: dict[str, Any] | None = None
+) -> None:
     """Refuse every resource the native engines cannot consume before constructing one."""
     from pops._platform_contracts import ExecutionContext
 
@@ -89,7 +91,7 @@ def _require_supported_execution_context(plan: Any) -> None:
         raise NotImplementedError(
             "native RuntimeInstance providers require exact float64"
         )
-    facts = _native_runtime_facts()
+    facts = _native_runtime_facts() if native_facts is None else native_facts
     expected_device = facts.get("kokkos_device")
     expected_memory = facts.get("field_memory_space")
     expected_backend = facts.get("kokkos_backend")
@@ -148,6 +150,42 @@ def _require_supported_execution_context(plan: Any) -> None:
             "native RuntimeInstance providers support only serial or exact MPI_COMM_WORLD; got %r"
             % communicator.identity
         )
+
+
+def _require_runtime_determinism(
+    plan: Any, runtime_plan: Any, native_facts: dict[str, Any]
+) -> None:
+    """Consume the plan's determinism guarantee against current native facts."""
+    context = plan.execution_context
+    communication = runtime_plan.communication
+    planned = runtime_plan.determinism.assumptions
+    provider_facts = {
+        "rank_count": native_facts.get("mpi_ranks"),
+        "device": native_facts.get("kokkos_device"),
+        "communicator": native_facts.get("communicator"),
+        "execution_backend": native_facts.get("kokkos_backend"),
+        "shared_space": native_facts.get("kokkos_shared_space"),
+        "stream_identity": native_facts.get("kokkos_stream"),
+        "reduction_order": [
+            row.identity.token for row in communication.collectives
+        ],
+        "reduction_strategy": [
+            "%s:%s" % (row.operation, row.strategy)
+            for row in communication.collectives
+        ],
+    }
+    actual = {}
+    for name in planned:
+        if name in provider_facts:
+            actual[name] = provider_facts[name]
+            continue
+        proof = context.backend.capabilities.get(name)
+        actual[name] = (
+            None
+            if proof is None or not proof.known
+            else proof.require("runtime.%s" % name)
+        )
+    runtime_plan.determinism.require_assumptions(actual)
 
 
 class _UniformNativeProvider(RuntimeExecutorProvider):
@@ -279,7 +317,9 @@ def install_runtime_executor(install_plan: Any, runtime_plan: Any = None) -> Any
     from pops.runtime._runtime_planning import require_runtime_plan_bundle
 
     runtime_plan = require_runtime_plan_bundle(plan, runtime_plan)
-    _require_supported_execution_context(plan)
+    native_facts = _native_runtime_facts()
+    _require_runtime_determinism(plan, runtime_plan, native_facts)
+    _require_supported_execution_context(plan, native_facts)
     matches = tuple(provider for provider in _PROVIDERS if provider.supports(plan))
     if len(matches) != 1:
         raise ValueError(

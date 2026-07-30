@@ -13,9 +13,15 @@ from pops._platform_contracts import (
     ExecutionResource,
     proven_serial_manifest,
 )
+from pops.identity import make_identity
 from pops.runtime import _multi_layout_executor as multi_executor
 from pops.runtime import _platform_manifest as platform_manifest
 from pops.runtime import _runtime_executor as executor
+from pops.runtime import _runtime_planning as runtime_planning
+from pops.runtime._runtime_plan_contracts import (
+    DeterminismGuarantee,
+    RuntimePlanningError,
+)
 from pops.runtime._runtime_planning import build_runtime_plans
 from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
 
@@ -89,6 +95,7 @@ def test_mismatched_native_state_is_rejected_before_system_constructor(
     assert len(memory_spaces) == 1
     facts = {
         "mpi_active": False,
+        "mpi_ranks": 1,
         "kokkos_backend": backend.capabilities["execution_backend"].require(
             "runtime.execution_backend"
         ),
@@ -137,6 +144,62 @@ def test_runtime_plan_is_required_before_native_preflight(monkeypatch):
     with pytest.raises(TypeError, match="exact RuntimePlanBundle"):
         executor.install_runtime_executor(plan)
     assert calls == []
+
+
+def test_determinism_assumptions_are_rechecked_before_native_preflight(monkeypatch):
+    plan = SimpleNamespace(execution_context=SimpleNamespace())
+    runtime_plan = SimpleNamespace(
+        determinism=DeterminismGuarantee(
+            "reproducible",
+            ("rank_count",),
+            {"rank_count": 1},
+            {},
+            make_identity("execution-context", {"test": "runtime-executor"}),
+        ),
+        communication=SimpleNamespace(collectives=()),
+    )
+    calls = []
+
+    def forbidden_preflight(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("native preflight became reachable")
+
+    monkeypatch.setattr(executor, "require_install_plan", lambda value: value)
+    monkeypatch.setattr(executor, "_require_supported_execution_context", forbidden_preflight)
+    monkeypatch.setattr(
+        runtime_planning,
+        "require_runtime_plan_bundle",
+        lambda _plan, value: value,
+    )
+    monkeypatch.setattr(
+        executor,
+        "_native_runtime_facts",
+        lambda: {
+            "mpi_ranks": 2,
+        },
+    )
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "determinism_assumption_mismatch"
+    assert calls == []
+
+
+def test_matching_runtime_determinism_assumptions_are_consumed():
+    guarantee = DeterminismGuarantee(
+        "reproducible",
+        ("rank_count",),
+        {"rank_count": 1},
+        {},
+        make_identity("execution-context", {"test": "matching-runtime-executor"}),
+    )
+    executor._require_runtime_determinism(
+        SimpleNamespace(execution_context=SimpleNamespace()),
+        SimpleNamespace(
+            determinism=guarantee,
+            communication=SimpleNamespace(collectives=()),
+        ),
+        {"mpi_ranks": 1},
+    )
 
 
 
