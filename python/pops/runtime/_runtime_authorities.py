@@ -162,6 +162,22 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 "periodic", "foextrap", "dirichlet", "slip_wall", "external"}
                for value in types):
             raise NotImplementedError("prepared boundary plan selected an unavailable face producer")
+        representations = [row.get("representation", "conservative") for row in faces]
+        converter_identities = [row.get("converter") for row in faces]
+        for face, (face_type, representation, converter) in enumerate(zip(
+                types, representations, converter_identities, strict=True)):
+            if representation == "conservative":
+                if converter is not None:
+                    raise ValueError(
+                        "prepared conservative boundary face must not carry a converter")
+            elif representation == "primitive":
+                if face_type != "dirichlet" or not isinstance(converter, str) or not converter:
+                    raise ValueError(
+                        "prepared primitive boundary face %d requires an exact fixed-state "
+                        "converter identity" % face)
+            else:
+                raise NotImplementedError(
+                    "prepared boundary selected unavailable representation %r" % representation)
         face_identities = [row.get("producer") for row in faces]
         if any(not isinstance(value, str) or not value for value in face_identities):
             raise TypeError(
@@ -198,6 +214,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             list(first.get("omitted_interface_faces", [])),
             state_identity,
             periodic_identifications,
+            representations,
+            ["" if value is None else value for value in converter_identities],
         )
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):

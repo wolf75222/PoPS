@@ -257,3 +257,5 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     ]
     assert native.installed[6] == ["Scalar"]
     assert native.installed[9] == [[0, target_face, *permutation, *signs]]
+    assert native.installed[10] == ["conservative"] * 4
+    assert native.installed[11] == [""] * 4

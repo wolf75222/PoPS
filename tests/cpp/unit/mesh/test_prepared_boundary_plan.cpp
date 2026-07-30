@@ -6,6 +6,7 @@
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/runtime/context/grid_context.hpp>
 
+#include <limits>
 #include <type_traits>
 #include <vector>
 
@@ -152,6 +153,95 @@ TEST(test_prepared_boundary_plan, executes_same_level_and_component_physical_pro
   EXPECT_EQ(field(-1, 2, 1), Real(2));
   EXPECT_EQ(field(4, 2, 0), Real(7));   // 2*4 - interior(1)
   EXPECT_EQ(field(4, 2, 1), Real(16));  // 2*9 - interior(2)
+}
+
+TEST(test_prepared_boundary_plan,
+     converts_primitive_fixed_state_once_before_conservative_face_execution) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  MultiFab state = scalar_field(domain, 4, 1);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      for (int component = 0; component < 4; ++component)
+        values(i, j, component) = Real(1);
+    });
+  }
+  std::vector<double> face_values;
+  for (const double primitive : {2.0, 3.0, -1.0, 4.0})
+    face_values.insert(face_values.end(), {0.0, primitive, 0.0, 0.0});
+  auto boundary = prepare_hyperbolic_boundary<2>(
+      {"foextrap", "dirichlet", "foextrap", "foextrap"}, face_values,
+      {"case::fluid::xlo", "case::fluid::xhi", "case::fluid::ylo", "case::fluid::yhi"},
+      {"Density", "MomentumX", "MomentumY", "Energy"}, false,
+      {"conservative", "primitive", "conservative", "conservative"},
+      {"", "case::fluid::model-p2c", "", ""});
+  PreparedBoundaryPlan plan("case::fluid::primitive-inflow", 1, std::move(boundary));
+  const auto lane = ExecutionLane::world("case::fluid::primitive-inflow-lane");
+  auto stale_session = plan.make_session(lane);
+
+  EXPECT_TRUE(plan.requires_fixed_state_conversion());
+  EXPECT_THROW(plan.fill_same_level_and_physical(state, domain), std::logic_error);
+  plan.prepare_fixed_state_conversion([](const double* primitive, double* conservative) {
+    constexpr double gamma = 1.4;
+    conservative[0] = primitive[0];
+    conservative[1] = primitive[0] * primitive[1];
+    conservative[2] = primitive[0] * primitive[2];
+    conservative[3] =
+        primitive[3] / (gamma - 1.0) +
+        0.5 * primitive[0] * (primitive[1] * primitive[1] + primitive[2] * primitive[2]);
+  });
+
+  EXPECT_FALSE(plan.requires_fixed_state_conversion());
+  const auto& prepared_xhi = plan.hyperbolic_boundary().face(0, 1);
+  EXPECT_EQ(prepared_xhi.authored_representation, HyperbolicStateRepresentation::Primitive);
+  EXPECT_EQ(prepared_xhi.converter_identity, "case::fluid::model-p2c");
+  EXPECT_TRUE(prepared_xhi.fixed_state_converted);
+  EXPECT_THROW(stale_session.fill_same_level_and_physical(state, domain), std::logic_error);
+  plan.fill_same_level_and_physical(state, domain);
+  const Fab2D& field = state.fab(0);
+  EXPECT_EQ(field(4, 2, 0), Real(3));
+  EXPECT_EQ(field(4, 2, 1), Real(11));
+  EXPECT_EQ(field(4, 2, 2), Real(-5));
+  EXPECT_NEAR(field(4, 2, 3), Real(39), Real(1e-12));
+}
+
+TEST(test_prepared_boundary_plan, primitive_fixed_state_conversion_is_transactional_and_finite) {
+  auto make_plan = [] {
+    return PreparedBoundaryPlan(
+        "case::fluid::nonfinite-inflow", 1,
+        prepare_hyperbolic_boundary<2>(
+            {"foextrap", "dirichlet", "foextrap", "foextrap"}, {0.0, 2.0, 0.0, 0.0},
+            {"case::fluid::xlo", "case::fluid::xhi", "case::fluid::ylo", "case::fluid::yhi"},
+            {"Scalar"}, false, {"conservative", "primitive", "conservative", "conservative"},
+            {"", "case::fluid::model-p2c", "", ""}));
+  };
+  auto plan = make_plan();
+  EXPECT_THROW(plan.prepare_fixed_state_conversion([](const double*, double* conservative) {
+    conservative[0] = std::numeric_limits<double>::quiet_NaN();
+  }),
+               std::runtime_error);
+  EXPECT_TRUE(plan.requires_fixed_state_conversion());
+
+  EXPECT_THROW(prepare_hyperbolic_boundary<2>(
+                   {"foextrap", "foextrap", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+                   {"case::xlo", "case::xhi", "case::ylo", "case::yhi"}, {"Scalar"}, false,
+                   {"primitive", "conservative", "conservative", "conservative"},
+                   {"case::fluid::model-p2c", "", "", ""}),
+               std::invalid_argument);
+}
+
+TEST(test_prepared_boundary_plan,
+     primitive_conversion_preserves_explicit_periodic_identification_validation) {
+  auto boundary = prepare_hyperbolic_boundary<2>(
+      {"periodic", "dirichlet", "foextrap", "periodic"}, {0.0, 2.0, 0.0, 0.0},
+      {"case::fluid::xlo", "case::fluid::xhi", "case::fluid::ylo", "case::fluid::yhi"}, {"Scalar"},
+      true, {"conservative", "primitive", "conservative", "conservative"},
+      {"", "case::fluid::model-p2c", "", ""});
+
+  EXPECT_TRUE(boundary.requires_fixed_state_conversion());
+  const auto converted = boundary.with_converted_fixed_states(
+      [](const double* primitive, double* conservative) { conservative[0] = primitive[0]; });
+  EXPECT_FALSE(converted.requires_fixed_state_conversion());
 }
 
 TEST(test_prepared_boundary_plan,

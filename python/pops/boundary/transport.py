@@ -75,6 +75,27 @@ def _converter(value: Any) -> Handle | None:
     return value
 
 
+def model_primitive_to_conservative(state: Any) -> Handle:
+    """Return the exact block-model primitive-to-conservative boundary provider.
+
+    The returned Handle names the already compiled ``Model.to_conservative`` kernel; it is not a
+    Python callback and it cannot select an unrelated conversion implementation by string. The
+    corresponding ``Inflow.value`` tuple follows the model's declared primitive-variable order.
+    """
+    checked = _state(state, where="model_primitive_to_conservative.state")
+    representation = getattr(getattr(checked, "space", None), "representation", None)
+    if representation != "conservative":
+        raise ValueError(
+            "model_primitive_to_conservative requires a conservative target state"
+        )
+    digest = hashlib.sha256(checked.qualified_id.encode("utf-8")).hexdigest()[:24]
+    return Handle(
+        "model-primitive-to-conservative-%s" % digest,
+        kind="representation_conversion",
+        owner=checked.owner_path,
+    )
+
+
 def _condition_protocol(value: Any, *, where: str) -> Any:
     _state(getattr(value, "state", None), where="%s.state" % where)
     for method in ("inspect", "resolve_references", "resolve_condition"):
@@ -339,9 +360,17 @@ class Inflow:
     def resolve_references(self, resolver: Any) -> Inflow:
         if not callable(resolver):
             raise TypeError("Inflow.resolve_references requires a callable resolver")
-        converter = None if self.converter is None else resolver(self.converter)
+        resolved_state = resolver(self.state)
+        if self.converter is None:
+            converter = None
+        elif self.converter == model_primitive_to_conservative(self.state):
+            # This provider is derived from the authenticated state, not an independently
+            # registered declaration. Re-derive its canonical identity after resolving the state.
+            converter = model_primitive_to_conservative(resolved_state)
+        else:
+            converter = resolver(self.converter)
         return type(self)(
-            state=resolver(self.state),
+            state=resolved_state,
             value=tuple(value.resolve_references(resolver) for value in self.values),
             representation=self.representation,
             converter=converter,
@@ -592,12 +621,7 @@ class ResolvedTransportBoundarySet:
                     "for characteristic closure; directional modes cannot fall back to "
                     "component-wise ghost filling"
                 )
-            flow = dependencies.representation
-            if flow.converter is not None or flow.source != flow.target:
-                raise NotImplementedError(
-                    "native transport boundary lowering requires an authored compiled "
-                    "representation converter"
-                )
+            self._native_representation_contract(condition, state)
             if condition.condition_type == "inflow":
                 if dependencies.states or dependencies.fields or dependencies.time:
                     raise NotImplementedError(
@@ -615,6 +639,37 @@ class ResolvedTransportBoundarySet:
         if any(row is None for row in face_rows):
             raise ValueError("native transport boundary has incomplete physical-face coverage")
         return state, ncomp, tuple(row for row in face_rows if row is not None), depth
+
+    @staticmethod
+    def _native_representation_contract(
+        condition: ResolvedTransportCondition,
+        state: Handle,
+    ) -> tuple[str, str | None]:
+        flow = condition.provider.dependencies.representation
+        target_name = getattr(getattr(state, "space", None), "representation", None)
+        if target_name != "conservative":
+            raise NotImplementedError(
+                "native transport boundaries require a conservative target state")
+        target = _representation_handle(state, target_name)
+        if flow.source == target and flow.target == target and flow.converter is None:
+            return "conservative", None
+        primitive = _representation_handle(state, "primitive")
+        expected_converter = model_primitive_to_conservative(state)
+        if (
+            flow.source == primitive
+            and flow.target == target
+            and flow.converter == expected_converter
+        ):
+            if condition.condition_type != "inflow":
+                raise NotImplementedError(
+                    "model primitive-to-conservative boundary conversion is defined only for "
+                    "fixed-state inflow data"
+                )
+            return "primitive", expected_converter.qualified_id
+        raise NotImplementedError(
+            "native transport boundary representation conversion requires the exact "
+            "model_primitive_to_conservative(state) provider"
+        )
 
     def compile_boundary_data(self) -> dict[str, Any]:
         """Return deterministic evidence that the authority has a total native lowering.
@@ -642,6 +697,10 @@ class ResolvedTransportBoundarySet:
                         "inflow": "dirichlet",
                         "slip_wall": "slip_wall",
                     }[row.condition_type],
+                    "representation": self._native_representation_contract(
+                        row, state)[0],
+                    "converter": self._native_representation_contract(
+                        row, state)[1],
                     "values": (
                         [] if row.condition_type == "outflow" else
                         [_expression_data(expression, qualified=True)["value"]
@@ -698,6 +757,10 @@ class ResolvedTransportBoundarySet:
                 "geometry": geometry.canonical_identity(),
                 "producer": condition.provider.qualified_id,
                 "type": face_type,
+                "representation": self._native_representation_contract(
+                    condition, state)[0],
+                "converter": self._native_representation_contract(
+                    condition, state)[1],
                 "values": values,
             }
         rows = tuple(row for row in face_rows if row is not None)
@@ -925,6 +988,7 @@ class TransportBoundarySet:
 __all__ = [
     "BoundaryStencilRequirement",
     "Inflow",
+    "model_primitive_to_conservative",
     "Outflow",
     "ResolvedTransportBoundarySet",
     "ResolvedTransportCondition",

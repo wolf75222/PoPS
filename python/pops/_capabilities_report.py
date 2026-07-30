@@ -385,7 +385,8 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             limitation=(
                 "one prepared 2D model-aware plan serves Uniform/AMR native and compiled "
                 "transport boundaries; executable built-ins are periodic, extrapolation, "
-                "constant/RuntimeParam fixed state, and typed-role slip wall, with "
+                "constant/RuntimeParam fixed state, model primitive-to-conservative fixed-state "
+                "conversion, and typed-role slip wall, with "
                 "double-physical corners explicitly not required by dimension-split FV stencils"
             ),
             source=source,
@@ -412,18 +413,17 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "boundary:representation_conversion",
             layout="uniform|amr",
-            backend="none",
+            backend="production",
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            status="unavailable",
+            status="partial",
             limitation=(
-                "primitive/conservative boundary conversion has no built-in executable provider; "
-                "a non-identity RepresentationFlow is rejected before native installation"
+                "2D fixed-state primitive inflow may use the exact compiled block-model "
+                "to_conservative provider; conservative-to-primitive recovery and arbitrary "
+                "representation converters remain unavailable, and conversion does not invent "
+                "a boundary admissibility projection"
             ),
-            requested="transport boundary data in a non-state representation",
-            available_route="boundary data in the evolved state's representation",
-            alternative="install an authored compiled representation-conversion provider",
             source=source,
         ),
         _row(
