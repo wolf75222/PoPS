@@ -20,11 +20,14 @@ EXPECTED_REQUIREMENTS = {
     "typed_fallible_evaluation",
     "transactional_recovery_publication",
     "allocation_aware_cell_hot_path",
+    "prepared_boundary_publication",
+    "typed_flux_recovery_consumption",
+    "runtime_recovery_consumer_publication",
 }
 EXPECTED_DEFERRED = (
-    "boundary_geometry_riemann_and_spatial_provider_families",
+    "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
     "python_ir_generated_abi_and_restart_parity",
-    "runtime_consumer_cutover_and_legacy_deletion",
+    "remaining_legacy_recovery_boundary_and_riemann_authority_deletion",
     "amr_regrid_migration_and_restart_coherence",
     "mpi_collective_execution",
     "gpu_backend_execution",
@@ -79,8 +82,9 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         errors.append("gate must be exactly 'adc757-prepared-numerics-slice'")
     if data.get("issue") != "ADC-757":
         errors.append("issue must be exactly ADC-757")
-    if data.get("evidence_from") != ["ADC-750", "ADC-753"]:
-        errors.append("evidence_from must be exactly ADC-750 then ADC-753")
+    expected_evidence = ["ADC-749", "ADC-750", "ADC-753", "ADC-754", "ADC-755"]
+    if data.get("evidence_from") != expected_evidence:
+        errors.append("evidence_from must be exactly %s" % expected_evidence)
     if data.get("deferred") != list(EXPECTED_DEFERRED):
         errors.append("deferred must enumerate every deliberately unproved family exactly")
 

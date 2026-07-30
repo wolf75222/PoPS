@@ -1,11 +1,11 @@
 schema_version = 1
 gate = "adc757-prepared-numerics-slice"
 issue = "ADC-757"
-evidence_from = ["ADC-750", "ADC-753"]
+evidence_from = ["ADC-749", "ADC-750", "ADC-753", "ADC-754", "ADC-755"]
 deferred = [
-  "boundary_geometry_riemann_and_spatial_provider_families",
+  "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
   "python_ir_generated_abi_and_restart_parity",
-  "runtime_consumer_cutover_and_legacy_deletion",
+  "remaining_legacy_recovery_boundary_and_riemann_authority_deletion",
   "amr_regrid_migration_and_restart_coherence",
   "mpi_collective_execution",
   "gpu_backend_execution",
@@ -63,3 +63,39 @@ requirement = "allocation_aware_cell_hot_path"
 polarity = "refusal"
 target = "test_prepared_numerics_gate"
 test_regex = "^PreparedNumericsGate\\.AllocationProbeDetectsControlHeapTraffic$"
+
+[[check]]
+requirement = "prepared_boundary_publication"
+polarity = "positive"
+target = "test_prepared_boundary_plan"
+test_regex = "^test_prepared_boundary_plan\\.evaluates_prepared_coordinate_time_inflow_on_device_without_hot_path_allocation$"
+
+[[check]]
+requirement = "prepared_boundary_publication"
+polarity = "refusal"
+target = "test_prepared_boundary_plan"
+test_regex = "^test_prepared_boundary_plan\\.analytic_inflow_preflights_nonfinite_values_before_any_mutation$"
+
+[[check]]
+requirement = "typed_flux_recovery_consumption"
+polarity = "positive"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.recovery_report_uses_the_flux_failure_reduction_without_type_erasure$"
+
+[[check]]
+requirement = "typed_flux_recovery_consumption"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.face_recovery_refusal_never_reaches_the_numerical_flux$"
+
+[[check]]
+requirement = "runtime_recovery_consumer_publication"
+polarity = "positive"
+target = "test_block_builder"
+test_regex = "^test_block_builder\\.cell_primitive_conversion_consumes_prepared_recovery_outcome$"
+
+[[check]]
+requirement = "runtime_recovery_consumer_publication"
+polarity = "refusal"
+target = "test_facade_routing"
+test_regex = "^FacadeRouting\\.PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedState$"
