@@ -83,7 +83,11 @@ Supported native routes include:
   default-flux RHS evaluations must be simultaneous and contiguous in one Program point.
   `MPI_COMM_WORLD` layouts may distribute the two face decompositions independently: native C++
   collectives reconstruct both traces, require a finite bit-identical shared flux on every rank,
-  then scatter only into locally owned residual cells.
+  then scatter only into locally owned residual cells. `MultiFab`/`DistributionMapping` ownership is
+  still indexed in the process-world rank space, so interface installation performs one explicit
+  admission comparison against that storage rank space. It then retains the world-congruent
+  communicator carried by `ExecutionContext`; trace, failure, flux and registry collectives never
+  reacquire the process world in the numerical hot path.
   Internal serial two-level work retains endpoint-qualified canonical fragments with exact Program
   weights and authoritative local substep duration. Those fragments authenticate the paired RHS
   update; they are not injected again into reflux because that would duplicate the same face flux.
@@ -181,7 +185,11 @@ future validators:
   has ended; an embedding application retains its lifecycle. Python carries only the opaque native
   resource identity.
 - `parallel:custom_communicator`: caller-provided custom MPI communicators remain representable but
-  unavailable because the native engines expose no communicator-injection ABI.
+  unavailable at the public bind surface because field storage does not yet carry a
+  communicator-relative rank space. The native interface scheduler and layout-transfer consumers
+  can execute on an authenticated `MPI_IDENT`/`MPI_CONGRUENT` lane, but admission must still compare
+  that lane with the process-world-indexed field ownership. Subgroups and reordered communicators
+  are refused before kernel launch.
 - `precision:single_or_mixed`: `pops::Real` is `double`; single or mixed precision is unavailable.
 - `runtime:kokkos_lifecycle`: `runtime_environment_report()` exposes whether PoPS will lazily
   initialize Kokkos, has initialized it, or is attached to an externally initialized runtime.
