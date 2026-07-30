@@ -206,12 +206,10 @@ static ModelSpec exb_spec(double q, double B0) {
 // L'objet AmrSystem reste a une adresse stable : l'AmrProgramContext installe par le helper conserve
 // un pointeur vers cette facade. Le moteur spatial est materialise par le Program, jamais construit
 // directement par ce test.
-static std::unique_ptr<AmrSystem> make_two_block_system(int N, double L, double B0, double q0,
-                                                        double q1, const std::vector<double>& rho0,
-                                                        const std::vector<double>& rho1,
-                                                        int stride1 = 1, int regrid_every = 0,
-                                                        int regrid_grow = 2, int regrid_margin = 2,
-                                                        int level_count = 2) {
+static std::unique_ptr<AmrSystem> make_two_block_system(
+    int N, double L, double B0, double q0, double q1, const std::vector<double>& rho0,
+    const std::vector<double>& rho1, int stride1 = 1, int regrid_every = 0, int regrid_grow = 2,
+    int regrid_margin = 2, int level_count = 2, bool explicit_bootstrap = false) {
   AmrSystemConfig cfg;
   cfg.n = N;
   cfg.L = L;
@@ -220,7 +218,7 @@ static std::unique_ptr<AmrSystem> make_two_block_system(int N, double L, double 
   cfg.regrid_grow = regrid_grow;
   cfg.regrid_margin = regrid_margin;
   cfg.level_count = level_count;
-  cfg.explicit_bootstrap = level_count > 2;
+  cfg.explicit_bootstrap = explicit_bootstrap || level_count > 2;
   auto sim = std::make_unique<AmrSystem>(cfg);
   install_regrid_state_authorities(*sim);
   std::vector<std::int64_t> numerators(static_cast<std::size_t>(level_count - 1), 2);
@@ -237,6 +235,119 @@ static std::unique_ptr<AmrSystem> make_two_block_system(int N, double L, double 
   if (!sim->uses_runtime_engine() || sim->engine() == nullptr)
     throw std::runtime_error("multi-block regrid test requires the AmrSystem runtime engine");
   return sim;
+}
+
+static void check_persistent_tagging_hysteresis_and_rollback() {
+  SCOPED_TRACE("persistent tagging hysteresis");
+  constexpr int N = 16;
+  constexpr int minimum_cycles = 2;
+  auto sim = make_two_block_system(
+      N, 1.0, 1.0, +1.0, -1.0, flat(N, 2.0), flat(N, 2.0), /*stride1=*/1,
+      /*regrid_every=*/0, /*regrid_grow=*/0, /*regrid_margin=*/1, /*level_count=*/2,
+      /*explicit_bootstrap=*/true);
+  AmrRuntime& runtime = *sim->engine();
+  ASSERT_EQ(runtime.nlev(), 1);
+  test::install_prepared_threshold_decisions(
+      runtime,
+      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above},
+       {1, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below},
+       {1, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
+      "test::persistent-hysteresis@1", minimum_cycles);
+
+  runtime.begin_bootstrap_plan();
+  ASSERT_TRUE(runtime.bootstrap_next_level(kAmrRefRatio));
+  runtime.commit_bootstrap_level();
+  ASSERT_EQ(runtime.nlev(), 2);
+  const std::vector<Box2D> refined = runtime.levels(0)[1].U.box_array().boxes();
+  ASSERT_FALSE(refined.empty());
+
+  for (const char* block : {"a", "b"}) {
+    std::vector<double> low = sim->block_level_state(block, 0);
+    std::fill(low.begin(), low.end(), 1.0);
+    sim->set_block_level_state(block, 0, low);
+  }
+
+  runtime.regrid();  // cycle 2: only one cycle since refinement, so coarsening is held.
+  ASSERT_EQ(runtime.nlev(), 2);
+  EXPECT_TRUE(same_box_list(refined, runtime.levels(0)[1].U.box_array().boxes()));
+  const auto accepted = runtime.step_snapshot();
+  const auto accepted_hysteresis = runtime.checkpoint_tagging_state();
+  ASSERT_FALSE(accepted_hysteresis.empty());
+
+  runtime.regrid();  // cycle 3: the inclusive min_cycles boundary permits coarsening.
+  ASSERT_EQ(runtime.nlev(), 1);
+  runtime.restore_step_snapshot(accepted);
+  ASSERT_EQ(runtime.nlev(), 2);
+  EXPECT_EQ(runtime.checkpoint_tagging_state(), accepted_hysteresis)
+      << "rejected topology work must restore the exact hysteresis image";
+
+  runtime.regrid();
+  EXPECT_EQ(runtime.nlev(), 1)
+      << "retrying from the restored cycle must reproduce the same coarsening decision";
+}
+
+static void check_persistent_tagging_three_level_cycle_and_suffix_restore() {
+  SCOPED_TRACE("persistent tagging three-level cycle and suffix restore");
+  constexpr int N = 16;
+  constexpr int minimum_cycles = 2;
+  constexpr const char* provider_identity = "test::persistent-hysteresis-three-level@1";
+  auto sim = make_two_block_system(
+      N, 1.0, 1.0, +1.0, -1.0, flat(N, 2.0), flat(N, 2.0), /*stride1=*/1,
+      /*regrid_every=*/0, /*regrid_grow=*/0, /*regrid_margin=*/1, /*level_count=*/3,
+      /*explicit_bootstrap=*/true);
+  AmrRuntime& runtime = *sim->engine();
+  test::install_prepared_threshold_decisions(
+      runtime,
+      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Above},
+       {1, 0, Real(1.5), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1.5), test::PreparedThresholdRelation::Below},
+       {1, 0, Real(1.5), test::PreparedThresholdRelation::Below}},
+      provider_identity, minimum_cycles);
+
+  // One committed bootstrap_next_level is one accepted tagging transaction. A hierarchy-wide
+  // regrid is also exactly one transaction, independent of the number of active parent levels.
+  // Consequently the second bootstrap advances the same canonical cycle once before the first
+  // hierarchy-wide regrid.
+  for (int expected_levels = 2; expected_levels <= 3; ++expected_levels) {
+    runtime.begin_bootstrap_plan();
+    ASSERT_TRUE(runtime.bootstrap_next_level(kAmrRefRatio));
+    runtime.commit_bootstrap_level();
+    ASSERT_EQ(runtime.nlev(), expected_levels);
+    if (expected_levels == 2)
+      for (const char* block : {"a", "b"}) {
+        std::vector<double> high = sim->block_level_state(block, 1);
+        std::fill(high.begin(), high.end(), 2.0);
+        sim->set_block_level_state(block, 1, high);
+      }
+  }
+
+  for (const char* block : {"a", "b"})
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      std::vector<double> low = sim->block_level_state(block, level);
+      std::fill(low.begin(), low.end(), 1.0);
+      sim->set_block_level_state(block, level, low);
+    }
+
+  // The level-0 refine decision was accepted at bootstrap cycle 1. Bootstrap cycle 2 plus this
+  // single regrid cycle 3 reach the inclusive boundary and remove the complete fine suffix.
+  runtime.regrid();
+  ASSERT_EQ(runtime.nlev(), 1);
+  const auto image = runtime.checkpoint_tagging_state();
+  ASSERT_FALSE(image.empty());
+
+  // Parent-level-1 history remains meaningful even though its fine suffix is temporarily absent.
+  // Restore validates keys against configured max_levels(), not only currently materialized levels.
+  const std::vector<Box2D> configured_parent_domains{
+      Box2D{{0, 0}, {N - 1, N - 1}},
+      Box2D{{0, 0}, {2 * N - 1, 2 * N - 1}},
+  };
+  const auto decoded = pops::runtime::amr::PersistentTaggingState::decode(
+      image, minimum_cycles, provider_identity, configured_parent_domains);
+  EXPECT_GT(decoded.active_entry_count(), static_cast<std::size_t>(N * N))
+      << "the checkpoint must retain live parent-level-1 decisions after suffix removal";
+  EXPECT_NO_THROW(runtime.restore_checkpoint_tagging_state(image));
+  EXPECT_EQ(runtime.checkpoint_tagging_state(), image);
 }
 
 static void check_three_level_bootstrap_step_regrid_and_rollback() {
@@ -428,6 +539,8 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   // finalize Kokkos when this TEST returns and make the following TEST construct storage after
   // finalization, which Kokkos deliberately forbids.
 
+  check_persistent_tagging_hysteresis_and_rollback();
+  check_persistent_tagging_three_level_cycle_and_suffix_restore();
   check_three_level_bootstrap_step_regrid_and_rollback();
 
   const int N = 32;

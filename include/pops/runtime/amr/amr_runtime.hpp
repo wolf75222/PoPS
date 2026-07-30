@@ -44,6 +44,7 @@
 #include <pops/runtime/amr/field_solver_options.hpp>
 #include <pops/runtime/amr/hierarchy_policy_authority.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/amr/persistent_tagging_state.hpp>
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/export.hpp>
 #include <pops/runtime/output_piece.hpp>
@@ -1007,6 +1008,7 @@ class AmrRuntime {
     int solve_count = 0;
     int regrid_count = 0;
     std::uint64_t topology_epoch = 0;
+    runtime::amr::PersistentTaggingState tagging_state;
     bool has_profiler = false;
     runtime::program::Profiler profiler;
   };
@@ -1408,10 +1410,6 @@ class AmrRuntime {
         refine_ops.size() + coarsen_ops.size() > POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1 ||
         equality_policy < 0 || equality_policy > 2 || conflict_policy < 0 || conflict_policy > 3)
       throw std::runtime_error("AmrRuntime::set_tagging_program invalid manifest");
-    if (min_cycles != 0)
-      throw std::runtime_error(
-          "AmrRuntime::set_tagging_program min_cycles requires a persistent tagging-state "
-          "provider");
     for (const auto& leaf : leaves) {
       const bool gradient = leaf.opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
                             leaf.opcode == POPS_TAGGING_GRADIENT_BELOW_V1;
@@ -1507,8 +1505,10 @@ class AmrRuntime {
         });
     auto execution_candidate =
         make_tagging_execution_plan_(candidate, topology_materialization_generation_);
+    runtime::amr::PersistentTaggingState state_candidate;
     tagging_program_ = std::move(candidate);
     tagging_execution_plan_ = std::move(execution_candidate);
+    tagging_state_ = std::move(state_candidate);
   }
 
   void install_external_tagger(std::shared_ptr<runtime::amr::PreparedTaggerComponent> provider) {
@@ -1883,6 +1883,23 @@ class AmrRuntime {
   int solve_count() const { return solve_count_; }
   int regrid_count() const { return regrid_count_; }
   std::uint64_t topology_epoch() const { return topology_epoch_; }
+  std::vector<std::uint8_t> checkpoint_tagging_state() const {
+    return tagging_state_.encode(tagging_program_.min_cycles, tagging_program_.provider_identity);
+  }
+  void restore_checkpoint_tagging_state(const std::vector<std::uint8_t>& payload) {
+    std::vector<Box2D> parent_domains;
+    parent_domains.reserve(max_levels() > 1 ? static_cast<std::size_t>(max_levels() - 1) : 0u);
+    int configured_refinement = 1;
+    for (int parent_level = 0; parent_level + 1 < max_levels(); ++parent_level) {
+      parent_domains.push_back(dom_.refine(configured_refinement));
+      const int ratio = maximum_refinement_ratios_.at(static_cast<std::size_t>(parent_level));
+      if (ratio <= 0 || configured_refinement > std::numeric_limits<int>::max() / ratio)
+        throw std::runtime_error("AmrRuntime checkpoint tagging hierarchy refinement is invalid");
+      configured_refinement *= ratio;
+    }
+    tagging_state_ = runtime::amr::PersistentTaggingState::decode(
+        payload, tagging_program_.min_cycles, tagging_program_.provider_identity, parent_domains);
+  }
   /// Process-local identity of the currently materialized hierarchy storage. Unlike the
   /// checkpointed epoch, this generation is never restored to an older value: rebuilding a
   /// checkpoint or rolling back a topology-changing attempt must invalidate address/layout-bound
@@ -2165,6 +2182,7 @@ class AmrRuntime {
     out.solve_count = solve_count_;
     out.regrid_count = regrid_count_;
     out.topology_epoch = topology_epoch_;
+    out.tagging_state = tagging_state_;
     out.has_profiler = profiler_ != nullptr;
     if (profiler_ != nullptr)
       out.profiler = *profiler_;
@@ -2243,6 +2261,7 @@ class AmrRuntime {
       solve_count_ = saved.solve_count;
       regrid_count_ = saved.regrid_count;
       topology_epoch_ = saved.topology_epoch;
+      tagging_state_ = saved.tagging_state;
       if (saved.has_profiler && profiler_ != nullptr)
         *profiler_ = saved.profiler;
       // A completed rollback is immediately observable by host diagnostics and may be followed by a
@@ -2317,6 +2336,7 @@ class AmrRuntime {
     solve_count_ = saved.solve_count;
     regrid_count_ = saved.regrid_count;
     topology_epoch_ = saved.topology_epoch;
+    tagging_state_ = saved.tagging_state;
     if (saved.has_profiler && profiler_ != nullptr)
       *profiler_ = saved.profiler;
 
@@ -4023,30 +4043,54 @@ class AmrRuntime {
     return current;
   }
 
-  TagBox apply_tagging_decisions(const TagBox& refine, const TagBox& coarsen,
+  TagBox apply_tagging_decisions(int parent_level, const TagBox& refine, const TagBox& coarsen,
                                  const TagBox& refine_equalities, const TagBox& coarsen_equalities,
-                                 TagBox result) const {
+                                 TagBox result) {
     if (refine.box != result.box || coarsen.box != result.box ||
         refine_equalities.box != result.box || coarsen_equalities.box != result.box)
       throw std::runtime_error("AMR Tagger candidate grids disagree on their parent domain");
+    using PersistentDecision = runtime::amr::PersistentTaggingState::Decision;
+    using PersistentKey = runtime::amr::PersistentTaggingState::CellKey;
+    const auto decision_at = [&](int i, int j) {
+      const auto root = [](bool matches, bool equality) {
+        return equality ? amr::TagTruth::Unknown
+                        : (matches ? amr::TagTruth::True : amr::TagTruth::False);
+      };
+      return amr::resolve_tag_decision(
+          root(refine(i, j) != 0, refine_equalities(i, j) != 0),
+          root(coarsen(i, j) != 0, coarsen_equalities(i, j) != 0),
+          static_cast<amr::TagEqualityPolicy>(tagging_program_.equality_policy),
+          static_cast<amr::TagConflictPolicy>(tagging_program_.conflict_policy));
+    };
+    // Persistent state must not be partially advanced when a later cell reports an authored
+    // ConflictPolicy.ERROR. The min_cycles=0 path retains its historical single pass.
+    if (tagging_program_.min_cycles != 0)
+      for (int j = result.box.lo[1]; j <= result.box.hi[1]; ++j)
+        for (int i = result.box.lo[0]; i <= result.box.hi[0]; ++i)
+          if (decision_at(i, j).conflict_error)
+            throw std::runtime_error(
+                "AMR tagging refine/coarsen conflict under ConflictPolicy.ERROR");
     for (int j = result.box.lo[1]; j <= result.box.hi[1]; ++j)
       for (int i = result.box.lo[0]; i <= result.box.hi[0]; ++i) {
-        const auto root = [](bool matches, bool equality) {
-          return equality ? amr::TagTruth::Unknown
-                          : (matches ? amr::TagTruth::True : amr::TagTruth::False);
-        };
-        const auto decision = amr::resolve_tag_decision(
-            root(refine(i, j) != 0, refine_equalities(i, j) != 0),
-            root(coarsen(i, j) != 0, coarsen_equalities(i, j) != 0),
-            static_cast<amr::TagEqualityPolicy>(tagging_program_.equality_policy),
-            static_cast<amr::TagConflictPolicy>(tagging_program_.conflict_policy));
+        const auto decision = decision_at(i, j);
         if (decision.conflict_error)
           throw std::runtime_error(
               "AMR tagging refine/coarsen conflict under ConflictPolicy.ERROR");
-        if (decision.refine)
+        const bool currently_refined = result(i, j) != 0;
+        const bool refine_transition = decision.refine && !currently_refined;
+        const bool coarsen_transition = decision.coarsen && currently_refined;
+        if (!refine_transition && !coarsen_transition)
+          continue;
+        const PersistentKey key{parent_level, i, j};
+        if (!tagging_state_.transition_allowed(key, tagging_program_.min_cycles))
+          continue;
+        if (refine_transition) {
           result(i, j) = 1;
-        else if (decision.coarsen)
+          tagging_state_.record(key, PersistentDecision::Refine, tagging_program_.min_cycles);
+        } else {
           result(i, j) = 0;
+          tagging_state_.record(key, PersistentDecision::Coarsen, tagging_program_.min_cycles);
+        }
       }
     return result;
   }
@@ -4059,7 +4103,7 @@ class AmrRuntime {
         tagging_execution_plan_.execute(parent_level, parent_domain, geometry.dx(), geometry.dy(),
                                         topology_materialization_generation_);
     return apply_tagging_decisions(
-        candidates.refine, candidates.coarsen, candidates.refine_equalities,
+        parent_level, candidates.refine, candidates.coarsen, candidates.refine_equalities,
         candidates.coarsen_equalities,
         current_fine_coverage(parent_domain, fine_level, refinement_ratio));
   }
@@ -4069,11 +4113,16 @@ class AmrRuntime {
     const Geometry geometry = geom_.refine(level_refinement(level));
     const auto& candidates = tagging_execution_plan_.execute(
         level, domain, geometry.dx(), geometry.dy(), topology_materialization_generation_);
-    TagBox refine = candidates.refine;
-    if (tagging_program_.equality_policy == 1)
-      for (std::size_t index = 0; index < refine.t.size(); ++index)
-        refine.t[index] = refine.t[index] || candidates.refine_equalities.t[index];
-    return refine;
+    if (tagging_program_.min_cycles == 0) {
+      TagBox refine = candidates.refine;
+      if (tagging_program_.equality_policy == 1)
+        for (std::size_t index = 0; index < refine.t.size(); ++index)
+          refine.t[index] = refine.t[index] || candidates.refine_equalities.t[index];
+      return refine;
+    }
+    return apply_tagging_decisions(level, candidates.refine, candidates.coarsen,
+                                   candidates.refine_equalities, candidates.coarsen_equalities,
+                                   TagBox(domain));
   }
 
   runtime::amr::PreparedTaggerCandidates execute_external_tagger(int parent_level,
@@ -4102,17 +4151,22 @@ class AmrRuntime {
 
   TagBox execute_external_bootstrap_tagging(int level, const Box2D& domain) {
     auto candidates = execute_external_tagger(level, domain);
-    if (tagging_program_.equality_policy == 1)
-      for (std::size_t index = 0; index < candidates.refine.t.size(); ++index)
-        candidates.refine.t[index] =
-            candidates.refine.t[index] || candidates.refine_equalities.t[index];
-    return std::move(candidates.refine);
+    if (tagging_program_.min_cycles == 0) {
+      if (tagging_program_.equality_policy == 1)
+        for (std::size_t index = 0; index < candidates.refine.t.size(); ++index)
+          candidates.refine.t[index] =
+              candidates.refine.t[index] || candidates.refine_equalities.t[index];
+      return std::move(candidates.refine);
+    }
+    return apply_tagging_decisions(level, candidates.refine, candidates.coarsen,
+                                   candidates.refine_equalities, candidates.coarsen_equalities,
+                                   TagBox(domain));
   }
 
   TagBox execute_external_regrid_tagging(int parent_level, int fine_level, const Box2D& domain,
                                          int refinement_ratio) {
     auto candidates = execute_external_tagger(parent_level, domain);
-    return apply_tagging_decisions(candidates.refine, candidates.coarsen,
+    return apply_tagging_decisions(parent_level, candidates.refine, candidates.coarsen,
                                    candidates.refine_equalities, candidates.coarsen_equalities,
                                    current_fine_coverage(domain, fine_level, refinement_ratio));
   }
@@ -4138,6 +4192,7 @@ class AmrRuntime {
       throw std::runtime_error(
           "AmrRuntime::bootstrap_next_level exceeds or disagrees with hierarchy capacity");
     require_coarse_fine_reconstruction_contract_();
+    tagging_state_.begin_cycle(tagging_program_.min_cycles);
     const Box2D pdom = dom_.refine(level_refinement(pk));
     std::vector<TagBox> parts;
     parts.reserve(blocks_.size() + 1);
@@ -4517,6 +4572,7 @@ class AmrRuntime {
       // Field-dependent taggers observe an accepted, hierarchy-consistent state. Each changed
       // transition below republishes fields before the next parent is tagged.
       require_solved_field_outcome(solve_fields(), "AmrRuntime::regrid precondition");
+      tagging_state_.begin_cycle(tagging_program_.min_cycles);
 
       for (int parent_level = 0; parent_level < max_levels() - 1 && parent_level < nlev_;
            ++parent_level) {
@@ -5743,6 +5799,7 @@ class AmrRuntime {
   // PreparedTaggingProgram. Host std::function predicates are intentionally absent from this engine.
   TaggingProgram tagging_program_;
   runtime::amr::PreparedTaggingExecutionPlan tagging_execution_plan_;
+  runtime::amr::PersistentTaggingState tagging_state_;
   std::vector<BlockTransferAuthority> block_transfer_authorities_;
   std::vector<std::vector<TemporalParentWorkspace>> temporal_parent_workspaces_;
   std::vector<AuxPublicationWorkspace> aux_publication_workspaces_;
