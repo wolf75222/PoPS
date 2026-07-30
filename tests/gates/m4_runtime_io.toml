@@ -53,15 +53,6 @@ evidence_paths = [
   "tests/python/integration/native_loader/test_external_component_package.py",
 ]
 
-[[deferred]]
-issue = "ADC-686"
-requirement = "strict_checkpoint"
-polarity = "refusal"
-reason = "Atomic restart rollback is only exercised through an injected FailFirstRestart wrapper; a real checkpoint provider failure must prove restoration rollback."
-evidence_paths = [
-  "tests/python/integration/runtime/test_multi_layout_runtime.py",
-]
-
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
 # optional imports, skip/xfail, non-exact CTest selectors, duplicate proofs,
@@ -331,6 +322,14 @@ polarity = "positive"
 kind = "pytest"
 target = "strict_checkpoint"
 nodeid = "tests/python/integration/runtime/test_multi_layout_runtime.py::test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count"
+
+[[check]]
+issue = "ADC-686"
+requirement = "strict_checkpoint"
+polarity = "refusal"
+kind = "pytest"
+target = "strict_checkpoint"
+nodeid = "tests/python/integration/amr/test_amr_regrid_on_restart.py::test_authenticated_amr_contract_refusal_rolls_back_native_restart_transaction"
 
 [[check]]
 issue = "ADC-686"

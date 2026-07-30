@@ -38,8 +38,8 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["deferred"]) == 5
-    assert len(data["check"]) >= 46
+    assert len(data["deferred"]) == 4
+    assert len(data["check"]) >= 47
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -59,7 +59,6 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
         ("ADC-684", "runtime_instance", "positive"),
         ("ADC-684", "runtime_instance", "refusal"),
         ("ADC-685", "consumer_graph", "refusal"),
-        ("ADC-686", "strict_checkpoint", "refusal"),
         ("ADC-687", "gate_execution", "positive"),
     }
 
@@ -196,6 +195,17 @@ def test_m4_gate_pins_real_runtime_instance_and_positive_checkpoint_proofs():
         "nodeid": (
             "tests/python/integration/runtime/test_multi_layout_runtime.py::"
             "test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count"
+        ),
+    } in checks
+    assert {
+        "issue": "ADC-686",
+        "requirement": "strict_checkpoint",
+        "polarity": "refusal",
+        "kind": "pytest",
+        "target": "strict_checkpoint",
+        "nodeid": (
+            "tests/python/integration/amr/test_amr_regrid_on_restart.py::"
+            "test_authenticated_amr_contract_refusal_rolls_back_native_restart_transaction"
         ),
     } in checks
     selected = {
