@@ -271,11 +271,19 @@ def test_regrid_on_restart_mpi_shared_interface_collective_rollback_and_retry() 
         print("== RegridOnRestart two-rank refined shared-interface transaction ==", flush=True)
 
     with _shared_temporary_directory() as root:
-        component_root = root / ("component-rank-%d" % int(_COMM.rank))
-        authoring = _shared_interface_amr_authoring(
-            root / "authoring",
-            component_root=component_root,
-        )
+        # The compiled component path participates in the resolved-plan identity.  Materialize the
+        # same shared path serially on each rank: rank-local paths make otherwise identical plans
+        # diverge, while concurrent writes to one package would race on a shared filesystem.
+        authoring = None
+        for owner in range(int(_COMM.size)):
+            if int(_COMM.rank) == owner:
+                authoring = _shared_interface_amr_authoring(
+                    root / "authoring",
+                    component_root=root / "component-shared",
+                )
+            barrier(_COMM)
+        if authoring is None:
+            raise RuntimeError("shared-interface authoring was not materialized on this rank")
         resolved = _resolve_shared_interface_amr(authoring, max_levels=2)
         artifact = compile_resolved_plan_once(
             _COMM,
