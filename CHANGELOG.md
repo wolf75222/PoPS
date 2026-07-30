@@ -18,6 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- The final HyQMOM15 executable now checks realizability and the conserved `M00`
+  particle number for rejected, accepted, restored, and continued runtime snapshots. Its JSON
+  evidence reports the measured integral and maximum relative drift against the documented
+  `1e-10` acceptance threshold.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
   executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
