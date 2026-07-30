@@ -97,6 +97,7 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
             "reduction": "sum",
             "transform": "identity",
             "metric_weighted": True,
+            "coefficient": (1.0).hex(),
         },
     )
     assert checkpoint.output_format is None
@@ -249,6 +250,7 @@ def test_console_monitor_is_a_scheduled_rank_zero_diagnostic_consumer():
             "reduction": "step_change_l2",
             "transform": "identity",
             "metric_weighted": False,
+            "coefficient": (1.0).hex(),
         },
     )
 

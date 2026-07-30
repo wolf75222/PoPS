@@ -86,6 +86,7 @@ def test_step_change_norm_is_typed_l2_and_whole_state():
     assert change.diagnostic_execution()["operations"] == [{
         "name": "step_change_l2", "reduction": "step_change_l2",
         "transform": "identity", "metric_weighted": False,
+        "coefficient": (1.0).hex(),
     }]
     with pytest.raises(ValueError, match="exactly.*L2"):
         StepChangeNorm(L1())
@@ -111,10 +112,11 @@ def test_balance_uses_one_typed_native_attempt_route():
         **execution,
         "operations": execution["operations"] + [{
             "name": "integral",
-            "reduction": "sum",
-            "transform": "identity",
-            "metric_weighted": True,
-        }],
+                "reduction": "sum",
+                "transform": "identity",
+                "metric_weighted": True,
+                "coefficient": (1.0).hex(),
+            }],
     }
     with pytest.raises(ValueError, match="sole diagnostic execution operation"):
         diagnostic_collective_operations(mixed)
@@ -161,13 +163,36 @@ def test_balance_ledger_selects_exact_native_component_terms():
 
 # --- Integral / MinMax ------------------------------------------------------------------
 def test_integral_is_a_sum_reduction():
-    mass = Integral(role=Density())
+    mass = Integral(role=Density(), coefficient=-2.0)
     assert isinstance(mass, Descriptor)
     assert mass.category == "diagnostic_integral"
     assert mass.options()["scheme"] == "integral"
     assert mass.options()["role"] == "Density"
     assert mass.options()["block"] is None
+    assert mass.options()["coefficient"] == (-2.0).hex()
     assert mass.capabilities().to_dict()["reduction"] == "sum"
+    assert mass.diagnostic_execution()["operations"][0]["coefficient"] == (-2.0).hex()
+
+
+@pytest.mark.parametrize("coefficient", [True, "1", object()])
+def test_integral_rejects_untyped_coefficients(coefficient):
+    with pytest.raises(TypeError, match="coefficient"):
+        Integral(coefficient=coefficient)
+
+
+@pytest.mark.parametrize(
+    "coefficient",
+    [
+        0.0,
+        float("inf"),
+        float("-inf"),
+        float("nan"),
+        pytest.param(10**10_000, id="overflowing-int"),
+    ],
+)
+def test_integral_rejects_nonfinite_or_zero_coefficients(coefficient):
+    with pytest.raises(ValueError, match="coefficient"):
+        Integral(coefficient=coefficient)
 
 
 def test_minmax_is_a_minmax_reduction():
@@ -250,7 +275,7 @@ def test_measures_expose_closed_native_execution_plans():
     }
     assert plans["l1"]["operations"] == [{
         "name": "l1", "reduction": "abs_sum", "transform": "identity",
-        "metric_weighted": True,
+        "metric_weighted": True, "coefficient": (1.0).hex(),
     }]
     assert plans["l2"]["operations"][0]["transform"] == "sqrt"
     assert plans["linf"]["operations"][0]["reduction"] == "abs_max"

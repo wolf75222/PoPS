@@ -55,6 +55,29 @@ def _nonnegative_binary64_hex(value: Any, where: str) -> str:
     return number.hex()
 
 
+def _finite_binary64_hex(value: Any, where: str) -> str:
+    """Normalize a signed finite binary64 value for identity-bearing manifests."""
+    if isinstance(value, bool):
+        raise TypeError("%s must be a finite number" % where)
+    if isinstance(value, str):
+        try:
+            number = float.fromhex(value)
+        except (OverflowError, ValueError) as exc:
+            raise TypeError("%s must be a canonical float.hex() string" % where) from exc
+        if number.hex() != value:
+            raise ValueError("%s must be a canonical float.hex() string" % where)
+    elif isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except OverflowError as exc:
+            raise ValueError("%s must be a finite number" % where) from exc
+    else:
+        raise TypeError("%s must be a finite number" % where)
+    if not math.isfinite(number):
+        raise ValueError("%s must be a finite number" % where)
+    return number.hex()
+
+
 def _exact_handle(value: Any, kind: str | None, where: str) -> Handle:
     if not isinstance(value, Handle) or not value.is_resolved:
         raise TypeError("%s must be a canonical Handle" % where)
@@ -326,8 +349,8 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {
             "schema_version", "role", "operations", "conservation"}:
         raise TypeError("DiagnosticQuantity.execution has an unknown schema")
-    if value["schema_version"] != 1:
-        raise ValueError("DiagnosticQuantity.execution schema_version must be 1")
+    if value["schema_version"] != 2:
+        raise ValueError("DiagnosticQuantity.execution schema_version must be 2")
     role = value["role"]
     if role is not None:
         _text(role, "DiagnosticQuantity.execution.role")
@@ -340,7 +363,13 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
         if not isinstance(operation, Mapping):
             raise TypeError("%s has an unknown schema" % where)
         reduction = operation.get("reduction")
-        expected = {"name", "reduction", "transform", "metric_weighted"}
+        expected = {
+            "name",
+            "reduction",
+            "transform",
+            "metric_weighted",
+            "coefficient",
+        }
         if reduction == "accepted_balance":
             expected.add("balance_route")
             if "automatic_terms" in operation:
@@ -359,16 +388,22 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
             raise TypeError("%s.metric_weighted must be an exact bool" % where)
         if weighted and reduction not in {"sum", "abs_sum", "sum_sq"}:
             raise ValueError("only additive diagnostic reductions may be metric-weighted")
+        coefficient = _finite_binary64_hex(
+            operation["coefficient"], "%s.coefficient" % where)
+        if float.fromhex(coefficient) == 0.0:
+            raise ValueError("%s.coefficient must be nonzero" % where)
         row = {
             "name": name,
             "reduction": reduction,
             "transform": transform,
             "metric_weighted": weighted,
+            "coefficient": coefficient,
         }
         if reduction == "accepted_balance":
-            if transform != "identity" or weighted:
+            if transform != "identity" or weighted or float.fromhex(coefficient) != 1.0:
                 raise ValueError(
-                    "accepted balance evidence cannot apply a scalar transform or metric weight"
+                    "accepted balance evidence cannot apply a scalar transform, metric weight, "
+                    "or coefficient"
                 )
             route = Identity.from_token(operation["balance_route"])
             if route.domain != "balance-ledger-route" or route.schema_version != 1:
@@ -422,7 +457,7 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
             raise ValueError("a conservation check requires exactly one scalar operation")
         normalized_conservation = {"tolerance": tolerance}
     return freeze_data({
-        "schema_version": 1,
+        "schema_version": 2,
         "role": role,
         "operations": normalized,
         "conservation": normalized_conservation,

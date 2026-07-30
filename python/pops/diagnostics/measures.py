@@ -54,14 +54,21 @@ def _role_name(value: Any) -> str | None:
         ) from exc
 
 
-def _operation(name: str, reduction: str, *, transform: str = "identity",
-               metric_weighted: bool = False) -> dict[str, Any]:
+def _operation(
+    name: str,
+    reduction: str,
+    *,
+    transform: str = "identity",
+    metric_weighted: bool = False,
+    coefficient: float = 1.0,
+) -> dict[str, Any]:
     """Build one callback-free native scalar-reduction instruction."""
     return {
         "name": name,
         "reduction": reduction,
         "transform": transform,
         "metric_weighted": metric_weighted,
+        "coefficient": coefficient.hex(),
     }
 
 
@@ -216,7 +223,7 @@ class Norm(_Measure):
         if kind is None:
             raise ValueError("typed norm descriptor has no canonical kind")
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": _role_name(self.role),
             "operations": [operations[kind]],
             "conservation": None,
@@ -252,7 +259,7 @@ class StepChangeNorm(_Measure):
 
     def diagnostic_execution(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": None,
             "operations": [
                 _operation("step_change_l2", "step_change_l2"),
@@ -265,19 +272,52 @@ class Integral(_Measure):
     """A typed domain-integral reduction over a block: ``Integral(role=Density())``.
 
     Sums the (role-selected) quantity over the block volume; ``mass`` is
-    ``Integral(role=Density())``. Lowers to the native ``integral`` reduction.
+    ``Integral(role=Density())``. ``coefficient`` applies one exact finite scalar after the
+    collective reduction, so signed contributions such as charge remain owner-qualified without
+    copying or transforming fields in Python. Lowers to the native ``integral`` reduction.
     """
 
     category = "diagnostic_integral"
     scheme = "integral"
     reduction = "sum"
 
+    def __init__(
+        self,
+        block: Any = None,
+        role: Any = None,
+        cadence: Any = None,
+        *,
+        coefficient: float = 1.0,
+    ) -> None:
+        super().__init__(block=block, role=role, cadence=cadence)
+        if isinstance(coefficient, bool) or not isinstance(coefficient, (int, float)):
+            raise TypeError("Integral coefficient must be a finite real number")
+        try:
+            normalized = float(coefficient)
+        except OverflowError as exc:
+            raise ValueError("Integral coefficient must be finite") from exc
+        if not math.isfinite(normalized):
+            raise ValueError("Integral coefficient must be finite")
+        if normalized == 0.0:
+            raise ValueError("Integral coefficient must be nonzero")
+        self.coefficient = normalized
+
+    def options(self) -> dict:
+        options = super().options()
+        options["coefficient"] = self.coefficient.hex()
+        return options
+
     def diagnostic_execution(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": _role_name(self.role),
             "operations": [
-                _operation("integral", "sum", metric_weighted=True),
+                _operation(
+                    "integral",
+                    "sum",
+                    metric_weighted=True,
+                    coefficient=self.coefficient,
+                ),
             ],
             "conservation": None,
         }
@@ -296,7 +336,7 @@ class MinMax(_Measure):
 
     def diagnostic_execution(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": _role_name(self.role),
             "operations": [
                 _operation("min", "min"),
@@ -345,7 +385,7 @@ class Balance(_Measure):
     def diagnostic_execution(self) -> dict[str, Any]:
         route = self.ledger.route_identity(self.block)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": _role_name(self.ledger.role),
             "operations": [
                 {
@@ -434,7 +474,7 @@ class ConservationCheck(Descriptor):
             raise TypeError(
                 "ConservationCheck quantity must implement diagnostic_execution()")
         plan = provider()
-        if type(plan) is not dict or plan.get("schema_version") != 1:
+        if type(plan) is not dict or plan.get("schema_version") != 2:
             raise TypeError("ConservationCheck quantity returned an invalid execution plan")
         operations = plan.get("operations")
         if not isinstance(operations, list) or len(operations) != 1:
@@ -447,7 +487,7 @@ class ConservationCheck(Descriptor):
                 "five-term residual instead"
             )
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "role": plan.get("role"),
             "operations": [dict(operations[0])],
             "conservation": {"tolerance": self.tolerance.hex()},
