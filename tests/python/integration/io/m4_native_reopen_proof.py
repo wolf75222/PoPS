@@ -84,7 +84,12 @@ def _publish(writer, target):
 
 def _field_dataset(manifest: dict, request: OutputRequest) -> str:
     key = request.selection[0].identity.token
-    return manifest["datasets"]["fields"][key]
+    dataset = manifest["datasets"]["fields"][key]
+    if isinstance(dataset, str):
+        return dataset
+    pieces = dataset["pieces"]
+    assert len(pieces) == 1
+    return pieces[0]["name"]
 
 
 def test_npz_reopens_with_numpy_without_a_pops_reader(tmp_path):
@@ -122,7 +127,7 @@ def test_hdf5_authenticated_reader_rejects_native_dataset_tampering(tmp_path):
         dataset = _field_dataset(manifest, request)
         output[dataset][0, 0] = np.float64(99.0)
 
-    with pytest.raises(ValueError, match="content verification"):
+    with pytest.raises(ValueError, match="parallel piece failed verification"):
         read_hdf5(path)
 
 
@@ -130,7 +135,7 @@ def test_paraview_reopens_with_vtk_without_a_pops_reader(tmp_path):
     from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridReader
 
     path, _request, expected = _publish(
-        ParaViewWriter(), tmp_path / "native.vtu"
+        ParaViewWriter(collection=False), tmp_path / "native.vtu"
     )
 
     reader = vtkXMLUnstructuredGridReader()
