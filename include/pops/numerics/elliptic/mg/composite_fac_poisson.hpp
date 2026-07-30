@@ -897,6 +897,12 @@ class CompositeFacPoisson {
       phi_probe_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
     }
     boundary_probe_snapshot_ = MultiFab(ba_c_, dm_c_, 1, boundary_view_c_.n_grow());
+    phi_published_snapshot_.clear();
+    phi_published_snapshot_.reserve(static_cast<std::size_t>(n_levels_));
+    for (int level = 0; level < n_levels_; ++level) {
+      MultiFab& phi = phi_level(level);
+      phi_published_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
+    }
   }
 
   Real exact_zero_composite_residual_(bool general) {
@@ -1309,6 +1315,7 @@ class CompositeFacPoisson {
   FieldBoundaryFailure boundary_failure_{};
   std::vector<MultiFab> phi_probe_snapshot_;  ///< persistent full-state snapshots for exact R(0)
   MultiFab boundary_probe_snapshot_;          ///< persistent generated-boundary view snapshot
+  std::vector<MultiFab> phi_published_snapshot_;  ///< persistent rollback state for boundary FAS
   bool has_field_nonlinear_options_ = false;
   FieldNewtonOptions field_nonlinear_options_{};
   SolveReport last_solve_report_{};
