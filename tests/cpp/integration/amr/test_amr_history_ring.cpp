@@ -411,6 +411,63 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
       << "the conservative per-level count reaches full depth together";
 }
 
+TEST(test_amr_history_ring, SharedProgramServiceInterpolatesEveryActiveAmrLevel) {
+  constexpr int n = 8;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 2);
+
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.configure_primary_clock("clock.macro");
+  context.declare_clock_relation("clock.macro", "clock.fast", 2);
+  context.register_history("linear.shared", 2, 1, 0, "block.a.U", "cell.conservative",
+                           "clock.macro", "dense.linear");
+
+  std::array<int, 2> interpolation_visits{0, 0};
+  context.install([&](double macro_dt) {
+    context.advance_hierarchy(macro_dt, [&](double) {
+      const int level = context.level();
+      MultiFab& state = context.state(0);
+      MultiFab& sample = context.scratch_state(7000, 0, state);
+      const bool second_sample = sim.macro_step() == 1;
+      sample.set_val(Real((second_sample ? 20 : 10) + level));
+      context.store_history("linear.shared", sample, 0);
+
+      if (second_sample) {
+        MultiFab& interpolated = context.scratch_state(7001, 0, state);
+        interpolated.set_val(Real(-99));
+        context.interpolate_history_linear(interpolated, "linear.shared", 2, 0, "clock.macro",
+                                           "clock.fast", -1, Real(0));
+        device_fence();
+        const Real expected = Real(15 + level);
+        for (int local = 0; local < interpolated.local_size(); ++local) {
+          const Box2D box = interpolated.box(local);
+          const ConstArray4 values = interpolated.fab(local).const_array();
+          for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+            for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+              EXPECT_DOUBLE_EQ(values(i, j, 0), expected);
+        }
+        ++interpolation_visits[static_cast<std::size_t>(level)];
+      }
+      context.rotate_histories("clock.macro");
+    });
+  });
+  // Installing a direct native body revokes artifact-derived bindings; republish this fixture's
+  // explicit Program-to-runtime identity before the public facade steps execute it.
+  sim.set_program_block_map({0, 1});
+  sim.step(0.2);
+  sim.step(0.4);
+
+  EXPECT_EQ(interpolation_visits[0], 1);
+  EXPECT_EQ(interpolation_visits[1], 2);
+}
+
 TEST(test_amr_history_ring, CommitManySnapshotsSourcesThatAreAlsoTargetsOnAFlatHierarchy) {
   constexpr int n = 16;
   AmrSystemConfig cfg;

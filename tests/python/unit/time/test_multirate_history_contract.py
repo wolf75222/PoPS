@@ -289,17 +289,17 @@ def test_child_clock_history_interpolation_lowers_with_its_qualified_clock_ledge
     assert "ctx.interpolate_history_linear" in source
 
 
-def test_dense_and_amr_history_interpolation_lowering_fail_closed():
+def test_dense_history_interpolation_lowering_fails_closed_but_amr_uses_shared_linear_service():
     from pops.codegen.program_codegen import emit_cpp_program
 
     with pytest.raises(NotImplementedError, match="supported capability"):
         emit_cpp_program(_interpolated_program(DenseOutput(2)), model=None)
-    with pytest.raises(NotImplementedError, match="Uniform-only"):
-        emit_cpp_program(
-            _interpolated_program(LinearInterpolation()),
-            model=None,
-            target="amr_system",
-        )
+    source = emit_cpp_program(
+        _interpolated_program(LinearInterpolation()),
+        model=None,
+        target="amr_system",
+    )
+    assert "ctx.interpolate_history_linear" in source
 
 
 def test_validity_interval_cannot_mix_clocks_or_run_backwards():
