@@ -3,6 +3,7 @@
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen, parallel_copy
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>
 
