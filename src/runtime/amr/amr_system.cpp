@@ -463,6 +463,7 @@ struct AmrSystem::Impl {
     std::map<std::string, Real> program_diagnostics;
     std::map<std::string, Real> step_balance_terms;
     std::map<pops::runtime::program::AutomaticBalanceKey, Real> automatic_balance_terms;
+    bool automatic_balance_due = false;
     bool balance_step_completed = false;
     bool balance_program_was_due = false;
     pops::runtime::program::CacheManager cache;
@@ -511,6 +512,7 @@ struct AmrSystem::Impl {
       copy_value_map_into(program_diagnostics, impl.program_.diagnostics_);
       copy_value_map_into(step_balance_terms, impl.program_.step_balance_terms_);
       copy_value_map_into(automatic_balance_terms, impl.program_.automatic_balance_terms_);
+      automatic_balance_due = impl.program_.automatic_balance_due_;
       balance_step_completed = impl.program_.balance_step_completed_;
       balance_program_was_due = impl.program_.balance_program_was_due_;
       // AMR currently owns its native cache/history rings inside AmrRuntime.  These two shared
@@ -545,6 +547,7 @@ struct AmrSystem::Impl {
       copy_value_map_into(impl.program_.diagnostics_, program_diagnostics);
       copy_value_map_into(impl.program_.step_balance_terms_, step_balance_terms);
       copy_value_map_into(impl.program_.automatic_balance_terms_, automatic_balance_terms);
+      impl.program_.automatic_balance_due_ = automatic_balance_due;
       impl.program_.balance_step_completed_ = balance_step_completed;
       impl.program_.balance_program_was_due_ = balance_program_was_due;
       impl.program_.cache_ = cache;

@@ -212,6 +212,7 @@ def emit_balance_due_guards(
     if type(lowering) is not BalanceDueLowering:
         raise TypeError("balance due guard emission requires BalanceDueLowering")
     contract = json.dumps(lowering.contract.token)
+    automatic_tokens = []
     for index, (route, periods) in enumerate(sorted(lowering.route_periods.items())):
         if not periods:
             token = "false"
@@ -223,7 +224,13 @@ def emit_balance_due_guards(
             ]
             token = "balance_due_%d" % index
             lines.append("const bool %s = (%s);" % (token, " || ".join(calls)))
+            automatic_tokens.append(token)
         var[("balance_due_route", route)] = token
+    if automatic_tokens:
+        lines.append(
+            "ctx.note_automatic_balance_capture_due(%s);"
+            % (" || ".join(automatic_tokens))
+        )
     var[("balance_guarded_values",)] = lowering.guarded_values
     var[("balance_record_routes",)] = lowering.record_routes
 

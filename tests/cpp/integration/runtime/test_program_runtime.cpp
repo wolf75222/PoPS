@@ -139,6 +139,31 @@ TEST(ProgramRuntime, BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailur
   EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 4, "test"), std::logic_error);
 }
 
+TEST(ProgramRuntime, AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySafe) {
+  runtime::program::ProgramRuntimeState state;
+
+  EXPECT_FALSE(state.automatic_balance_capture_due());
+  EXPECT_THROW(state.note_automatic_balance_capture_due(true, "test"), std::logic_error);
+  state.run_balance_due_window(0, "test", [&] {
+    state.note_automatic_balance_capture_due(false, "test");
+    EXPECT_FALSE(state.automatic_balance_capture_due());
+    state.note_automatic_balance_capture_due(true, "test");
+    EXPECT_TRUE(state.automatic_balance_capture_due());
+    state.note_automatic_balance_capture_due(false, "test");
+    EXPECT_TRUE(state.automatic_balance_capture_due());
+  });
+  EXPECT_TRUE(state.automatic_balance_capture_due());
+
+  state.begin_step_projection_report();
+  EXPECT_FALSE(state.automatic_balance_capture_due());
+  state.run_balance_replay("test", [&] {
+    state.note_automatic_balance_capture_due(false, "test");
+    EXPECT_FALSE(state.automatic_balance_capture_due());
+    EXPECT_THROW(state.note_automatic_balance_capture_due(true, "test"), std::logic_error);
+  });
+  EXPECT_FALSE(state.automatic_balance_capture_due());
+}
+
 TEST(ProgramRuntime, SelectiveReplayCompilesBalanceOffAndRestoresTheGuard) {
   runtime::program::ProgramRuntimeState state;
   const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '3');

@@ -618,6 +618,7 @@ struct System::Impl {
     std::map<std::string, Real> program_diagnostics;
     std::map<std::string, Real> step_balance_terms;
     std::map<pops::runtime::program::AutomaticBalanceKey, Real> automatic_balance_terms;
+    bool automatic_balance_due;
     bool balance_step_completed;
     bool balance_program_was_due;
     pops::runtime::program::CacheManager cache;
@@ -645,6 +646,7 @@ struct System::Impl {
           program_diagnostics(impl.program_.diagnostics_),
           step_balance_terms(impl.program_.step_balance_terms_),
           automatic_balance_terms(impl.program_.automatic_balance_terms_),
+          automatic_balance_due(impl.program_.automatic_balance_due_),
           balance_step_completed(impl.program_.balance_step_completed_),
           balance_program_was_due(impl.program_.balance_program_was_due_),
           cache(impl.program_.cache_),
@@ -680,6 +682,7 @@ struct System::Impl {
       impl.program_.diagnostics_ = program_diagnostics;
       impl.program_.step_balance_terms_ = step_balance_terms;
       impl.program_.automatic_balance_terms_ = automatic_balance_terms;
+      impl.program_.automatic_balance_due_ = automatic_balance_due;
       impl.program_.balance_step_completed_ = balance_step_completed;
       impl.program_.balance_program_was_due_ = balance_program_was_due;
       impl.program_.cache_ = cache;
