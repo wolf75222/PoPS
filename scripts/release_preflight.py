@@ -20,6 +20,7 @@ from typing import Any
 import zipfile
 
 from final_release_contract import (
+    FINAL_EXAMPLE_ACCEPTANCE_TESTS,
     FINAL_EXAMPLES,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
@@ -32,7 +33,7 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 7
+EVIDENCE_SCHEMA_VERSION = 8
 
 
 class PreflightError(RuntimeError):
@@ -437,6 +438,13 @@ def _examples_evidence(
             raise PreflightError("release evidence restart proof markers drifted for %s" % key)
 
 
+def _final_example_test_evidence(evidence: dict[str, Any]) -> None:
+    """Require the exact reviewed tests from the authenticated Python lane."""
+
+    if evidence.get("final_example_nodeids") != list(FINAL_EXAMPLE_ACCEPTANCE_TESTS):
+        raise PreflightError("release evidence final-example test ledger drifted")
+
+
 def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     expected = {"schema_version", "producer", "commit_sha", "package_version", "contract_sha256",
@@ -485,7 +493,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
     for name in ("native_conformance", "python_conformance"):
         evidence = gates[name]["evidence"]
         expected = {"required_lane"} if name == "native_conformance" \
-            else {"required_lane", "selection"}
+            else {"required_lane", "selection", "final_example_nodeids"}
         if not isinstance(evidence, dict) or set(evidence) != expected:
             raise PreflightError("release evidence %s lane is malformed" % name)
         lane = evidence["required_lane"]
@@ -502,6 +510,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
                        label="%s JUnit" % name)
     if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
         raise PreflightError("release evidence Python required-lane selection drifted")
+    _final_example_test_evidence(gates["python_conformance"]["evidence"])
     _examples_evidence(directory, gates, runtime)
 
 

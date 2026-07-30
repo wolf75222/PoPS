@@ -27,6 +27,7 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 from final_release_contract import (
+    FINAL_EXAMPLE_ACCEPTANCE_TESTS,
     FINAL_EXAMPLES,
     FINAL_SPECIFICATION,
     PYTHON_REQUIRED_SELECTION,
@@ -38,7 +39,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 7
+EVIDENCE_SCHEMA_VERSION = 8
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -320,6 +321,36 @@ def _junit_summary(path: Path) -> dict[str, Any]:
     }
 
 
+def _require_junit_nodeids(
+    path: Path,
+    required: Sequence[str],
+) -> list[str]:
+    """Authenticate exact pytest tests inside an already all-pass JUnit lane."""
+
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as exc:
+        raise FinalGateError("invalid JUnit report %s: %s" % (path, exc)) from exc
+    cases = tuple(root.iter("testcase"))
+    authenticated = []
+    for nodeid in required:
+        relative, function_name = nodeid.split("::", 1)
+        expected_class = str(Path(relative).with_suffix("")).replace("/", ".")
+        matches = [
+            case
+            for case in cases
+            if case.attrib.get("name", "").split("[", 1)[0] == function_name
+            and case.attrib.get("classname", "").endswith(expected_class)
+        ]
+        if len(matches) != 1:
+            raise FinalGateError(
+                "required final-example test %s appears %d times in %s"
+                % (nodeid, len(matches), path)
+            )
+        authenticated.append(nodeid)
+    return authenticated
+
+
 def _require_no_hidden_skip(stdout: str) -> None:
     """Reject script-style tests which print a skip reason but return success."""
     matches = [line.strip() for line in stdout.splitlines()
@@ -561,6 +592,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder.rows["python_conformance"]["evidence"] = {
             "required_lane": _junit_summary(python_junit),
             "selection": PYTHON_REQUIRED_SELECTION,
+            "final_example_nodeids": _require_junit_nodeids(
+                python_junit, FINAL_EXAMPLE_ACCEPTANCE_TESTS
+            ),
         }
         signed_runtime_sha256 = _signed_runtime_sha256(
             recorder.rows["codesign"]["evidence"])
