@@ -61,6 +61,9 @@ jobs:
           wheels=("$RUNNER_TEMP"/wheelhouse/pops-*.whl)
           test "${#wheels[@]}" -eq 1
           evidence="$RUNNER_TEMP/pops-final-evidence.json"
+          python scripts/prove_public_api_parity.py \
+            --wheel "${wheels[0]}" \
+            --evidence "$RUNNER_TEMP/pops-final-evidence-public-api.json"
           python scripts/run_final_gate.py --wheel "${wheels[0]}" --evidence "$evidence"
           python - <<'PY'
           from pops.runtime_environment import runtime_environment_report
