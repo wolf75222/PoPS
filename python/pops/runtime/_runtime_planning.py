@@ -518,4 +518,40 @@ def build_runtime_plans(install_plan: Any, component_manifests: Any) -> RuntimeP
     )
 
 
-__all__ = ["build_runtime_plans"]
+def require_runtime_plan_bundle(install_plan: Any, runtime_plan: Any) -> RuntimePlanBundle:
+    """Authenticate one derived runtime bundle against its exact install authority.
+
+    Runtime planning is deliberately pure, but its result is not advisory. Every native provider
+    must consume this check before it reaches backend state or constructs an execution engine.
+    Layout-specific consumers may add stronger checks for their own records (for example exact
+    Transfer routes), but cannot bypass these common identities.
+    """
+    from pops.identity import make_identity
+
+    plan = require_install_plan(install_plan)
+    if type(runtime_plan) is not RuntimePlanBundle:
+        raise TypeError("native install requires an exact RuntimePlanBundle")
+    if runtime_plan.identity != make_identity("runtime-plan-bundle", runtime_plan._payload()):
+        raise ValueError("RuntimePlanBundle identity does not authenticate its payload")
+    expected_identities = (
+        (runtime_plan.install_identity, plan.bind_identity, "bind"),
+        (
+            runtime_plan.platform_identity,
+            plan.artifact.platform_manifest.identity,
+            "platform",
+        ),
+        (
+            runtime_plan.execution_context_identity,
+            plan.execution_context.identity,
+            "execution context",
+        ),
+    )
+    for actual, expected, label in expected_identities:
+        if actual != expected:
+            raise ValueError("RuntimePlanBundle %s identity differs from InstallPlan" % label)
+    if runtime_plan.layout_plan_id != plan.artifact.layout_plan.qualified_id:
+        raise ValueError("RuntimePlanBundle layout identity differs from compiled LayoutPlan")
+    return runtime_plan
+
+
+__all__ = ["build_runtime_plans", "require_runtime_plan_bundle"]

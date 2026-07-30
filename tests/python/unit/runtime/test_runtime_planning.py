@@ -32,7 +32,11 @@ from pops.runtime._runtime_plan_contracts import (
     RuntimePlanBundle,
     RuntimePlanningError,
 )
-from pops.runtime._runtime_planning import build_runtime_plans, _resource_uses_and_fences
+from pops.runtime._runtime_planning import (
+    _resource_uses_and_fences,
+    build_runtime_plans,
+    require_runtime_plan_bundle,
+)
 from tests.python.support.layout_plan import cartesian_grid
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.unit.codegen._typed_artifact_fixture import CanonicalValue, CompiledComponent
@@ -355,6 +359,103 @@ def test_heterogeneous_layouts_emit_only_authenticated_directional_transfers():
     assert (
         bundle.calls[0].component_manifest_identity != bundle.calls[1].component_manifest_identity
     )
+
+
+def test_independent_block_does_not_change_existing_component_capability_proofs():
+    base_manifests = {
+        "fluid": _manifest(
+            "fluid",
+            reads=({"resource": "state:u"},),
+            requirements=(
+                {"capability": "halo", "depth": 2, "resource": "state:u"},
+            ),
+        ),
+        "solid": _manifest("solid"),
+    }
+    extended_manifests = {
+        **base_manifests,
+        "observer": _manifest(
+            "observer",
+            reads=({"resource": "diagnostic:temperature"},),
+        ),
+    }
+
+    base = build_runtime_plans(
+        _install(("fluid", "solid"), heterogeneous=True),
+        base_manifests,
+    )
+    extended = build_runtime_plans(
+        _install(("fluid", "solid", "observer"), heterogeneous=True),
+        extended_manifests,
+    )
+
+    for ordinal, name in enumerate(("fluid", "solid")):
+        original = base.calls[ordinal]
+        with_independent_block = extended.calls[ordinal]
+        assert original.component_manifest_identity == base_manifests[name].semantic_digest
+        assert (
+            with_independent_block.component_manifest_identity
+            == base_manifests[name].semantic_digest
+        )
+        assert with_independent_block.requirements == original.requirements
+        assert with_independent_block.effects == original.effects
+        assert with_independent_block.clocks == original.clocks
+
+
+@pytest.mark.parametrize(
+    "field,expected,label",
+    [
+        ("install_identity", make_identity("bind", {"forged": True}), "bind"),
+        (
+            "platform_identity",
+            make_identity("platform-manifest", {"forged": True}),
+            "platform",
+        ),
+    ],
+)
+def test_runtime_plan_authenticates_exact_install_authorities(field, expected, label):
+    install = _install()
+    bundle = build_runtime_plans(install, {"fluid": _manifest("fluid")})
+    forged = replace(bundle, **{field: expected})
+
+    with pytest.raises(ValueError, match=label):
+        require_runtime_plan_bundle(install, forged)
+
+
+def test_runtime_plan_authenticates_exact_execution_context():
+    install = _install()
+    bundle = build_runtime_plans(install, {"fluid": _manifest("fluid")})
+    forged_identity = make_identity("execution-context", {"forged": True})
+    forged = replace(
+        bundle,
+        execution_context_identity=forged_identity,
+        resources=replace(
+            bundle.resources,
+            execution_context_identity=forged_identity,
+        ),
+        determinism=replace(
+            bundle.determinism,
+            execution_context_identity=forged_identity,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="execution context"):
+        require_runtime_plan_bundle(install, forged)
+
+
+def test_runtime_plan_authenticates_exact_compiled_layout():
+    install = _install()
+    bundle = build_runtime_plans(install, {"fluid": _manifest("fluid")})
+    forged_layout = bundle.layout_plan_id + "-forged"
+    forged = replace(
+        bundle,
+        layout_plan_id=forged_layout,
+        communication=replace(bundle.communication, layout_plan_id=forged_layout),
+        resources=replace(bundle.resources, layout_plan_id=forged_layout),
+    )
+
+    with pytest.raises(ValueError, match="layout identity"):
+        require_runtime_plan_bundle(install, forged)
 
 
 def test_multilayout_install_authenticates_bundle_identity_uniqueness_and_exact_transfers():
