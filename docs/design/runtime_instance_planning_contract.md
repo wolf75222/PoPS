@@ -86,6 +86,9 @@ assumptions remain reviewable rather than becoming hidden installation state.
 Single-layout providers additionally require the exact ordered block/layout call projection,
 layout-qualified halos, and the absence of unconsumed Transfer or mapping-provider routes before
 constructing their sole native engine.
+The multi-layout Uniform provider likewise authenticates ordered block/layout calls and the exact
+mapping-provider set backing its materialized Transfers before constructing child engines. It
+refuses non-empty runtime halo plans until an explicit per-layout halo scheduler exists.
 
 For an accepted step, successful native finalization is an irreversible `native_finalized`
 boundary. The instance commits the engine state, accepted cursor set and consumer receipts across

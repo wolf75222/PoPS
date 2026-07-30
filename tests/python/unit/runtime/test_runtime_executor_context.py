@@ -281,6 +281,71 @@ def test_single_layout_providers_refuse_call_mismatch_before_geometry(
     assert reached == []
 
 
+def _multi_layout_projection():
+    primary = SimpleNamespace(qualified_id="layout::primary")
+    secondary = SimpleNamespace(qualified_id="layout::secondary")
+    blocks = (
+        SimpleNamespace(name="fluid"),
+        SimpleNamespace(name="solid"),
+    )
+    assignments = tuple(
+        SimpleNamespace(
+            subject_kind="block",
+            subject_id=block_id,
+            subject=SimpleNamespace(local_id=name),
+            layout=layout,
+        )
+        for name, block_id, layout in (
+            ("fluid", "block::fluid", primary),
+            ("solid", "block::solid", secondary),
+        )
+    )
+    plan = SimpleNamespace(
+        artifact=SimpleNamespace(
+            blocks=blocks,
+            layout_plan=SimpleNamespace(assignments=assignments),
+        )
+    )
+    transfer = SimpleNamespace(provider_id="pops://mapping/primary-secondary")
+    runtime_plan = SimpleNamespace(
+        calls=tuple(
+            SimpleNamespace(block_id=block_id, layout_id=layout.qualified_id)
+            for block_id, layout in (
+                ("block::fluid", primary),
+                ("block::solid", secondary),
+            )
+        ),
+        communication=SimpleNamespace(halos=()),
+        resources=SimpleNamespace(
+            mapping_provider_ids=("pops://mapping/primary-secondary",)
+        ),
+    )
+    return plan, runtime_plan, (transfer,)
+
+
+def test_multi_layout_provider_consumes_exact_call_and_mapping_projection():
+    plan, runtime_plan, transfers = _multi_layout_projection()
+
+    multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+
+    runtime_plan.calls[1].layout_id = "layout::primary"
+    with pytest.raises(ValueError, match="calls differ"):
+        multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+    runtime_plan.calls[1].layout_id = "layout::secondary"
+
+    runtime_plan.resources.mapping_provider_ids = ("pops://mapping/other",)
+    with pytest.raises(ValueError, match="mapping providers differ"):
+        multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+
+
+def test_multi_layout_provider_refuses_unconsumed_halo_plan():
+    plan, runtime_plan, transfers = _multi_layout_projection()
+    runtime_plan.communication.halos = (object(),)
+
+    with pytest.raises(NotImplementedError, match="explicit per-layout halo scheduler"):
+        multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+
+
 
 
 def test_before_step_transfer_cycle_captures_every_native_source_before_any_apply():
