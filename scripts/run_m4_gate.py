@@ -737,6 +737,19 @@ def _run_ctest(build_dir: Path, target: str, selector: str) -> None:
             raise subprocess.CalledProcessError(completed.returncode, command)
 
 
+def _required_ctest_targets(checks: Iterable[dict]) -> tuple[str, ...]:
+    """Return the exact native build targets needed by the selected CTest proofs."""
+    return tuple(
+        sorted(
+            {
+                row["target"].split("@", 1)[1]
+                for row in checks
+                if row["kind"] == "ctest"
+            }
+        )
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -747,6 +760,11 @@ def main(argv: list[str] | None = None) -> int:
         help="verify exact evidence and explicit gaps without claiming M4 closure",
     )
     mode.add_argument("--check-only", action="store_true")
+    mode.add_argument(
+        "--list-ctest-targets",
+        action="store_true",
+        help="print the exact native targets required by a closed manifest",
+    )
     parser.add_argument("--python-only", action="store_true")
     parser.add_argument("--build-dir", type=Path, default=ROOT / "build-mpi")
     parser.add_argument("--mpi-exec", default="mpiexec")
@@ -763,10 +781,23 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     checks = data["check"]
+    if args.list_ctest_targets:
+        targets = _required_ctest_targets(checks)
+        if not targets:
+            print("M4 gate selects no CTest build target", file=sys.stderr)
+            return 2
+        print("\n".join(targets))
+        return 0
     print(
         "M4 gate source matrix: %s (%d executable, %d deferred)"
         % (
-            "AUDITED OPEN" if args.audit_only else "CLOSED",
+            (
+                "AUDITED OPEN"
+                if data["deferred"]
+                else "AUDITED CLOSED"
+            )
+            if args.audit_only
+            else "CLOSED",
             len(checks),
             len(data["deferred"]),
         )
