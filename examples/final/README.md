@@ -2,7 +2,12 @@
 
 [`EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py`](EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py)
 is the final public target, not a migration example. It deliberately contains one authority per
-concern and no fallback to an older or lower-level API.
+concern and no fallback to an older or lower-level API. The executable acceptance reopens its VTU,
+removes covered coarse and replicated cells, and compares the active AMR leaf cells with the exact
+characteristic solution using cell-volume-weighted norms. Its relative L2 error must remain at or
+below `0.10`. The accepted `ProgramReport` must also contain flux contributions from every installed
+level and exact `reflux`, then `average_down`, synchronization for each parent/child relation; strict
+restart and the SSPRK2 factory run must preserve that complete transactional state.
 
 [`EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py`](EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py)
 extends the same public lifecycle with an explicit additive IMEX tableau, typed field solves,
