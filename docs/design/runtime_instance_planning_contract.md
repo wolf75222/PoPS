@@ -83,6 +83,9 @@ bundle, mismatched authority or changed execution fact therefore fails before ex
 complete bundle is retained in the array-free `RuntimeInstance.inspect()` report under
 `instance.runtime_plan` so derived halos, transfers, collectives, fences, buffers and determinism
 assumptions remain reviewable rather than becoming hidden installation state.
+Single-layout providers additionally require the exact ordered block/layout call projection,
+layout-qualified halos, and the absence of unconsumed Transfer or mapping-provider routes before
+constructing their sole native engine.
 
 For an accepted step, successful native finalization is an irreversible `native_finalized`
 boundary. The instance commits the engine state, accepted cursor set and consumer receipts across

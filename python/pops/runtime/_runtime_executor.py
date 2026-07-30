@@ -188,6 +188,31 @@ def _require_runtime_determinism(
     runtime_plan.determinism.require_assumptions(actual)
 
 
+def _require_single_layout_runtime_plan(plan: Any, runtime_plan: Any) -> None:
+    """Require the exact call/layout projection consumed by one native engine."""
+    layout_plan = plan.artifact.layout_plan
+    if len(layout_plan.layouts) != 1:
+        raise ValueError("single-layout native provider requires exactly one resolved layout")
+    layout_id = layout_plan.layouts[0].handle.qualified_id
+    assignments = {
+        row.subject.local_id: (row.subject_id, row.layout.qualified_id)
+        for row in layout_plan.assignments
+        if row.subject_kind == "block"
+    }
+    expected_calls = tuple(assignments[block.name] for block in plan.artifact.blocks)
+    actual_calls = tuple((row.block_id, row.layout_id) for row in runtime_plan.calls)
+    if actual_calls != expected_calls:
+        raise ValueError(
+            "RuntimePlanBundle calls differ from the single-layout InstallPlan projection"
+        )
+    if runtime_plan.communication.transfers:
+        raise ValueError("single-layout native provider cannot consume layout Transfers")
+    if runtime_plan.resources.mapping_provider_ids:
+        raise ValueError("single-layout native provider cannot consume mapping providers")
+    if any(row.layout_id != layout_id for row in runtime_plan.communication.halos):
+        raise ValueError("RuntimePlanBundle halo differs from the installed single layout")
+
+
 class _UniformNativeProvider(RuntimeExecutorProvider):
     def supports(self, install_plan: Any) -> bool:
         return _adaptive(install_plan) is False
@@ -201,6 +226,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
 
             return install_multi_layout_uniform(plan, runtime_plan)
 
+        _require_single_layout_runtime_plan(plan, runtime_plan)
         _require_native_geometry(plan)
         from pops.runtime._runtime_mesh_lowering import (
             install_uniform_embedded_boundary,
@@ -236,8 +262,8 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         return _adaptive(install_plan) is True
 
     def install(self, install_plan: Any, runtime_plan: Any = None) -> Any:
-        del runtime_plan
         plan = require_install_plan(install_plan)
+        _require_single_layout_runtime_plan(plan, runtime_plan)
         _require_native_geometry(plan)
         if plan.initial_condition_plan is None or plan.bootstrap_plan is None:
             raise ValueError(

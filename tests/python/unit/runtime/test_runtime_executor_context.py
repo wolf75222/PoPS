@@ -202,6 +202,85 @@ def test_matching_runtime_determinism_assumptions_are_consumed():
     )
 
 
+def _single_layout_projection():
+    layout = SimpleNamespace(handle=SimpleNamespace(qualified_id="layout::primary"))
+    plan = SimpleNamespace(
+        artifact=SimpleNamespace(
+            blocks=(SimpleNamespace(name="fluid"),),
+            layout_plan=SimpleNamespace(
+                layouts=(layout,),
+                assignments=(
+                    SimpleNamespace(
+                        subject_kind="block",
+                        subject_id="block::fluid",
+                        subject=SimpleNamespace(
+                            local_id="fluid", qualified_id="block::fluid"
+                        ),
+                        layout=layout.handle,
+                    ),
+                ),
+            ),
+        )
+    )
+    runtime_plan = SimpleNamespace(
+        calls=(SimpleNamespace(block_id="block::fluid", layout_id="layout::primary"),),
+        communication=SimpleNamespace(
+            transfers=(),
+            halos=(SimpleNamespace(layout_id="layout::primary"),),
+        ),
+        resources=SimpleNamespace(mapping_provider_ids=()),
+    )
+    return plan, runtime_plan
+
+
+def test_single_layout_provider_consumes_exact_call_and_halo_projection():
+    plan, runtime_plan = _single_layout_projection()
+
+    executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+    runtime_plan.calls[0].layout_id = "layout::other"
+    with pytest.raises(ValueError, match="calls differ"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+    runtime_plan.calls[0].layout_id = "layout::primary"
+
+    runtime_plan.communication.halos[0].layout_id = "layout::other"
+    with pytest.raises(ValueError, match="halo differs"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+@pytest.mark.parametrize("transfers,providers,match", [
+    ((object(),), (), "layout Transfers"),
+    ((), ("pops://mapping/test",), "mapping providers"),
+])
+def test_single_layout_provider_refuses_unconsumed_mapping_routes(
+    transfers, providers, match
+):
+    plan, runtime_plan = _single_layout_projection()
+    runtime_plan.communication.transfers = transfers
+    runtime_plan.resources.mapping_provider_ids = providers
+
+    with pytest.raises(ValueError, match=match):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+@pytest.mark.parametrize(
+    "provider",
+    (executor._UniformNativeProvider(), executor._AdaptiveNativeProvider()),
+)
+def test_single_layout_providers_refuse_call_mismatch_before_geometry(
+    monkeypatch, provider
+):
+    plan, runtime_plan = _single_layout_projection()
+    runtime_plan.calls[0].block_id = "block::other"
+    reached = []
+    monkeypatch.setattr(executor, "require_install_plan", lambda value: value)
+    monkeypatch.setattr(executor, "_require_native_geometry", reached.append)
+
+    with pytest.raises(ValueError, match="calls differ"):
+        provider.install(plan, runtime_plan)
+    assert reached == []
+
+
 
 
 def test_before_step_transfer_cycle_captures_every_native_source_before_any_apply():
