@@ -200,6 +200,7 @@ def test_installed_wheel_proof_requires_exact_native_member_and_direct_url(tmp_p
     wheel = tmp_path / "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
     native_bytes = b"exact wheel extension"
     with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("pops/__init__.py", "__version__ = '0.3.0'\n")
         archive.writestr("pops/_pops.cpython-312-darwin.so", native_bytes)
         archive.writestr(
             "pops-0.3.0.dist-info/METADATA",
@@ -211,6 +212,12 @@ def test_installed_wheel_proof_requires_exact_native_member_and_direct_url(tmp_p
     package.parent.mkdir(parents=True)
     package.write_text("__version__ = '0.3.0'\n", encoding="utf-8")
     extension.write_bytes(native_bytes)
+    metadata = distribution / "pops-0.3.0.dist-info" / "METADATA"
+    metadata.parent.mkdir()
+    metadata.write_text(
+        "Metadata-Version: 2.3\nName: PoPS\nVersion: 0.3.0\n",
+        encoding="utf-8",
+    )
     wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
     direct_url = {
         "archive_info": {"hashes": {"sha256": wheel_sha256}},
@@ -229,6 +236,7 @@ def test_installed_wheel_proof_requires_exact_native_member_and_direct_url(tmp_p
 
     assert proof["wheel_sha256"] == wheel_sha256
     assert proof["native_sha256"] == hashlib.sha256(native_bytes).hexdigest()
+    assert proof["installed_member_count"] == 3
     extension.write_bytes(b"not the retained wheel")
     with pytest.raises(installed.InstalledWheelProofError, match="not byte-identical"):
         installed.build_proof(
@@ -242,12 +250,24 @@ def test_installed_wheel_proof_requires_exact_native_member_and_direct_url(tmp_p
         )
 
 
+def test_installed_wheel_resolver_never_imports_unsigned_native_extension() -> None:
+    source = (SCRIPTS / "prove_installed_wheel.py").read_text(encoding="utf-8")
+    resolver = source.split("def installed_wheel_proof(", 1)[1].split(
+        "\ndef main(", 1
+    )[0]
+
+    assert "import pops" not in resolver
+    assert "from pops import" not in resolver
+    assert "_installed_distribution_paths(" in resolver
+
+
 def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(tmp_path):
     wheel = tmp_path / "wheels" / "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
     wheel.parent.mkdir()
     native_member = "pops/_pops.cpython-312-darwin.so"
     native_bytes = b"exact wheel extension"
     with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("pops/__init__.py", "__version__ = '0.3.0'\n")
         archive.writestr(native_member, native_bytes)
         archive.writestr(
             "pops-0.3.0.dist-info/METADATA",
@@ -260,6 +280,13 @@ def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(t
         "native_sha256": "post-sign-runtime-digest",
     }
     wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    with zipfile.ZipFile(wheel) as archive:
+        rows = [
+            "%s\0%s\n"
+            % (name, hashlib.sha256(archive.read(name)).hexdigest())
+            for name in sorted(archive.namelist())
+            if not name.endswith("/") and not name.endswith(".dist-info/RECORD")
+        ]
     commands = []
     command_argvs = (
         [
@@ -306,13 +333,20 @@ def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(t
         "installed_wheel": {
             "commands": commands,
             "evidence": {
-                "schema_version": 1,
+                "schema_version": 2,
                 "python_executable": runtime["python_executable"],
                 "distribution_root": "/proof/site-packages",
                 "package_file": runtime["pops_file"],
                 "native_extension": runtime["native_extension"],
                 "native_member": native_member,
                 "native_sha256": hashlib.sha256(native_bytes).hexdigest(),
+                "installed_member_count": len(rows),
+                "installed_tree_sha256": hashlib.sha256(
+                    "".join(rows).encode("utf-8")
+                ).hexdigest(),
+                "proof_script_sha256": hashlib.sha256(
+                    (SCRIPTS / "prove_installed_wheel.py").read_bytes()
+                ).hexdigest(),
                 "version": "0.3.0",
                 "wheel_path": str(wheel),
                 "wheel_sha256": wheel_sha256,

@@ -254,13 +254,16 @@ def _installed_wheel_evidence(
         "native_extension",
         "native_member",
         "native_sha256",
+        "installed_member_count",
+        "installed_tree_sha256",
+        "proof_script_sha256",
         "version",
         "wheel_path",
         "wheel_sha256",
     }
     if not isinstance(evidence, dict) or set(evidence) != expected:
         raise PreflightError("installed wheel evidence is malformed")
-    if evidence["schema_version"] != 1:
+    if evidence["schema_version"] != 2:
         raise PreflightError("installed wheel evidence schema is unsupported")
     if evidence["version"] != contract.PACKAGE_VERSION:
         raise PreflightError("installed wheel evidence version disagrees with release contract")
@@ -298,10 +301,27 @@ def _installed_wheel_evidence(
         with zipfile.ZipFile(retained) as archive:
             member = evidence["native_member"]
             member_digest = hashlib.sha256(archive.read(member)).hexdigest()
+            rows = []
+            for name in sorted(archive.namelist()):
+                if name.endswith("/") or name.endswith(".dist-info/RECORD"):
+                    continue
+                if ".data/" in name:
+                    raise PreflightError(
+                        "release wheel uses an unsupported .data installation scheme"
+                    )
+                digest = hashlib.sha256(archive.read(name)).hexdigest()
+                rows.append("%s\0%s\n" % (name, digest))
     except (KeyError, OSError, zipfile.BadZipFile) as exc:
         raise PreflightError("installed wheel native member is unreadable: %s" % exc) from exc
     if member_digest != evidence["native_sha256"]:
         raise PreflightError("installed wheel native member hash drifted")
+    expected_tree = hashlib.sha256("".join(rows).encode("utf-8")).hexdigest()
+    if evidence["installed_member_count"] != len(rows) \
+            or evidence["installed_tree_sha256"] != expected_tree:
+        raise PreflightError("installed wheel payload proof drifted")
+    proof_script = ROOT / "scripts" / "prove_installed_wheel.py"
+    if evidence["proof_script_sha256"] != hashlib.sha256(proof_script.read_bytes()).hexdigest():
+        raise PreflightError("installed wheel proof script drifted")
 
 
 def _codesign_evidence(

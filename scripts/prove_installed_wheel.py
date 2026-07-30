@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 import hashlib
+import importlib.machinery
 import importlib.metadata
 import json
 from pathlib import Path
@@ -16,7 +17,7 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROOF_SCHEMA_VERSION = 1
+PROOF_SCHEMA_VERSION = 2
 
 
 class InstalledWheelProofError(RuntimeError):
@@ -56,6 +57,71 @@ def _direct_url_path(payload: Any) -> tuple[Path, str]:
     if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
         raise InstalledWheelProofError("installed distribution did not originate from a local wheel")
     return Path(unquote(parsed.path)).resolve(), digest
+
+
+def _wheel_payload_proof(
+    archive: zipfile.ZipFile,
+    *,
+    distribution_root: Path,
+) -> tuple[int, str]:
+    """Authenticate every directly installed wheel member except mutable ``RECORD``."""
+
+    rows: list[str] = []
+    for name in sorted(archive.namelist()):
+        if name.endswith("/") or name.endswith(".dist-info/RECORD"):
+            continue
+        if ".data/" in name:
+            raise InstalledWheelProofError(
+                "retained wheel uses an unsupported .data installation scheme"
+            )
+        relative = Path(name)
+        installed = (distribution_root / relative).resolve()
+        try:
+            installed.relative_to(distribution_root)
+        except ValueError as exc:
+            raise InstalledWheelProofError(
+                "wheel member escapes the installed distribution root: %s" % name
+            ) from exc
+        if not installed.is_file():
+            raise InstalledWheelProofError(
+                "installed distribution is missing wheel member %s" % name
+            )
+        wheel_digest = _sha256_bytes(archive.read(name))
+        if _sha256(installed) != wheel_digest:
+            raise InstalledWheelProofError(
+                "installed wheel member is not byte-identical: %s" % name
+            )
+        rows.append("%s\0%s\n" % (name, wheel_digest))
+    if not rows:
+        raise InstalledWheelProofError("retained wheel has no immutable payload members")
+    return len(rows), _sha256_bytes("".join(rows).encode("utf-8"))
+
+
+def _installed_distribution_paths(
+    distribution: importlib.metadata.Distribution,
+) -> tuple[Path, Path, Path]:
+    """Resolve package/native paths from distribution metadata without importing PoPS."""
+
+    members = tuple(distribution.files or ())
+    package_members = [
+        member for member in members if member.as_posix() == "pops/__init__.py"
+    ]
+    native_members = [
+        member
+        for member in members
+        if member.parent.as_posix() == "pops"
+        and member.name.startswith("_pops.")
+        and any(member.name.endswith(suffix) for suffix in importlib.machinery.EXTENSION_SUFFIXES)
+    ]
+    if len(package_members) != 1 or len(native_members) != 1:
+        raise InstalledWheelProofError(
+            "installed distribution lacks one unique pops package and native extension"
+        )
+    return (
+        Path(distribution.locate_file(package_members[0])).resolve(),
+        Path(distribution.locate_file(native_members[0])).resolve(),
+        Path(distribution.locate_file("")).resolve(),
+    )
 
 
 def build_proof(
@@ -114,6 +180,10 @@ def build_proof(
             native_member = native_members[0]
             native_digest = _sha256_bytes(archive.read(native_member))
             metadata = archive.read(metadata_members[0]).decode("utf-8")
+            installed_member_count, installed_tree_sha256 = _wheel_payload_proof(
+                archive,
+                distribution_root=distribution,
+            )
     except (OSError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
         raise InstalledWheelProofError("retained wheel is unreadable: %s" % exc) from exc
 
@@ -143,6 +213,9 @@ def build_proof(
         "native_extension": str(extension),
         "native_member": native_member,
         "native_sha256": native_digest,
+        "installed_member_count": installed_member_count,
+        "installed_tree_sha256": installed_tree_sha256,
+        "proof_script_sha256": _sha256(Path(__file__).resolve()),
         "version": installed_version,
         "wheel_path": str(retained),
         "wheel_sha256": wheel_digest,
@@ -152,10 +225,10 @@ def build_proof(
 def installed_wheel_proof(wheel: Path) -> dict[str, Any]:
     """Resolve the live imported distribution and authenticate it against ``wheel``."""
 
-    import pops
-    from pops import _pops
-
     distribution = importlib.metadata.distribution("pops")
+    package_file, native_extension, distribution_root = _installed_distribution_paths(
+        distribution
+    )
     direct_url_text = distribution.read_text("direct_url.json")
     if direct_url_text is None:
         raise InstalledWheelProofError(
@@ -165,13 +238,11 @@ def installed_wheel_proof(wheel: Path) -> dict[str, Any]:
         direct_url = json.loads(direct_url_text)
     except json.JSONDecodeError as exc:
         raise InstalledWheelProofError("installed direct_url.json is invalid JSON") from exc
-    if pops.__version__ != _pops.__version__ or pops.__version__ != distribution.version:
-        raise InstalledWheelProofError("installed Python/native/distribution versions disagree")
     return build_proof(
         wheel,
-        package_file=Path(pops.__file__),
-        native_extension=Path(_pops.__file__),
-        distribution_root=Path(distribution.locate_file("")),
+        package_file=package_file,
+        native_extension=native_extension,
+        distribution_root=distribution_root,
         python_executable=Path(sys.executable),
         installed_version=distribution.version,
         direct_url=direct_url,
