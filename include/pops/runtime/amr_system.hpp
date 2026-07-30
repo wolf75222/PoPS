@@ -384,6 +384,8 @@ class AmrSystem {
   POPS_EXPORT void install_amr_clustering_component(
       runtime::amr::PreparedClusteringSpec spec,
       std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_amr_reflux_component(
+      runtime::amr::PreparedRefluxSpec spec, std::shared_ptr<component::LoadedComponent> component);
   POPS_EXPORT void discard_amr_provider_components();
   /// Materialize one exact shared NumericalFlux route on a frozen AMR level.  This seam is called
   /// only after the lazy AmrRuntime has been built and before bind freezes composition.

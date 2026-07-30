@@ -1124,7 +1124,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           throw std::runtime_error(
               "AMR conservative ledger contains only one side of a parent/child flux pair");
         if (!coarse_role.empty())
-          pops::detail::route_reflux_program(*eng_, sb, child, coarse_role, fine_role);
+          pops::detail::route_reflux_program(*eng_, sb, child, coarse_role, fine_role, sync_clock);
       }
       sync_report_.push_back({parent, child, b, SyncPhase::AverageDown, sync_clock});
       eng_->average_down_level(sb, child);
