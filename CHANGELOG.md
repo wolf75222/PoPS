@@ -18,6 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Canonical authoring now keeps one explicit projection/construction route: use
+  `pops.physics.Model.lower()` for advanced Module inspection and
+  `MomentModel.build()` for recorded moment specifications. The duplicate facade aliases were
+  removed instead of deprecated.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
   executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
