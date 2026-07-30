@@ -299,10 +299,18 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     Multiple hierarchy barriers are rejected until the region scheduler can represent them explicitly.
     """
     from pops.codegen.program_emit_ops import _emit_op
-    solves = [v for v in program._values if v.op == "solve_linear"]
+    from pops.codegen.program_lowerability import all_ops
+
+    solves = [v for v in all_ops(program) if v.op == "solve_linear"]
     scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"]
     if not scoped:
         return None
+    top_level_ids = {id(value) for value in program._values}
+    nested_scoped = [value.name for value in scoped if id(value) not in top_level_ids]
+    if nested_scoped:
+        raise NotImplementedError(
+            "a hierarchy-scoped solve must be a top-level barrier; nested solve_linear values %r "
+            "cannot cross the gather/solve/publish boundary" % nested_scoped)
     if len(scoped) != 1 or len(solves) != 1:
         raise NotImplementedError(
             "AMR hierarchy-scoped lowering supports exactly one top-level solve_linear; multiple "

@@ -9,9 +9,9 @@ grouped by **abstraction family** so the API surface is legible at a glance.
 
 | Family | Path | What it is | Surface |
 | --- | --- | --- | --- |
-| base | `base/` | Coupling policy, aux fill, elliptic RHS contracts shared by every coupler. | Stable building blocks. |
+| base | `base/` | Aux fill and elliptic RHS contracts shared by every coupler. | Stable spatial building blocks. |
 | source | `source/` | Coupled-source state and its DSL program. | Stable. |
-| single | `single/` | Single-block `Coupler`. | Stable. |
+| single | `single/` | Spatial single-block `Coupler`. | Stable; no time driver. |
 | system | `system/` | Spatial `SystemAssembler` plus the static AMR field coupler. | Spatial/reference components only; no time driver. |
 | amr | `amr/` | Multipatch AMR coupler (`AmrCouplerMp`) and its storage, regrid, and diagnostics. | AMR production path. |
 
@@ -19,7 +19,7 @@ grouped by **abstraction family** so the API surface is legible at a glance.
 
 ```text
 pops/coupling/
-  base/            coupling_policy.hpp  aux_fill.hpp  elliptic_rhs.hpp
+  base/            aux_fill.hpp  elliptic_rhs.hpp
   source/          coupled_source.hpp  coupled_source_program.hpp
   single/          coupler.hpp
   system/          system_coupler.hpp  amr_system_coupler.hpp
@@ -27,4 +27,5 @@ pops/coupling/
 ```
 
 `system_coupler.hpp` now contains only `SystemAssembler`: the historical static temporal driver
-lives exclusively in `tests/cpp/support/reference_system_driver.hpp` as a numerical oracle.
+lives exclusively in `tests/cpp/support/reference_time_scheduler.hpp` and
+`tests/cpp/support/reference_system_driver.hpp` as a numerical oracle.

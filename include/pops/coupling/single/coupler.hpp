@@ -2,41 +2,35 @@
 
 #include <pops/core/foundation/types.hpp>
 #include <pops/coupling/base/aux_fill.hpp>  // detail::derive_aux_bc + detail::fill_bz_box (shared)
-#include <pops/coupling/base/coupling_policy.hpp>
 #include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
-#include <pops/numerics/time/integrators/time_integrator.hpp>
-#include <pops/numerics/time/integrators/time_steppers.hpp>  // SSPRK2Step / SSPRK3Step (shared scheme)
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
-#include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
-#include <pops/numerics/fv/spatial_discretisation.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/prepared_provider_consensus.hpp>
 
-#include <type_traits>
 #include <utility>
 
 /// @file
-/// @brief Coupler: single-block hyperbolic-elliptic coupler (Poisson -> aux -> advance loop).
+/// @brief Spatial single-block hyperbolic-elliptic coupler (Poisson -> aux -> residual).
 ///
-/// At each integrator stage (stage-by-stage coupling): (1) RHS f = elliptic_rhs(model, U);
+/// The caller places these spatial operations in its Program: (1) RHS f = elliptic_rhs(model, U);
 /// (2) solve lap(phi) = f with the elliptic backend (warm start); (3) aux = (phi, grad phi) by
 /// centered differences; (4) assemble the hyperbolic residual with this aux. For drift transport
-/// aux enters through the FLUX (E x B); for a self-gravitating fluid through the SOURCE. Three
-/// orthogonal axes, all template parameters: Limiter (reconstruction), Policy (PerStage vs
-/// OncePerStep), NumericalFlux (Rusanov by default). Compatible with a SINGLE model; multi-species
-/// goes through the whole-system Program/runtime path. The detail:: helpers are at namespace scope
-/// (a POPS_HD extended lambda cannot live in a private method, an nvcc restriction).
+/// aux enters through the FLUX (E x B); for a self-gravitating fluid through the SOURCE. The
+/// residual keeps Limiter and NumericalFlux as independent spatial template axes. Compatible with
+/// a SINGLE model; multi-species goes through the whole-system Program/runtime path. The detail::
+/// helpers are at namespace scope (a POPS_HD extended lambda cannot live in a private method, an
+/// nvcc restriction).
 
 namespace pops {
 
@@ -68,8 +62,9 @@ inline void coupler_grad_phi(const MultiFab& phi, MultiFab& aux, Real cx, Real c
 
 /// Single-block hyperbolic-elliptic coupler. @tparam Model: PhysicalModel (flux, source,
 /// elliptic_rhs, max_wave_speed, aux channel). @tparam Elliptic: elliptic backend (concept
-/// EllipticSolver, default GeometricMG). Owns the aux and the solver; advance/step close the
-/// Poisson -> aux -> residual loop at each step. PRECONDITION: U carries at least Limiter::n_ghost ghosts.
+/// EllipticSolver, default GeometricMG). Owns the aux and the solver, but never chooses a timestep,
+/// a stage tableau, or a coupling cadence. The Program must place solve_fields() and
+/// assemble_residual() explicitly. PRECONDITION: state carries at least Limiter::n_ghost ghosts.
 template <class Model, class Elliptic = GeometricMG>
 class Coupler {
   static_assert(EllipticSolver<Elliptic>, "the Coupler elliptic backend must model EllipticSolver");
@@ -114,75 +109,18 @@ class Coupler {
     fill_bz();  // fills the B_z component (no-op if base model or empty bz)
   }
 
-  // Coupled SSPRK2. Three orthogonal axes, all template parameters:
-  //   - Limiter: reconstruction (NoSlope / Minmod / VanLeer ...)
-  //   - Policy: time coupling (PerStage = phi at each stage; OncePerStep
-  //                    = a single solve per step, aux frozen)
-  //   - NumericalFlux: Riemann flux (Rusanov by default, HLL, HLLC ...)
-  // U must carry at least Limiter::n_ghost ghosts. The historical signature
-  // advance<Limiter, Policy> stays valid (NumericalFlux default = Rusanov).
-  template <class Limiter = NoSlope, class Policy = PerStageCoupling,
-            class NumericalFlux = RusanovFlux>
-  void advance(MultiFab& U, Real dt) {
-    static_assert(
-        std::is_same_v<Policy, PerStageCoupling> || std::is_same_v<Policy, OncePerStepCoupling>,
-        "Policy must be PerStageCoupling or OncePerStepCoupling");
-    constexpr bool per = std::is_same_v<Policy, PerStageCoupling>;
-    // DELEGATES the scheme to the core SSPRK2Step object (dedup, sec.8.2 A4). The residual
-    // evaluator counts the stages: recompute_aux=true at stage 0, =per afterward (PerStage:
-    // phi recomputed for the intermediate state; OncePerStep: aux frozen). Bit-identical.
-    int stage = 0;
-    SSPRK2Step{}.take_step(
-        [&](MultiFab& s, MultiFab& R) {
-          stage_rhs<Limiter, NumericalFlux>(s, R, (stage++ == 0) ? true : per);
-        },
-        U, dt);
-  }
-
-  // Coupled SSPRK3 (Shu-Osher, 3 stages). Same axes as advance.
-  template <class Limiter = NoSlope, class Policy = PerStageCoupling,
-            class NumericalFlux = RusanovFlux>
-  void advance_ssprk3(MultiFab& U, Real dt) {
-    static_assert(
-        std::is_same_v<Policy, PerStageCoupling> || std::is_same_v<Policy, OncePerStepCoupling>,
-        "Policy must be PerStageCoupling or OncePerStepCoupling");
-    constexpr bool per = std::is_same_v<Policy, PerStageCoupling>;
-    // Same as advance: delegates to SSPRK3Step, recompute_aux=true at stage 0, =per afterward.
-    int stage = 0;
-    SSPRK3Step{}.take_step(
-        [&](MultiFab& s, MultiFab& R) {
-          stage_rhs<Limiter, NumericalFlux>(s, R, (stage++ == 0) ? true : per);
-        },
-        U, dt);
-  }
-
-  // Unified entry point: give the coupler a SPATIAL DISCRETISATION
-  // (limiter + flux) and an explicit time policy. The old SSPRK2/SSPRK3 tags
-  // stay valid; the new form also enables sub-cycling:
-  //   sim.step<MusclVanLeerHLLC, ExplicitTime<SSPRK3, 4>>(U, dt);
-  template <class Disc = FirstOrder, class TimeInteg = SSPRK2, class Policy = PerStageCoupling>
-  void step(MultiFab& U, Real dt) {
-    using L = typename Disc::Limiter;
-    using F = typename Disc::NumericalFlux;
-    using T = typename TimePolicyTraits<TimeInteg>::Method;
-    static_assert(TimePolicyTraits<TimeInteg>::treatment == TimeTreatment::Explicit,
-                  "Coupler::step can only run explicit policies; "
-                  "use a scheduler/system for IMEX or implicit");
-    static_assert(std::is_same_v<T, SSPRK2> || std::is_same_v<T, SSPRK3>,
-                  "Coupler::step supports SSPRK2 or SSPRK3");
-    constexpr int n = TimePolicyTraits<TimeInteg>::substeps;
-    const Real h = dt / static_cast<Real>(n);
-    for (int s = 0; s < n; ++s) {
-      if constexpr (std::is_same_v<T, SSPRK3>)
-        advance_ssprk3<L, Policy, F>(U, h);
-      else
-        advance<L, Policy, F>(U, h);
-    }
-  }
-
-  /// Solve phi and derive aux = (phi, grad phi) for @p U WITHOUT advancing in time (useful to estimate
-  /// the E x B velocity before fixing dt). aux() is up to date on return.
+  /// Solve phi and derive aux = (phi, grad phi) for @p U without advancing in time. aux() is up to
+  /// date on return. The Program decides at which logical point this operation runs.
   void solve_fields(const MultiFab& U) { update_aux(U); }
+
+  /// Assemble the spatial finite-volume residual from @p state and the fields prepared by the most
+  /// recent solve_fields() call. This method neither solves a field nor advances @p state: the
+  /// Program explicitly owns their ordering and every temporal coefficient.
+  template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux>
+  void assemble_residual(MultiFab& state, MultiFab& residual) {
+    fill_ghosts(state, geom_.domain, bcU_);
+    assemble_rhs<Limiter, NumericalFlux>(model_, state, aux_, geom_, residual);
+  }
 
   MultiFab& phi() { return mg_.phi(); }
   const MultiFab& aux() const { return aux_; }
@@ -192,17 +130,6 @@ class Coupler {
     detail::coupler_eval_rhs(state, mg_.rhs(), model_);
     mg_.solve();  // EllipticSolver concept interface (backend-agnostic)
     derive_aux();
-  }
-
-  // One stage: (optional) elliptic solve, halos, hyperbolic residual into R.
-  // Shared by advance (SSPRK2) and advance_ssprk3; order of operations kept
-  // to stay bit-identical to the old advance.
-  template <class Limiter, class NumericalFlux>
-  void stage_rhs(MultiFab& s, MultiFab& R, bool recompute_aux) {
-    if (recompute_aux)
-      update_aux(s);
-    fill_ghosts(s, geom_.domain, bcU_);
-    assemble_rhs<Limiter, NumericalFlux>(model_, s, aux_, geom_, R);
   }
 
   void derive_aux() {

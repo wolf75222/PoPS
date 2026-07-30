@@ -58,6 +58,41 @@ class _MappingProvider:
         ) in self.routes
 
 
+def _compiled_layout_program(block_names, routes):
+    program = CompiledComponent("permuted-program", target="system")
+    program.program_block_routes = routes
+    return CompiledLayoutProgram("layout", "system", block_names, program)
+
+
+def test_compiled_layout_program_accepts_exact_name_bijection_in_program_order():
+    row = _compiled_layout_program(
+        ("electrons", "ions"),
+        ((0, "ions"), (1, "electrons")),
+    )
+
+    assert row.block_names == ("electrons", "ions")
+    assert row.program.program_block_routes == ((0, "ions"), (1, "electrons"))
+
+
+@pytest.mark.parametrize(
+    "routes, message",
+    [
+        (((0, "electrons"),), "exact block partition"),
+        (((0, "electrons"), (1, "photons")), "exact block partition"),
+        (((0, "electrons"), (1, "electrons")), "exact block partition"),
+        (((1, "electrons"), (0, "ions")), "exact and contiguous"),
+        (((0, "electrons"), (2, "ions")), "exact and contiguous"),
+        (((0, ""), (1, "ions")), "malformed"),
+        ((("0", "electrons"), (1, "ions")), "malformed"),
+    ],
+)
+def test_compiled_layout_program_refuses_non_bijective_or_malformed_routes(
+    routes, message
+):
+    with pytest.raises(ValueError, match=message):
+        _compiled_layout_program(("electrons", "ions"), routes)
+
+
 def _layout(names, *, heterogeneous=False):
     owner = OwnerPath.case("runtime-planning-" + "-".join(names))
     blocks = tuple(Handle(name, kind="block", owner=owner) for name in names)
