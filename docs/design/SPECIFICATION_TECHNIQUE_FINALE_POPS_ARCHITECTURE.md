@@ -606,22 +606,24 @@ Les builtins de `pops.lib.amr` et les composants externes implémentent le même
 provider. Un composant externe est sélectionné sans callback Python :
 
 ```python
-from pops.amr import ClusteringProvider, TaggerProvider
+from pops.amr import ClusteringProvider, RefluxProvider, TaggerProvider
 
 layout = AMR(
     ...,
     tagger=TaggerProvider(component=my_tagger),
     clustering=ClusteringProvider(component=my_clustering),
+    reflux=RefluxProvider(component=my_reflux),
 )
 resolved = pops.resolve(
     pops.validate(case),
     layout=layout,
-    components=(my_tagger, my_clustering),
+    components=(my_tagger, my_clustering, my_reflux),
 )
 ```
 
-Les deux valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
-respectivement l'interface générée `Tagger` ou `Clustering`. Le même objet exact doit être fourni à
+Les trois valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
+respectivement l'interface générée `Tagger`, `Clustering` ou `Reflux`. Le même objet exact doit
+être fourni à
 `resolve(components=...)`; son identité de manifest, son interface et sa version traversent
 `resolve -> compile -> bind`. Le manifest doit déclarer une classification déterministe `bitwise` ou
 `reproducible`, car chaque rang doit produire la même hiérarchie. Un `Tagger` déclare en plus une
@@ -1426,11 +1428,12 @@ d'échec entre rangs, puis applique seul périodicité, masque de couverture, r�
 publication transactionnelle. La présence et le contrat exact du provider sont également comparés
 entre rangs avant toute exécution.
 
-Cette tranche ne publie pas encore la sélection `Reflux` dans la résolution normalisée des providers
-AMR : le seam d'installation demeure interne et les configurations publiques continuent donc
-d'utiliser le kernel builtin. La qualification initiale de l'adaptateur reste limitée à la cible 2D,
-`float64`, CPU avec stockage hôte. Le chemin n'est pas encore prouvé par compilation native, exécution
-MPI avec un composant externe, mesure de conservation ni backend GPU.
+La sélection `AMR(..., reflux=RefluxProvider(component))` traverse désormais la même résolution
+normalisée, identité de provider, artifact et transaction d'installation que `Tagger` et
+`Clustering`. Sans sélection explicite, `FluxRegisterReflux` décrit le kernel builtin par le même
+protocole et apparaît dans le même rapport de providers. La qualification initiale de l'adaptateur
+reste limitée à la cible 2D, `float64`, CPU avec stockage hôte. Le chemin n'est pas encore prouvé par
+exécution MPI avec un composant externe, mesure de conservation ni backend GPU.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.

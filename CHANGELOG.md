@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- External AMR `Reflux` components now use the normalized public provider route from
+  `AMR(..., reflux=...)` through resolve, compiled provenance and transactional native
+  installation; the builtin flux-register kernel follows the same reported contract.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
   executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
