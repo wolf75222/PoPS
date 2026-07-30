@@ -3226,6 +3226,14 @@ class AmrRuntime {
   /// Must be called BEFORE the first step. Body in amr_restore.hpp.
   void set_regrid(int every, int grow = 2, int margin = 2);
 
+  /// Fail before a restart-triggered topology mutation when accepted state contains bootstrap-only
+  /// staggered carriers or transfer caches whose topology-change semantics are not yet sealed.
+  void require_restart_regrid_supported() const {
+    if (!bootstrap_staggered_fields_.empty() || !bootstrap_caches_.empty())
+      throw std::runtime_error(
+          "AMR RegridOnRestart does not yet support bootstrap staggered fields or caches");
+  }
+
   /// ADC-616: Berger-Rigoutsos clustering params (min_efficiency in (0,1], sizes > 0, min <= max).
   /// Defaults reproduce {0.7, 1, 32}; refuses out-of-domain values STRUCTURALLY. Body in amr_restore.hpp.
   void set_clustering(double min_efficiency, int min_box_size, int max_box_size);

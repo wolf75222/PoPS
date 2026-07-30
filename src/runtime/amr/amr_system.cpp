@@ -3230,6 +3230,12 @@ void AmrSystem::install_program_step(std::function<void(double)> step) {
 void AmrSystem::install_program_hierarchy_refresh(std::function<void()> refresh) {
   p_->program_.install_hierarchy_refresh(std::move(refresh), "AmrSystem");
 }
+void AmrSystem::install_program_restart_hooks(std::function<void()> preflight,
+                                              std::function<void()> regrid,
+                                              std::function<void()> resync) {
+  p_->program_.install_restart_hooks(std::move(preflight), std::move(regrid), std::move(resync),
+                                     "AmrSystem");
+}
 // GLOBAL macro-step cadence around the installed program closure (parity System::set_program_cadence,
 // ADC-411). Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void AmrSystem::set_program_cadence(int substeps, int stride) {
@@ -3522,6 +3528,9 @@ bool AmrSystem::uses_runtime_engine() const {
 pops::runtime::program::Profiler& AmrSystem::profiler_handle() {
   return p_->program_.profiler_;
 }
+runtime::program::ProgramRuntimeState& AmrSystem::program_runtime_state_() {
+  return p_->program_;
+}
 // Record / read a Program runtime diagnostic (parity System::record_program_diagnostic). Pure side
 // effect; lives on the Impl (not the .so) so a later checkpoint can reach it.
 void AmrSystem::record_program_diagnostic(const std::string& name, double value) {
@@ -3564,8 +3573,8 @@ double AmrSystem::composite_reduce_field(const std::string& provider_slot, const
 // System::install_program (the loader logic is VERBATIM, only the AMR ABI conventions differ: the
 // global-scope promotion is anchored on amr_native_anchor like add_native_block, not pops::abi_key, and
 // the install entry is pops_install_program_amr). The blocks must be ALREADY added (the AMR registry is
-// frozen at the first lazy build); install_program runs BEFORE the first step so the .so's
-// pops_install_program_amr captures an AmrProgramContext over THIS AmrSystem. The .so stays loaded.
+// frozen at the first lazy build); install_program runs BEFORE the first step so the .so's shared
+// facade factory selects the hierarchy provider over THIS AmrSystem. The .so stays loaded.
 POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   require_assembling_amr(p_->bound_,
                          "install_program");  // frozen once pops.bind completes (ADC-592)
@@ -3644,7 +3653,7 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     throw;
   }
   auto install =
-      reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_program_amr"));
+      reinterpret_cast<void (*)(AmrSystem*)>(pops::dynlib::sym(h, "pops_install_program_amr"));
   if (!install) {
     pops::dynlib::close(h);
     throw std::runtime_error(
@@ -3706,7 +3715,7 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   // Resolve every target-specific scalar entry before the first facade mutation. In particular,
   // never install DSO-backed boundary pointers and then discover that the module must be unloaded.
   using has_dt_t = bool (*)();
-  using dt_bound_t = pops::Real (*)(void*, pops::Real);
+  using dt_bound_t = pops::Real (*)(AmrSystem*, pops::Real);
   auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
   auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound_amr"));
   const bool program_has_dt_bound = has_dt && has_dt();
@@ -3718,8 +3727,8 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   }
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
   const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
-  auto install_boundaries =
-      reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_field_boundaries_amr"));
+  auto install_boundaries = reinterpret_cast<void (*)(AmrSystem*)>(
+      pops::dynlib::sym(h, "pops_install_field_boundaries_amr"));
 
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). The Program numbers its blocks in P.state
   // declaration order (the .so's pops_program_block_name table); the AMR facade numbers its blocks in
@@ -3808,13 +3817,18 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
       seed_program_params(block, defaults);
     p_->program_.operator_authorities_ = operator_authorities;
     p_->ensure_built();
-    install(static_cast<void*>(this));
+    install(this);
     p_->program_.require_exact_artifact_step_install(previous_install,
                                                      "AmrSystem::install_program:");
     if (!p_->program_.hierarchy_refresh_)
       throw std::runtime_error(
           "AmrSystem::install_program: artifact installer did not install its accepted-state "
           "hierarchy refresh hook");
+    if (!p_->program_.restart_regrid_preflight_ || !p_->program_.restart_regrid_ ||
+        !p_->program_.restart_resync_)
+      throw std::runtime_error(
+          "AmrSystem::install_program: artifact installer did not install its restart "
+          "preflight/regrid/resync hooks");
 
     p_->program_.block_map_ = std::move(program_block_map);
     for (const auto& [block, defaults] : program_param_defaults)
@@ -3824,9 +3838,7 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     p_->program_.installed_hash_ = installed_hash;
     if (program_has_dt_bound) {
       AmrSystem* self = this;
-      p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real {
-        return dt_bound(static_cast<void*>(self), cfl);
-      };
+      p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real { return dt_bound(self, cfl); };
     }
     p_->program_.artifact_backed_ = true;
 
@@ -3834,7 +3846,7 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     // Each setter also updates the live runtime; both the facade plans and runtime are discarded if
     // the generated entry fails part-way through.
     if (install_boundaries)
-      install_boundaries(static_cast<void*>(this));
+      install_boundaries(this);
   } catch (...) {
     const std::exception_ptr failure = std::current_exception();
     p_->program_.rollback_artifact_step_install(std::move(previous_install));
@@ -4215,6 +4227,27 @@ void AmrSystem::rollback_restart_transaction() {
   p_->restart_transaction_active_ = false;
   p_->runtime->end_step_rollback_scope();
   p_->restart_snapshot_.restore(*p_);
+  p_->program_.resync_after_restart_rollback("AmrSystem::rollback_restart_transaction:");
+}
+
+void AmrSystem::preflight_regrid_on_restart() {
+  p_->ensure_built();
+  if (!p_->restart_transaction_active_)
+    throw std::runtime_error(
+        "AmrSystem::preflight_regrid_on_restart requires an active restart transaction");
+  if (p_->has_active_step_transaction_())
+    throw std::runtime_error(
+        "AmrSystem::preflight_regrid_on_restart cannot overlap a step transaction");
+  p_->program_.preflight_regrid_on_restart("AmrSystem::preflight_regrid_on_restart:");
+}
+
+void AmrSystem::regrid_on_restart() {
+  p_->ensure_built();
+  if (!p_->restart_transaction_active_)
+    throw std::runtime_error("AmrSystem::regrid_on_restart requires an active restart transaction");
+  if (p_->has_active_step_transaction_())
+    throw std::runtime_error("AmrSystem::regrid_on_restart cannot overlap a step transaction");
+  p_->program_.regrid_on_restart("AmrSystem::regrid_on_restart:");
 }
 
 int AmrSystem::checkpoint_regrid_count() const {
