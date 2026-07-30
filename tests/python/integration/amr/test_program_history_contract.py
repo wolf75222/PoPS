@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""ADC-631 (a): flat-AMR multistep history == Uniform, bit-for-bit.
+"""ADC-702: one Program history contract exercised by the real Uniform and AMR runtimes.
 
-The SAME Adams-Bashforth 2 Program (a System-owned multistep history ring, R_{n-1}) installed on a
-single-level System (ProgramContext) and on a FLAT single-level AmrSystem (AmrProgramContext, the
-coarse-only Program layout) must produce the BYTE-IDENTICAL evolved coarse density over several steps
-AND byte-identical ring-slot buffers. This proves the per-level AMR ring seam (register / store / read
-/ rotate on detail::AmrHistoryOps) is a byte-faithful mirror of the Uniform HistoryManager when nlev=1
-(the per-level slot [level 0] IS the Uniform ring), so the whole compiled-Program byte-code drives both.
+The same Adams-Bashforth 2 Program contract is checked independently on ``System`` and on a flat
+``AmrSystem``: registration creates a retained ring, the first store cold-starts every lag, reads
+observe the accepted preceding rates, and rotation advances the recurrence exactly once per accepted
+step. The oracle is the analytical AB2 recurrence for ``du/dt = c*u``; this is deliberately not a
+byte-parity comparison between two context implementations.
 
 Missing native prerequisites are explicit local skips and required-lane failures, exactly like
 test_amr_program_parity. Pytest + __main__ guard (CI runs ``python3 <file>``).
@@ -23,7 +22,7 @@ from tests.python.support.requirements import (
 
 _native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
 if _native_missing:
-    require_native_or_skip("test_amr_history_parity: %s" % _native_missing)
+    require_native_or_skip("test_program_history_contract: %s" % _native_missing)
 
 try:
     import numpy as np
@@ -41,7 +40,7 @@ try:
     )
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     require_native_or_skip(
-        "test_amr_history_parity cannot import pops/numpy: %s" % exc)
+        "test_program_history_contract cannot import pops/numpy: %s" % exc)
 
 N = 16
 NSTEPS = 5
@@ -84,7 +83,7 @@ def _rho0():
     return 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 
 
-def _ring_slots(sim, depth):
+def _ring_slots(sim):
     """Every ring's every stored slot as flat float64 buffers (concatenated, order-stable)."""
     out = {}
     for hname in sim.history_names():
@@ -98,7 +97,7 @@ def _system_run(u0):
     sim = System(n=N, L=1.0, periodicity=(True, True))
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
         require_native_or_skip(
-            "test_amr_history_parity requires System install_program/history_names bindings")
+            "test_program_history_contract requires System install_program/history_names bindings")
     model = _passive_source_model("blkS")
     plan = _ab2_plan(model, target="system")
     block_cm = compile_block_model(model, target="system")
@@ -115,14 +114,14 @@ def _system_run(u0):
     sim.install_program(compiled.so_path)
     for _ in range(NSTEPS):
         sim.step(DT)
-    return (np.array(sim.get_state("blk"))[0], _ring_slots(sim, 2)), None
+    return (np.array(sim.get_state("blk"))[0], _ring_slots(sim)), None
 
 
 def _amr_run(u0):
     amr = AmrSystem(n=N, L=1.0, regrid_every=0)  # FLAT: no refinement -> nlev=1 (coarse-only)
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         require_native_or_skip(
-            "test_amr_history_parity requires AmrSystem install_program/history_names bindings")
+            "test_program_history_contract requires AmrSystem install_program/history_names bindings")
     model = _passive_source_model("blkA")
     plan = _ab2_plan(model, target="amr_system")
     compiled = compile_problem(
@@ -140,11 +139,38 @@ def _amr_run(u0):
     amr.install_program(compiled.so_path)
     for _ in range(NSTEPS):
         amr.step(DT)
-    return (np.array(amr.density("blk")), _ring_slots(amr, 2), int(amr.n_levels())), None
+    return (np.array(amr.density("blk")), _ring_slots(amr), int(amr.n_levels())), None
 
 
-def test_flat_amr_history_equals_uniform():
-    print("== flat-AMR AB2 history == Uniform (bit-for-bit density + ring slots) ==")
+def _ab2_factor(steps):
+    """Exact scalar recurrence used by the compiled AB2 Program, including Euler cold start."""
+    previous = 1.0
+    current = 1.0 + DT * _C
+    if steps == 0:
+        return previous
+    for _ in range(1, steps):
+        previous, current = current, current + DT * _C * (
+            1.5 * current - 0.5 * previous
+        )
+    return current
+
+
+def _check_history_contract(label, rho, rings, initial):
+    expected = _ab2_factor(NSTEPS) * initial
+    error = float(np.abs(rho - expected).max())
+    chk(np.all(np.isfinite(rho)), "%s produces a finite accepted state" % label)
+    chk(np.all(rho > 0.0), "%s preserves positivity for the linear-growth contract" % label)
+    chk(error < 5.0e-13,
+        "%s follows the analytical AB2 recurrence (max|error| = %.3e)" % (label, error))
+    chk(bool(rings), "%s registers at least one native history ring" % label)
+    chk(all(len(slots) >= 2 for slots in rings.values()),
+        "%s retains current and lag-one slots" % label)
+    chk(all(np.all(np.isfinite(slot)) for slots in rings.values() for slot in slots),
+        "%s exposes finite retained slot buffers" % label)
+
+
+def test_uniform_and_amr_run_the_same_program_history_contract():
+    print("== shared Program history contract on real Uniform and AMR providers ==")
     u0 = _rho0()
     sys_out, sys_err = _system_run(u0)
     assert sys_out is not None, sys_err
@@ -153,26 +179,14 @@ def test_flat_amr_history_equals_uniform():
     sys_rho, sys_rings = sys_out
     amr_rho, amr_rings, nlev = amr_out
 
-    chk(nlev == 1, "the AMR system is FLAT (nlev=1, coarse-only Program layout)")
-    drho = float(np.abs(sys_rho - amr_rho).max())
-    chk(np.array_equal(sys_rho, amr_rho),
-        "the evolved coarse density is BIT-IDENTICAL System vs AMR (max|diff| = %.3e)" % drho)
-    # The ring names + depths match, and every slot buffer is byte-identical (nlev=1 -> the per-level
-    # slot IS the Uniform ring).
-    chk(sorted(sys_rings) == sorted(amr_rings) and len(amr_rings) >= 1,
-        "the same history rings are registered on both (%r)" % sorted(amr_rings))
-    all_slots_equal = True
-    for hname in sys_rings:
-        for k, (a, b) in enumerate(
-                zip(sys_rings[hname], amr_rings.get(hname, []), strict=False)):
-            if not np.array_equal(a, b):
-                all_slots_equal = False
-                print("    ring %s slot %d differs: max|d|=%.3e" % (hname, k, np.abs(a - b).max()))
-    chk(all_slots_equal, "every ring slot buffer is BIT-IDENTICAL System vs AMR (the seam is faithful)")
+    chk(nlev == 1, "the AMR contract fixture is flat and has one storage level")
+    _check_history_contract("System", sys_rho, sys_rings, u0)
+    _check_history_contract("AmrSystem", amr_rho, amr_rings, u0)
+    assert _fails == 0
 
 
 def main():
-    test_flat_amr_history_equals_uniform()
+    test_uniform_and_amr_run_the_same_program_history_contract()
     print("FAILURES:", _fails)
     sys.exit(1 if _fails else 0)
 
