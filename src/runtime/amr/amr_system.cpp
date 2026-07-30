@@ -3505,6 +3505,9 @@ bool AmrSystem::uses_runtime_engine() const {
 pops::runtime::program::Profiler& AmrSystem::profiler_handle() {
   return p_->program_.profiler_;
 }
+runtime::program::ProgramRuntimeState& AmrSystem::program_runtime_state_() {
+  return p_->program_;
+}
 // Record / read a Program runtime diagnostic (parity System::record_program_diagnostic). Pure side
 // effect; lives on the Impl (not the .so) so a later checkpoint can reach it.
 void AmrSystem::record_program_diagnostic(const std::string& name, double value) {
