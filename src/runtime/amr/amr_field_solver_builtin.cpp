@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -98,21 +99,25 @@ bool fully_refines_every_level(const AmrFieldSolverBuildRequest& request) {
     return false;
   int refinement = 1;
   for (int level = 0; level + 1 < request.hierarchy.nlev(); ++level) {
-    const Geometry parent_geometry = request.geometry.refine(refinement);
+    const int ratio =
+        request.hierarchy.refinement_ratios.at(static_cast<std::size_t>(level));
+    if (ratio <= 0 || refinement > std::numeric_limits<int>::max() / ratio)
+      return false;
+    refinement *= ratio;
+    const Geometry child_geometry = request.geometry.refine(refinement);
     const BoxArray& children = request.hierarchy.ba.at(static_cast<std::size_t>(level + 1));
     std::uint64_t covered_cells = 0;
     for (int patch = 0; patch < children.size(); ++patch) {
       const Box2D footprint = PatchRange(children[patch]).box();
-      if (!parent_geometry.domain.contains(footprint))
+      if (!child_geometry.domain.contains(footprint))
         return false;
       for (int previous = 0; previous < patch; ++previous)
         if (!footprint.intersect(PatchRange(children[previous]).box()).empty())
           return false;
       covered_cells += static_cast<std::uint64_t>(footprint.num_cells());
     }
-    if (covered_cells != static_cast<std::uint64_t>(parent_geometry.domain.num_cells()))
+    if (covered_cells != static_cast<std::uint64_t>(child_geometry.domain.num_cells()))
       return false;
-    refinement *= request.hierarchy.refinement_ratios.at(static_cast<std::size_t>(level));
   }
   return true;
 }
