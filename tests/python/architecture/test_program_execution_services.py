@@ -305,7 +305,6 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_capture_logical_evaluation_",
             "program_execution_apply_logical_evaluation_",
             "program_execution_restore_logical_evaluation_",
-            "program_execution_solve_fields_from_state_at_",
             "program_execution_solve_fields_outcome_",
             "program_execution_solve_fields_from_state_outcome_",
             "program_execution_field_solve_from_state_at_outcome_",
@@ -354,6 +353,18 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             assert source.count(hook) == 1, (
                 "%s must provide exactly one explicit provider hook %s" % (context, hook)
             )
+
+
+def test_field_state_evaluation_consumes_outcomes_in_the_shared_service():
+    shared = _read(SHARED)
+    providers = (_read(UNIFORM), _read(AMR))
+
+    assert shared.count("consume_field_outcome_(") == 3
+    assert shared.count("solve_fields_from_state_at(point, provider_slot, block,") == 2
+    assert "program_execution_solve_fields_from_state_at_" not in shared
+    assert all(
+        "program_execution_solve_fields_from_state_at_" not in provider for provider in providers
+    )
 
 
 def test_grid_free_program_state_services_are_shared_not_mirrored():

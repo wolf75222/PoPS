@@ -3415,11 +3415,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     current_level_dt_ = rollback.parent_dt;
     stage_time_ = rollback.stage;
   }
-  SolveReport program_execution_solve_fields_from_state_at_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
-      int block, MultiFab& state) const {
-    return consume_field_outcome_(solve_fields_from_state_at(point, provider_slot, block, state));
-  }
   MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
                                        const MultiFab& prototype, int n_comp, int n_ghost) const {
     return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);

@@ -581,6 +581,16 @@ void expect_shared_install_and_field_services(Context& context) {
       std::vector<std::string>({"default", "default-state", "qualified-state-at", "named-state",
                                 "default-blocks", "named-blocks", "generated-blocks"}));
 
+  int evaluated_bodies = 0;
+  context.evaluate_with_field_state_at(point, "field", 0, state, state,
+                                       [&]() { ++evaluated_bodies; });
+  EXPECT_EQ(evaluated_bodies, 1);
+  EXPECT_EQ(context.field_solve_dispatches(),
+            std::vector<std::string>({"default", "default-state", "qualified-state-at",
+                                      "named-state", "default-blocks", "named-blocks",
+                                      "generated-blocks", "qualified-state-at",
+                                      "qualified-state-at"}));
+
   const int calls_before_invalid_provider = context.field_solve_dispatch_count();
   EXPECT_THROW((void)context.solve_fields_from_state_at(point, "", 0, state),
                std::invalid_argument);

@@ -322,13 +322,13 @@ class ProgramExecutionServices {
                                     MultiFab& evaluation_state, MultiFab& restore_state,
                                     Body&& body) const {
     const auto restore = [&]() {
-      const SolveReport restored = provider_().program_execution_solve_fields_from_state_at_(
-          point, provider_slot, block, restore_state);
+      const SolveReport restored = consume_field_outcome_(
+          solve_fields_from_state_at(point, provider_slot, block, restore_state));
       if (!restored.solved_value_available())
         throw_field_solve_failure_(restored, "restoring the frozen field state");
     };
-    const SolveReport prepared = provider_().program_execution_solve_fields_from_state_at_(
-        point, provider_slot, block, evaluation_state);
+    const SolveReport prepared = consume_field_outcome_(
+        solve_fields_from_state_at(point, provider_slot, block, evaluation_state));
     if (!prepared.solved_value_available()) {
       restore();
       throw_field_solve_failure_(prepared, "evaluating the perturbed field state");
