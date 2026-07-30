@@ -143,6 +143,29 @@ struct HistoryManager {
   }
 };
 
+/// Attempt-local native balance evidence emitted by one exact runtime operator.
+///
+/// The coordinate deliberately remains independent of a user-facing BalanceLedger route: native
+/// operators know their qualified runtime block, hierarchy level and conservative component, while
+/// the route-to-quantity selector is a separate planning authority. Keeping both identities
+/// separate prevents a reflux correction from being silently relabelled as a complete balance.
+struct AutomaticBalanceKey {
+  int runtime_block = -1;
+  int level = -1;
+  int component = -1;
+  std::string term;
+
+  friend bool operator<(const AutomaticBalanceKey& left, const AutomaticBalanceKey& right) {
+    if (left.runtime_block != right.runtime_block)
+      return left.runtime_block < right.runtime_block;
+    if (left.level != right.level)
+      return left.level < right.level;
+    if (left.component != right.component)
+      return left.component < right.component;
+    return left.term < right.term;
+  }
+};
+
 /// The compiled time-Program runtime state, extracted from the System / AmrSystem god-object (ADC-594).
 ///
 /// A plain aggregate: the owning Impl embeds ONE instance and routes every Program seam through it. The
@@ -272,6 +295,11 @@ struct ProgramRuntimeState {
   /// consumers read it while the facade's outer transaction still retains U^n, so a missing term
   /// cannot silently reuse the preceding step.
   std::map<std::string, Real> step_balance_terms_;
+  /// Native operator contributions captured only for a due Balance attempt. These values are keyed
+  /// by their physical runtime coordinate instead of a user ledger route and are therefore not read
+  /// by accepted_balance_terms(). The owning facade snapshots this map with the rest of the attempt,
+  /// so rejection cannot leak automatic evidence into a retry.
+  std::map<AutomaticBalanceKey, Real> automatic_balance_terms_;
   /// Attempt-local outer accepted-step target used by ConsumerGraph-fused balance guards. Program
   /// substeps temporarily publish their window-start macro step through the facade, so generated
   /// balance code must not infer the public target from `macro_step()+1`.
@@ -791,6 +819,14 @@ struct ProgramRuntimeState {
       throw std::invalid_argument(runtime + " requires one canonical five-term balance name");
   }
 
+  static void require_automatic_balance_term(const std::string& term, const std::string& runtime) {
+    static constexpr std::array<std::string_view, 4> kTerms{"outward_boundary_flux", "sources",
+                                                            "reflux", "projection"};
+    if (std::find(kTerms.begin(), kTerms.end(), std::string_view(term)) == kTerms.end())
+      throw std::invalid_argument(runtime +
+                                  " requires one native operator balance contribution name");
+  }
+
   /// Record a compiled-Program scalar. Ordinary P.record_scalar names remain inspectable after the
   /// step with last-write-wins semantics. The balance namespace has a separate typed sink.
   void record_diagnostic(const std::string& name, Real value) {
@@ -816,6 +852,40 @@ struct ProgramRuntimeState {
       entry->second += value;
   }
 
+  /// Whether a compiled Program has actually emitted a due Balance route in this attempt.
+  ///
+  /// Generated balance records are cadence-guarded before their reductions. Reflux executes after
+  /// the Program body, so observing a non-empty authored mailbox here avoids every extra native
+  /// reduction on an off-cadence or replay step without introducing a second scheduler.
+  [[nodiscard]] bool automatic_balance_capture_due() const noexcept {
+    return !balance_replay_active_ && !step_balance_terms_.empty();
+  }
+
+  /// Accumulate one signed, metric-integrated native operator contribution.
+  ///
+  /// This is intentionally not accepted_balance_terms(): automatic evidence remains qualified by
+  /// block/level/component until a resolved quantity selector proves which BalanceLedger route owns
+  /// it. The separation is fail-closed and lets boundary/source/projection producers join the same
+  /// mailbox later without fabricating missing terms.
+  void record_automatic_balance_term(int runtime_block, int level, int component,
+                                     const std::string& term, Real value,
+                                     const std::string& runtime) {
+    if (!automatic_balance_capture_due())
+      throw std::logic_error(runtime +
+                             "::record_automatic_balance_term requires a due authored balance");
+    if (runtime_block < 0 || level < 0 || component < 0)
+      throw std::invalid_argument(
+          runtime + "::record_automatic_balance_term requires non-negative coordinates");
+    require_automatic_balance_term(term, runtime + "::record_automatic_balance_term");
+    if (!std::isfinite(static_cast<double>(value)))
+      throw std::invalid_argument(runtime +
+                                  "::record_automatic_balance_term requires a finite value");
+    auto [entry, inserted] = automatic_balance_terms_.try_emplace(
+        AutomaticBalanceKey{runtime_block, level, component, term}, value);
+    if (!inserted)
+      entry->second += value;
+  }
+
   /// Read the named diagnostic, FAIL-LOUD if the Program never recorded it. @p runtime names the
   /// Program subsystem setter in the message (not a generic getter). @throws std::out_of_range.
   Real diagnostic(const std::string& name, const std::string& runtime) const {
@@ -833,6 +903,7 @@ struct ProgramRuntimeState {
   void begin_step_projection_report() {
     step_projections_.clear();
     step_balance_terms_.clear();
+    automatic_balance_terms_.clear();
     balance_due_window_active_ = false;
     balance_due_target_step_ = 0;
     balance_step_completed_ = false;
