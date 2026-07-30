@@ -3,7 +3,9 @@
 #include <pops/amr/tagging/cluster.hpp>
 #include <pops/amr/tagging/clustering_provider.hpp>
 #include <pops/amr/tagging/tag_box.hpp>
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/time/amr/levels/amr_subcycling.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
@@ -20,6 +22,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -182,6 +185,16 @@ struct PreparedClusteringSpec {
   std::string component_id;
   std::string manifest_identity;
   std::string layout_identity;
+  std::uint32_t interface_version = 1;
+  std::shared_ptr<const component::PreparedExecutionContextV1> execution;
+};
+
+struct PreparedRefluxSpec {
+  std::string provider_identity;
+  std::string component_id;
+  std::string manifest_identity;
+  std::string layout_identity;
+  std::string clock_identity;
   std::uint32_t interface_version = 1;
   std::shared_ptr<const component::PreparedExecutionContextV1> execution;
 };
@@ -598,6 +611,200 @@ class PreparedTaggerComponent final {
   std::shared_ptr<const component::PreparedExecutionContextV1> local_execution_;
   component::LoadedComponent::PreparedState state_owner_;
   void* state_ = nullptr;
+};
+
+/// Prepared adapter for the deliberately narrow Reflux ABI. One callback receives four contiguous
+/// faces of one rank-local child patch. It has no communicator, topology mask, global register or
+/// live state; the enclosing PreparedAmrProgramRefluxTransition validates and publishes its result.
+class PreparedRefluxComponent final {
+ public:
+  PreparedRefluxComponent(PreparedRefluxSpec spec,
+                          std::shared_ptr<component::LoadedComponent> component)
+      : spec_(std::move(spec)), component_(std::move(component)) {
+    validate_();
+    prepare_provider_contract_();
+    local_execution_ = std::make_shared<const component::PreparedExecutionContextV1>(
+        spec_.execution->without_collective_authority());
+    state_owner_ = component_->prepare_fresh_state(
+        POPS_NATIVE_INTERFACE_REFLUX_V1, spec_.interface_version, local_execution_->view());
+    state_ = state_owner_.get();
+  }
+
+  [[nodiscard]] const std::string& provider_identity() const noexcept {
+    return spec_.provider_identity;
+  }
+  [[nodiscard]] std::string_view collective_contract() const noexcept {
+    return collective_contract_;
+  }
+
+  void apply(const PreparedAmrRefluxLocalRequest& request) const {
+    static_assert(sizeof(Real) == sizeof(double),
+                  "Reflux ABI v1 requires the binary64 PoPS backend");
+    if (request.transition_identity == nullptr || request.transition_identity->empty() ||
+        request.patch_identity == nullptr || request.patch_identity->empty() ||
+        request.parent_level < 0 || request.child_level != request.parent_level + 1 ||
+        request.logical_time.level != request.parent_level || request.logical_time.macro_step < 0 ||
+        request.coarse.components <= 0 || request.coarse.components != request.fine.components ||
+        request.coarse.components != request.correction.components ||
+        request.coarse.I0 != request.fine.I0 || request.coarse.I1 != request.fine.I1 ||
+        request.coarse.J0 != request.fine.J0 || request.coarse.J1 != request.fine.J1 ||
+        request.coarse.I0 != request.correction.I0 || request.coarse.I1 != request.correction.I1 ||
+        request.coarse.J0 != request.correction.J0 || request.coarse.J1 != request.correction.J1 ||
+        !std::isfinite(request.dx) || !std::isfinite(request.dy) || request.dx <= Real(0) ||
+        request.dy <= Real(0))
+      throw std::invalid_argument("prepared native Reflux invocation is incomplete");
+    for (const std::string* identity : request.interface_identities)
+      if (identity == nullptr || identity->empty())
+        throw std::invalid_argument("prepared native Reflux face identity is empty");
+
+    const auto make_const_view = [&](const Real* data, int axis) {
+      if (data == nullptr)
+        throw std::invalid_argument("prepared native Reflux input face is absent");
+      const std::size_t tangent =
+          static_cast<std::size_t>(axis == 0 ? request.coarse.J1 - request.coarse.J0 + 1
+                                             : request.coarse.I1 - request.coarse.I0 + 1);
+      const std::size_t components = static_cast<std::size_t>(request.coarse.components);
+      const std::size_t extent0 = axis == 0 ? 1u : tangent;
+      const std::size_t extent1 = axis == 0 ? tangent : 1u;
+      return PopsConstFieldViewV1{sizeof(PopsConstFieldViewV1),
+                                  data,
+                                  2,
+                                  {extent0, extent1, 1},
+                                  {static_cast<std::ptrdiff_t>(extent1 * components),
+                                   static_cast<std::ptrdiff_t>(components), 0},
+                                  components,
+                                  1,
+                                  POPS_FIELD_CENTERING_FACE_V1,
+                                  1u << static_cast<unsigned>(axis),
+                                  {0, 0, 0},
+                                  {0, 0, 0},
+                                  POPS_SCALAR_FLOAT64_V1,
+                                  POPS_MEMORY_SPACE_HOST_V1,
+                                  spec_.layout_identity.c_str(),
+                                  request.patch_identity->c_str(),
+                                  POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+    };
+    const auto make_output_view = [&](Real* data, int axis) {
+      if (data == nullptr)
+        throw std::invalid_argument("prepared native Reflux output face is absent");
+      const std::size_t tangent =
+          static_cast<std::size_t>(axis == 0 ? request.coarse.J1 - request.coarse.J0 + 1
+                                             : request.coarse.I1 - request.coarse.I0 + 1);
+      const std::size_t components = static_cast<std::size_t>(request.coarse.components);
+      const std::size_t extent0 = axis == 0 ? 1u : tangent;
+      const std::size_t extent1 = axis == 0 ? tangent : 1u;
+      return PopsFieldViewV1{sizeof(PopsFieldViewV1),
+                             data,
+                             2,
+                             {extent0, extent1, 1},
+                             {static_cast<std::ptrdiff_t>(extent1 * components),
+                              static_cast<std::ptrdiff_t>(components), 0},
+                             components,
+                             1,
+                             POPS_FIELD_CENTERING_CELL_V1,
+                             0,
+                             {0, 0, 0},
+                             {0, 0, 0},
+                             POPS_SCALAR_FLOAT64_V1,
+                             POPS_MEMORY_SPACE_HOST_V1,
+                             spec_.layout_identity.c_str(),
+                             request.patch_identity->c_str(),
+                             POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+    };
+
+    const std::array<const Real*, 4> coarse{request.coarse.cL, request.coarse.cR, request.coarse.cB,
+                                            request.coarse.cT};
+    const std::array<const Real*, 4> fine{request.fine.fL, request.fine.fR, request.fine.fB,
+                                          request.fine.fT};
+    const std::array<Real*, 4> correction{request.correction.x_low, request.correction.x_high,
+                                          request.correction.y_low, request.correction.y_high};
+    const std::array<int, 4> axes{0, 0, 1, 1};
+    const std::array<PopsRefluxFaceSideV1, 4> sides{
+        POPS_REFLUX_FACE_LOW_V1, POPS_REFLUX_FACE_HIGH_V1, POPS_REFLUX_FACE_LOW_V1,
+        POPS_REFLUX_FACE_HIGH_V1};
+    std::array<PopsRefluxFaceV1, 4> faces;
+    for (std::size_t face = 0; face < faces.size(); ++face)
+      faces[face] = PopsRefluxFaceV1{
+          sizeof(PopsRefluxFaceV1),
+          request.interface_identities[face]->c_str(),
+          axes[face],
+          sides[face],
+          static_cast<double>(Real(1) / (axes[face] == 0 ? request.dx : request.dy)),
+          make_const_view(coarse[face], axes[face]),
+          make_const_view(fine[face], axes[face]),
+          make_output_view(correction[face], axes[face])};
+
+    const PopsLogicalTimeV1 logical_time{sizeof(PopsLogicalTimeV1),
+                                         spec_.clock_identity.c_str(),
+                                         request.logical_time.macro_step,
+                                         request.parent_level,
+                                         0,
+                                         0,
+                                         request.logical_time.phase.numerator,
+                                         request.logical_time.phase.denominator,
+                                         0.0,
+                                         request.logical_time.physical_time};
+    const PopsRefluxRequestV1 abi_request{sizeof(PopsRefluxRequestV1),
+                                          request.transition_identity->c_str(),
+                                          request.parent_level,
+                                          request.child_level,
+                                          faces.size(),
+                                          faces.data(),
+                                          logical_time,
+                                          local_execution_->view()};
+    PopsComponentStatusV1 status = component::unwritten_component_status();
+    const auto& api = component_->table<PopsRefluxApiV1>(POPS_NATIVE_INTERFACE_REFLUX_V1,
+                                                         spec_.interface_version);
+    const int code = component::apply_reflux_interface_batch(api, state_, abi_request, status);
+    if (code != 0)
+      throw std::runtime_error(status.reason == nullptr ? "native Reflux component failed"
+                                                        : status.reason);
+  }
+
+ private:
+  void prepare_provider_contract_() {
+    ExactContractBuilder contract;
+    contract.text("pops.runtime.external-amr-reflux-provider")
+        .scalar(std::uint32_t{1})
+        .text(spec_.provider_identity)
+        .text(spec_.component_id)
+        .text(spec_.manifest_identity)
+        .text(spec_.layout_identity)
+        .text(spec_.clock_identity)
+        .scalar(spec_.interface_version)
+        .text(spec_.execution->identity());
+    collective_contract_ = std::move(contract).release();
+  }
+
+  void validate_() const {
+    if (!component_ || !spec_.execution || spec_.provider_identity.empty() ||
+        spec_.component_id.empty() || spec_.manifest_identity.empty() ||
+        spec_.layout_identity.empty() || spec_.clock_identity.empty() ||
+        spec_.interface_version != 1)
+      throw std::invalid_argument("prepared AMR Reflux specification is incomplete");
+    if constexpr (!std::is_same_v<Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>)
+      throw std::invalid_argument(
+          "prepared external Reflux v1 is qualified only for a host execution backend");
+    component::validate_execution_context(spec_.execution->view());
+    if (spec_.execution->view().memory_space != POPS_MEMORY_SPACE_HOST_V1)
+      throw std::invalid_argument(
+          "prepared external Reflux v1 requires host-resident face storage");
+    const auto& api = component_->api();
+    if (api.component_id == nullptr || api.manifest_identity == nullptr ||
+        spec_.component_id != api.component_id || spec_.manifest_identity != api.manifest_identity)
+      throw std::invalid_argument("prepared AMR Reflux changed native component identity");
+    component::require_operation(
+        component_->table<PopsRefluxApiV1>(POPS_NATIVE_INTERFACE_REFLUX_V1, spec_.interface_version)
+                .apply_interface_batch != nullptr,
+        "apply_interface_batch");
+  }
+
+  PreparedRefluxSpec spec_;
+  std::shared_ptr<component::LoadedComponent> component_;
+  std::shared_ptr<const component::PreparedExecutionContextV1> local_execution_;
+  component::LoadedComponent::PreparedState state_owner_;
+  void* state_ = nullptr;
+  std::string collective_contract_;
 };
 
 /// External Clustering ABI contract: each result is `2 * dimension` signed integers laid out as
