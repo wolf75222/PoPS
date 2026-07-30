@@ -4,6 +4,7 @@
 #include <pops/numerics/fv/flux_failure.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <limits>
@@ -65,6 +66,49 @@ struct ProviderStorage {
 
   POPS_HD pops::Real operator()(int, int, int component) const {
     return component == 1 ? gradient : pops::Real(0);
+  }
+};
+
+struct QualifiedProviderAdvect : ProviderAdvect {
+  static constexpr int n_flux_providers = 1;
+  inline static constexpr std::array<pops::QualifiedProviderRequirement, 1>
+      flux_provider_requirements{{
+          {"model::qualified", "field", "electric", "grad_x", "scalar", "cell", "",
+           "layout::primary", "", "field::electric", true, 1},
+      }};
+};
+
+struct UnavailableQualifiedProviderAdvect : ProviderAdvect {
+  static constexpr int n_flux_providers = 1;
+  inline static constexpr std::array<pops::QualifiedProviderRequirement, 1>
+      flux_provider_requirements{{
+          {"model::unavailable", "field", "electric", "grad_x", "scalar", "cell", "",
+           "layout::primary", "", "field::electric", false, 1},
+      }};
+};
+
+struct IncompleteQualifiedProviderAdvect : ProviderAdvect {
+  static constexpr int n_flux_providers = 1;
+};
+
+struct DuplicateQualifiedProviderAdvect : ProviderAdvect {
+  static constexpr int n_flux_providers = 2;
+  inline static constexpr std::array<pops::QualifiedProviderRequirement, 2>
+      flux_provider_requirements{{
+          {"model::duplicate", "field", "electric", "grad_x", "scalar", "cell", "",
+           "layout::primary", "", "field::electric", true, 1},
+          {"model::duplicate", "field", "magnetic", "grad_x", "scalar", "cell", "",
+           "layout::primary", "", "field::magnetic", true, 1},
+      }};
+};
+
+struct CountingProviderStorage {
+  pops::Real values[3]{pops::Real(11), pops::Real(4), pops::Real(13)};
+  mutable int reads[3]{};
+
+  POPS_HD pops::Real operator()(int, int, int component) const {
+    ++reads[component];
+    return values[component];
   }
 };
 
@@ -251,6 +295,30 @@ TEST(test_flux_interfaces, provider_pack_is_model_qualified_and_failure_action_i
             pops::TransactionFailureAction::kRejectStep);
   EXPECT_EQ(pops::transaction_action(pops::EvaluationStatus::kFailed),
             pops::TransactionFailureAction::kAbortRun);
+}
+
+TEST(test_flux_interfaces, generated_provider_requirements_own_native_slot_reads) {
+  static_assert(pops::has_qualified_flux_provider_requirements<QualifiedProviderAdvect>);
+  static_assert(pops::qualified_flux_provider_requirements_valid<QualifiedProviderAdvect>());
+  static_assert(
+      !pops::qualified_flux_provider_requirements_valid<UnavailableQualifiedProviderAdvect>());
+  static_assert(
+      !pops::qualified_flux_provider_requirements_valid<IncompleteQualifiedProviderAdvect>());
+  static_assert(
+      !pops::qualified_flux_provider_requirements_valid<DuplicateQualifiedProviderAdvect>());
+
+  const CountingProviderStorage storage{};
+  const auto bound = pops::bind_flux_providers_at<QualifiedProviderAdvect>(storage, 0, 0);
+  EXPECT_EQ(storage.reads[0], 0);
+  EXPECT_EQ(storage.reads[1], 1);
+  EXPECT_EQ(storage.reads[2], 0);
+
+  const QualifiedProviderAdvect::State state{pops::Real(3)};
+  const auto trace = pops::make_face_trace(state, bound);
+  const auto density =
+      pops::PhysicalFluxView<QualifiedProviderAdvect>{QualifiedProviderAdvect{}}.evaluate(
+          trace, pops::FaceContext::axis_aligned(0));
+  EXPECT_DOUBLE_EQ(density.value[0], pops::Real(12));
 }
 
 TEST(test_flux_interfaces, failed_evaluation_never_publishes_a_density) {
