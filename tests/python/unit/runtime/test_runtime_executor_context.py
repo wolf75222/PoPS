@@ -156,7 +156,12 @@ def test_determinism_assumptions_are_rechecked_before_native_preflight(monkeypat
             {},
             make_identity("execution-context", {"test": "runtime-executor"}),
         ),
-        communication=SimpleNamespace(collectives=()),
+        resources=SimpleNamespace(buffers=()),
+        communication=SimpleNamespace(
+            collectives=(),
+            fences=(),
+            clock_joins=(),
+        ),
     )
     calls = []
 
@@ -204,9 +209,14 @@ def test_matching_runtime_determinism_assumptions_are_consumed():
 
 def _single_layout_projection():
     layout = SimpleNamespace(handle=SimpleNamespace(qualified_id="layout::primary"))
+    call_identity = SimpleNamespace(token="runtime-call::fluid")
+    compiled_block = SimpleNamespace(
+        name="fluid",
+        spatial={"ghost_depth": 2},
+    )
     plan = SimpleNamespace(
         artifact=SimpleNamespace(
-            blocks=(SimpleNamespace(name="fluid"),),
+            blocks=(compiled_block,),
             layout_plan=SimpleNamespace(
                 layouts=(layout,),
                 assignments=(
@@ -223,12 +233,25 @@ def _single_layout_projection():
         )
     )
     runtime_plan = SimpleNamespace(
-        calls=(SimpleNamespace(block_id="block::fluid", layout_id="layout::primary"),),
+        calls=(
+            SimpleNamespace(
+                identity=call_identity,
+                block_id="block::fluid",
+                layout_id="layout::primary",
+            ),
+        ),
         communication=SimpleNamespace(
             transfers=(),
-            halos=(SimpleNamespace(layout_id="layout::primary"),),
+            halos=(
+                SimpleNamespace(
+                    call_id=call_identity.token,
+                    resource="state:u",
+                    layout_id="layout::primary",
+                    depth=2,
+                ),
+            ),
         ),
-        resources=SimpleNamespace(mapping_provider_ids=()),
+        resources=SimpleNamespace(mapping_provider_ids=(), buffers=()),
     )
     return plan, runtime_plan
 
@@ -245,6 +268,22 @@ def test_single_layout_provider_consumes_exact_call_and_halo_projection():
 
     runtime_plan.communication.halos[0].layout_id = "layout::other"
     with pytest.raises(ValueError, match="halo differs"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+def test_single_layout_provider_refuses_halo_deeper_than_compiled_storage():
+    plan, runtime_plan = _single_layout_projection()
+    runtime_plan.communication.halos[0].depth = 3
+
+    with pytest.raises(ValueError, match="exceeds compiled block.*ghost depth 2"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+def test_single_layout_provider_requires_exact_compiled_halo_evidence():
+    plan, runtime_plan = _single_layout_projection()
+    plan.artifact.blocks[0].spatial = {}
+
+    with pytest.raises(TypeError, match="exact positive spatial ghost depth"):
         executor._require_single_layout_runtime_plan(plan, runtime_plan)
 
 
@@ -344,6 +383,68 @@ def test_multi_layout_provider_refuses_unconsumed_halo_plan():
 
     with pytest.raises(NotImplementedError, match="explicit per-layout halo scheduler"):
         multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+
+
+@pytest.mark.parametrize(
+    "resource_rows,fences,clock_joins,match",
+    [
+        ((object(),), (), (), "buffer allocations"),
+        ((), (object(),), (), "cross-memory fences"),
+        ((), (), (object(),), "clock joins"),
+    ],
+)
+def test_runtime_provider_refuses_planned_actions_without_native_owner(
+    resource_rows, fences, clock_joins, match
+):
+    runtime_plan = SimpleNamespace(
+        resources=SimpleNamespace(buffers=resource_rows),
+        communication=SimpleNamespace(
+            fences=fences,
+            clock_joins=clock_joins,
+            collectives=(object(),),
+        ),
+    )
+
+    with pytest.raises(NotImplementedError, match=match):
+        executor._require_supported_runtime_actions(runtime_plan)
+
+
+def test_consumer_collectives_are_not_claimed_by_runtime_action_gate():
+    runtime_plan = SimpleNamespace(
+        resources=SimpleNamespace(buffers=()),
+        communication=SimpleNamespace(
+            fences=(),
+            clock_joins=(),
+            collectives=(object(),),
+        ),
+    )
+
+    executor._require_supported_runtime_actions(runtime_plan)
+
+
+def test_unowned_runtime_action_fails_before_native_fact_probe(monkeypatch):
+    plan = SimpleNamespace()
+    runtime_plan = SimpleNamespace(
+        resources=SimpleNamespace(buffers=(object(),)),
+        communication=SimpleNamespace(
+            collectives=(),
+            fences=(),
+            clock_joins=(),
+        ),
+    )
+
+    def forbidden_native_facts():
+        raise AssertionError("native fact probe became reachable")
+
+    monkeypatch.setattr(executor, "require_install_plan", lambda value: value)
+    monkeypatch.setattr(
+        runtime_planning,
+        "require_runtime_plan_bundle",
+        lambda _plan, value: value,
+    )
+    monkeypatch.setattr(executor, "_native_runtime_facts", forbidden_native_facts)
+    with pytest.raises(NotImplementedError, match="buffer allocations"):
+        executor.install_runtime_executor(plan, runtime_plan)
 
 
 
