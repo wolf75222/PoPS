@@ -5,8 +5,11 @@ Both Uniform and two-level AMR execute the public
 ``Case -> Program.cadence -> compile -> mpi_world -> bind -> run`` route. The Program closes one
 stride-3 window every third accepted macro-step, while async Balance consumers fire every two and
 three accepted steps. Held windows must therefore publish exact zero ledgers and due windows must
-publish native nonzero ledgers. A separate every-step async field series proves that each worker
-receives the accepted field image captured on its own tick, never the latest native state.
+publish an exact signed five-term ledger built from five real collective Program reductions. The
+fixture explicitly authors that accounting split; it proves transport, signs, residual closure and
+rank agreement, not automatic extraction of AMR reflux or projection terms. A separate every-step
+async field series proves that each worker receives the accepted field image captured on its own
+tick, never the latest native state.
 """
 from __future__ import annotations
 
@@ -163,21 +166,34 @@ def _authored_case(*, adaptive: bool) -> tuple[pops.Case, Any]:
     case.numerics(numerics, block=block)
     program = pops.Program("async-balance-%s-program" % label)
     temporal = program.state(evolved)
-    total = program.sum(temporal.n)
-    zero = total * 0.0
-    ledger = BalanceLedger("accepted-mass")
-    program.record_balance(
-        ledger,
-        storage_change=total,
-        outward_boundary_flux=zero,
-        sources=zero,
-        reflux=zero,
-        projection=zero,
-    )
     accepted = program.value(
         "accepted_growth",
         temporal.n + program.dt * Fraction(1, 2) * temporal.n,
         at=temporal.next.point,
+    )
+    increment = program.value(
+        "accepted_increment",
+        accepted - temporal.n,
+        at=temporal.next.point,
+    )
+    # This is an explicitly authored accounting fixture, not an automatic AMR-term extractor.
+    # Every term owns a real native Program.sum so the installed mpiexec route enters five
+    # collectives. The signed split closes the actual accepted storage increment exactly:
+    #   storage + outward - sources - reflux - projection
+    #   = q - q - q - q - (-2q) = 0.
+    storage_change = program.sum(increment)
+    outward_boundary_flux = -program.sum(increment)
+    sources = program.sum(increment)
+    reflux = program.sum(increment)
+    projection = -2.0 * program.sum(increment)
+    ledger = BalanceLedger("accepted-mass")
+    program.record_balance(
+        ledger,
+        storage_change=storage_change,
+        outward_boundary_flux=outward_boundary_flux,
+        sources=sources,
+        reflux=reflux,
+        projection=projection,
     )
     program.commit(temporal.next, accepted)
     program.cadence(stride=3)
@@ -310,6 +326,34 @@ def _balance(reopened: Any) -> tuple[float, dict[str, float]]:
     )
 
 
+def _require_exact_signed_balance(
+    label: str,
+    step: int,
+    value: float,
+    terms: dict[str, float],
+) -> None:
+    q = terms["storage_change"]
+    expected = {
+        "storage_change": q,
+        "outward_boundary_flux": -q,
+        "sources": q,
+        "reflux": q,
+        "projection": -2.0 * q,
+    }
+    residual = (
+        terms["storage_change"]
+        + terms["outward_boundary_flux"]
+        - terms["sources"]
+        - terms["reflux"]
+        - terms["projection"]
+    )
+    if q <= 0.0 or terms != expected or residual != 0.0 or value != residual:
+        raise AssertionError(
+            "%s due step %d did not preserve its exact signed five-term Balance: "
+            "value=%r terms=%r" % (label, step, value, terms)
+        )
+
+
 def _verify(root: Path, *, adaptive: bool) -> None:
     if RANK != 0:
         return
@@ -354,17 +398,13 @@ def _verify(root: Path, *, adaptive: bool) -> None:
     for series, steps in ((every_two, (6,)), (every_three, (3, 6))):
         for step in steps:
             value, terms = _balance(series[step])
-            if set(terms) != expected_terms \
-                    or value <= 0.0 \
-                    or terms["storage_change"] <= 0.0 \
-                    or any(
-                        terms[name] != 0.0
-                        for name in expected_terms - {"storage_change"}
-                    ):
-                raise AssertionError(
-                    "%s due step %d did not publish its native nonzero Balance ledger"
-                    % (label, step)
-                )
+            if set(terms) != expected_terms:
+                raise AssertionError("%s due step %d omitted a Balance term" % (label, step))
+            _require_exact_signed_balance(label, step, value, terms)
+    if _balance(every_two[6]) != _balance(every_three[6]):
+        raise AssertionError(
+            "%s independent due consumers disagreed on the accepted step-6 Balance" % label
+        )
 
 
 def _run_case(root: Path, *, adaptive: bool) -> None:
@@ -405,6 +445,16 @@ def _run_case(root: Path, *, adaptive: bool) -> None:
     )
     if any(row != reports[0] for row in reports[1:]) or reports[0][0] != NSTEPS:
         raise AssertionError("%s run report differs across ranks: %r" % (label, reports))
+    accepted_balance = tuple(
+        row
+        for row in runtime.inspect().to_dict()["instance"]["accepted_diagnostics"]
+        if row["key"]["reduction"] == "discrete_balance"
+    )
+    accepted_by_rank = allgather_value(COMM, accepted_balance)
+    if not accepted_balance or any(row != accepted_by_rank[0] for row in accepted_by_rank[1:]):
+        raise AssertionError(
+            "%s accepted Balance registry differs across ranks: %r" % (label, accepted_by_rank)
+        )
     barrier(COMM)
     _collective_local(label + " output verification", lambda: _verify(root, adaptive=adaptive))
 
