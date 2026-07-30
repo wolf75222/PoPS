@@ -98,6 +98,7 @@ namespace runtime {
 namespace program {
 class
     Profiler;  // forward-declared so engine()/profiler_handle() do not pull profiler.hpp into this header
+struct ProgramRuntimeState;
 }  // namespace program
 namespace multiblock {
 struct AxisAlignedInterface;
@@ -1098,6 +1099,7 @@ class AmrSystem {
 
  private:
   friend class runtime::program::AmrProgramContext;
+  POPS_EXPORT runtime::program::ProgramRuntimeState& program_runtime_state_();
   /// Read-only compiled-artifact capability check; artifact authority installation is private to
   /// AmrSystem::install_program and cannot be injected through the public facade.
   POPS_EXPORT bool program_owns_operator_authority(
