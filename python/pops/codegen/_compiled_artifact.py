@@ -414,8 +414,33 @@ class CompiledLayoutProgram:
         if len(names) != len(set(names)):
             raise ValueError("CompiledLayoutProgram.block_names contains a duplicate")
         object.__setattr__(self, "block_names", names)
-        routes = tuple(name for _index, name in getattr(self.program, "program_block_routes", ()))
-        if routes != names:
+        route_rows = tuple(getattr(self.program, "program_block_routes", ()))
+        if any(
+            not isinstance(row, tuple)
+            or len(row) != 2
+            or isinstance(row[0], bool)
+            or not isinstance(row[0], int)
+            or row[0] < 0
+            or not isinstance(row[1], str)
+            or not row[1]
+            for row in route_rows
+        ):
+            raise ValueError(
+                "CompiledLayoutProgram binary block routes are malformed")
+        route_indices = tuple(row[0] for row in route_rows)
+        route_names = tuple(row[1] for row in route_rows)
+        if len(route_rows) != len(names):
+            raise ValueError(
+                "CompiledLayoutProgram binary routes do not match its exact block partition")
+        if route_indices != tuple(range(len(names))):
+            raise ValueError(
+                "CompiledLayoutProgram binary block route indices must be exact and contiguous")
+        # ``block_names`` describes the authenticated LayoutPlan partition in plan order.  The
+        # generated Program may declare the same blocks in a different order: its ABI exports that
+        # order explicitly and ProgramContext maps every index by name.  Require a bijection, never
+        # positional equality, so a valid permutation is executable while any missing, duplicate,
+        # or foreign route still fails before the component is sealed.
+        if len(route_names) != len(set(route_names)) or set(route_names) != set(names):
             raise ValueError(
                 "CompiledLayoutProgram binary routes do not match its exact block partition")
         _seal_component(self.program)

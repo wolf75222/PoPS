@@ -134,6 +134,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         self._lifecycle = "assembling"
         self._bound_snapshot = None
         self._last_run_manifest = self._last_run_identity = self._last_restart_identity = None
+        self._restart_lineage_identity = None
         from pops.runtime._temporal_restart import TemporalRestartState
         self._temporal_restart_state = TemporalRestartState()
 

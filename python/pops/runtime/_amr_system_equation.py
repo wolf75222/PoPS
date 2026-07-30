@@ -248,8 +248,8 @@ class _AmrSystemEquation(_AmrSystem):
                 "runtime has no private IMEX fallback."
             )
         # Newton options / diagnostics: same flat ABI -> neither the options nor the report transit
-        # through the .so loader. Explicit rejection (otherwise iters=2 / no report silently), parity with
-        # the stride/mask rejection above and with System.add_equation (compiled backend).
+        # through the .so loader. Explicit rejection prevents silent substitution of the prepared
+        # provider defaults, in parity with the stride/mask rejection above and System.add_equation.
         _reject_newton_amr_compiled("AmrSystem.add_equation", time)
         # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor now
         # (pops_install_native_amr -> add_compiled_model -> set_compiled_block), so it is threaded

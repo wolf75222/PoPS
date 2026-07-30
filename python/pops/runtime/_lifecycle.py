@@ -176,7 +176,9 @@ class _LifecycleMixin(_System):
         if type(identity) is not Identity or identity.domain != "run":
             raise TypeError("restart requires an authenticated domain-'run' identity")
         self._last_run_manifest = None
-        self._last_run_identity = Identity.from_data(identity.to_data())
+        restored = Identity.from_data(identity.to_data())
+        self._last_run_identity = restored
+        self._restart_lineage_identity = restored
 
     @property
     def last_run_manifest(self) -> Any:

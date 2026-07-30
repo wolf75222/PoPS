@@ -80,6 +80,10 @@ struct CopyComp0Kernel {
 };
 }  // namespace detail
 
+namespace validation {
+struct GeometricMGValidationAccess;
+}
+
 inline BCRec homogeneous(const BCRec& b) {
   BCRec h = b;
   h.xlo_val = h.xhi_val = h.ylo_val = h.yhi_val = 0;
@@ -620,6 +624,9 @@ class GeometricMG {
   }
   Real abs_tol() const { return abs_tol_; }
 
+ private:
+  friend struct validation::GeometricMGValidationAccess;
+
   // HARDENED solve for the embedded boundary at high resolution. On a fine grid, the geometric
   // V-cycle sometimes diverges near the conducting wall: coarsening is
   // NON-Galerkin and the circle mask is re-evaluated per level, so the coarse
@@ -740,6 +747,7 @@ class GeometricMG {
     return iteration_limit(total, hardened_residual);
   }
 
+ public:
   // Current residual (infinity norm) at the finest level. all_reduce_max MANDATORY for
   // a DISTRIBUTED MULTI-BOX coarse: without it, norm_inf returns the LOCAL max (different per rank),
   // so the V-cycle stopping criterion fires at different iterations depending on the rank

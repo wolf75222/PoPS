@@ -561,9 +561,16 @@ void init_core(py::module_& m) {
   // ordinals into the private bootstrap ABI.
   py::class_<pops::SolveReport>(m, "_SolveReport")
       .def_readonly("iters", &pops::SolveReport::iters)
+      .def_readonly("evaluations", &pops::SolveReport::evaluations)
+      .def_readonly("safeguard_steps", &pops::SolveReport::safeguard_steps)
       .def_readonly("rel_residual", &pops::SolveReport::rel_residual)
       .def_readonly("reference_residual_norm", &pops::SolveReport::reference_residual_norm)
       .def_readonly("residual_norm", &pops::SolveReport::residual_norm)
+      .def_readonly("step_norm", &pops::SolveReport::step_norm)
+      .def_readonly("condition_evidence", &pops::SolveReport::condition_evidence)
+      .def_readonly("failed_i", &pops::SolveReport::failed_i)
+      .def_readonly("failed_j", &pops::SolveReport::failed_j)
+      .def_readonly("failed_component", &pops::SolveReport::failed_component)
       .def_property_readonly("status",
                              [](const pops::SolveReport& report) { return report.status_name(); })
       .def_property_readonly("action",

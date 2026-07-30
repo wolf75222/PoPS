@@ -149,9 +149,12 @@ Explicit unsupported rows include:
   history ring is Dense. Selective history replay remains same-rank. Recorded patch boxes and
   refinement topology are not regridded or inferred from opaque local publications.
 - `checkpoint:regrid_on_restart` has an explicit typed `RegridOnRestart()` identity and the weaker
-  `accepted_state_after_regrid` guarantee, but the builtin accepted-state-v5 provider refuses it before
-  artifact creation. No complete hierarchy/history/field remap route currently implements that
-  guarantee, and `bit_identical=True` is incompatible with the policy.
+  `accepted_state_after_regrid` guarantee. The builtin accepted-state-v5 provider supports one
+  artifact-backed AMR layout at unchanged MPI cardinality: exact accepted replay precedes one real
+  tagger/clustering regrid, history/flux topology is rebound, composite conservation is checked, and
+  a global transform receipt derives a distinct run identity. Uniform, multi-layout, elliptic-field,
+  shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
+  `bit_identical=True` is incompatible with the policy.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 - `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a
@@ -218,4 +221,10 @@ unsupported route: requested solver=FFT() with layout=AMR; available route: Geom
 Unknown values are not treated as false and are never repaired by a compatibility default. A public
 artifact must carry the current authenticated manifest and required route facts; missing, unknown, or
 incompatible evidence is refused before bind. Historical artifacts may only be converted by an
-explicit offline migration tool that emits a complete current artifact.
+explicit offline migration tool that emits a complete current artifact. The one implemented
+checkpoint route accepts only the exact frozen Uniform-v2 schema through
+`pops.codegen.checkpoint_migration`: it requires a complete authenticated v5 authority and an
+exhaustive reviewed mapping, preserves no runtime alias, and publishes atomically only after current
+integrity and restart preflight succeed. Its supported envelope is same-grid/same-clock, Dense
+store-all history, with no field-provider slots, scheduled caches, or ConsumerGraph state; every
+other historical checkpoint remains a fail-closed refusal in the runtime.
