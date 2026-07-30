@@ -5183,7 +5183,11 @@ class AmrRuntime {
     finish_collective_materialization_validation_(local_failure, where);
   }
 
-  void require_complete_history_materialization_(const char* where) const {
+  // Validate only the owner-qualified ring/storage shape. This deliberately accepts the
+  // in-step image produced by store_history(), where initialized=true, fill=0 and pending=true
+  // until rotate_histories() publishes the logical sample. Read-only diagnostics such as
+  // history_global() need this structural contract, not an accepted-state quiescence gate.
+  void require_complete_history_structure_(const char* where) const {
     const std::size_t registry_size = hist_rings_.size();
     if (hist_depth_.size() != registry_size || hist_block_owner_.size() != registry_size ||
         hist_init_.size() != registry_size || hist_fill_count_.size() != registry_size ||
@@ -5234,15 +5238,26 @@ class AmrRuntime {
       if (invalid_layout)
         throw std::runtime_error(std::string(where) + " history '" + name +
                                  "' has incomplete level materialization");
+    }
+  }
+
+  // Accepted restart/regrid/bootstrap boundaries additionally require a quiescent logical image:
+  // no level may retain a pending store, and initialization must agree with the accepted fill
+  // count. Keep this stricter than the structural read contract above.
+  void require_complete_history_materialization_(const char* where) const {
+    require_complete_history_structure_(where);
+    for (const auto& [name, ring] : hist_rings_) {
+      const auto& initialized = hist_init_.at(name);
+      const auto& fill_counts = hist_fill_count_.at(name);
+      const auto& pending = hist_store_pending_.at(name);
       bool invalid_fill = false;
       for (int level = 0; level < nlev_; ++level) {
         const auto index = static_cast<std::size_t>(level);
-        const int fill = fill_counts->second[index];
+        const int fill = fill_counts[index];
         // A Program history may be cold only as the coherent
         // (initialized=false, fill=0, pending=false) image.
         invalid_fill = invalid_fill || fill < 0 || fill > static_cast<int>(ring.size()) ||
-                       pending->second[index] != 0 ||
-                       (initialized->second[index] != 0) != (fill > 0);
+                       pending[index] != 0 || (initialized[index] != 0) != (fill > 0);
       }
       if (invalid_fill)
         throw std::runtime_error(std::string(where) + " history '" + name +

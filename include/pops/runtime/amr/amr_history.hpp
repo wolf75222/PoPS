@@ -299,7 +299,7 @@ struct AmrHistoryOps {
     const std::vector<std::vector<MultiFab>>* ring = nullptr;
     std::exception_ptr structural_failure;
     try {
-      eng.require_complete_history_materialization_("AmrRuntime::history_global");
+      eng.require_complete_history_structure_("AmrRuntime::history_global");
       const auto it = eng.hist_rings_.find(name);
       if (it == eng.hist_rings_.end())
         throw std::runtime_error("AmrRuntime::history_global: unknown history '" + name + "'");
