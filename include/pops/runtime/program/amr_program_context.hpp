@@ -3254,6 +3254,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       const HistoryRegistration& registration) const {
     return pops::detail::AmrHistoryOps::initialized(*eng_, registration.name);
   }
+  double program_execution_history_slot_dt_storage_(
+      const HistoryRegistration& registration, int lag) const {
+    return pops::detail::AmrHistoryOps::slot_dt(*eng_, registration.name, lag);
+  }
   void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
                                                           bool initialized) const {
     pops::detail::AmrHistoryOps::set_initialized(*eng_, registration.name, initialized);
