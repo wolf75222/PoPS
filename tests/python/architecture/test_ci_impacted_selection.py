@@ -829,7 +829,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     cpp_shards_block = workflow.split("\n  gate-cpp-shards:\n", 1)[1].split(
         "\n  # Check historique", 1)[0]
     assert "timeout-minutes: 22" in cpp_prewarm_block
-    assert "lane: [system, amr-base, amr-compressible]" in cpp_prewarm_block
+    assert (
+        "lane: [system, amr-base, amr-block-base, amr-compressible]"
+        in cpp_prewarm_block
+    )
     assert "scripts/ci_python_module_objects.py" in cpp_prewarm_block
     assert "--contract-file" in cpp_prewarm_block
     assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in cpp_prewarm_block
@@ -853,8 +856,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "--shard-total 7" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
-    assert "test \"${#cache_archives[@]}\" -eq 3" in cpp_shards_block
-    assert "test \"${#compile_contracts[@]}\" -eq 3" in cpp_shards_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in cpp_shards_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in cpp_shards_block
     assert "--verify-contracts" in cpp_shards_block
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
     assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 18m' in cpp_shards_block
@@ -886,7 +889,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 40" in mpi_prewarm_block
     assert "needs: [set-mode, changes]" in mpi_prewarm_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_prewarm_block
-    assert "lane: [system, amr-base, amr-compressible]" in mpi_prewarm_block
+    assert (
+        "lane: [system, amr-base, amr-block-base, amr-compressible]"
+        in mpi_prewarm_block
+    )
     assert "cmake --preset ci-mpi" in mpi_prewarm_block
     assert "scripts/ci_python_module_objects.py" in mpi_prewarm_block
     assert "--contract-file" in mpi_prewarm_block
@@ -899,8 +905,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "needs: [set-mode, changes, gate-mpi-prewarm]" in mpi_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_block
     assert "actions/download-artifact@v8" in mpi_block
-    assert "test \"${#cache_archives[@]}\" -eq 3" in mpi_block
-    assert "test \"${#compile_contracts[@]}\" -eq 3" in mpi_block
+    assert "test \"${#cache_archives[@]}\" -eq 4" in mpi_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in mpi_block
     assert "--verify-contracts" in mpi_block
     assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
     assert 'run_with_heartbeat "MPI native test build" 8m' in mpi_block
@@ -962,7 +968,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 32" in openmp_prewarm_block
     assert "needs: set-mode" in openmp_prewarm_block
     assert "if: needs.set-mode.outputs.openmp_required == 'true'" in openmp_prewarm_block
-    assert "lane: [system, amr-base, amr-compressible]" in openmp_prewarm_block
+    assert (
+        "lane: [system, amr-base, amr-block-base, amr-compressible]"
+        in openmp_prewarm_block
+    )
     assert "graph: [cpp, python]" in openmp_prewarm_block
     assert "if: matrix.graph == 'python'" in openmp_prewarm_block
     assert "python-version: '3.12'" in openmp_prewarm_block
@@ -1046,8 +1055,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "steps.openmp-python-module-cache.outputs.cache-hit != 'true'"
     ) == 2
     assert "openmp-prewarm-${{ matrix.kind }}-ccache-*.tar" in openmp_block
-    assert "test \"${#cache_archives[@]}\" -eq 3" in openmp_block
-    assert openmp_block.count("test \"${#compile_contracts[@]}\" -eq 3") == 2
+    assert "test \"${#cache_archives[@]}\" -eq 4" in openmp_block
+    assert openmp_block.count("test \"${#compile_contracts[@]}\" -eq 4") == 2
     assert openmp_block.count("--verify-contracts") == 2
     assert "openmp-prewarm-cpp-contract-*.json" in openmp_block
     assert "openmp-prewarm-python-contract-*.json" in openmp_block
@@ -1198,11 +1207,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         assert repr(cache_input) in build_module_key
     assert "actions/download-artifact@v8" in python_build_block
     assert "--verify-contracts" in python_build_block
-    assert "test \"${#cache_archives[@]}\" -eq 3" in python_build_block
-    assert "test \"${#compile_contracts[@]}\" -eq 3" in python_build_block
-    assert "matrix.lane: [system, amr-base, amr-compressible]" \
+    assert "test \"${#cache_archives[@]}\" -eq 4" in python_build_block
+    assert "test \"${#compile_contracts[@]}\" -eq 4" in python_build_block
+    assert "matrix.lane: [system, amr-base, amr-block-base, amr-compressible]" \
         not in python_prewarm_block
-    assert "lane: [system, amr-base, amr-compressible]" \
+    assert "lane: [system, amr-base, amr-block-base, amr-compressible]" \
         in python_prewarm_block
     assert "timeout-minutes: 22" in python_prewarm_block
     assert "lookup-only: true" in python_prewarm_block
@@ -1273,7 +1282,10 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
     )[0]
     assert "timeout-minutes: 60" in prewarm
     assert "profile: [warnings, asan, coverage]" in prewarm
-    assert "lane: [system, amr-base, amr-compressible]" in prewarm
+    assert (
+        "lane: [system, amr-base, amr-block-base, amr-compressible]"
+        in prewarm
+    )
     assert "CCACHE_MAXSIZE: 2G" in prewarm
     assert "scripts/ci_python_module_objects.py" in prewarm
     assert "--contract-file" in prewarm
@@ -1295,9 +1307,9 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
     artifact_names = {
         f"quality-prewarm-{profile}-{lane}"
         for profile in ("warnings", "asan", "coverage")
-        for lane in ("system", "amr-base", "amr-compressible")
+        for lane in ("system", "amr-base", "amr-block-base", "amr-compressible")
     }
-    assert len(artifact_names) == 9
+    assert len(artifact_names) == 12
     for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
         assert linked_artifact not in upload
 
@@ -1311,8 +1323,8 @@ def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
         assert "needs: [set-mode, quality-native-prewarm]" in block
         assert "CCACHE_MAXSIZE: 2G" in block
         assert f"pattern: quality-prewarm-{profile}-*" in block
-        assert "test \"${#cache_archives[@]}\" -eq 3" in block
-        assert "test \"${#compile_contracts[@]}\" -eq 3" in block
+        assert "test \"${#cache_archives[@]}\" -eq 4" in block
+        assert "test \"${#compile_contracts[@]}\" -eq 4" in block
         assert f"--build-dir {build_dir}" in block
         assert "--verify-contracts" in block
         assert block.index(f"cmake --preset ci-{profile}") < block.index(

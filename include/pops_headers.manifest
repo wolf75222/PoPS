@@ -91,14 +91,14 @@ sdk-support pops/numerics/elliptic/linear/scaled_scalar.hpp
 api pops/numerics/elliptic/linear/solve_outcome.hpp
 api pops/numerics/elliptic/linear/solve_report.hpp
 api pops/numerics/elliptic/linear/vector_distribution.hpp
-api pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
-api pops/numerics/elliptic/mg/composite_fac_poisson.hpp
-api pops/numerics/elliptic/mg/geometric_mg.hpp
+sdk-support pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
+sdk-support pops/numerics/elliptic/mg/composite_fac_poisson.hpp
+sdk-support pops/numerics/elliptic/mg/geometric_mg.hpp
 api pops/numerics/elliptic/poisson/poisson_fft.hpp
 api pops/numerics/elliptic/poisson/poisson_fft_solver.hpp
 api pops/numerics/elliptic/poisson/poisson_operator.hpp
 api pops/numerics/elliptic/polar/polar_poisson_solver.hpp
-api pops/numerics/elliptic/polar/polar_tensor_operator.hpp
+sdk-support pops/numerics/elliptic/polar/polar_tensor_operator.hpp
 api pops/numerics/fv/flux_interfaces.hpp
 api pops/numerics/fv/flux_failure.hpp
 api pops/numerics/fv/numerical_flux.hpp
@@ -106,6 +106,7 @@ api pops/numerics/fv/reconstruction.hpp
 api pops/numerics/fv/spatial_discretisation.hpp
 api pops/numerics/linalg/block_inverse.hpp
 api pops/numerics/linalg/dense_eig.hpp
+api pops/numerics/nonlinear/prepared_local_nonlinear.hpp
 api pops/numerics/spatial/embedded_boundary/domain.hpp
 api pops/numerics/spatial/embedded_boundary/operator.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
@@ -130,7 +131,6 @@ test-only pops/numerics/time/integrators/ssprk.hpp
 api pops/numerics/time/integrators/time_integrator.hpp
 api pops/numerics/time/integrators/time_steppers.hpp
 test-only pops/numerics/time/schemes/imex.hpp
-api pops/numerics/time/schemes/scheduler.hpp
 test-only pops/numerics/time/schemes/splitting.hpp
 api pops/parallel/comm.hpp
 api pops/parallel/execution_lane.hpp
@@ -236,4 +236,5 @@ sdk-support pops/runtime/system/system_field_solver.hpp
 sdk-support pops/runtime/system/system_lifecycle.hpp
 sdk-support pops/runtime/system/system_poisson_options.hpp
 sdk-support pops/runtime/system/system_program_driver.hpp
+test-only pops/validation/numerics/geometric_mg.hpp
 test-only pops/validation/physics/advection_diffusion.hpp

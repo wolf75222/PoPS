@@ -8,7 +8,7 @@
   "tests/python/integration/amr/test_amr_conservative_state.py": 110.4,
   "tests/python/integration/amr/test_amr_explicit_family.py": 5.0,
   "tests/python/integration/amr/test_amr_fac_and_clustering_options.py": 5.0,
-  "tests/python/integration/amr/test_amr_history_parity.py": 136.8,
+  "tests/python/integration/amr/test_program_history_contract.py": 136.8,
   "tests/python/integration/amr/test_amr_history_regrid.py": 274.2,
   "tests/python/integration/amr/test_amr_install_program.py": 0.5,
   "tests/python/integration/amr/test_amr_introspection_endtoend.py": 60.0,
@@ -31,6 +31,7 @@
   "tests/python/integration/dsl/test_dsl_hll_explicit_wave_speeds.py": 160.0,
   "tests/python/integration/dsl/test_dsl_jacobian_fd_public.py": 160.0,
   "tests/python/integration/io/test_amr_history_checkpoint.py": 360.0,
+  "tests/python/integration/io/test_amr_history_reflux_restart.py": 180.0,
   "tests/python/integration/io/test_amr_history_regrid_replay.py": 230.6,
   "tests/python/integration/io/test_io_checkpoint.py": 0.5,
   "tests/python/integration/io/test_io_multirank.py": 0.5,
@@ -88,6 +89,7 @@
   "tests/python/unit/codegen/test_amr_artifact_metadata.py": 2.0,
   "tests/python/unit/codegen/test_amr_route_introspection.py": 2.0,
   "tests/python/unit/codegen/test_artifact_migration.py": 2.0,
+  "tests/python/unit/codegen/test_checkpoint_migration.py": 2.0,
   "tests/python/unit/codegen/test_artifact_model_metadata_protocol.py": 2.0,
   "tests/python/unit/codegen/test_bind_schema.py": 2.0,
   "tests/python/unit/codegen/test_boundary_jacvec_validation.py": 2.0,
@@ -406,7 +408,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 221,
+    "estimated_count": 223,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -424,6 +426,7 @@
       "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
       "tests/python/integration/dsl/test_dsl_hll_explicit_wave_speeds.py",
       "tests/python/integration/dsl/test_dsl_jacobian_fd_public.py",
+      "tests/python/integration/io/test_amr_history_reflux_restart.py",
       "tests/python/integration/io/test_uniform_selective_history_checkpoint.py",
       "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py",
       "tests/python/integration/mpi/test_compile_stale_and_debug.py",
@@ -462,6 +465,7 @@
       "tests/python/unit/codegen/test_amr_artifact_metadata.py",
       "tests/python/unit/codegen/test_amr_route_introspection.py",
       "tests/python/unit/codegen/test_artifact_migration.py",
+      "tests/python/unit/codegen/test_checkpoint_migration.py",
       "tests/python/unit/codegen/test_artifact_model_metadata_protocol.py",
       "tests/python/unit/codegen/test_bind_schema.py",
       "tests/python/unit/codegen/test_boundary_jacvec_validation.py",
@@ -630,6 +634,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 402
+    "total_files": 404
   }
 }

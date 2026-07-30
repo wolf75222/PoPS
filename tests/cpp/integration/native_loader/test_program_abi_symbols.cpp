@@ -45,6 +45,7 @@ std::string stub_source() {
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/config/route_ids.hpp>
 #include <cstdint>
+namespace pops { class System; }
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "abi_symbol_stub"; }
@@ -53,7 +54,7 @@ extern "C" int pops_program_operator_authority_count() { return 0; }
 extern "C" std::uint64_t pops_program_operator_authority_word(int, int) { return 0; }
 extern "C" int pops_program_block_count() { return 1; }
 extern "C" const char* pops_program_block_name(int i) { return i == 0 ? "gas" : ""; }
-extern "C" void pops_install_program(void* /*sys*/) { /* no-op: symbol presence only */ }
+extern "C" void pops_install_program(pops::System* /*sys*/) { /* no-op: symbol presence only */ }
 extern "C" int  pops_module_operator_count() { return 1; }
 extern "C" int  pops_module_state_space_count() { return 0; }
 extern "C" int  pops_module_field_space_count() { return 0; }
