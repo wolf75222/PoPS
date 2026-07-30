@@ -259,6 +259,23 @@ def test_amr_program_cfl_does_not_require_native_advance_closures():
     assert "parent_child_temporal_relation(child)" in refinement_preflight
 
 
+def test_amr_regrid_cadence_is_decided_by_the_program_context():
+    runtime = AMR_RUNTIME.read_text(encoding="utf-8")
+    context = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+
+    assert "void regrid_if_due(" not in runtime
+    assert "int regrid_interval() const noexcept" in runtime
+    spatial_regrid = _function_body(runtime, "  void regrid()")
+    assert "macro_step" not in spatial_regrid
+    assert "regrid_every_" not in spatial_regrid
+
+    cadence = _function_body(context, "  void regrid_if_due_at_(")
+    assert "eng_->regrid_interval()" in cadence
+    assert "macro_step % interval" in cadence
+    assert "eng_->regrid();" in cadence
+    assert "eng_->regrid_if_due(" not in cadence
+
+
 def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closures():
     runtime = AMR_RUNTIME.read_text(encoding="utf-8")
     builder = AMR_DSL_BLOCK.read_text(encoding="utf-8")
