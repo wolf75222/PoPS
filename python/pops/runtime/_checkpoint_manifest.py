@@ -137,16 +137,28 @@ def _runtime_identities(owner: Any) -> tuple[Identity, Identity, Identity]:
     return tuple(checked)  # type: ignore[return-value]
 
 
-def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind: str) -> Identity:
-    """Add the canonical manifest and restart token to an in-memory NPZ payload."""
+def _seal_checkpoint_payload_with_identities(
+    payload: dict[str, Any],
+    *,
+    runtime_kind: str,
+    semantic: Identity,
+    artifact: Identity,
+    bind: Identity,
+    run: Identity,
+) -> Identity:
+    """Seal an offline payload with explicit, already-authenticated lifecycle identities."""
     if MANIFEST_KEY in payload or IDENTITY_KEY in payload:
         raise ValueError("checkpoint payload already contains reserved identity keys")
-    semantic, artifact, bind = _runtime_identities(owner)
-    run = getattr(owner, "last_run_identity", None)
-    if type(run) is not Identity or run.domain != "run":
-        raise RuntimeError(
-            "checkpoint requires a prior pops.run(sim, **controls) so its execution controls "
-            "have a run identity")
+    for value, domain in (
+        (semantic, "semantic"),
+        (artifact, "artifact"),
+        (bind, "bind"),
+        (run, "run"),
+    ):
+        if type(value) is not Identity or value.domain != domain:
+            raise TypeError("checkpoint requires an exact domain-%r identity" % domain)
+    if not isinstance(runtime_kind, str) or not runtime_kind:
+        raise TypeError("checkpoint runtime kind must be non-empty text")
     arrays = {name: _array_evidence(value) for name, value in sorted(payload.items())}
     base = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
@@ -167,6 +179,24 @@ def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind
         manifest, sort_keys=True, separators=(",", ":"), allow_nan=False)
     payload[IDENTITY_KEY] = restart.token
     return restart
+
+
+def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind: str) -> Identity:
+    """Add the canonical manifest and restart token to an in-memory NPZ payload."""
+    semantic, artifact, bind = _runtime_identities(owner)
+    run = getattr(owner, "last_run_identity", None)
+    if type(run) is not Identity or run.domain != "run":
+        raise RuntimeError(
+            "checkpoint requires a prior pops.run(sim, **controls) so its execution controls "
+            "have a run identity")
+    return _seal_checkpoint_payload_with_identities(
+        payload,
+        runtime_kind=runtime_kind,
+        semantic=semantic,
+        artifact=artifact,
+        bind=bind,
+        run=run,
+    )
 
 
 def _strict_json(text: Any) -> dict[str, Any]:

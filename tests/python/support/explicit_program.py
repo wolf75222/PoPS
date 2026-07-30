@@ -399,8 +399,7 @@ extern "C" std::uint64_t pops_program_operator_authority_word(int, int) {
 %s
 %s
 extern "C" bool pops_program_has_dt_bound() { return false; }
-extern "C" pops::Real pops_program_dt_bound(
-    pops::runtime::program::ProgramContext*, pops::Real) {
+extern "C" pops::Real %s(%s*, pops::Real) {
   return std::numeric_limits<pops::Real>::infinity();
 }
 """ % (
@@ -409,14 +408,16 @@ extern "C" pops::Real pops_program_dt_bound(
         identity,
         _block_identity_exports(block_names),
         _empty_module_metadata_exports(),
+        "pops_program_dt_bound_amr" if target == "amr_system" else "pops_program_dt_bound",
+        "pops::AmrSystem" if target == "amr_system" else "pops::System",
     )
     if target == "system":
         install = """\
-extern "C" void pops_install_program(void* system) {
-  auto context = std::make_shared<pops::runtime::program::ProgramContext>(system);
+extern "C" void pops_install_program(pops::System* system) {
+  auto context = pops::runtime::program::make_program_execution_provider(system);
   context->configure_primary_clock("pops.test.clock.macro");
   context->install([context](double dt) {
-    pops::runtime::program::ProgramContext& ctx = *context;
+    auto& ctx = *context;
     ctx.begin_step(dt);
 %s
   });
@@ -424,12 +425,12 @@ extern "C" void pops_install_program(void* system) {
 """ % body
     else:
         install = """\
-extern "C" void pops_install_program_amr(void* system) {
-  auto context = std::make_shared<pops::runtime::program::AmrProgramContext>(system);
+extern "C" void pops_install_program_amr(pops::AmrSystem* system) {
+  auto context = pops::runtime::program::make_program_execution_provider(system);
   context->configure_primary_clock("pops.test.clock.macro");
   context->install([context](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context](double dt) {
-      pops::runtime::program::AmrProgramContext& ctx = *context;
+      auto& ctx = *context;
 %s
     });
   }, context);

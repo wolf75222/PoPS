@@ -185,8 +185,8 @@ pops::runtime::amr::PreparedClusteringSpec amr_clustering_spec_from_python(
 // Assembly seams: per-block composition, native block, and refinement tagging.
 void bind_amr_assembly(py::class_<AmrSystem>& cls) {
   cls.def(py::init<const AmrSystemConfig&>())
-      // ADC-214: Python surface UNCHANGED (same flat newton_* kwargs, same defaults). The lambda
-      // assembles the NewtonOptions POD before the C++ call (parity with System.add_block).
+      // The lambda assembles the flat preparation controls into NewtonOptions before the C++ call.
+      // Failure policy is intentionally absent: every local nonlinear failure is fail-closed.
       .def(
           "add_block",
           [](AmrSystem& s, const std::string& name, const ModelSpec& model,
@@ -216,8 +216,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // metadata only; they do not enable a hidden backward-Euler step.
           py::arg("implicit_vars") = std::vector<std::string>{},
           py::arg("implicit_roles") = std::vector<std::string>{},
-          // The flat newton_* kwargs likewise remain for Python-surface compatibility. Every
-          // non-default option and newton_diagnostics=true fails closed until an executable typed
+          // Every non-default Newton control and newton_diagnostics=true fails closed until a typed
           // AMR local nonlinear/Newton Program primitive owns both the solve and its report.
           py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
           py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
@@ -1101,6 +1100,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("begin_restart_transaction", &AmrSystem::begin_restart_transaction)
       .def("commit_restart_transaction", &AmrSystem::commit_restart_transaction)
       .def("rollback_restart_transaction", &AmrSystem::rollback_restart_transaction)
+      .def("preflight_regrid_on_restart", &AmrSystem::preflight_regrid_on_restart)
+      .def("regrid_on_restart", &AmrSystem::regrid_on_restart)
       .def("checkpoint_regrid_count", &AmrSystem::checkpoint_regrid_count)
       .def("checkpoint_topology_epoch", &AmrSystem::checkpoint_topology_epoch)
       .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,

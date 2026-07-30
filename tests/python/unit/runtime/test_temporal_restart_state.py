@@ -1061,6 +1061,28 @@ def test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state():
         TemporalRestartState.from_json(json.dumps(payload), time=0.0, macro_step=0)
 
 
+def test_strict_controller_state_matches_the_accepted_macro_step():
+    initial = _bound_state()
+    initial_payload = json.loads(initial.checkpoint_json(time=0.0, macro_step=0))
+    initial_payload["controller_state"]["last_accepted_dt"] = (0.125).hex()
+    with pytest.raises(ValueError, match="before the first macro step"):
+        TemporalRestartState.from_json(
+            json.dumps(initial_payload), time=0.0, macro_step=0)
+
+    native = _Native()
+    accepted = _bound_state()
+    run_step_attempt(_Engine(native, accepted), native, FixedDt(0.125), t_end=1.0)
+    accepted_payload = json.loads(
+        accepted.checkpoint_json(time=native.time(), macro_step=native.macro_step()))
+    accepted_payload["controller_state"]["last_accepted_dt"] = None
+    with pytest.raises(ValueError, match="lacks the last accepted dt"):
+        TemporalRestartState.from_json(
+            json.dumps(accepted_payload),
+            time=native.time(),
+            macro_step=native.macro_step(),
+        )
+
+
 def test_frozen_release_v2_fixture_is_refused_offline_and_at_runtime_boundary():
     import base64
     import hashlib
