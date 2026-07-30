@@ -34,16 +34,6 @@ evidence_paths = [
 ]
 
 [[deferred]]
-issue = "ADC-687"
-requirement = "tamper_capability_abi"
-polarity = "refusal"
-reason = "A genuine wrong-ABI shared object refusal exists, but the executable M4 matrix does not yet select and run that DSO proof."
-evidence_paths = [
-  "tests/cpp/integration/native_loader/test_amr_native_loader.cpp",
-  "tests/gates/m4_runtime_io.toml",
-]
-
-[[deferred]]
 issue = "ADC-684"
 requirement = "runtime_instance"
 polarity = "positive"
@@ -388,6 +378,14 @@ polarity = "refusal"
 kind = "ctest"
 target = "tamper_capability_abi@test_native_loader_param_overflow"
 test_regex = "^test_native_loader_param_overflow\\.Runs$"
+
+[[check]]
+issue = "ADC-687"
+requirement = "tamper_capability_abi"
+polarity = "refusal"
+kind = "ctest"
+target = "tamper_capability_abi@test_amr_native_loader"
+test_regex = "^test_amr_native_loader\\.RefusesComponentBuiltForAnotherNativeAbi$"
 
 [[check]]
 issue = "ADC-687"

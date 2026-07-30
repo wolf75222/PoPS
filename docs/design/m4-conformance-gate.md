@@ -12,7 +12,7 @@ The source audit already authenticates real proofs for:
 - canonical component manifests, generated registries, exact interface
   tables, and platform launch checks;
 - source, manifest, and installed-binary tamper refusals, provider absence,
-  and native parameter capacity overflow;
+  native parameter capacity overflow, and a genuine wrong-ABI DSO refusal;
 - real Uniform and AMR writer transactions, a real multi-layout transfer,
   and a positive multi-layout checkpoint/restart;
 - accepted scientific publication, diagnostics, and two-rank collective
@@ -25,7 +25,6 @@ that must not be mistaken for closure. They currently cover:
 - a CI lane that installs every mandatory dependency, including VTK, and
   executes every selected pytest and CTest proof with zero skips;
 - an unknown capability refused by a real runtime/backend before execution;
-- selection and execution of the existing genuine wrong-ABI DSO refusal;
 - ConsumerGraph and composite runtime rollback without handwritten publishers
   or injected failure wrappers;
 - checkpoint restore rollback caused by a real provider failure;
