@@ -207,12 +207,17 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
   const int nc = Model::n_vars;
   const int ng = Limiter::n_ghost;
   const int nlev = S.nlev();
-  std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
+  std::shared_ptr<PreparedBoundaryPlan> prepared_boundary_plan;
   if (S.boundary_plans != nullptr) {
     auto found = S.boundary_plans->find(name);
     if (found != S.boundary_plans->end())
-      boundary_plan = found->second;
+      prepared_boundary_plan = found->second;
   }
+  if (prepared_boundary_plan && prepared_boundary_plan->requires_fixed_state_conversion()) {
+    auto conversion = make_cell_convert(model);
+    prepared_boundary_plan->prepare_fixed_state_conversion(conversion.first);
+  }
+  std::shared_ptr<const PreparedBoundaryPlan> boundary_plan = prepared_boundary_plan;
   BCRec transport_bc;
   if (!S.base_per.x)
     transport_bc.xlo = transport_bc.xhi = BCType::Foextrap;

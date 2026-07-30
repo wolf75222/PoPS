@@ -62,6 +62,14 @@ void System::set_density(const std::string& name, const std::vector<double>& rho
 POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConvert prim_to_cons,
                                               CellConvert cons_to_prim) {
   Impl::Species& s = p_->find(name);
+  const auto boundary = p_->boundary_plans_.find(name);
+  if (boundary != p_->boundary_plans_.end() &&
+      boundary->second->requires_fixed_state_conversion()) {
+    if (!prim_to_cons)
+      throw std::runtime_error(
+          "System primitive fixed-state boundary requires the block-model conversion");
+    boundary->second->prepare_fixed_state_conversion(prim_to_cons);
+  }
   s.prim_to_cons = std::move(prim_to_cons);
   s.cons_to_prim = std::move(cons_to_prim);
 }

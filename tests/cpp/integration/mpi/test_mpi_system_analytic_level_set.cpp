@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
+#include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -189,6 +192,151 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   }
   require(all_reduce_sum(valid_amr_registered ? 1L : 0L) == n_ranks(),
           "a rejected local AMR error must not leak a partial registration");
+
+  const std::vector<std::string> boundary_types{"dirichlet", "foextrap", "foextrap", "foextrap"};
+  const std::vector<double> boundary_values(4, 0.0);
+  const std::vector<std::string> boundary_faces{"case::boundary::xlo", "case::boundary::xhi",
+                                                "case::boundary::ylo", "case::boundary::yhi"};
+  const std::vector<std::string> boundary_roles{"Scalar"};
+  const std::vector<std::string> boundary_representations(4, "conservative");
+  const std::vector<std::string> boundary_converters(4, "");
+  const std::vector<std::string> boundary_clocks(4, "");
+  const std::vector<std::vector<double>> boundary_literals{{1.0}, {}, {}, {}};
+
+  // Boundary programs are prepared and allocate native tables during installation. A malformed
+  // opcode on one rank must reject every rank before the prepared-plan map publishes a node.
+  System boundary_system(SystemConfig{12, 1.0, Periodicity{false, false}});
+  const std::string boundary_state = "case::boundary::uniform::state";
+  boundary_system.install_block_state_route("tracer", boundary_state);
+  bool malformed_boundary_rejected = false;
+  std::string malformed_boundary_message;
+  try {
+    boundary_system.install_boundary_plan(
+        "tracer", "case::boundary::uniform::plan", 1, boundary_types, boundary_values,
+        boundary_faces, boundary_roles, {}, boundary_state, PreparedBoundaryReadDependencies{}, {},
+        boundary_representations, boundary_converters,
+        {{rank == 0 ? "constant" : "not-an-analytic-opcode"}, {}, {}, {}}, boundary_literals,
+        boundary_clocks);
+  } catch (const std::runtime_error& error) {
+    malformed_boundary_rejected = true;
+    malformed_boundary_message = error.what();
+  }
+  require(all_reduce_sum(malformed_boundary_rejected ? 1L : 0L) == n_ranks(),
+          "one malformed uniform analytic boundary must reject collectively");
+  require(malformed_boundary_rejected &&
+              malformed_boundary_message.find(
+                  "rank-local analytic validation failed collectively") != std::string::npos,
+          "uniform boundary rejection must identify rank-local collective validation");
+
+  bool valid_boundary_installed = true;
+  try {
+    boundary_system.install_boundary_plan(
+        "tracer", "case::boundary::uniform::plan", 1, boundary_types, boundary_values,
+        boundary_faces, boundary_roles, {}, boundary_state, PreparedBoundaryReadDependencies{}, {},
+        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
+        boundary_literals, boundary_clocks);
+  } catch (const std::exception& error) {
+    valid_boundary_installed = false;
+    std::cerr << "valid uniform analytic boundary failed after malformed payload on rank " << rank
+              << ": " << error.what() << '\n';
+  }
+  require(all_reduce_sum(valid_boundary_installed ? 1L : 0L) == n_ranks(),
+          "a rejected uniform boundary must not publish a partial plan");
+
+  // AMR uses the same exact transaction. Change non-program metadata only, proving that consensus
+  // covers the complete boundary request rather than merely its postfix rows.
+  AmrSystem boundary_amr(amr_config);
+  const std::string boundary_amr_state = "case::boundary::amr::state";
+  boundary_amr.install_block_state_route("tracer", boundary_amr_state);
+  auto rank_faces = boundary_faces;
+  if (rank == 1)
+    rank_faces[0] = "case::boundary::rank-one-xlo";
+  bool boundary_metadata_rejected = false;
+  std::string boundary_metadata_message;
+  try {
+    boundary_amr.install_boundary_plan(
+        "tracer", "case::boundary::amr::plan", 1, boundary_types, boundary_values, rank_faces,
+        boundary_roles, {}, boundary_amr_state, PreparedBoundaryReadDependencies{}, {},
+        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
+        boundary_literals, boundary_clocks);
+  } catch (const std::runtime_error& error) {
+    boundary_metadata_rejected = true;
+    boundary_metadata_message = error.what();
+  }
+  require(all_reduce_sum(boundary_metadata_rejected ? 1L : 0L) == n_ranks(),
+          "rank-dependent AMR analytic boundary metadata must reject collectively");
+  require(boundary_metadata_rejected &&
+              boundary_metadata_message.find("differs across MPI ranks") != std::string::npos,
+          "AMR boundary metadata rejection must identify exact MPI disagreement");
+
+  bool valid_amr_boundary_installed = true;
+  try {
+    boundary_amr.install_boundary_plan(
+        "tracer", "case::boundary::amr::plan", 1, boundary_types, boundary_values, boundary_faces,
+        boundary_roles, {}, boundary_amr_state, PreparedBoundaryReadDependencies{}, {},
+        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
+        boundary_literals, boundary_clocks);
+  } catch (const std::exception& error) {
+    valid_amr_boundary_installed = false;
+    std::cerr << "valid AMR analytic boundary failed after metadata mismatch on rank " << rank
+              << ": " << error.what() << '\n';
+  }
+  require(all_reduce_sum(valid_amr_boundary_installed ? 1L : 0L) == n_ranks(),
+          "a rejected AMR boundary mismatch must not publish a partial plan");
+
+  // The analytic finite-value scan must precede every same-level, periodic and MPI halo write.
+  // This distributed multibox field exercises all three paths and compares the complete grown
+  // storage after the collective refusal.
+  const Box2D halo_domain = Box2D::from_extents(8, 4);
+  const Geometry halo_geometry(halo_domain, Real(0), Real(8), Real(0), Real(4));
+  const BoxArray halo_boxes = BoxArray::from_domain(halo_domain, 2);
+  MultiFab halo_state(halo_boxes, DistributionMapping(halo_boxes.size(), n_ranks()), 1, 1);
+  halo_state.set_val(Real(-99));
+  for (int local = 0; local < halo_state.local_size(); ++local) {
+    const Array4 values = halo_state.fab(local).array();
+    for_each_cell(halo_state.box(local),
+                  [=](int i, int j) { values(i, j, 0) = Real(2 + i + 10 * j); });
+  }
+  device_fence();
+  const MultiFab halo_before = halo_state;
+  PreparedBoundaryPlan invalid_halo_plan(
+      "case::boundary::invalid-halo-plan", 1,
+      prepare_hyperbolic_boundary<2>(
+          {"dirichlet", "foextrap", "periodic", "periodic"}, std::vector<double>(4, 0.0),
+          {"case::invalid-halo::xlo", "case::invalid-halo::xhi", "case::invalid-halo::ylo",
+           "case::invalid-halo::yhi"},
+          {"Scalar"}, false, {}, {},
+          {{"constant", "log"},
+           std::vector<std::string>{},
+           std::vector<std::string>{},
+           std::vector<std::string>{}},
+          {{-1.0, 0.0}, std::vector<double>{}, std::vector<double>{}, std::vector<double>{}},
+          {"", "", "", ""}));
+  const auto invalid_halo_lane = ExecutionLane::world("case::boundary::invalid-halo-lane");
+  auto invalid_halo_session = invalid_halo_plan.make_session(invalid_halo_lane);
+  const runtime::multiblock::BoundaryEvaluationPoint halo_point{"clock.boundary",    1,   0,   0, 0,
+                                                                amr::Rational(0, 1), 0.1, 0.25};
+  bool invalid_halo_rejected = false;
+  try {
+    invalid_halo_session.fill_same_level_and_physical(halo_state, halo_geometry, halo_point);
+  } catch (const std::runtime_error&) {
+    invalid_halo_rejected = true;
+  }
+  require(all_reduce_sum(invalid_halo_rejected ? 1L : 0L) == n_ranks(),
+          "non-finite analytic halo values must reject collectively");
+  halo_state.sync_host();
+  halo_before.sync_host();
+  long local_halo_mutations = 0;
+  for (int local = 0; local < halo_state.local_size(); ++local) {
+    const Fab2D& observed = halo_state.fab(local);
+    const Fab2D& expected = halo_before.fab(local);
+    const Box2D grown = observed.grown_box();
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        local_halo_mutations += observed(i, j, 0) == expected(i, j, 0) ? 0L : 1L;
+  }
+  require(all_reduce_sum(local_halo_mutations) == 0,
+          "analytic refusal must preserve complete same-level, periodic, MPI and physical storage");
 
   const long failures = all_reduce_sum(local_failures);
   comm_finalize();

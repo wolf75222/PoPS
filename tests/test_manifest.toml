@@ -166,6 +166,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_amr_prepared_boundary_cf"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_prepared_boundary_cf.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_amr_program_reflux"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
 labels = ["backend", "mpi", "medium"]

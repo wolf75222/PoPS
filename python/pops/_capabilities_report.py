@@ -375,6 +375,94 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
     gpu = bool(_flag_value(flags, "supports_gpu"))
     return [
         _row(
+            "boundary:prepared_transport",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "one prepared 2D model-aware plan serves Uniform/AMR native and compiled "
+                "transport boundaries; executable built-ins are periodic, extrapolation, "
+                "constant/RuntimeParam fixed state, conservative device-side analytic "
+                "(x,y,t,params) fixed state, model primitive-to-conservative fixed-state conversion, "
+                "and typed-role slip wall; dynamic AMR regrid keeps internal "
+                "coarse-fine ghosts under the prepared transfer authority on MPI ranks, with "
+                "double-physical corners explicitly not required by dimension-split FV stencils"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:characteristic_no_inflow",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "the prepared transport plan rejects characteristic closure until executable "
+                "model eigenstructure, incoming-mode data, and sonic/sign policies are installed"
+            ),
+            requested="characteristic no-inflow/outflow transport boundary",
+            available_route="explicit fixed-state inflow or extrapolated outflow",
+            alternative=(
+                "use the explicit built-in route or install a prepared characteristic kernel"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:representation_conversion",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "2D fixed-state primitive inflow may use the exact compiled block-model "
+                "to_conservative provider; conservative-to-primitive recovery and arbitrary "
+                "representation converters remain unavailable, and conversion does not invent "
+                "a boundary admissibility projection"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:analytic_xtp",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "2D conservative fixed-state inflow accepts data-only analytic ScalarExpr "
+                "programs over typed coordinates, one exact logical Clock, and bound parameters; "
+                "primitive per-point conversion and discrete state/field/input reads remain "
+                "unavailable, analytic ghost depth may not exceed the normal domain extent, and "
+                "axis-permuted periodic coordinates require a prepared coordinate map"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:post_riemann_flux",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "the prepared boundary component ABI has ghost, residual, and JVP operations "
+                "but no post-Riemann numerical-flux transformation port"
+            ),
+            requested="post-Riemann transport-boundary flux provider",
+            available_route="prepared ghost-state/exterior-state transport boundary",
+            alternative="add the typed NumericalFlux boundary component interface",
+            source=source,
+        ),
+        _row(
             "amr:field_coupled_rhs_jacvec",
             layout="amr",
             backend="none",

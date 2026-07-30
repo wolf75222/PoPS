@@ -251,7 +251,7 @@ class PreparedGridBoundarySession final {
       return;
     }
     if (!context_.boundary_plan->has_component_boundaries()) {
-      plan_session_->fill_same_level_and_physical(state, context_.geom);
+      plan_session_->fill_same_level_and_physical(state, context_.geom, point);
       return;
     }
     bind_registry_(point, state, nullptr, nullptr);

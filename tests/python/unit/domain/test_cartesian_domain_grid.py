@@ -18,7 +18,7 @@ from pops.domain import (
     RectangleBoundaryNames,
     RectangleFrame,
 )
-from pops.frames import Cartesian2D, CartesianAxis, CartesianDirection
+from pops.frames import Cartesian2D, CartesianAxis, CartesianDirection, Z_AXIS
 from pops.mesh.grid import CartesianGrid, PeriodicAxes
 
 
@@ -38,9 +38,12 @@ def test_cartesian_axes_are_typed_immutable_and_canonical() -> None:
     assert y is frame.y
     assert (x.direction, x.index, x.name) == (CartesianDirection.X, 0, "x")
     assert (y.direction, y.index, y.name) == (CartesianDirection.Y, 1, "y")
+    assert (Z_AXIS.direction, Z_AXIS.index, Z_AXIS.name) == (CartesianDirection.Z, 2, "z")
+    assert Z_AXIS not in frame.axes
     assert len({x, y}) == 2
     assert Cartesian2D.from_dict(frame.to_dict()) == frame
     assert CartesianAxis.from_dict(x.to_dict()) == x
+    assert CartesianAxis.from_dict(Z_AXIS.to_dict()) == Z_AXIS
     assert json.loads(json.dumps(frame.to_dict())) == frame.to_dict()
 
     with pytest.raises(FrozenInstanceError):

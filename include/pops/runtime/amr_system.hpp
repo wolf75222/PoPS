@@ -350,17 +350,27 @@ class AmrSystem {
   POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
                                          int required_depth,
                                          const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values, int ncomp,
+                                         const std::vector<double>& face_values,
+                                         const std::vector<std::string>& face_identities,
+                                         const std::vector<std::string>& component_roles,
                                          const std::vector<int>& omitted_interface_faces = {},
                                          const std::string& state_identity = {},
                                          PreparedBoundaryReadDependencies read_dependencies = {});
-  /// Exact-topology overload; preserves the translation-only exported ABI above.
+  /// Exact-topology overload. Periodic endpoint maps remain topology metadata beside the sole
+  /// model-aware physical-law plan; they never restore component-wise BCRec transport semantics.
   POPS_EXPORT void install_boundary_plan(
       const std::string& name, const std::string& identity, int required_depth,
-      const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
+      const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+      const std::vector<std::string>& face_identities,
+      const std::vector<std::string>& component_roles,
       const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
       PreparedBoundaryReadDependencies read_dependencies,
-      std::vector<PeriodicIdentification2D> periodic_identifications);
+      std::vector<PeriodicIdentification2D> periodic_identifications,
+      const std::vector<std::string>& face_representations = {},
+      const std::vector<std::string>& face_converter_identities = {},
+      const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
+      const std::vector<std::vector<double>>& face_analytic_literals = {},
+      const std::vector<std::string>& face_analytic_clocks = {});
   /// Register the exact state Handle independently from physical-boundary ownership.
   POPS_EXPORT void install_block_state_route(const std::string& name,
                                              const std::string& state_identity);

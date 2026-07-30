@@ -1330,72 +1330,76 @@ POPS_EXPORT void AmrSystem::install_block_state_route(const std::string& name,
 
 POPS_EXPORT void AmrSystem::install_boundary_plan(
     const std::string& name, const std::string& identity, int required_depth,
-    const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
+    const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+    const std::vector<std::string>& face_identities,
+    const std::vector<std::string>& component_roles,
     const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
     PreparedBoundaryReadDependencies read_dependencies) {
-  install_boundary_plan(name, identity, required_depth, face_types, face_values, ncomp,
-                        omitted_interface_faces, state_identity, std::move(read_dependencies), {});
+  install_boundary_plan(name, identity, required_depth, face_types, face_values, face_identities,
+                        component_roles, omitted_interface_faces, state_identity,
+                        std::move(read_dependencies), {});
 }
 
 POPS_EXPORT void AmrSystem::install_boundary_plan(
     const std::string& name, const std::string& identity, int required_depth,
-    const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
+    const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+    const std::vector<std::string>& face_identities,
+    const std::vector<std::string>& component_roles,
     const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
     PreparedBoundaryReadDependencies read_dependencies,
-    std::vector<PeriodicIdentification2D> periodic_identifications) {
+    std::vector<PeriodicIdentification2D> periodic_identifications,
+    const std::vector<std::string>& face_representations,
+    const std::vector<std::string>& face_converter_identities,
+    const std::vector<std::vector<std::string>>& face_analytic_opcodes,
+    const std::vector<std::vector<double>>& face_analytic_literals,
+    const std::vector<std::string>& face_analytic_clocks) {
   Impl* P = p_.get();
-  require_assembling_amr(P->bound_, "install_boundary_plan");
-  if (P->built)
-    throw std::runtime_error("AmrSystem::install_boundary_plan: system is already built");
-  if (name.empty() || state_identity.empty() || P->boundary_plans_.count(name) != 0)
-    throw std::runtime_error(
-        "AmrSystem::install_boundary_plan requires unique block/state-qualified identities");
-  const auto state_route = P->block_state_identities_.find(name);
-  if (state_route == P->block_state_identities_.end() || state_route->second != state_identity)
-    throw std::runtime_error(
-        "AmrSystem::install_boundary_plan state differs from the exact block state route");
-  if (ncomp < 1 || face_types.size() != 4 ||
-      face_values.size() != static_cast<std::size_t>(4 * ncomp))
-    throw std::runtime_error(
-        "AmrSystem::install_boundary_plan requires four face types and ncomp*4 values");
-  auto parse = [](const std::string& token) {
-    if (token == "periodic")
-      return BCType::Periodic;
-    if (token == "foextrap")
-      return BCType::Foextrap;
-    if (token == "dirichlet")
-      return BCType::Dirichlet;
-    if (token == "external")
-      return BCType::External;
-    throw std::runtime_error("AmrSystem::install_boundary_plan: unsupported face producer '" +
-                             token + "'");
-  };
-  std::vector<BCRec> components(static_cast<std::size_t>(ncomp));
-  for (int comp = 0; comp < ncomp; ++comp) {
-    BCRec& bc = components[static_cast<std::size_t>(comp)];
-    const BCType types[4] = {parse(face_types[0]), parse(face_types[1]), parse(face_types[2]),
-                             parse(face_types[3])};
-    const Real values[4] = {static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp)]),
-                            static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + 1)]),
-                            static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + 2)]),
-                            static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + 3)])};
-    bc.xlo = types[0];
-    bc.xhi = types[1];
-    bc.ylo = types[2];
-    bc.yhi = types[3];
-    bc.xlo_val = values[0];
-    bc.xhi_val = values[1];
-    bc.ylo_val = values[2];
-    bc.yhi_val = values[3];
-  }
-  auto plan = std::make_shared<PreparedBoundaryPlan>(
-      identity, required_depth, std::move(components), omitted_interface_faces, state_identity,
-      std::move(read_dependencies), std::move(periodic_identifications));
-  for (const auto& [_, installed] : P->boundary_plans_)
-    if (installed->state_identity() == state_identity)
-      throw std::runtime_error(
-          "AmrSystem::install_boundary_plan duplicate qualified state identity");
-  P->boundary_plans_.emplace(name, std::move(plan));
+  using BoundaryPlanMap = decltype(P->boundary_plans_);
+  using BoundaryPlanNode = typename BoundaryPlanMap::node_type;
+  BoundaryPlanNode prepared = analytic::collectively_prepare_exact_analytic_request(
+      "AmrSystem::install_boundary_plan",
+      [&]() -> BoundaryPlanNode {
+        require_assembling_amr(P->bound_, "install_boundary_plan");
+        if (P->built)
+          throw std::runtime_error("AmrSystem::install_boundary_plan: system is already built");
+        if (name.empty() || state_identity.empty() || P->boundary_plans_.count(name) != 0)
+          throw std::runtime_error(
+              "AmrSystem::install_boundary_plan requires unique block/state-qualified identities");
+        const auto state_route = P->block_state_identities_.find(name);
+        if (state_route == P->block_state_identities_.end() ||
+            state_route->second != state_identity)
+          throw std::runtime_error(
+              "AmrSystem::install_boundary_plan state differs from the exact block state route");
+        for (const auto& [_, installed] : P->boundary_plans_)
+          if (installed->state_identity() == state_identity)
+            throw std::runtime_error(
+                "AmrSystem::install_boundary_plan duplicate qualified state identity");
+
+        auto hyperbolic = prepare_hyperbolic_boundary<2>(
+            face_types, face_values, face_identities, component_roles,
+            !periodic_identifications.empty(), face_representations, face_converter_identities,
+            face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
+        auto plan = std::make_shared<PreparedBoundaryPlan>(
+            identity, required_depth, std::move(hyperbolic), omitted_interface_faces,
+            state_identity, read_dependencies, periodic_identifications);
+        if (plan->has_mapped_periodicity())
+          throw std::runtime_error(
+              "AmrSystem::install_boundary_plan: mapped periodic topology is not supported by AMR "
+              "fill-patch/regrid; use the uniform runtime or an axis-aligned translation");
+        BoundaryPlanMap staged;
+        staged.emplace(name, std::move(plan));
+        return staged.extract(staged.begin());
+      },
+      [&]() {
+        return detail::canonical_prepared_boundary_plan_request(
+            name, identity, required_depth, face_types, face_values, face_identities,
+            component_roles, omitted_interface_faces, state_identity, read_dependencies,
+            periodic_identifications, face_representations, face_converter_identities,
+            face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
+      });
+  const auto published = P->boundary_plans_.insert(std::move(prepared));
+  if (!published.inserted)
+    throw std::logic_error("AmrSystem::install_boundary_plan lost its prepared publication slot");
 }
 
 POPS_EXPORT void AmrSystem::install_field_storage_route(const std::string& field_identity,

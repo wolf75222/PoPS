@@ -98,6 +98,33 @@ Supported native routes include:
   interpolation are cell-centered on the supplied route. Derived fields use `elliptic_solve` and
   caches use `patch_topology`; unsupported provider contracts fail before artifact creation.
 - Finite-volume spatial discretisation on the 2D core.
+- One prepared, model-aware 2D transport-boundary plan shared by Uniform and AMR native/compiled
+  routes. The capability matrix marks this route `partial` and names its exact built-ins:
+  periodicity, extrapolation, constant or `RuntimeParam` fixed state, conservative device-side
+  analytic fixed state over typed `(x,y,t,params)`, fixed-state primitive inflow converted once
+  through the exact compiled block-model `to_conservative` provider, and typed-role slip wall.
+  Analytic programs are immutable postfix tables evaluated in native device kernels at the exact
+  `BoundaryEvaluationPoint`; no Python callback or hot-loop allocation is retained. The analytic
+  finite-value contract is strictly non-mutating: one device preflight and one communicator
+  reduction complete before any same-level, periodic, MPI or physical halo write. The commit kernel
+  then evaluates the program again; this deliberate two-pass route avoids a per-cell scratch field
+  but retains one blocking collective per analytic boundary fill.
+  The analytic route remains `partial`: primitive per-point conversion and discrete state/field/input reads are
+  rejected, as is an analytic ghost depth larger than the normal domain extent. Analytic faces with
+  axis-permuted periodic coordinates also fail closed until a prepared coordinate map exists. The
+  conversion route is explicitly `partial`: conservative-to-primitive recovery and arbitrary
+  representation components remain unavailable, and conversion does not invent a boundary
+  admissibility projection. Separate `unavailable` rows expose the missing characteristic
+  no-inflow kernel and post-Riemann flux transformation.
+  These requests fail during resolution or lowering; none silently degrades to component-wise
+  ghost filling. A native rank-1/2/4 regrid fixture removes and recreates the fine hierarchy, then
+  proves that uncovered internal fine ghosts retain the conservative coarse-fine transfer and are
+  never treated as physical faces by the rematerialized prepared boundary session. The explicit
+  public route is
+  `Inflow(state=U, value=primitive_values, representation=Primitive(),
+  converter=pops.boundary.model_primitive_to_conservative(U))`; the converter is derived from the
+  authenticated block state and cannot name an unrelated callback or kernel.
+  `primitive_values` follows the model's declared primitive-variable order.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
