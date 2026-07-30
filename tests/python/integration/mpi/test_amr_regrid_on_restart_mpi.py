@@ -131,39 +131,54 @@ def _shared_flux_component(root: Path):
         component.binary if component is not None else b"",
         root=0,
     )
-    if not isinstance(metadata, dict) or not binary:
-        raise RuntimeError("rank zero published an incomplete NumericalFlux component artifact")
-    from pops.identity import Identity
+    local_failure = ""
+    try:
+        if not isinstance(metadata, dict) or not binary:
+            raise RuntimeError("rank zero published an incomplete NumericalFlux component artifact")
+        from pops.identity import Identity
 
+        if component is None:
+            from pops.external.artifacts import CompiledComponentArtifact, ComponentRuntimeContract
+            from pops.interfaces import NumericalFlux
+            from pops.model import ComponentManifest
+            from pops.runtime._platform_manifest import PlatformManifest
+
+            manifest = ComponentManifest.from_data(metadata["runtime_manifest"])
+            component = CompiledComponentArtifact(
+                component_id=metadata["component_id"],
+                component_manifest=Identity.from_token(metadata["component_manifest"]),
+                runtime_contract=ComponentRuntimeContract.from_manifest(manifest),
+                interface=NumericalFlux,
+                platform_manifest=PlatformManifest.from_data(metadata["platform_manifest"]),
+                entry_symbols=dict(metadata["entry_symbols"]),
+                binary_identity=Identity.from_token(metadata["binary_identity"]),
+                binary=binary,
+                source_package=(
+                    Identity.from_token(metadata["source_package"])
+                    if metadata["source_package"] is not None
+                    else None
+                ),
+                fixed_signature=metadata["fixed_signature"],
+                suffix=metadata["suffix"],
+            )
+        component.verify()
+        if component.artifact_identity != Identity.from_token(metadata["artifact_identity"]):
+            raise RuntimeError(
+                "broadcast NumericalFlux artifact identity changed during reconstruction"
+            )
+    except Exception as exc:  # noqa: BLE001 -- close local authentication before the next collective
+        local_failure = "%s: %s" % (type(exc).__name__, exc)
+
+    failures = tuple(str(value) for value in allgather_value(_COMM, local_failure))
+    if any(failures):
+        details = "; ".join(
+            "rank %d: %s" % (rank, message)
+            for rank, message in enumerate(failures)
+            if message
+        )
+        raise RuntimeError("shared NumericalFlux component authentication failed: " + details)
     if component is None:
-        from pops.external.artifacts import CompiledComponentArtifact, ComponentRuntimeContract
-        from pops.interfaces import NumericalFlux
-        from pops.model import ComponentManifest
-        from pops.runtime._platform_manifest import PlatformManifest
-
-        manifest = ComponentManifest.from_data(metadata["runtime_manifest"])
-        component = CompiledComponentArtifact(
-            component_id=metadata["component_id"],
-            component_manifest=Identity.from_token(metadata["component_manifest"]),
-            runtime_contract=ComponentRuntimeContract.from_manifest(manifest),
-            interface=NumericalFlux,
-            platform_manifest=PlatformManifest.from_data(metadata["platform_manifest"]),
-            entry_symbols=dict(metadata["entry_symbols"]),
-            binary_identity=Identity.from_token(metadata["binary_identity"]),
-            binary=binary,
-            source_package=(
-                Identity.from_token(metadata["source_package"])
-                if metadata["source_package"] is not None
-                else None
-            ),
-            fixed_signature=metadata["fixed_signature"],
-            suffix=metadata["suffix"],
-        )
-    component.verify()
-    if component.artifact_identity != Identity.from_token(metadata["artifact_identity"]):
-        raise RuntimeError(
-            "broadcast NumericalFlux artifact identity changed during reconstruction"
-        )
+        raise RuntimeError("collective component authentication returned without an artifact")
     return component
 
 
