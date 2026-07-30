@@ -85,10 +85,11 @@ count, target suffix, or writer availability:
   gather, but only rank 0 prepares, verifies and atomically publishes the single-file writer.
   Preparation failures and the final receipt are broadcast to every participant.
 - `COLLECTIVE` requires a distributed context, an authenticated collective resource plan and the
-  native C++ parallel-HDF5 provider. Each rank writes only its exact non-overlapping native
-  hyperslabs with exactly one MPIO collective transfer per dataset and rank (including a select-none
-  transfer for a rank with no patch). A replicated AMR coarse patch is assigned to rank 0 for this
-  mode so it cannot overlap.
+  native C++ parallel-HDF5 provider. The observer runtime owns a duplicated MPI lane for the complete
+  writer session; neither the Python writer nor the native HDF5 adapter borrows or rediscovers the
+  process world. Each rank writes only its exact non-overlapping native hyperslabs with exactly one
+  MPIO collective transfer per dataset and rank (including a select-none transfer for a rank with no
+  patch). A replicated AMR coarse patch is assigned to rank 0 for this mode so it cannot overlap.
 - `PER_RANK` requires a distributed context and preserves each rank's exact local pieces, including
   explicitly replicated coarse pieces. Targets are rank-qualified before any file is opened. The
   transaction succeeds only after it aggregates one deterministic receipt per contiguous rank.

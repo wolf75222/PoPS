@@ -128,6 +128,8 @@ def _shared_directory() -> Path:
 
 def _validate_native_binding_error_consensus(root: Path) -> None:
     """One malformed rank must fail before HDF5 while every peer receives the same cause."""
+    lane = COMM.duplicate_observer_lane(
+        "scientific-output-mpi-hdf5-binding-validation")
     values = (
         [[1.0, 2.0], [3.0, 4.0]]
         if RANK == 0
@@ -135,21 +137,24 @@ def _validate_native_binding_error_consensus(root: Path) -> None:
     )
     error = None
     try:
-        _pops._write_parallel_hdf5(
-            COMM,
-            str(root / "binding-must-not-enter-hdf5.h5"),
-            "{}",
-            {"geometry/0000/coverage": np.zeros((2, 2), dtype=np.bool_)},
-            ({
-                "dataset": "fields/0000/values",
-                "dtype": np.dtype(np.float64).str,
-                "shape": (2, 2),
-                "pieces": ({"lower": (0, 0), "upper": (2, 2), "values": values},),
-            },),
-        )
-    except RuntimeError as exc:
-        error = str(exc)
-    errors = allgather_value(COMM, error)
+        try:
+            _pops._write_parallel_hdf5(
+                lane,
+                str(root / "binding-must-not-enter-hdf5.h5"),
+                "{}",
+                {"geometry/0000/coverage": np.zeros((2, 2), dtype=np.bool_)},
+                ({
+                    "dataset": "fields/0000/values",
+                    "dtype": np.dtype(np.float64).str,
+                    "shape": (2, 2),
+                    "pieces": ({"lower": (0, 0), "upper": (2, 2), "values": values},),
+                },),
+            )
+        except RuntimeError as exc:
+            error = str(exc)
+        errors = allgather_value(lane, error)
+    finally:
+        lane.close_collectively()
     if not all(item is not None and "binding input validation" in item for item in errors):
         raise AssertionError("rank-local binding fault did not reach all ranks: %r" % (errors,))
     if len(set(errors)) != 1:
