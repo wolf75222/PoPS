@@ -31,7 +31,6 @@ that must not be mistaken for closure. They currently cover:
   executes every selected pytest and CTest proof with zero skips;
 - ConsumerGraph and composite runtime rollback without handwritten publishers
   or injected failure wrappers;
-- checkpoint restore rollback caused by a real provider failure;
 - complete Uniform, AMR, and multi-layout public-contract/report parity.
 
 ## Exact output evidence
@@ -60,6 +59,14 @@ component name, and `TimeValue`. VTK imports are unconditional in the required
 MPI lane: `POPS_REQUIRE_MPI_TESTS=1` turns an absent reader into a test failure.
 The separate `gate_execution` gap remains open until CI provisions VTK and
 executes this selected entrypoint rather than auditing only its source.
+
+The strict-checkpoint refusal is also provider-backed. A correctly sealed AMR
+checkpoint with an inconsistent dynamic accepted-ledger claim passes the real
+`RestartV3` file reopen and static preflight, then fails only when the native
+AMR provider validates the restored Program image. The test proves that the
+active restart transaction restores fields, hierarchy, histories, clocks,
+counters, run identity, and consumer cursors, and that the same provider can
+successfully retry the unmodified checkpoint.
 
 ## Gate modes
 
