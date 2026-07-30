@@ -560,11 +560,20 @@ class ObserverMpiLane {
       throw std::out_of_range("observer collective root is outside the lane");
     const int me = lane.rank();
 
-    std::optional<std::vector<std::string>> result;
+    long length_overflow = 0;
+    if constexpr (sizeof(std::size_t) > sizeof(unsigned long long)) {
+      if (payload.size() > static_cast<std::size_t>(std::numeric_limits<unsigned long long>::max()))
+        length_overflow = 1;
+    }
+    if (all_reduce_max(length_overflow, lane) != 0)
+      throw std::overflow_error("consumer gather payload exceeds the MPI length domain");
+    const unsigned long long local_length = static_cast<unsigned long long>(payload.size());
+
+    std::vector<unsigned long long> lengths;
     long allocation_failed = 0;
     if (me == root) {
       try {
-        result.emplace(static_cast<std::size_t>(ranks));
+        lengths.resize(static_cast<std::size_t>(ranks), 0ULL);
       } catch (const std::bad_alloc&) {
         allocation_failed = 1;
       } catch (const std::length_error&) {
@@ -572,25 +581,94 @@ class ObserverMpiLane {
       }
     }
     if (all_reduce_max(allocation_failed, lane) != 0)
-      throw std::runtime_error("observer root could not allocate gathered results");
+      throw std::runtime_error("consumer root could not allocate gathered lengths");
+    detail::require_mpi_success(
+        MPI_Gather(&local_length, 1, MPI_UNSIGNED_LONG_LONG, me == root ? lengths.data() : nullptr,
+                   1, MPI_UNSIGNED_LONG_LONG, root, lane.native_handle()),
+        "MPI_Gather(consumer payload lengths)");
 
-    for (int source = 0; source < ranks; ++source) {
-      std::string source_payload;
-      long copy_failed = 0;
-      if (me == source) {
-        try {
-          source_payload = payload;
-        } catch (const std::bad_alloc&) {
-          copy_failed = 1;
-        } catch (const std::length_error&) {
-          copy_failed = 1;
+    unsigned long long maximum_length = local_length;
+    detail::require_mpi_success(
+        MPI_Allreduce(MPI_IN_PLACE, &maximum_length, 1, MPI_UNSIGNED_LONG_LONG, MPI_MAX,
+                      lane.native_handle()),
+        "MPI_Allreduce(maximum consumer gather length)");
+
+    std::optional<std::vector<std::string>> result;
+    std::vector<int> counts;
+    std::vector<int> displacements;
+    allocation_failed = 0;
+    if (me == root) {
+      try {
+        result.emplace(static_cast<std::size_t>(ranks));
+        counts.resize(static_cast<std::size_t>(ranks), 0);
+        displacements.resize(static_cast<std::size_t>(ranks), 0);
+        for (int rank = 0; rank < ranks; ++rank) {
+          const unsigned long long length = lengths[static_cast<std::size_t>(rank)];
+          if (length > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+            allocation_failed = 1;
+            break;
+          }
+          (*result)[static_cast<std::size_t>(rank)].resize(static_cast<std::size_t>(length));
+        }
+      } catch (const std::bad_alloc&) {
+        allocation_failed = 1;
+      } catch (const std::length_error&) {
+        allocation_failed = 1;
+      }
+    }
+    if (all_reduce_max(allocation_failed, lane) != 0)
+      throw std::runtime_error("consumer root could not allocate gathered payloads");
+
+    const int capacity = detail::chunk_capacity(ranks);
+    for (unsigned long long offset = 0; offset < maximum_length;
+         offset += static_cast<unsigned long long>(capacity)) {
+      int total = 0;
+      if (me == root) {
+        for (int rank = 0; rank < ranks; ++rank) {
+          const unsigned long long length = lengths[static_cast<std::size_t>(rank)];
+          const int count = offset < length
+                                ? static_cast<int>(std::min<unsigned long long>(
+                                      length - offset, static_cast<unsigned long long>(capacity)))
+                                : 0;
+          counts[static_cast<std::size_t>(rank)] = count;
+          displacements[static_cast<std::size_t>(rank)] = total;
+          total += count;
         }
       }
-      if (all_reduce_max(copy_failed, lane) != 0)
-        throw std::runtime_error("an observer rank could not stage its gather payload");
-      std::string received = broadcast_bytes(std::move(source_payload), source);
-      if (me == root)
-        (*result)[static_cast<std::size_t>(source)] = std::move(received);
+      std::vector<char> round;
+      long round_allocation_failed = 0;
+      if (me == root) {
+        try {
+          round.resize(static_cast<std::size_t>(total));
+        } catch (const std::bad_alloc&) {
+          round_allocation_failed = 1;
+        } catch (const std::length_error&) {
+          round_allocation_failed = 1;
+        }
+      }
+      if (all_reduce_max(round_allocation_failed, lane) != 0)
+        throw std::runtime_error("consumer root could not allocate a gathered chunk");
+      const int send_count =
+          offset < local_length
+              ? static_cast<int>(std::min<unsigned long long>(
+                    local_length - offset, static_cast<unsigned long long>(capacity)))
+              : 0;
+      detail::require_mpi_success(
+          MPI_Gatherv(detail::chunk_pointer(payload, offset, send_count), send_count, MPI_BYTE,
+                      me == root ? round.data() : nullptr, me == root ? counts.data() : nullptr,
+                      me == root ? displacements.data() : nullptr, MPI_BYTE, root,
+                      lane.native_handle()),
+          "MPI_Gatherv(consumer payload chunk)");
+      if (me != root)
+        continue;
+      for (int rank = 0; rank < ranks; ++rank) {
+        const int count = counts[static_cast<std::size_t>(rank)];
+        if (count == 0)
+          continue;
+        std::copy_n(
+            round.data() + displacements[static_cast<std::size_t>(rank)], count,
+            (*result)[static_cast<std::size_t>(rank)].data() + static_cast<std::size_t>(offset));
+      }
     }
     return result;
 #else

@@ -111,12 +111,12 @@ TEST(WorldCommunicator, TransfersEmptyNullAndVariableSizedBytes) {
 }
 
 TEST(WorldCommunicator, GathersOutputPiecesOnlyOnRoot) {
-  pops::WorldCommunicator& world = pops::WorldCommunicator::world();
+  auto lane = pops::ObserverMpiLane::duplicate_world_collectively("test/output-piece/gather");
 #ifdef POPS_HAS_MPI
-  const int rank = world.rank();
-  const int size = world.size();
+  const int rank = lane.rank();
+  const int size = lane.size();
   std::vector<pops::OutputPiece> result = pops::output_pieces_to_root(
-      world, pops::detail::output_collective_identity("test", "state", "tracer", 0), [rank] {
+      lane, pops::detail::output_collective_identity("test", "state", "tracer", 0), [rank] {
         pops::OutputPiece piece;
         piece.box = pops::PatchBox{0, rank, 0, rank, 0};
         piece.global_box_index = rank;
@@ -141,18 +141,19 @@ TEST(WorldCommunicator, GathersOutputPiecesOnlyOnRoot) {
   }
 #else
   EXPECT_THROW((void)pops::output_pieces_to_root(
-                   world, pops::detail::output_collective_identity("test", "state", "tracer", 0),
+                   lane, pops::detail::output_collective_identity("test", "state", "tracer", 0),
                    [] { return std::vector<pops::OutputPiece>{}; }),
                std::runtime_error);
 #endif
+  lane.close_collectively();
 }
 
 TEST(WorldCommunicator, SelectsOneCanonicalReplicatedOutputContributor) {
-  pops::WorldCommunicator& world = pops::WorldCommunicator::world();
+  auto lane = pops::ObserverMpiLane::duplicate_world_collectively("test/output-piece/replicated");
 #ifdef POPS_HAS_MPI
-  const int rank = world.rank();
+  const int rank = lane.rank();
   std::vector<pops::OutputPiece> result = pops::output_pieces_to_root(
-      world, pops::detail::output_collective_identity("test", "state", "replicated", 0), [rank] {
+      lane, pops::detail::output_collective_identity("test", "state", "replicated", 0), [rank] {
         pops::OutputPiece piece;
         piece.box = pops::PatchBox{0, 0, 0, 0, 0};
         piece.global_box_index = 0;
@@ -173,10 +174,10 @@ TEST(WorldCommunicator, SelectsOneCanonicalReplicatedOutputContributor) {
     EXPECT_TRUE(result.empty());
   }
 #else
-  EXPECT_THROW(
-      (void)pops::output_pieces_to_root(
-          world, pops::detail::output_collective_identity("test", "state", "replicated", 0),
-          [] { return std::vector<pops::OutputPiece>{}; }),
-      std::runtime_error);
+  EXPECT_THROW((void)pops::output_pieces_to_root(
+                   lane, pops::detail::output_collective_identity("test", "state", "replicated", 0),
+                   [] { return std::vector<pops::OutputPiece>{}; }),
+               std::runtime_error);
 #endif
+  lane.close_collectively();
 }

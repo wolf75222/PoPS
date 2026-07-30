@@ -82,8 +82,10 @@ count, target suffix, or writer availability:
 
 - `SERIAL` requires the proved serial `ExecutionContext` (rank 0, size 1) and one complete snapshot.
 - `ROOT` requires a distributed context. Every rank participates in the authenticated native
-  gather, but only rank 0 prepares, verifies and atomically publishes the single-file writer.
-  Preparation failures and the final receipt are broadcast to every participant.
+  gather over a run-scoped duplicated consumer lane, but only rank 0 prepares, verifies and
+  atomically publishes the single-file writer. The native `System`/`AmrSystem` output bridge
+  accepts only that owned lane, never the process-world singleton. Preparation failures and the
+  final receipt are broadcast to every participant.
 - `COLLECTIVE` requires a distributed context, an authenticated collective resource plan and the
   native C++ parallel-HDF5 provider. The observer runtime owns a duplicated MPI lane for the complete
   writer session; neither the Python writer nor the native HDF5 adapter borrows or rediscovers the
@@ -193,10 +195,11 @@ therefore write NPZ, HDF5 or the complete VTU/PVTU/PVD/state ParaView bundle. `q
 retained detached snapshots; a full queue deliberately applies backpressure.
 
 The selected format owns the topology. `SERIAL` uses the sole rank. `ROOT` performs the complete
-snapshot gather on the main execution path, then writes from the rank-zero worker without worker
-MPI. `PER_RANK` and `COLLECTIVE` run one worker per rank over a run-scoped communicator duplicated
-collectively before any worker starts. That private lane has a distinct MPI context from
-`MPI_COMM_WORLD`, so numerical and output collective orderings cannot alias. PoPS requires
+snapshot gather on the main execution path over one run-scoped duplicated consumer lane, then
+writes from the rank-zero worker without MPI. `PER_RANK` and `COLLECTIVE` run one worker per rank
+over a run-scoped communicator duplicated collectively before any worker starts. Those private
+lanes have distinct MPI contexts from `MPI_COMM_WORLD`, so numerical and output collective
+orderings cannot alias. PoPS requires
 `MPI_THREAD_MULTIPLE`, authenticates the lane on every worker call and fixes distributed
 `max_attempts` to one: retrying after entry into an MPI publication would not be safe. Supported mode
 combinations remain those of the format itself; in particular, ParaView has no `COLLECTIVE` mode and
@@ -385,9 +388,10 @@ re-emission; a rank-local `KeyboardInterrupt`/`SystemExit` cannot split collecti
 - HDF5 uses native datasets and `read_hdf5()` verification. Serial/root fields must be complete.
   Collective mode requires the compiled C++ parallel-HDF5 route before preparation; every rank
   writes its declared non-overlapping hyperslabs through the exact authenticated communicator and
-  the manifest authenticates all pieces. A synchronous consumer uses the execution communicator;
-  an asynchronous consumer uses its private duplicated worker lane. Python never emulates this
-  mode with a gather-to-root writer: the compiled provider owns the MPIO dataset transfers.
+  the manifest authenticates all pieces. The HDF5 session uses its private duplicated observer lane;
+  neither synchronous nor asynchronous publication borrows the process world. Python never
+  emulates this mode with a gather-to-root writer: the compiled provider owns the MPIO dataset
+  transfers.
   Partition validation scales with piece count rather than global cell count, and shared geometry
   is written once by rank zero. Unlike the default relayed PVTU topology, the single collective HDF5
   target is opened by every rank through parallel HDF5/MPI-IO and must therefore be genuinely

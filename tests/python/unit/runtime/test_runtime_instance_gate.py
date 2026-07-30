@@ -259,13 +259,13 @@ class _Executor:
         )
 
     def output_state_root_pieces(self, communicator, block, level):
-        """Expose the exact singleton-world gather required by ROOT publication tests."""
-        from pops._native_collectives import require_world, size
+        """Expose the exact duplicated consumer lane required by ROOT publication tests."""
+        from pops._native_collectives import require_communicator, size
 
         expected = self._plan.execution_context.communicator
-        if communicator is not expected.handle:
-            raise ValueError("ROOT gather did not receive the installed communicator handle")
-        native = require_world(communicator)
+        native = require_communicator(communicator, allow_world=False)
+        if expected.identity != "MPI_COMM_WORLD":
+            raise ValueError("ROOT gather requires an MPI execution context")
         if size(native) != 1:
             raise RuntimeError(
                 "runtime-instance unit executor only implements a singleton ROOT gather"
@@ -1729,6 +1729,83 @@ def test_checkpoint_diagnostic_baseline_schema_is_finite_and_canonical():
                 "diagnostics": [],
             }
         )
+
+
+def test_root_output_lane_requires_one_active_run_scoped_communicator():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    lane = SimpleNamespace(active=True, closed=False)
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {"run": lane}
+    assert publisher._root_output_communicator() is lane
+
+    publisher._root_output_lanes = {}
+    with pytest.raises(RuntimeError, match="exactly one active"):
+        publisher._root_output_communicator()
+
+    publisher._root_output_lanes = {"run": SimpleNamespace(active=False, closed=False)}
+    with pytest.raises(RuntimeError, match="not active"):
+        publisher._root_output_communicator()
+
+    publisher._root_output_consumers = ()
+    with pytest.raises(RuntimeError, match="declares no ROOT"):
+        publisher._root_output_communicator()
+
+
+def test_root_output_lane_is_materialized_and_closed_once_per_run():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Lane:
+        active = True
+        closed = False
+
+        def __init__(self):
+            self.close_calls = 0
+
+        def close_collectively(self):
+            self.close_calls += 1
+            self.active = False
+            self.closed = True
+
+    class _World:
+        def __init__(self, lane):
+            self.lane = lane
+            self.identities = []
+
+        def duplicate_observer_lane(self, identity):
+            self.identities.append(identity)
+            return self.lane
+
+    run_identity = make_identity("run", {"case": "root-output-lane"})
+    lane = _Lane()
+    world = _World(lane)
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {}
+    publisher._communicator = world
+    publisher._closed_observer_runs = set()
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(
+        _consumer_graph=SimpleNamespace(nodes=()),
+    )
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_pending_failures = {}
+
+    publisher.begin_post_commit_consumers(run_identity)
+    assert world.identities == ["scientific-output/root/%s" % run_identity.token]
+    assert publisher._root_output_communicator() is lane
+
+    assert publisher.close_live_visualizations(run_identity) == ()
+    assert lane.close_calls == 1
+    assert publisher.close_live_visualizations(run_identity) == ()
+    assert lane.close_calls == 1
+    with pytest.raises(RuntimeError, match="already closed"):
+        publisher.begin_post_commit_consumers(run_identity)
 
 
 def test_diagnostic_component_requires_one_explicit_role_for_multicomponent_state():
