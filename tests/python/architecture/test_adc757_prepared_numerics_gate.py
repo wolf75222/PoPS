@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 18
+    assert len(data["check"]) == 19
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-749",
@@ -54,13 +54,21 @@ def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
         row for row in data["check"] if row.get("kind") == "mpi_ctest"
     ] == [
         {
-            "requirement": "prepared_boundary_publication",
+            "requirement": "mpi_collective_execution",
             "polarity": "positive",
             "kind": "mpi_ctest",
             "target": "test_mpi_system_analytic_level_set",
             "test_regex": "^test_mpi_system_analytic_level_set_np2$",
             "nproc": 2,
-        }
+        },
+        {
+            "requirement": "mpi_collective_execution",
+            "polarity": "refusal",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_flux_failure_collective",
+            "test_regex": "^test_mpi_flux_failure_collective_np2$",
+            "nproc": 2,
+        },
     ]
     assert all("gpu" not in row["target"].lower() for row in data["check"])
     assert runner.main(["--check-only", "--closure"]) == 3

@@ -76,11 +76,19 @@ target = "test_prepared_boundary_plan"
 test_regex = "^test_prepared_boundary_plan\\.analytic_inflow_preflights_nonfinite_values_before_any_mutation$"
 
 [[check]]
-requirement = "prepared_boundary_publication"
+requirement = "mpi_collective_execution"
 polarity = "positive"
 kind = "mpi_ctest"
 target = "test_mpi_system_analytic_level_set"
 test_regex = "^test_mpi_system_analytic_level_set_np2$"
+nproc = 2
+
+[[check]]
+requirement = "mpi_collective_execution"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_flux_failure_collective"
+test_regex = "^test_mpi_flux_failure_collective_np2$"
 nproc = 2
 
 [[check]]

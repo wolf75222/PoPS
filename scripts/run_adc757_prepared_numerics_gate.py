@@ -22,6 +22,7 @@ EXPECTED_REQUIREMENTS = {
     "allocation_aware_cell_hot_path",
     "prepared_boundary_publication",
     "capability_driven_riemann",
+    "mpi_collective_execution",
     "typed_flux_recovery_consumption",
     "runtime_recovery_consumer_publication",
 }
@@ -169,8 +170,10 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     duplicates = sorted(identity for identity, count in identities.items() if count > 1)
     if duplicates:
         errors.append("duplicate executable checks: %s" % duplicates)
-    if mpi_checks != 1:
-        errors.append("the closed mpi_collective_execution family requires exactly one MPI CTest")
+    if mpi_checks != 2:
+        errors.append(
+            "the closed mpi_collective_execution family requires exactly two MPI CTests"
+        )
     for requirement in sorted(EXPECTED_REQUIREMENTS):
         missing = {"positive", "refusal"} - coverage[requirement]
         if missing:
