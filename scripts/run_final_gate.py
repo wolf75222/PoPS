@@ -32,6 +32,7 @@ from final_release_contract import (
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
+    require_release_matrix_source_contract,
     require_source_contract,
 )
 
@@ -418,6 +419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         require_source_contract(ROOT)
+        require_release_matrix_source_contract(ROOT)
         _require_cpp_duration_catalogs()
         _check_clean_checkout()
         evidence_path = _outside_checkout(args.evidence)
