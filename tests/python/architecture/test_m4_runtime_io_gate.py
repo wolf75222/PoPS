@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -30,12 +32,13 @@ def _mutated_manifest(tmp_path: Path, old: str, new: str) -> Path:
     return path
 
 
-def test_m4_manifest_is_a_closed_exact_mandatory_matrix():
-    data, errors = _load_runner().validate_manifest(MANIFEST)
+def test_m4_manifest_is_an_audited_open_exact_matrix():
+    runner = _load_runner()
+    data, errors = runner.audit_manifest(MANIFEST)
 
-    assert not errors, "M4 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert data["deferred"] == []
-    assert len(data["check"]) >= 41
+    assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
+    assert len(data["deferred"]) == 9
+    assert len(data["check"]) >= 36
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -48,10 +51,53 @@ def test_m4_manifest_is_a_closed_exact_mandatory_matrix():
         "ADC-687",
     ]
     assert {row["issue"] for row in data["check"]} == set(data["issues"])
+    assert {
+        (row["issue"], row["requirement"], row["polarity"])
+        for row in data["deferred"]
+    } == {
+        ("ADC-683", "tamper_capability_abi", "refusal"),
+        ("ADC-684", "runtime_instance", "positive"),
+        ("ADC-684", "runtime_instance", "refusal"),
+        ("ADC-685", "consumer_graph", "refusal"),
+        ("ADC-686", "strict_checkpoint", "refusal"),
+        ("ADC-686", "exact_paraview", "positive"),
+        ("ADC-687", "gate_execution", "positive"),
+        ("ADC-687", "tamper_capability_abi", "refusal"),
+        ("ADC-687", "legacy_stepper_retirement", "positive"),
+    }
+
+    _, closure_errors = runner.validate_manifest(MANIFEST)
+    assert len(closure_errors) == len(data["deferred"])
+    assert all("remains deferred" in error for error in closure_errors)
+
+
+def test_m4_cli_reports_open_and_check_only_refuses_closure():
+    audit = subprocess.run(
+        [sys.executable, str(RUNNER), "--audit-only"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert audit.returncode == 0
+    assert "M4 gate source matrix: AUDITED OPEN" in audit.stdout
+
+    closure = subprocess.run(
+        [sys.executable, str(RUNNER), "--check-only"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert closure.returncode == 2
+    assert "M4 gate is incomplete or invalid" in closure.stdout
+    assert "remains deferred" in closure.stdout
 
 
 def test_m4_gate_pins_every_external_component_family():
-    data, errors = _load_runner().validate_manifest(MANIFEST)
+    data, errors = _load_runner().audit_manifest(MANIFEST)
     assert not errors
 
     executable = {
@@ -105,8 +151,8 @@ def test_m4_gate_pins_every_external_component_family():
     } <= executable
 
 
-def test_m4_gate_pins_runtime_instance_multi_layout_and_strict_checkpoint():
-    data, errors = _load_runner().validate_manifest(MANIFEST)
+def test_m4_gate_pins_real_runtime_instance_and_positive_checkpoint_proofs():
+    data, errors = _load_runner().audit_manifest(MANIFEST)
     assert not errors
     checks = data["check"]
 
@@ -155,21 +201,22 @@ def test_m4_gate_pins_runtime_instance_multi_layout_and_strict_checkpoint():
             "test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count"
         ),
     } in checks
-    assert {
-        "issue": "ADC-686",
-        "requirement": "strict_checkpoint",
-        "polarity": "refusal",
-        "kind": "pytest",
-        "target": "strict_checkpoint",
-        "nodeid": (
-            "tests/python/integration/runtime/test_multi_layout_runtime.py::"
-            "test_failed_child_restart_rolls_back_already_restored_layouts"
-        ),
-    } in checks
+    selected = {
+        row.get("nodeid", row.get("test_regex"))
+        for row in checks
+    }
+    assert (
+        "tests/python/integration/runtime/test_multi_layout_runtime.py::"
+        "test_mid_step_child_failure_preserves_root_error_and_rolls_back_composite"
+    ) not in selected
+    assert (
+        "tests/python/integration/runtime/test_multi_layout_runtime.py::"
+        "test_failed_child_restart_rolls_back_already_restored_layouts"
+    ) not in selected
 
 
-def test_m4_gate_pins_capability_tamper_and_native_abi_refusals():
-    data, errors = _load_runner().validate_manifest(MANIFEST)
+def test_m4_gate_keeps_real_tamper_capacity_proofs_and_defers_runtime_gaps():
+    data, errors = _load_runner().audit_manifest(MANIFEST)
     assert not errors
 
     refusals = {
@@ -180,23 +227,31 @@ def test_m4_gate_pins_capability_tamper_and_native_abi_refusals():
     }
     assert {
         (
-            "tests/python/unit/codegen/test_component_manifest_v2.py::"
-            "test_target_capability_refusal_contains_requested_and_supported_evidence"
-        ),
-        (
             "tests/python/unit/codegen/test_component_packages.py::"
             "test_fixed_binary_cannot_claim_template_genericity"
         ),
-        (
-            "tests/python/unit/runtime/test_platform_manifest.py::"
-            "test_aot_component_rejects_openmpi_mpich_abi_mix_even_with_same_headers_and_standard"
-        ),
         r"^test_native_loader_param_overflow\.Runs$",
     } <= refusals
+    assert (
+        "tests/python/unit/codegen/test_component_manifest_v2.py::"
+        "test_target_capability_refusal_contains_requested_and_supported_evidence"
+    ) not in refusals
+    assert (
+        "tests/python/unit/runtime/test_platform_manifest.py::"
+        "test_aot_component_rejects_openmpi_mpich_abi_mix_even_with_same_headers_and_standard"
+    ) not in refusals
+    assert {
+        (row["issue"], row["requirement"], row["polarity"])
+        for row in data["deferred"]
+        if row["requirement"] == "tamper_capability_abi"
+    } == {
+        ("ADC-683", "tamper_capability_abi", "refusal"),
+        ("ADC-687", "tamper_capability_abi", "refusal"),
+    }
 
 
 def test_m4_gate_pins_mandatory_native_reopen_and_collective_hdf5_np2():
-    data, errors = _load_runner().validate_manifest(MANIFEST)
+    data, errors = _load_runner().audit_manifest(MANIFEST)
     assert not errors
     checks = data["check"]
 
@@ -236,8 +291,8 @@ def test_m4_gate_pins_mandatory_native_reopen_and_collective_hdf5_np2():
     } in checks
 
 
-def test_m4_gate_pins_schur_retirement_and_ci_check_only_command():
-    data, errors = _load_runner().validate_manifest(MANIFEST)
+def test_m4_gate_keeps_schur_evidence_but_ci_only_claims_an_open_audit():
+    data, errors = _load_runner().audit_manifest(MANIFEST)
     assert not errors
     assert {
         "issue": "ADC-687",
@@ -254,8 +309,15 @@ def test_m4_gate_pins_schur_retirement_and_ci_check_only_command():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     job = workflow.split("\n  gate-python-architecture:\n", 1)[1]
     job = job.split("\n  gate-python-build:\n", 1)[0]
-    command = "run: python3 scripts/run_m4_gate.py --check-only"
+    command = "run: python3 scripts/run_m4_gate.py --audit-only"
     assert [line.strip() for line in job.splitlines()].count(command) == 1
+    assert "run: python3 scripts/run_m4_gate.py --check-only" not in job
+
+    documentation = (
+        ROOT / "docs/design/m4-conformance-gate.md"
+    ).read_text(encoding="utf-8")
+    assert "current status is **AUDITED OPEN**" in documentation
+    assert "four serial proofs" in documentation
 
 
 def test_m4_gate_rejects_fake_nodeid_before_execution(tmp_path):
@@ -353,26 +415,23 @@ def test_m4_gate_rejects_importorskip_and_mock_proofs(tmp_path):
     )
 
 
-def test_m4_gate_rejects_every_deferred_requirement(tmp_path):
-    manifest = _mutated_manifest(
-        tmp_path,
-        "deferred = []",
-        (
-            "[[deferred]]\n"
-            'issue = "ADC-687"\n'
-            'requirement = "legacy_stepper_retirement"\n'
-            'reason = "The mandatory Schur retirement proof is deliberately deferred."\n'
-            "evidence_paths = "
-            '["tests/python/architecture/test_no_schur_header_leak.py"]'
-        ),
-    )
-
-    data, audit_errors = _load_runner().audit_manifest(manifest)
+def test_m4_gate_rejects_every_explicit_deferred_gap():
+    runner = _load_runner()
+    data, audit_errors = runner.audit_manifest(MANIFEST)
     assert not audit_errors
-    assert len(data["deferred"]) == 1
+    assert data["deferred"]
 
-    _, errors = _load_runner().validate_manifest(manifest)
-    assert any("remains deferred" in error for error in errors)
+    _, errors = runner.validate_manifest(MANIFEST)
+    expected = {
+        "%s/%s/%s" % (row["issue"], row["requirement"], row["polarity"])
+        for row in data["deferred"]
+    }
+    observed = {
+        error.split(" remains deferred:", 1)[0]
+        for error in errors
+        if " remains deferred:" in error
+    }
+    assert observed == expected
 
 
 def test_m4_required_pytest_execution_rejects_junit_skips(monkeypatch):
@@ -442,7 +501,7 @@ def test_m4_required_ctest_execution_rejects_junit_skips(tmp_path, monkeypatch):
     assert calls == 2
 
 
-def test_m4_check_only_never_consults_launcher_or_build(monkeypatch):
+def test_m4_check_only_refuses_open_ledger_before_launcher_or_build(monkeypatch):
     runner = _load_runner()
 
     def forbidden_call(*_args, **_kwargs):
@@ -451,4 +510,4 @@ def test_m4_check_only_never_consults_launcher_or_build(monkeypatch):
     monkeypatch.setattr(runner.shutil, "which", forbidden_call)
     monkeypatch.setattr(runner.subprocess, "run", forbidden_call)
 
-    assert runner.main(["--check-only"]) == 0
+    assert runner.main(["--check-only"]) == 2

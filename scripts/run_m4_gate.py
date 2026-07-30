@@ -46,6 +46,7 @@ REQUIRED_POLARITIES = {
     "diagnostics": {"positive", "refusal"},
     "tamper_capability_abi": {"refusal"},
     "legacy_stepper_retirement": {"positive"},
+    "gate_execution": {"positive"},
 }
 REQUIREMENT_ISSUES = {
     "component_manifest": {"ADC-679"},
@@ -70,6 +71,7 @@ REQUIREMENT_ISSUES = {
     "diagnostics": {"ADC-686"},
     "external_solver": {"ADC-687"},
     "legacy_stepper_retirement": {"ADC-687"},
+    "gate_execution": {"ADC-687"},
     "tamper_capability_abi": {"ADC-679", "ADC-680", "ADC-683", "ADC-687"},
 }
 NATIVE_PYTEST_PREFIXES = (
@@ -333,21 +335,33 @@ def _validate_python_nodeid(
     return relative
 
 
-def _validate_deferred(data: dict, errors: list[str]) -> set[str]:
+def _validate_deferred(
+    data: dict, errors: list[str]
+) -> set[tuple[str, str, str]]:
     rows = data.get("deferred")
     if not isinstance(rows, list):
         errors.append("deferred must be an array of explicit gap tables")
         return set()
-    requirements: set[str] = set()
+    gaps: set[tuple[str, str, str]] = set()
     identities = Counter()
     for index, row in enumerate(rows, 1):
         where = "deferred[%d]" % index
-        expected = {"issue", "requirement", "reason", "evidence_paths"}
+        expected = {
+            "issue",
+            "requirement",
+            "polarity",
+            "reason",
+            "evidence_paths",
+        }
         if not isinstance(row, dict) or set(row) != expected:
-            errors.append("%s must contain issue/requirement/reason/evidence_paths" % where)
+            errors.append(
+                "%s must contain issue/requirement/polarity/reason/evidence_paths"
+                % where
+            )
             continue
         issue = row.get("issue")
         requirement = row.get("requirement")
+        polarity = row.get("polarity")
         reason = row.get("reason")
         evidence_paths = row.get("evidence_paths")
         if issue not in EXPECTED_ISSUES:
@@ -358,6 +372,16 @@ def _validate_deferred(data: dict, errors: list[str]) -> set[str]:
             errors.append(
                 "%s requirement %r cannot be deferred under %r"
                 % (where, requirement, issue)
+            )
+        if polarity not in {"positive", "refusal"}:
+            errors.append("%s polarity must be positive or refusal" % where)
+        elif (
+            requirement in REQUIRED_POLARITIES
+            and polarity not in REQUIRED_POLARITIES[requirement]
+        ):
+            errors.append(
+                "%s requirement %r has no %r polarity"
+                % (where, requirement, polarity)
             )
         if not isinstance(reason, str) or len(reason.strip()) < 20:
             errors.append("%s requires a precise non-empty reason" % where)
@@ -371,12 +395,13 @@ def _validate_deferred(data: dict, errors: list[str]) -> set[str]:
                     errors.append(
                         "%s gap evidence path no longer exists: %s" % (where, relative)
                     )
-        identities[(issue, requirement)] += 1
-        requirements.add(str(requirement))
+        identity = (str(issue), str(requirement), str(polarity))
+        identities[identity] += 1
+        gaps.add(identity)
     duplicates = sorted(identity for identity, count in identities.items() if count > 1)
     if duplicates:
         errors.append("duplicate deferred gaps: %s" % duplicates)
-    return requirements
+    return gaps
 
 
 def audit_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
@@ -396,7 +421,7 @@ def audit_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     if data.get("issues") != list(EXPECTED_ISSUES):
         errors.append("issues must list ADC-679..ADC-687 exactly once")
 
-    deferred_requirements = _validate_deferred(data, errors)
+    deferred_gaps = _validate_deferred(data, errors)
     checks = data.get("check")
     if not isinstance(checks, list) or not checks:
         errors.append("manifest must contain [[check]] rows")
@@ -529,16 +554,36 @@ def audit_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         errors.append("duplicate executable checks: %s" % duplicates)
     for issue in EXPECTED_ISSUES:
         missing = {"positive", "refusal"} - issue_coverage[issue]
-        if missing:
-            errors.append("%s lacks %s coverage" % (issue, "/".join(sorted(missing))))
+        unresolved = {
+            polarity
+            for polarity in missing
+            if not any(
+                deferred_issue == issue and deferred_polarity == polarity
+                for deferred_issue, _requirement, deferred_polarity in deferred_gaps
+            )
+        }
+        if unresolved:
+            errors.append(
+                "%s lacks %s coverage"
+                % (issue, "/".join(sorted(unresolved)))
+            )
         if issue not in native_positive_issues:
             errors.append("%s lacks a mandatory native positive proof" % issue)
     for requirement, required in sorted(REQUIRED_POLARITIES.items()):
         missing = required - requirement_coverage[requirement]
-        if missing and requirement not in deferred_requirements:
+        unresolved = {
+            polarity
+            for polarity in missing
+            if not any(
+                deferred_requirement == requirement
+                and deferred_polarity == polarity
+                for _issue, deferred_requirement, deferred_polarity in deferred_gaps
+            )
+        }
+        if unresolved:
             errors.append(
                 "%s lacks %s coverage"
-                % (requirement, "/".join(sorted(missing)))
+                % (requirement, "/".join(sorted(unresolved)))
             )
     return data, errors
 
@@ -550,8 +595,13 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         return data, errors
     for row in data["deferred"]:
         errors.append(
-            "%s/%s remains deferred: %s"
-            % (row["issue"], row["requirement"], row["reason"])
+            "%s/%s/%s remains deferred: %s"
+            % (
+                row["issue"],
+                row["requirement"],
+                row["polarity"],
+                row["reason"],
+            )
         )
     return data, errors
 

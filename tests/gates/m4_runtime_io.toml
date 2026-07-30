@@ -11,12 +11,103 @@ issues = [
   "ADC-686",
   "ADC-687",
 ]
-deferred = []
+
+[[deferred]]
+issue = "ADC-687"
+requirement = "gate_execution"
+polarity = "positive"
+reason = "CI only audits the source ledger; no required lane installs VTK and executes every selected pytest and CTest proof with zero skips."
+evidence_paths = [
+  ".github/workflows/ci.yml",
+  "environment.yml",
+  "scripts/run_m4_gate.py",
+]
+
+[[deferred]]
+issue = "ADC-683"
+requirement = "tamper_capability_abi"
+polarity = "refusal"
+reason = "The matrix lacks a real runtime or backend launch whose unknown capability is refused before any kernel executes; schema-only target validation is insufficient."
+evidence_paths = [
+  "tests/python/unit/codegen/test_component_manifest_v2.py",
+  "tests/cpp/unit/runtime/test_platform_manifest.cpp",
+]
+
+[[deferred]]
+issue = "ADC-687"
+requirement = "tamper_capability_abi"
+polarity = "refusal"
+reason = "A genuine wrong-ABI shared object refusal exists, but the executable M4 matrix does not yet select and run that DSO proof."
+evidence_paths = [
+  "tests/cpp/integration/native_loader/test_amr_native_loader.cpp",
+  "tests/gates/m4_runtime_io.toml",
+]
+
+[[deferred]]
+issue = "ADC-684"
+requirement = "runtime_instance"
+polarity = "positive"
+reason = "Uniform, AMR, and multi-layout executions are covered separately and only partially inspect reports; one complete public-contract and report-parity proof is still absent."
+evidence_paths = [
+  "tests/python/integration/native_loader/test_external_component_package.py",
+  "tests/python/integration/runtime/test_multi_layout_runtime.py",
+  "tests/python/integration/runtime/test_shared_interface_runtime.py",
+]
+
+[[deferred]]
+issue = "ADC-684"
+requirement = "runtime_instance"
+polarity = "refusal"
+reason = "Composite step rollback is only exercised through an injected FailFirstStep wrapper; a failure from a real prepared runtime component is still required."
+evidence_paths = [
+  "tests/python/integration/runtime/test_multi_layout_runtime.py",
+]
+
+[[deferred]]
+issue = "ADC-685"
+requirement = "consumer_graph"
+polarity = "refusal"
+reason = "The available transaction refusal uses handwritten publisher and prepared-publication fakes; M4 still needs the same refusal through a real writer or consumer."
+evidence_paths = [
+  "tests/python/unit/runtime/test_consumer_transactions.py",
+  "tests/python/integration/native_loader/test_external_component_package.py",
+]
+
+[[deferred]]
+issue = "ADC-686"
+requirement = "strict_checkpoint"
+polarity = "refusal"
+reason = "Atomic restart rollback is only exercised through an injected FailFirstRestart wrapper; a real checkpoint provider failure must prove restoration rollback."
+evidence_paths = [
+  "tests/python/integration/runtime/test_multi_layout_runtime.py",
+]
+
+[[deferred]]
+issue = "ADC-686"
+requirement = "exact_paraview"
+polarity = "positive"
+reason = "Serial VTU reopens with VTK, but native VTK reopening of the mandatory MPI PVD to PVTU to rank-VTU hierarchy is still optional and therefore unproved."
+evidence_paths = [
+  "tests/python/integration/io/m4_native_reopen_proof.py",
+  "tests/python/integration/mpi/test_scientific_output_mpi.py",
+]
+
+[[deferred]]
+issue = "ADC-687"
+requirement = "legacy_stepper_retirement"
+polarity = "positive"
+reason = "The selected Schur-header fence does not by itself prove Program-only execution or the absence of every legacy stepper, concrete central dispatch, and silent fallback."
+evidence_paths = [
+  "tests/python/architecture/test_no_schur_header_leak.py",
+  "tests/python/architecture/test_program_only_temporal_facades.py",
+  "tests/python/architecture/test_no_legacy_runtime_routes.py",
+  "tests/python/architecture/test_component_interface_dispatch.py",
+]
 
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
-# one source-registered proof. The runner rejects mocks, optional imports,
-# skip/xfail, non-exact CTest selectors, duplicate proofs, and missing manifest
-# ownership before it launches anything.
+# one source-registered proof. The runner rejects mock fixtures/imports,
+# optional imports, skip/xfail, non-exact CTest selectors, duplicate proofs,
+# and missing manifest ownership before it launches anything.
 
 [[check]]
 issue = "ADC-679"
@@ -41,14 +132,6 @@ polarity = "refusal"
 kind = "pytest"
 target = "component_manifest"
 nodeid = "tests/python/unit/codegen/test_component_manifest_v2.py::test_interface_bindings_are_exact_closed_and_entry_point_checked"
-
-[[check]]
-issue = "ADC-679"
-requirement = "tamper_capability_abi"
-polarity = "refusal"
-kind = "pytest"
-target = "tamper_capability_abi"
-nodeid = "tests/python/unit/codegen/test_component_manifest_v2.py::test_target_capability_refusal_contains_requested_and_supported_evidence"
 
 [[check]]
 issue = "ADC-679"
@@ -163,28 +246,12 @@ target = "platform_execution@test_platform_manifest"
 test_regex = "^PlatformManifest\\.FieldAndCommunicatorMismatchesRefuseBeforeKernel$"
 
 [[check]]
-issue = "ADC-683"
-requirement = "tamper_capability_abi"
-polarity = "refusal"
-kind = "pytest"
-target = "tamper_capability_abi"
-nodeid = "tests/python/unit/runtime/test_platform_manifest.py::test_aot_component_rejects_openmpi_mpich_abi_mix_even_with_same_headers_and_standard"
-
-[[check]]
 issue = "ADC-684"
 requirement = "runtime_instance"
 polarity = "positive"
 kind = "pytest"
 target = "runtime_instance"
 nodeid = "tests/python/integration/runtime/test_shared_interface_runtime.py::test_runtime_instance_executes_one_two_sided_shared_flux"
-
-[[check]]
-issue = "ADC-684"
-requirement = "runtime_instance"
-polarity = "refusal"
-kind = "pytest"
-target = "runtime_instance"
-nodeid = "tests/python/integration/runtime/test_multi_layout_runtime.py::test_mid_step_child_failure_preserves_root_error_and_rolls_back_composite"
 
 [[check]]
 issue = "ADC-684"
@@ -209,14 +276,6 @@ polarity = "positive"
 kind = "pytest"
 target = "consumer_graph"
 nodeid = "tests/python/unit/runtime/test_consumer_transactions.py::test_graph_and_plan_are_semantic_and_insertion_order_independent"
-
-[[check]]
-issue = "ADC-685"
-requirement = "consumer_graph"
-polarity = "refusal"
-kind = "pytest"
-target = "consumer_graph"
-nodeid = "tests/python/unit/runtime/test_consumer_transactions.py::test_rejected_attempt_discards_temporaries_without_publication_or_cursor_advance"
 
 [[check]]
 issue = "ADC-685"
@@ -297,14 +356,6 @@ polarity = "positive"
 kind = "pytest"
 target = "strict_checkpoint"
 nodeid = "tests/python/integration/runtime/test_multi_layout_runtime.py::test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count"
-
-[[check]]
-issue = "ADC-686"
-requirement = "strict_checkpoint"
-polarity = "refusal"
-kind = "pytest"
-target = "strict_checkpoint"
-nodeid = "tests/python/integration/runtime/test_multi_layout_runtime.py::test_failed_child_restart_rolls_back_already_restored_layouts"
 
 [[check]]
 issue = "ADC-686"
