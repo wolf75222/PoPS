@@ -272,8 +272,11 @@ def test_amr_regrid_cadence_is_decided_by_the_program_context():
     cadence = _function_body(context, "  void regrid_if_due_at_(")
     assert "eng_->regrid_interval()" in cadence
     assert "macro_step % interval" in cadence
+    assert "const bool regrid_due" in cadence
+    assert "interval <= 0" not in cadence
     assert "eng_->regrid();" in cadence
     assert "eng_->regrid_if_due(" not in cadence
+    assert cadence.count("materialize_capture_flux_scratch_();") == 1
 
 
 def test_amr_blocks_expose_program_spatial_primitives_without_hidden_step_closures():

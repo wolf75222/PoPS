@@ -264,8 +264,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       throw std::overflow_error(
           "AMR Program regrid logical tick exceeds the runtime integer range");
     const int interval = eng_->regrid_interval();
-    if (interval <= 0 || macro_step == 0 || macro_step % interval != 0)
-      return;
+    const bool regrid_due = interval > 0 && macro_step > 0 && macro_step % interval == 0;
 
     const HistoryFluxTopology before = history_flux_topology_snapshot_();
     if (history_flux_topology_.bound() &&
@@ -276,10 +275,14 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     // The Program owns the accepted clock. Publish its exact evaluation coordinate only at the
     // tagger/regrid boundary so direct AmrProgramContext and restarted executions cannot inherit
     // stale facade metadata.
-    eng_->set_component_logical_time(macro_step, physical_time);
-    eng_->regrid();
+    if (regrid_due) {
+      eng_->set_component_logical_time(macro_step, physical_time);
+      eng_->regrid();
+    }
     // Regrid is a head-of-attempt operation.  Rebuild every layout-bound face field and its
     // redistribution scratch here, before the first Program stage, never lazily from capture_into_.
+    // This is also required off-cadence: restart/rank rematerialization may have replaced topology
+    // storage between accepted steps without scheduling a new regrid.
     materialize_capture_flux_scratch_();
     const HistoryFluxTopology after = history_flux_topology_snapshot_();
     if (after.epoch != before.epoch && !same_history_flux_layout_(before, after))
