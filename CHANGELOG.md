@@ -74,11 +74,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   type-erased scheduler continues to execute only authenticated cell-average projections;
   MUSCL/WENO face reconstruction is rejected with its retained provider/depth contract until a
   mapped-halo reconstruction provider is installed, rather than being silently lowered.
-- Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the
+- Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v7. They persist the
   held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
   hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay
-  only for the exact ring/depth authority exported by the installed artifact. AMR v5 images are
-  rejected fail-closed rather than silently restarting without their missing hysteresis state.
+  only for the exact ring/depth authority exported by the installed artifact. AMR v5/v6 images are
+  rejected fail-closed rather than silently restarting without their missing accepted-state data.
   Explicit AMR bootstrap also republishes the Program's level-qualified accepted image before each
   hierarchy transition commits, so a checkpoint taken before the first accepted step (after the
   required zero-step `pops.run` establishes its controls identity) already covers every active level.

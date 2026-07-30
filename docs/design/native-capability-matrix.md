@@ -138,7 +138,7 @@ Supported native routes include:
   exact provider route only on AMR level 0.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v5 for Uniform and v6 for AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v5 for Uniform and v7 for AMR. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
   authority is resolved into the compiled plan, including the builtin v5 manual route. Restart reads
