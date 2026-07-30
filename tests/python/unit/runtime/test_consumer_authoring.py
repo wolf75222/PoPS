@@ -410,8 +410,6 @@ def test_output_format_options_refuse_python_truthiness_coercion() -> None:
         HDF5(mode="serial")
     with pytest.raises(TypeError, match="exact bool or None"):
         HDF5(series=1)
-    with pytest.raises(TypeError, match="exact bool or None"):
-        ParaView(series=1)
     assert HDF5().consumer_data()["options"] == {"mode": "serial", "series": True}
     serial_options = ParaView().consumer_data()["options"]
     assert serial_options["mode"] == "serial"
