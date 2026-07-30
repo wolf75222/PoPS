@@ -25,6 +25,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   accepted snapshot is detached; the asynchronous worker receives only immutable arrays and
   scalars. Sparse Balance cadences elide off-cadence reductions, publish an exact zero ledger for
   held Program strides, and replay accepted state without reopening the native mailbox.
+- ParaView output now has one collection-authoring keyword: `collection`. The deprecated
+  `ParaView(series=...)` compatibility route is deleted instead of being retained beside the
+  canonical PVD collection contract.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
   executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`

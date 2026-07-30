@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, ClassVar
-import warnings
 
 from pops.descriptors import Descriptor
 from pops.descriptors_report import RequirementSet
@@ -404,7 +403,6 @@ class ParaView(FormatInterface):
         preset: ParaViewPreset | None = None,
         placement: Any = None,
         state: Any = _DEFAULT_PARAVIEW_STATE,
-        series: Any = _UNSET_PARAVIEW_OPTION,
     ) -> None:
         selected_mode = _mode(
             mode,
@@ -420,21 +418,6 @@ class ParaView(FormatInterface):
             raise ValueError("ParaView.compression must be None or an integer from 0 to 9")
         if collection is not _UNSET_PARAVIEW_OPTION and type(collection) is not bool:
             raise TypeError("ParaView.collection must be an exact bool")
-        if series is not _UNSET_PARAVIEW_OPTION:
-            if series is not None and type(series) is not bool:
-                raise TypeError("ParaView.series must be an exact bool or None")
-            warnings.warn(
-                "ParaView(series=...) is deprecated; use collection=... for the standard "
-                "PVD collection",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            legacy_collection = (
-                selected_mode is not ParallelMode.PER_RANK if series is None else series)
-            if collection is not _UNSET_PARAVIEW_OPTION \
-                    and collection is not legacy_collection:
-                raise ValueError("ParaView.collection and deprecated series disagree")
-            collection = legacy_collection
         if collection is _UNSET_PARAVIEW_OPTION:
             collection = True
         from .paraview_state import MaterializedPVSM, PortableState
