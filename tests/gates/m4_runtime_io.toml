@@ -24,16 +24,6 @@ evidence_paths = [
 ]
 
 [[deferred]]
-issue = "ADC-683"
-requirement = "tamper_capability_abi"
-polarity = "refusal"
-reason = "The matrix lacks a real runtime or backend launch whose unknown capability is refused before any kernel executes; schema-only target validation is insufficient."
-evidence_paths = [
-  "tests/python/unit/codegen/test_component_manifest_v2.py",
-  "tests/cpp/unit/runtime/test_platform_manifest.cpp",
-]
-
-[[deferred]]
 issue = "ADC-684"
 requirement = "runtime_instance"
 polarity = "positive"
@@ -222,6 +212,14 @@ polarity = "refusal"
 kind = "ctest"
 target = "platform_execution@test_platform_manifest"
 test_regex = "^PlatformManifest\\.FieldAndCommunicatorMismatchesRefuseBeforeKernel$"
+
+[[check]]
+issue = "ADC-683"
+requirement = "tamper_capability_abi"
+polarity = "refusal"
+kind = "ctest"
+target = "tamper_capability_abi@test_platform_manifest"
+test_regex = "^PlatformManifest\\.UnknownCapabilityRefusesBeforeKernel$"
 
 [[check]]
 issue = "ADC-684"

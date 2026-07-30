@@ -37,8 +37,8 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["deferred"]) == 7
-    assert len(data["check"]) >= 44
+    assert len(data["deferred"]) == 6
+    assert len(data["check"]) >= 45
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -55,7 +55,6 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
         (row["issue"], row["requirement"], row["polarity"])
         for row in data["deferred"]
     } == {
-        ("ADC-683", "tamper_capability_abi", "refusal"),
         ("ADC-684", "runtime_instance", "positive"),
         ("ADC-684", "runtime_instance", "refusal"),
         ("ADC-685", "consumer_graph", "refusal"),
@@ -230,6 +229,7 @@ def test_m4_gate_keeps_real_tamper_capacity_proofs_and_defers_runtime_gaps():
         ),
         r"^test_native_loader_param_overflow\.Runs$",
         r"^test_amr_native_loader\.RefusesComponentBuiltForAnotherNativeAbi$",
+        r"^PlatformManifest\.UnknownCapabilityRefusesBeforeKernel$",
     } <= refusals
     assert (
         "tests/python/unit/codegen/test_component_manifest_v2.py::"
@@ -243,7 +243,7 @@ def test_m4_gate_keeps_real_tamper_capacity_proofs_and_defers_runtime_gaps():
         (row["issue"], row["requirement"], row["polarity"])
         for row in data["deferred"]
         if row["requirement"] == "tamper_capability_abi"
-    } == {("ADC-683", "tamper_capability_abi", "refusal")}
+    } == set()
 
 
 def test_m4_gate_pins_mandatory_native_reopen_and_collective_hdf5_np2():

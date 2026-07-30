@@ -13,6 +13,8 @@ The source audit already authenticates real proofs for:
   tables, and platform launch checks;
 - source, manifest, and installed-binary tamper refusals, provider absence,
   native parameter capacity overflow, and a genuine wrong-ABI DSO refusal;
+- an unknown device capability refused by the runtime launch validator before
+  the candidate kernel is invoked;
 - Program-only Uniform/AMR temporal facades, retired native source-stage
   headers and schedulers, typed component dispatch, and fail-closed unbound
   native interfaces;
@@ -27,7 +29,6 @@ that must not be mistaken for closure. They currently cover:
 
 - a CI lane that installs every mandatory dependency, including VTK, and
   executes every selected pytest and CTest proof with zero skips;
-- an unknown capability refused by a real runtime/backend before execution;
 - ConsumerGraph and composite runtime rollback without handwritten publishers
   or injected failure wrappers;
 - checkpoint restore rollback caused by a real provider failure;
