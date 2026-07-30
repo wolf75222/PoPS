@@ -28,6 +28,14 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
     assert len(data["check"]) == 14
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
+    assert data["evidence_from"] == [
+        "ADC-749",
+        "ADC-750",
+        "ADC-752",
+        "ADC-753",
+        "ADC-754",
+        "ADC-755",
+    ]
     assert runner.main(["--check-only"]) == 0
 
 

@@ -1,7 +1,7 @@
 schema_version = 1
 gate = "adc757-prepared-numerics-slice"
 issue = "ADC-757"
-evidence_from = ["ADC-749", "ADC-750", "ADC-753", "ADC-754", "ADC-755"]
+evidence_from = ["ADC-749", "ADC-750", "ADC-752", "ADC-753", "ADC-754", "ADC-755"]
 deferred = [
   "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
   "python_ir_generated_abi_and_restart_parity",

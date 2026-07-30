@@ -82,7 +82,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         errors.append("gate must be exactly 'adc757-prepared-numerics-slice'")
     if data.get("issue") != "ADC-757":
         errors.append("issue must be exactly ADC-757")
-    expected_evidence = ["ADC-749", "ADC-750", "ADC-753", "ADC-754", "ADC-755"]
+    expected_evidence = ["ADC-749", "ADC-750", "ADC-752", "ADC-753", "ADC-754", "ADC-755"]
     if data.get("evidence_from") != expected_evidence:
         errors.append("evidence_from must be exactly %s" % expected_evidence)
     if data.get("deferred") != list(EXPECTED_DEFERRED):
