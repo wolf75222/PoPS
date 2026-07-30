@@ -63,10 +63,10 @@ def test_projection_delta_is_captured_only_when_due_and_stays_qualified() -> Non
     )
     assert "if (!runtime.automatic_balance_capture_due())" in projection
     assert projection.count("program_execution_projection_balance_integrals_") == 2
-    assert projection.index("const std::optional<std::vector<Real>> before") < projection.index(
-        "program_execution_apply_projection_"
-    )
-    assert projection.index("program_execution_apply_projection_") < projection.index(
+    due_projection = projection.split(
+        "const std::optional<std::vector<Real>> before", 1
+    )[1]
+    assert due_projection.index("program_execution_apply_projection_") < due_projection.index(
         "const std::optional<std::vector<Real>> after"
     )
     assert "record_automatic_balance_term(" in projection
