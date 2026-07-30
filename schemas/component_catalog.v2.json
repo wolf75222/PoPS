@@ -159,6 +159,16 @@
       "operations": ["apply"]
     },
     {
+      "id": 6,
+      "name": "reflux",
+      "uri": "pops://interfaces/reflux",
+      "version": 1,
+      "cpp_table": "PopsRefluxApiV1",
+      "hot_path": true,
+      "facets": ["stencil", "lowering", "effects"],
+      "operations": ["apply_interface_batch"]
+    },
+    {
       "id": 7,
       "name": "field_solver",
       "uri": "pops://interfaces/field-solver",
