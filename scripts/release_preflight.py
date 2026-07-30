@@ -21,6 +21,7 @@ import zipfile
 
 from final_release_contract import (
     FINAL_EXAMPLES,
+    INSTALLED_COMPONENT_PACKAGE_NODEID,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
@@ -437,6 +438,61 @@ def _examples_evidence(
             raise PreflightError("release evidence restart proof markers drifted for %s" % key)
 
 
+def _installed_component_package_evidence(
+    directory: Path,
+    python_conformance: dict[str, Any],
+) -> None:
+    component = python_conformance["evidence"]["installed_component_package"]
+    if not isinstance(component, dict) or set(component) != {"nodeid", "headers", "lane"}:
+        raise PreflightError("release evidence installed component package lane is malformed")
+    if component["nodeid"] != INSTALLED_COMPONENT_PACKAGE_NODEID \
+            or component["headers"] != "installed-wheel":
+        raise PreflightError("release evidence installed component package authority drifted")
+    lane = component["lane"]
+    if not isinstance(lane, dict) or set(lane) != {
+            "path", "sha256", "tests", "failures", "skips_or_xfails"}:
+        raise PreflightError("release evidence installed component package JUnit is malformed")
+    if lane["tests"] != 1 or lane["failures"] != 0 or lane["skips_or_xfails"] != 0:
+        raise PreflightError("release evidence installed component package lane is not all-pass")
+    component_report = Path(lane["path"]).resolve()
+    if not _inside(directory, component_report):
+        raise PreflightError(
+            "release evidence installed component package JUnit path escapes its directory")
+    _artifact_file(
+        directory,
+        component_report.relative_to(directory).as_posix(),
+        lane["sha256"],
+        label="installed component package JUnit",
+    )
+    component_commands = [
+        command for command in python_conformance["commands"]
+        if INSTALLED_COMPONENT_PACKAGE_NODEID in command["argv"]
+    ]
+    if len(component_commands) != 1:
+        raise PreflightError(
+            "release evidence must execute the installed component package node exactly once")
+    component_argv = component_commands[0]["argv"]
+    include_assignments = [
+        argument for argument in component_argv if argument.startswith("POPS_INCLUDE=")
+    ]
+    if include_assignments != ["POPS_INCLUDE="] \
+            or "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1" not in component_argv:
+        raise PreflightError(
+            "installed component package proof must use only wheel-owned headers")
+    expected_suffix = [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-s",
+        INSTALLED_COMPONENT_PACKAGE_NODEID,
+        "--junitxml",
+        lane["path"],
+    ]
+    if component_argv[-len(expected_suffix):] != expected_suffix:
+        raise PreflightError("installed component package proof command drifted")
+
+
 def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     expected = {"schema_version", "producer", "commit_sha", "package_version", "contract_sha256",
@@ -485,7 +541,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
     for name in ("native_conformance", "python_conformance"):
         evidence = gates[name]["evidence"]
         expected = {"required_lane"} if name == "native_conformance" \
-            else {"required_lane", "selection"}
+            else {"required_lane", "selection", "installed_component_package"}
         if not isinstance(evidence, dict) or set(evidence) != expected:
             raise PreflightError("release evidence %s lane is malformed" % name)
         lane = evidence["required_lane"]
@@ -498,10 +554,11 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
         report = Path(lane["path"]).resolve()
         if not _inside(directory, report):
             raise PreflightError("release evidence %s JUnit path escapes its directory" % name)
-        _artifact_file(directory, report.relative_to(directory), lane["sha256"],
+        _artifact_file(directory, report.relative_to(directory).as_posix(), lane["sha256"],
                        label="%s JUnit" % name)
     if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
         raise PreflightError("release evidence Python required-lane selection drifted")
+    _installed_component_package_evidence(directory, gates["python_conformance"])
     _examples_evidence(directory, gates, runtime)
 
 
