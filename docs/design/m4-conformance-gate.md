@@ -19,7 +19,8 @@ The source audit already authenticates real proofs for:
   headers and schedulers, typed component dispatch, and fail-closed unbound
   native interfaces;
 - real Uniform and AMR writer transactions, a real multi-layout transfer,
-  and a positive multi-layout checkpoint/restart;
+  a real two-writer collision with complete ConsumerGraph compensation, and a
+  positive multi-layout checkpoint/restart;
 - accepted scientific publication, diagnostics, two-rank collective HDF5,
   and a two-rank PVD/PVTU/rank-VTU hierarchy reopened by native VTK readers.
 
@@ -29,8 +30,7 @@ that must not be mistaken for closure. They currently cover:
 
 - a CI lane that installs every mandatory dependency, including VTK, and
   executes every selected pytest and CTest proof with zero skips;
-- ConsumerGraph and composite runtime rollback without handwritten publishers
-  or injected failure wrappers;
+- composite runtime rollback without an injected failure wrapper;
 - complete Uniform, AMR, and multi-layout public-contract/report parity.
 
 ## Exact output evidence
@@ -67,6 +67,15 @@ AMR provider validates the restored Program image. The test proves that the
 active restart transaction restores fields, hierarchy, histories, clocks,
 counters, run identity, and consumer cursors, and that the same provider can
 successfully retry the unmodified checkpoint.
+
+The ConsumerGraph refusal is likewise provider-backed. Two separately
+qualified native Writer components are compiled and staged in one transaction.
+After the first Writer publishes, a pre-existing user-owned target makes the
+second Writer fail at the runtime's atomic publication link. The transaction
+must compensate the first artifact, preserve the colliding file byte-for-byte,
+remove every private staging path, retain the exact accepted numerical state
+and consumer cursors, and then publish both Writers on a clean retry. The
+selected proof contains no handwritten publisher or prepared-publication fake.
 
 ## Gate modes
 
