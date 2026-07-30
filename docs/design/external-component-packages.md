@@ -88,4 +88,10 @@ artifacts on the declared failure path.
 
 Other devices, scalar types and dimensions remain unavailable until a target variant and every
 interface operation prove them. The wheel ships the exact signed PoPS header tree under
-`pops/include`, so AOT compilation does not depend on a source checkout.
+`pops/include`, so AOT compilation does not depend on a source checkout. The release gate proves
+this independently of the ordinary source conformance lane: it clears `POPS_INCLUDE`, imports the
+retained installed wheel with an empty `PYTHONPATH`, requires `pops_include()` to resolve exactly to
+that wheel's `pops/include`, and rejects a stub or mocked native route before compiling, installing,
+loading and invoking the external numerical-flux component. The one exact pytest node produces an
+all-pass JUnit report; release preflight reauthenticates its node ID, command, wheel-header authority
+and report digest, and refuses skips, xfails, duplicate execution or a checkout header override.

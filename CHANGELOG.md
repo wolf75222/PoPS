@@ -18,6 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- The final release gate now proves an external source component against the exact installed wheel:
+  its isolated AOT lane clears the checkout-owned `POPS_INCLUDE`, requires the wheel-owned signed
+  header tree and native Kokkos extension, compiles/installs/loads the component, and retains one
+  exact no-skip/no-xfail JUnit result whose node ID and command are reauthenticated by preflight.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
   executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
