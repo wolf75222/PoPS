@@ -69,8 +69,8 @@ def test_wave_speeds_fd_eps_rejected_on_numeric_path():
 def _solve_program(adctime, fd_eps=None):
     from pops.solvers.nonlinear import LocalNewton
     from pops.time import FailRun, LocalResidual
-    """A minimal Program with a solve_local_nonlinear node carrying fd_eps (trivial residual so no
-    compiled model is needed): r(U) = U - U0. The node stores tol / max_iter / fd_eps."""
+    """A minimal Program with a prepared solve_local_nonlinear node carrying fd_eps (trivial
+    residual so no compiled model is needed): r(U) = U - U0."""
     P = adctime.Program("p_default" if fd_eps is None else "p_eps")
     U = typed_state(P, "blk")
 

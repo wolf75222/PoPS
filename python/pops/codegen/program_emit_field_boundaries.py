@@ -476,15 +476,15 @@ static void prepare_field_boundary_jvp_route_{ordinal}(
              "field_boundary_jvp_noop" if iterate_dependent else "nullptr",
              "true" if iterate_dependent else "false"))
     chunks += ["}  // namespace"]
-    context_type = ("pops::runtime::program::AmrProgramContext" if target == "amr_system"
-                    else "pops::runtime::program::ProgramContext")
+    facade_type = "pops::AmrSystem" if target == "amr_system" else "pops::System"
     entry = ("pops_install_field_boundaries_amr" if target == "amr_system"
              else "pops_install_field_boundaries")
     if target == "amr_system":
         chunks.append("#include <pops/runtime/program/amr_program_context.hpp>")
     chunks += [
-        'extern "C" void %s(void* sys) {' % entry,
-        "  %s ctx(sys);" % context_type,
+        'extern "C" void %s(%s* sys) {' % (entry, facade_type),
+        "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);",
+        "  auto& ctx = *ctx_owner;",
         *installs,
         "}",
     ]
