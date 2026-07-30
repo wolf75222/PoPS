@@ -40,7 +40,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   deliberately limited to same-grid/same-clock, Dense fully stored histories and empty
   field-provider/cache/ConsumerGraph state; it validates before atomic no-clobber publication.
   Runtime restart remains unchanged and fail-closed for every historical payload.
-- Internal frozen two-level serial AMR shared-interface transactions now retain endpoint-qualified
+- Internal refined AMR shared-interface transactions now retain endpoint-qualified
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
   reflux source. `AMRRegrid.frozen()` now exposes the materialize-once public hierarchy policy, and
