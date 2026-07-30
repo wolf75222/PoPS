@@ -139,6 +139,7 @@ TEST(MpiHdf5Collective, WritesDisjointHyperslabsAndReopensNatively) {
   FAIL() << "this target must never be registered without native parallel HDF5";
 #else
   auto& world = pops::WorldCommunicator::world();
+  const auto communicator = world.communicator();
   const int rank = world.rank();
   const int ranks = world.size();
   ASSERT_GE(rank, 0);
@@ -180,7 +181,7 @@ TEST(MpiHdf5Collective, WritesDisjointHyperslabsAndReopensNatively) {
          local_values.size() * sizeof(double)}}},
   }};
   const std::string manifest = R"({"format":"native-test","version":1})";
-  pops::runtime::output::write_collective_hdf5(world, path_text, manifest, arrays, fields);
+  pops::runtime::output::write_collective_hdf5(communicator, path_text, manifest, arrays, fields);
 
   std::string validation_error;
   if (rank == 0) {
@@ -203,6 +204,7 @@ TEST(MpiHdf5Collective, RejectsOneRankInvalidDescriptorBeforeCreatingFile) {
   FAIL() << "this target must never be registered without native parallel HDF5";
 #else
   auto& world = pops::WorldCommunicator::world();
+  const auto communicator = world.communicator();
   const int rank = world.rank();
   const int ranks = world.size();
   if (ranks < 2)
@@ -240,7 +242,7 @@ TEST(MpiHdf5Collective, RejectsOneRankInvalidDescriptorBeforeCreatingFile) {
   std::string error;
   try {
     pops::runtime::output::write_collective_hdf5(
-        world, path, R"({"format":"native-invalid-test","version":1})", arrays, fields);
+        communicator, path, R"({"format":"native-invalid-test","version":1})", arrays, fields);
   } catch (const std::exception& failure) {
     error = failure.what();
   }
@@ -266,6 +268,7 @@ TEST(MpiHdf5Collective, RejectsCrossRankOverlappingHyperslabsBeforeCreatingFile)
   FAIL() << "this target must never be registered without native parallel HDF5";
 #else
   auto& world = pops::WorldCommunicator::world();
+  const auto communicator = world.communicator();
   const int rank = world.rank();
   const int ranks = world.size();
   if (ranks < 2)
@@ -303,7 +306,7 @@ TEST(MpiHdf5Collective, RejectsCrossRankOverlappingHyperslabsBeforeCreatingFile)
   std::string error;
   try {
     pops::runtime::output::write_collective_hdf5(
-        world, path, R"({"format":"native-overlap-test","version":1})", arrays, fields);
+        communicator, path, R"({"format":"native-overlap-test","version":1})", arrays, fields);
   } catch (const std::exception& failure) {
     error = failure.what();
   }
@@ -329,6 +332,7 @@ TEST(MpiHdf5Collective, RepeatedIdenticalWritesAreByteIdenticalAcrossTime) {
   FAIL() << "this target must never be registered without native parallel HDF5";
 #else
   auto& world = pops::WorldCommunicator::world();
+  const auto communicator = world.communicator();
   const int rank = world.rank();
   const int ranks = world.size();
   const std::string first_path = shared_temporary_path(world, "native-parallel-hdf5-exact-a");
@@ -369,9 +373,9 @@ TEST(MpiHdf5Collective, RepeatedIdenticalWritesAreByteIdenticalAcrossTime) {
   }};
   const std::string manifest = R"({"format":"native-exact-test","version":1})";
 
-  pops::runtime::output::write_collective_hdf5(world, first_path, manifest, arrays, fields);
+  pops::runtime::output::write_collective_hdf5(communicator, first_path, manifest, arrays, fields);
   std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-  pops::runtime::output::write_collective_hdf5(world, second_path, manifest, arrays, fields);
+  pops::runtime::output::write_collective_hdf5(communicator, second_path, manifest, arrays, fields);
 
   std::string validation_error;
   if (rank == 0) {
