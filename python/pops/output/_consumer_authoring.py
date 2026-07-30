@@ -1,6 +1,7 @@
 """Output-owned callback-free consumer-to-ConsumerGraph authoring contracts."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -241,6 +242,15 @@ class ConsumerAuthoringNode:
 
     def resolve(self, resolver: Any, layout_plan: Any, *, owner: Any) -> ConsumerManifest:
         case_owner = OwnerPath.coerce(owner)
+        if self.kind is ConsumerKind.CHECKPOINT:
+            operation_data = self.operation.consumer_data()
+            hierarchy = operation_data.get("hierarchy")
+            if isinstance(hierarchy, Mapping) and hierarchy.get("mode") == "regrid_on_restart":
+                if len(layout_plan.layouts) != 1 or not layout_plan.layouts[0].adaptive:
+                    raise ValueError(
+                        "RegridOnRestart requires exactly one AMR layout; "
+                        "Uniform and multi-layout plans are refused before artifact creation"
+                    )
         references = tuple(resolver(reference) for reference in self.references)
         quantities = []
         layout_rows = []

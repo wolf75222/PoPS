@@ -116,6 +116,7 @@ namespace runtime::program {
 class Profiler;      // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
 class CacheManager;  // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
 class ProgramContext;
+struct ProgramRuntimeState;
 }  // namespace runtime::program
 
 namespace runtime::multiblock {
@@ -225,7 +226,7 @@ class System {
   /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
   ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
   ///                 aggregated over the substeps of each advance and available via newton_report(name).
-  ///                 OPT-IN: false (default) = historical path with no extra cost. Stays
+  ///                 OPT-IN: false (default) omits the retained diagnostic summary. Stays
   ///                 flat (a separate bool, outside the homogeneous family of convergence options).
   /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
   ///                 every exact reconstructed face-trace pair, then reuses that interval from both
@@ -1360,6 +1361,7 @@ class System {
  private:
   friend class runtime::program::ProgramContext;
   friend class PreparedSystemLayoutTransfer;
+  POPS_EXPORT runtime::program::ProgramRuntimeState& program_runtime_state_();
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
   /// these methods in the same physical accepted/candidate transaction.

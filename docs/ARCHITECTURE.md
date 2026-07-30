@@ -454,10 +454,13 @@ accepted step therefore cannot retain a stale coarse-only clock axis.  Multi-blo
 layouts use this same authenticated route. `RestoreRecordedHierarchy()` preserves the recorded patch
 geometry. With `bit_identical=True` it also requires the recorded rank count and owner map; the
 default non-bit-identical route may rematerialize ownership only when every persisted history ring is
-Dense. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity; the
-builtin accepted-state-v5 provider currently refuses that weaker policy during resolution because it
-has no complete hierarchy/history/field remap implementation. PoPS never silently changes patch
-geometry under `RestoreRecordedHierarchy()`.
+Dense. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity. The
+builtin accepted-state-v5 provider first restores and validates the recorded accepted hierarchy,
+state, histories, counters and clock, then requests one artifact-owned scientific regrid at that
+accepted coordinate. It verifies composite conservation, publishes a rank-consensus before/after
+topology receipt and derives a new continuation run identity. The bounded route requires one AMR
+layout, unchanged MPI cardinality and no elliptic provider, shared-interface flux group, or bootstrap
+staggered cache. PoPS never silently changes patch geometry under `RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
 `assemble_rhs` (limited reconstruction then numerical flux -> $R = -\mathrm{div} F + S$).
@@ -599,7 +602,7 @@ transport/coupling sub-flows. The AMR conservation suites validate the resulting
 
 **MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DPOPS_USE_MPI=ON`, np=1/2/4). `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_generic_krylov`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
 
-**Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). Its current `amrmpi_integrated` harness also requires the installed `ProgramGraph` to consume B_z on both the coarse and fine trajectories. These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner); after a temporal-runtime cutover, their host/source checks do not replace a fresh GH200 run. A component variant that does not declare and prove the selected GPU execution context is refused; there is no implicit host fallback. Multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
+**Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). Its current `amrmpi_integrated` harness also requires the installed `ProgramGraph` to consume B_z on both the coarse and fine trajectories. These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner); after a temporal-runtime cutover, their host/source checks do not replace a fresh GH200 run. The ADC-700 refresh is the paired hardware campaign in `benchmarks/adc700/`: it refuses CPU evidence, records the concrete device inventory, compares a pinned pre-cutover native route with the Program-only candidate in ABBA order, and emits a machine-readable report with the `0.98` throughput threshold. The harness makes the proof reproducible but does not itself claim a result until that report is produced on real hardware. A component variant that does not declare and prove the selected GPU execution context is refused; there is no implicit host fallback. Multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
 
 **Parity of authenticated generated blocks.** The private native block artifact specializes the same
 catalog-selected templates as the builtin leaf. `test_compiled_model_parity` validates their numerical

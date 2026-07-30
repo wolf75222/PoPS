@@ -124,6 +124,7 @@ class AmrSystem(
         self._last_run_manifest = None
         self._last_run_identity = None
         self._last_restart_identity = None
+        self._restart_lineage_identity = None
         self._step_strategy = None
         self._step_transaction_plan = None
         self._step_controller = None
