@@ -38,8 +38,8 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["deferred"]) == 3
-    assert len(data["check"]) >= 48
+    assert len(data["deferred"]) == 2
+    assert len(data["check"]) >= 49
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -57,7 +57,6 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
         for row in data["deferred"]
     } == {
         ("ADC-684", "runtime_instance", "positive"),
-        ("ADC-684", "runtime_instance", "refusal"),
         ("ADC-687", "gate_execution", "positive"),
     }
 
@@ -164,6 +163,18 @@ def test_m4_gate_pins_real_runtime_instance_and_positive_checkpoint_proofs():
     } in checks
     assert {
         "issue": "ADC-684",
+        "requirement": "runtime_instance",
+        "polarity": "refusal",
+        "kind": "pytest",
+        "target": "runtime_instance",
+        "nodeid": (
+            "tests/python/integration/native_loader/"
+            "test_external_field_solver_runtime.py::"
+            "test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries"
+        ),
+    } in checks
+    assert {
+        "issue": "ADC-684",
         "requirement": "external_transfer",
         "polarity": "positive",
         "kind": "pytest",
@@ -219,6 +230,69 @@ def test_m4_gate_pins_real_runtime_instance_and_positive_checkpoint_proofs():
         "tests/python/integration/runtime/test_multi_layout_runtime.py::"
         "test_failed_child_restart_rolls_back_already_restored_layouts"
     ) not in selected
+
+
+def test_m4_runtime_refusal_uses_a_real_prepared_component_without_step_wrapper():
+    data, errors = _load_runner().audit_manifest(MANIFEST)
+    assert not errors
+    nodeid = (
+        "tests/python/integration/native_loader/"
+        "test_external_field_solver_runtime.py::"
+        "test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries"
+    )
+    assert [
+        row
+        for row in data["check"]
+        if row.get("nodeid") == nodeid
+    ] == [{
+        "issue": "ADC-684",
+        "requirement": "runtime_instance",
+        "polarity": "refusal",
+        "kind": "pytest",
+        "target": "runtime_instance",
+        "nodeid": nodeid,
+    }]
+
+    source_path = (
+        ROOT
+        / "tests/python/integration/native_loader/test_external_field_solver_runtime.py"
+    )
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name
+        == "test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries"
+    )
+    calls = {
+        (
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else ""
+        )
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+    }
+    assert {"_component", "compile", "bind", "run"} <= calls
+    names = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
+    assert names.isdisjoint(
+        {
+            "FailFirstStep",
+            "_RankLocalFailureTarget",
+            "Mock",
+            "MagicMock",
+            "SimpleNamespace",
+        }
+    )
+    attributes = {
+        node.attr for node in ast.walk(function) if isinstance(node, ast.Attribute)
+    }
+    assert "_native_step_target" not in attributes
+    assert "_engines" not in attributes
+    assert not any(isinstance(node, ast.ClassDef) for node in ast.walk(function))
 
 
 def test_m4_gate_pins_real_writer_refusal_without_publication_fakes():

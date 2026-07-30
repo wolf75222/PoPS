@@ -34,15 +34,6 @@ evidence_paths = [
   "tests/python/integration/runtime/test_shared_interface_runtime.py",
 ]
 
-[[deferred]]
-issue = "ADC-684"
-requirement = "runtime_instance"
-polarity = "refusal"
-reason = "Composite step rollback is only exercised through an injected FailFirstStep wrapper; a failure from a real prepared runtime component is still required."
-evidence_paths = [
-  "tests/python/integration/runtime/test_multi_layout_runtime.py",
-]
-
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
 # optional imports, skip/xfail, non-exact CTest selectors, duplicate proofs,
@@ -199,6 +190,14 @@ polarity = "positive"
 kind = "pytest"
 target = "runtime_instance"
 nodeid = "tests/python/integration/runtime/test_shared_interface_runtime.py::test_runtime_instance_executes_one_two_sided_shared_flux"
+
+[[check]]
+issue = "ADC-684"
+requirement = "runtime_instance"
+polarity = "refusal"
+kind = "pytest"
+target = "runtime_instance"
+nodeid = "tests/python/integration/native_loader/test_external_field_solver_runtime.py::test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries"
 
 [[check]]
 issue = "ADC-684"
