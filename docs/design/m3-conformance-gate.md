@@ -20,7 +20,8 @@ The full gate covers:
   runtime;
 - two-rank composite AMR reductions checked against an independent
   covered-cell oracle for replicated and distributed coarse layouts;
-- distinct strict/regrid-on-restart identities, guarantees, and fail-closed capability refusal;
+- distinct strict/regrid-on-restart identities and guarantees, plus one real transactional
+  restart/regrid with non-empty persistent tagging hysteresis;
 - total `LoweringCoverageReport` success and structured rejection.
 
 `deferred = []` is normative. Every ADC-672 through ADC-678 issue must have a
@@ -40,6 +41,10 @@ native tagger uses non-zero hysteresis; both source ranks must publish the same 
 payload, and the one-rank checkpoint after restore must retain those bytes exactly. A separate
 two-rank process injects a byte-level producer disagreement and proves collective refusal leaves no
 published or temporary checkpoint.
+The serial RegridOnRestart proof restores that accepted hysteresis image, executes exactly one
+scientific regrid, and requires its cycle to advance exactly once. A fault injected after the native
+topology/tagging mutation must roll back the complete pre-restart Program image; a second successful
+attempt must reproduce the same transformed tagging bytes before continuation.
 The source validator requires that exact pytest path to remain in the manifest's
 `mpi_orchestrators` category; removing or reclassifying it invalidates `--check-only`.
 All Python checks run with native and MPI requirements forced on; a missing capability cannot turn

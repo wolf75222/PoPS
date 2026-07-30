@@ -82,14 +82,41 @@ Supported native routes include:
   and opposite residual scattering. Endpoints must be co-located on one layout and their explicit
   default-flux RHS evaluations must be simultaneous and contiguous in one Program point.
   `MPI_COMM_WORLD` layouts may distribute the two face decompositions independently: native C++
-  collectives reconstruct both traces, require a finite bit-identical shared flux on every rank,
+  collectives assemble both traces, require a finite bit-identical shared flux on every rank,
   then scatter only into locally owned residual cells.
-  Internal serial two-level work retains endpoint-qualified canonical fragments with exact Program
-  weights and authoritative local substep duration. Those fragments authenticate the paired RHS
-  update; they are not injected again into reflux because that would duplicate the same face flux.
+  Each endpoint trace plan retains its projection Handle, authenticated reconstruction-provider
+  identity, operation and provider-derived stencil depth in the collective identity
+  `pops.multiblock.interface-plan.v2`. The current
+  type-erased scheduler executes the exact first-order cell-average operation. A MUSCL/WENO endpoint
+  retains its higher-order reconstructed-face requirement but fails before native installation
+  because no mapped-halo reconstruction provider is installed; it is never silently replaced by a
+  cell-average trace.
+  A public `AMRRegrid.frozen()` hierarchy may contain any positive materialized L0 prefix. A
+  dynamic hierarchy is also executable when at least two levels are configured, its complete
+  configured prefix is active at bind, and every accepted regrid preserves that active depth. The
+  scheduler rematerializes the authenticated per-level routes on the replacement BoxArray and
+  DistributionMapping before the next Program stage; missing full-face coverage or a depth change
+  rejects the regrid and restores the accepted registry. At depth greater than two, the current
+  coarse-to-fine regrid transaction can replace the finest transition while all ancestors remain
+  unchanged. Replacing a non-finest transition temporarily removes its descendants, so that route
+  fails closed until rematerialization can stage the complete candidate hierarchy atomically.
+  Endpoint-qualified canonical fragments retain exact Program weights and authoritative local
+  substep duration. An interior level publishes the same canonical evaluation to both adjacent,
+  level-qualified coarse/fine audit pairs. Those fragments authenticate the paired RHS update; they
+  are not injected again into reflux because that would duplicate the same face flux.
+  Both endpoint hierarchies must expose matching full-tangential fine-face coverage. The level-zero
+  route is installed before hierarchy bootstrap. Each successfully created fine route is installed
+  before that level becomes the parent of the next transition; only those exact routes can authorize
+  proper-nesting support across an omitted physical-boundary face. This route does not mirror one
+  endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
-  refined or dynamically regridded public AMR interfaces, historical shared-interface rates, and
-  refined MPI publication remain unavailable; the public AMR route accepts only one frozen level.
+  dynamic active-depth changes, non-finest dynamic replacements at depth greater than two, and
+  historical shared-interface rates remain unavailable. Frozen and depth-preserving dynamic
+  refined interfaces use the same exact `MPI_COMM_WORLD` trace and replacement-registry consensus
+  as the flat route. Dynamic rematerialization stages a detached collective candidate; a
+  rank-local failure restores the accepted layout, topology epoch, evaluator audit count and
+  executable registry before retry. Every rank evaluates the canonical shared flux and scatters
+  only to its locally owned endpoint cells.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes
@@ -111,7 +138,7 @@ Supported native routes include:
   exact provider route only on AMR level 0.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v5 for Uniform and AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v5 for Uniform and v6 for AMR. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
   authority is resolved into the compiled plan, including the builtin v5 manual route. Restart reads
@@ -134,21 +161,26 @@ Explicit unsupported rows include:
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v5 or AMR
-  v6 accepted-state payloads.
-- `checkpoint:amr_dynamic_regrid` is available through the strict v6 accepted-state route. The single
+  v7 accepted-state payloads.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v7 accepted-state route. The single
   authenticated artifact carries one exact DistributionMapping and compiled-Program accepted image
   per native rank. `bit_identical=True` therefore requires the recorded rank count. With the default
   non-bit-identical guarantee, `RestoreRecordedHierarchy()` may rematerialize hierarchy ownership and
   the rank-owned accepted Program image onto a different MPI rank count only when every persisted
   history ring is Dense. The rematerialized image includes the exact runtime-owned persistent
-  tagging payload after source-rank consensus. Selective history replay remains same-rank. Recorded
-  patch boxes and refinement topology are not regridded or inferred from opaque local publications.
+  tagging payload and the rank-consensus accepted shared-interface flux audit. Every restored
+  fragment is authenticated against the live topology, exact clock window, resolved Program weight,
+  face measure and local duration. Selective history replay remains same-rank. Recorded patch boxes
+  and refinement topology are not regridded or inferred from opaque local publications.
 - `checkpoint:regrid_on_restart` has an explicit typed `RegridOnRestart()` identity and the weaker
   `accepted_state_after_regrid` guarantee. The builtin accepted-state-v5 provider supports one
   artifact-backed AMR layout at unchanged MPI cardinality: exact accepted replay precedes one real
   tagger/clustering regrid, history/flux topology is rebound, composite conservation is checked, and
-  a global transform receipt derives a distinct run identity. Uniform, multi-layout, elliptic-field,
-  shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
+  a global transform receipt derives a distinct run identity. Persistent tagging state is restored
+  and rolled back with the accepted image, then advanced exactly once by a successful transform.
+  Serial shared-interface groups are rematerialized in the same transaction and execute
+  conservatively after rollback or commit. Uniform, multi-layout, elliptic-field, distributed
+  dynamic shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
   `bit_identical=True` is incompatible with the policy.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.

@@ -357,13 +357,63 @@ def _require_interface_component(install_plan: Any, binding: dict[str, Any]) -> 
     return installed
 
 
-def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
-    """Install authorities that require materialized native block storage.
+def _materialized_shared_interface_levels(native: Any, hierarchy: Any) -> tuple[int, ...]:
+    """Return the bootstrap-materialized prefix, never the configured level capacity."""
+    provider = getattr(native, "n_levels", None)
+    if not callable(provider):
+        raise TypeError("native AMR shared-interface provider must expose n_levels()")
+    materialized = provider()
+    configured = hierarchy.level_count
+    if type(materialized) is not int or materialized < 1:
+        raise RuntimeError(
+            "native AMR shared-interface provider returned an invalid materialized level count")
+    if type(configured) is not int or configured < 1 or materialized > configured:
+        raise RuntimeError(
+            "materialized AMR shared-interface levels exceed the resolved hierarchy capacity")
+    return tuple(range(materialized))
+
+
+def _validate_refined_shared_interface_execution(
+    levels: tuple[int, ...],
+    execution_data: dict[str, Any],
+    rank_count: int,
+    *,
+    dynamic_regrid: bool = False,
+) -> None:
+    """Require one contiguous materialized prefix on the selected communicator.
+
+    Frozen and depth-preserving dynamic hierarchies share this exact execution contract.  Native
+    rematerialization prepares a detached collective registry and publishes it only after every
+    ``MPI_COMM_WORLD`` rank agrees on the replacement layout identity.
+    """
+    if not levels or levels != tuple(range(len(levels))):
+        raise ValueError("shared-interface materialized levels must be a contiguous L0 prefix")
+    if type(rank_count) is not int or rank_count < 1:
+        raise RuntimeError("native shared-interface rank count must be a positive integer")
+    if type(dynamic_regrid) is not bool:
+        raise TypeError("shared-interface dynamic_regrid must be an exact bool")
+    communicator = execution_data.get("communicator_identity")
+    if communicator == "serial":
+        if rank_count != 1:
+            raise RuntimeError(
+                "serial shared-interface execution cannot run in a multi-rank native world")
+        return
+    if communicator != "MPI_COMM_WORLD":
+        raise TypeError("shared-interface execution requires serial or exact MPI_COMM_WORLD")
+
+
+def finalize_runtime_authorities(
+    engine: Any, install_plan: Any, *, complete: bool = False
+) -> None:
+    """Install authorities for the currently materialized native level prefix.
 
     Physical ghost plans are installed before block construction so generated closures capture them.
     A shared NumericalFlux is different: both exact endpoint MultiFabs must exist before the scheduler
-    can prove their BoxArray, DistributionMapping and face geometry.  This finalizer is therefore called
-    by the unified install seam after blocks/Program materialization and before the bind freeze.
+    can prove their BoxArray, DistributionMapping and face geometry. AMR calls this finalizer before
+    bootstrap to authenticate level-zero ownership, after each successful level creation so the next
+    proper-nesting proof sees an exact parent-level route, and once with ``complete=True`` before
+    bind freezes. Repeated calls must extend the exact prefix and can never reinstall or silently
+    replace an existing route.
     """
     from pops.runtime._component_execution_context import component_execution_data
 
@@ -372,6 +422,11 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
         raise RuntimeError("post-block authority finalization lost pre-build boundary reports")
     native = getattr(engine, "_s", None)
     install = getattr(native, "_install_interface_flux_component", None)
+    previous_reports = getattr(engine, "_interface_authorities", None)
+    if previous_reports is None:
+        previous_reports = {}
+    if not isinstance(previous_reports, Mapping):
+        raise TypeError("installed shared-interface authority reports must be a mapping")
     rows: dict[str, dict[str, Any]] = {}
     owners: dict[str, set[str]] = {}
     endpoint_owners: dict[str, dict[str, set[str]]] = {}
@@ -408,6 +463,9 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
             for side in sides:
                 table[side].add(block_name)
     if not rows:
+        if previous_reports:
+            raise RuntimeError(
+                "shared-interface declarations disappeared between authority finalizations")
         engine._interface_authorities = MappingProxyType({})
         return
     if not callable(install):
@@ -433,17 +491,49 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
     adaptive = {row.adaptive for row in install_plan.artifact.layout_plan.layouts}
     levels = (0,)
     if adaptive == {True}:
+        from pops.mesh._amr import FrozenHierarchy, RegridSchedule
+
         hierarchy = install_plan.resolved_hierarchy.plan
-        if hierarchy.level_count != 1:
+        frozen = type(hierarchy.regrid) is FrozenHierarchy
+        dynamic_refined = (
+            type(hierarchy.regrid) is RegridSchedule and hierarchy.level_count >= 2
+        )
+        if not frozen and not dynamic_refined:
             raise NotImplementedError(
-                "shared interface runtime finalization requires one frozen AMR level")
+                "shared interface runtime finalization supports any frozen materialized L0 "
+                "prefix; dynamic regrid requires at least two configured levels and the complete "
+                "prefix active at bind")
+        levels = _materialized_shared_interface_levels(native, hierarchy)
+        from pops import _pops
+
+        _validate_refined_shared_interface_execution(
+            levels, execution_data, _pops.n_ranks(), dynamic_regrid=dynamic_refined)
+        if complete and dynamic_refined and levels != tuple(range(hierarchy.level_count)):
+            raise NotImplementedError(
+                "dynamic shared interfaces require the complete configured prefix materialized "
+                "at bind; post-bind active-depth creation/removal is not executable"
+            )
     elif adaptive != {False}:
         raise ValueError("shared interface finalization requires one coherent layout capability")
 
     installed_reports = {}
     jobs = []
+    if set(previous_reports) - set(rows):
+        raise RuntimeError(
+            "installed shared-interface authority has no current resolved declaration")
+    import hashlib
+    import json
+
     for identity, row in sorted(rows.items()):
         interface = row["interface"]
+        declaration_identity = hashlib.sha256(
+            json.dumps(
+                interface,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
         endpoints = []
         for side_name in ("left", "right"):
             side = interface.get(side_name)
@@ -476,6 +566,30 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
             raise ValueError(
                 "shared interface endpoint block %r was not materialized" % error.args[0]) from None
         installed = _require_interface_component(install_plan, row["component"])
+        component_id = row["component"]["component_id"]
+        previous = previous_reports.get(identity)
+        previous_levels: tuple[int, ...] = ()
+        if previous is not None:
+            if not isinstance(previous, Mapping) or set(previous) != {
+                    "left_block", "right_block", "levels", "component_id",
+                    "declaration_identity"}:
+                raise TypeError(
+                    "installed shared-interface authority report is not canonical")
+            if previous["left_block"] != left or previous["right_block"] != right \
+                    or previous["component_id"] != component_id \
+                    or previous["declaration_identity"] != declaration_identity:
+                raise RuntimeError(
+                    "shared-interface authority changed after level-zero installation")
+            raw_levels = previous["levels"]
+            if type(raw_levels) is not tuple or any(
+                    type(level) is not int for level in raw_levels):
+                raise TypeError(
+                    "installed shared-interface levels must be one exact tuple of integers")
+            previous_levels = raw_levels
+            if previous_levels != tuple(range(len(previous_levels))) \
+                    or any(level not in levels for level in previous_levels):
+                raise RuntimeError(
+                    "installed shared-interface levels are not a prefix of materialized levels")
         # Empty overrides are deliberate: LoadedComponent owns the authenticated
         # parameters/target JSON captured from the installed component manifest.
         # Boundary binding scalars travel independently in the typed invocation
@@ -483,6 +597,8 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
         parameters_json = ""
         target_json = ""
         for level in levels:
+            if level in previous_levels:
+                continue
             jobs.append((
                 left_index, right_index, level, installed.native_handle,
                 interface, row["component"], parameters_json, target_json,
@@ -492,17 +608,38 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
             "left_block": left,
             "right_block": right,
             "levels": levels,
-            "component_id": row["component"]["component_id"],
+            "component_id": component_id,
+            "declaration_identity": declaration_identity,
         })
     discard = getattr(native, "_discard_interface_flux_components", None)
-    if jobs and not callable(discard):
+    checkpoint_provider = getattr(native, "_interface_flux_installation_checkpoint", None)
+    rollback_installations = getattr(
+        native, "_rollback_interface_flux_installations", None
+    )
+    transactional_prefix = callable(checkpoint_provider) and callable(
+        rollback_installations
+    )
+    if jobs and not transactional_prefix and not callable(discard):
         raise NotImplementedError(
             "the selected native provider cannot roll back shared interface installation")
+    accepted_size = None
+    if jobs and transactional_prefix:
+        accepted_size = cast(Callable[[], Any], checkpoint_provider)()
+        if type(accepted_size) is not int or accepted_size < 0:
+            raise RuntimeError(
+                "native shared-interface installation checkpoint is invalid"
+            )
     try:
         for job in jobs:
             cast(Callable[..., Any], install)(*job)
     except BaseException:
-        cast(Callable[..., Any], discard)()
+        try:
+            if accepted_size is None:
+                cast(Callable[..., Any], discard)()
+            else:
+                cast(Callable[[int], Any], rollback_installations)(accepted_size)
+        finally:
+            engine._interface_authorities = MappingProxyType(dict(previous_reports))
         raise
     engine._interface_authorities = MappingProxyType(installed_reports)
 

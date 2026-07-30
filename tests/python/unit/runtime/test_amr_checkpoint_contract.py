@@ -52,8 +52,14 @@ class _Sim:
     def n_levels(self):
         return self.active_levels
 
+    def n_blocks(self):
+        return 2
+
     def configured_n_levels(self):
         return self.configured_levels
+
+    def checkpoint_topology_epoch(self):
+        return 7
 
     def checkpoint_temporal_relations(self):
         return [[0, 1, 2, 1, "integral_only"], [1, 2, 3, 1, "integral_only"]]
@@ -114,6 +120,40 @@ class _Sim:
             ]
         ]
 
+    def program_interface_flux_ledger_manifest(self):
+        return [
+            [
+                "shared.face",
+                "7",
+                "0",
+                "1",
+                "0",
+                "4",
+                "1",
+                "2",
+                "0.4",
+                "program.group.node.42",
+                "0",
+                "4",
+                "0",
+                "1",
+                "0.3",
+                "0",
+                "4",
+                "1",
+                "1",
+                "0.5",
+                "coarse_outward",
+                "0",
+                "1",
+                "1",
+                "2",
+                "0.125",
+                "0.2",
+                "resolved",
+            ]
+        ]
+
     def program_sync_manifest(self):
         return [
             ["0", "1", "0", "reflux", "4", "1", "1"],
@@ -135,11 +175,19 @@ def _payload(sim=None):
 
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
     contract = contract_for(_Sim())
-    assert contract["schema_version"] == 3
+    assert contract["schema_version"] == 4
     assert contract["guarantee"] == "bit_identical_accepted_state"
     assert contract["ledger"]["accepted_entries"] == 1
     assert contract["ledger"]["transaction_depth"] == 0
     assert contract["ledger"]["entries"][0][8:10] == ["1", "2"]
+    assert contract["interface_ledger"]["accepted_entries"] == 1
+    assert contract["interface_ledger"]["transaction_depth"] == 0
+    assert contract["interface_ledger"]["entries"][0][0:4] == [
+        "shared.face",
+        "7",
+        "0",
+        "1",
+    ]
     assert contract["level_relations"] == [
         {
             "parent": 0,
@@ -186,14 +234,21 @@ def test_preflight_refuses_any_static_provenance_mismatch(mutation):
 
 
 @pytest.mark.parametrize(
-    "section", ["history_qualifications", "clocks", "ledger", "synchronization"]
+    "section",
+    [
+        "history_qualifications",
+        "clocks",
+        "ledger",
+        "interface_ledger",
+        "synchronization",
+    ],
 )
 def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section):
     payload = _payload()
     data = json.loads(str(payload["amr_accepted_contract"]))
     if section == "history_qualifications":
         data[section][0][1] = "program.block.1"
-    elif section == "ledger":
+    elif section in {"ledger", "interface_ledger"}:
         data[section]["accepted_entries"] += 1
     else:
         data[section].append(["tampered"])
@@ -201,6 +256,21 @@ def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section)
     preflight_contract(_Sim(), payload)
     with pytest.raises(ValueError, match="restored AMR accepted-state image differs"):
         validate_restored_contract(_Sim(), payload)
+
+
+@pytest.mark.parametrize("live_epoch, levels, blocks", [(8, 3, 2), (7, 1, 2), (7, 3, 1)])
+def test_restored_interface_audit_must_match_the_live_hierarchy(live_epoch, levels, blocks):
+    class _ChangedHierarchy(_Sim):
+        active_levels = levels
+
+        def checkpoint_topology_epoch(self):
+            return live_epoch
+
+        def n_blocks(self):
+            return blocks
+
+    with pytest.raises(ValueError, match="interface-flux audit is outside the live hierarchy"):
+        validate_restored_contract(_ChangedHierarchy(), _payload(_ChangedHierarchy()))
 
 
 def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
@@ -229,6 +299,9 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
             ]
 
         def program_flux_ledger_manifest(self):
+            return []
+
+        def program_interface_flux_ledger_manifest(self):
             return []
 
         def program_sync_manifest(self):

@@ -439,7 +439,7 @@ positive-definiteness are mutually exclusive. Consequently CG requires the globa
 when `nullspace=None`, and the complement-SPD certificate for `ConstantNullspace`; PoPS never swaps
 methods or upgrades a certificate from stencil metadata.
 
-Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v6
+Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v7
 reader preflights topology, ownership maps, state, aux, potentials, provider slots and history rings,
 then authenticates the runtime-owned tagging hysteresis before publishing the accepted Program image.
 It restores the hierarchy through the final clock update inside one native accepted-state transaction.
@@ -458,14 +458,21 @@ default non-bit-identical route may rematerialize ownership only when every pers
 Dense; source ranks must agree on the runtime-owned tagging payload and rank-count rematerialization
 preserves it exactly. Native `SymbolicTagger` therefore accepts non-zero temporal hysteresis.
 External Tagger components still refuse non-zero hysteresis until their adapter owns that persistent
-route. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity; the
-builtin `pops.restart.accepted-state-v5` provider first restores and validates the recorded AMR v6
-accepted hierarchy, state, histories, counters, clock, and tagging payload, then requests one
-artifact-owned scientific regrid at that accepted coordinate. It verifies composite conservation,
-publishes a rank-consensus before/after topology receipt and derives a new continuation run identity.
-The bounded route requires one AMR layout, unchanged MPI cardinality and no elliptic provider,
-shared-interface flux group, or bootstrap staggered cache. PoPS never silently changes patch geometry
-under `RestoreRecordedHierarchy()`.
+route. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity. The
+builtin accepted-state-v5 provider first restores and validates the AMR v7 accepted hierarchy,
+state, histories, counters, clock and accepted shared-interface flux audit, then requests one
+artifact-owned scientific regrid at that accepted coordinate. Each interface fragment retains its
+topology epoch, exact clock window, rational Program weight, face measure and local duration; strict
+restart rejects an incomplete or stale fragment before publishing the accepted image. It verifies
+composite conservation, publishes a rank-consensus before/after
+topology receipt and derives a new continuation run identity. The restored tagging hysteresis enters
+that same transaction: a failed transform restores its exact accepted bytes, while a successful
+transform advances one tagging cycle and publishes the transformed image. The bounded route requires
+one AMR layout and unchanged MPI cardinality. Serial shared-interface flux groups participate in the
+same topology rematerialization, conservation check, rollback and retry; distributed dynamic
+interface rematerialization, elliptic providers and bootstrap staggered caches remain refused. PoPS
+never silently changes patch geometry under
+`RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
 `assemble_rhs` (limited reconstruction then numerical flux -> $R = -\mathrm{div} F + S$).

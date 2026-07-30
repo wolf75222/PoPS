@@ -334,7 +334,7 @@ def _assert_snapshot(
 
 
 def _accepted_tagging_hysteresis(payload: Any) -> bytes:
-    """Extract the opaque persistent-tagging bytes from accepted-state v3."""
+    """Extract the opaque persistent-tagging bytes from accepted-state v4."""
     encoded = (
         bytes(payload)
         if isinstance(payload, (bytes, bytearray, memoryview))
@@ -350,8 +350,8 @@ def _accepted_tagging_hysteresis(payload: Any) -> bytes:
         cursor += 8
         return value
 
-    if encoded[:8] != b"POPSAST3":
-        raise AssertionError("checkpoint does not contain accepted-state v3")
+    if encoded[:8] != b"POPSAST4":
+        raise AssertionError("checkpoint does not contain accepted-state v4")
     cursor = 8
     level_count = read_size()
     clock_bytes = level_count * 40

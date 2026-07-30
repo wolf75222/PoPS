@@ -990,15 +990,15 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             source=source,
         ),
         _row(
-            "checkpoint:amr_accepted_state_v6",
+            "checkpoint:amr_accepted_state_v7",
             layout="amr",
             backend="runtime",
             platform="host|mpi",
             mpi=mpi,
             limitation=(
                 "strict accepted-state checkpoint includes the runtime-owned AMR tagging "
-                "payload; MPI_COMM_WORLD uses one rank-0 publication with collective capture "
-                "and consensus"
+                "payload and accepted shared-interface flux audit; MPI_COMM_WORLD uses one "
+                "rank-0 publication with collective capture and consensus"
             ),
             source=source,
         ),
@@ -1010,7 +1010,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             status="unavailable",
             limitation="parallel HDF5 checkpoint is not a native checkpoint route",
             requested="restartable checkpoint encoded as parallel HDF5",
-            available_route="strict accepted-state NPZ checkpoint (uniform v5, AMR v6)",
+            available_route="strict accepted-state NPZ checkpoint (uniform v5, AMR v7)",
             alternative="use RuntimeInstance.checkpoint() or the typed Checkpoint consumer",
             source=source,
         ),
@@ -1023,7 +1023,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             flag="supports_amr",
             mpi=mpi,
             limitation=(
-                "strict v6 accepted-state restart; exact rank-local AMR ownership and "
+                "strict v7 accepted-state restart; exact rank-local AMR ownership and "
                 "compiled-Program publications keep the native rank count"
             ),
             source=source,
