@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pops.identity import Identity, canonical_bytes, make_identity
 from pops.interfaces import ComponentInterface
@@ -30,6 +30,9 @@ from ._package_data import (
     validate_payload_row,
     verify_package_identity,
 )
+
+if TYPE_CHECKING:
+    from .artifacts import CompiledComponentArtifact
 
 
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -288,6 +291,16 @@ class FixedBinaryPackage:
         identity = verify_package_identity(row)
         return cls(manifests, exports, platform, symbols, binary_identity, binary, identity,
                    manifest_path, str(relative))
+
+    def require(
+        self, alias: str, *, interface: ComponentInterface
+    ) -> CompiledComponentArtifact:
+        """Authenticate one fixed export and return its installable artifact."""
+        if type(interface) is not ComponentInterface:
+            raise TypeError("interface must be an exact pops.interfaces.ComponentInterface")
+        from .artifacts import CompiledComponentArtifact
+
+        return CompiledComponentArtifact.from_fixed(self, alias, interface=interface)
 
     def to_data(self) -> dict[str, Any]:
         return {
