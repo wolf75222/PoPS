@@ -45,6 +45,19 @@ def _write_final_source_tree(root: Path) -> None:
             + "\nif __name__ == \"__main__\":\n    pass\n",
             encoding="utf-8",
         )
+    for example, nodeid in zip(
+        contract.FINAL_EXAMPLES,
+        contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS,
+        strict=True,
+    ):
+        relative, function_name = nodeid.split("::", 1)
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "EXAMPLE = %r\n\ndef %s():\n    pass\n"
+            % (example.name, function_name),
+            encoding="utf-8",
+        )
 
 
 def test_final_release_source_contract_accepts_exact_canonical_set(tmp_path):
@@ -73,6 +86,23 @@ def test_final_release_source_contract_requires_executable_restart_output_proof(
 
     assert any("--output-dir" in error for error in errors)
     assert any("lacks final proof markers" in error for error in errors)
+
+
+def test_final_release_source_contract_requires_exact_mandatory_example_tests(tmp_path):
+    _write_final_source_tree(tmp_path)
+    nodeid = contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS[-1]
+    relative, _function_name = nodeid.split("::", 1)
+    (tmp_path / relative).write_text(
+        "EXAMPLE = 'wrong.py'\n"
+        "@pytest.mark.skip(reason='optional')\n"
+        "def renamed_test():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    errors = contract.source_contract_errors(tmp_path)
+
+    assert any("must resolve exactly once" in error for error in errors)
 
 
 @pytest.mark.parametrize("module", ("pops.ir", "pops._ir"))
@@ -108,6 +138,47 @@ def test_required_junit_lane_rejects_skips_xfails_failures_and_empty_reports(tmp
     report.write_text('<testsuite tests="0"/>', encoding="utf-8")
     with pytest.raises(gate.FinalGateError):
         gate._junit_summary(report)
+
+
+def test_required_junit_lane_authenticates_exact_final_example_tests(tmp_path):
+    cases = []
+    for nodeid in contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS:
+        relative, function_name = nodeid.split("::", 1)
+        classname = str(Path(relative).with_suffix("")).replace("/", ".")
+        cases.append(
+            '<testcase classname="%s" name="%s"/>' % (classname, function_name)
+        )
+    report = tmp_path / "final-examples.xml"
+    report.write_text(
+        '<testsuite tests="%d">%s</testsuite>'
+        % (len(cases), "".join(cases)),
+        encoding="utf-8",
+    )
+
+    assert gate._require_junit_nodeids(
+        report, contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS
+    ) == list(contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS)
+
+    report.write_text(
+        '<testsuite tests="%d">%s</testsuite>'
+        % (len(cases) - 1, "".join(cases[:-1])),
+        encoding="utf-8",
+    )
+    with pytest.raises(gate.FinalGateError, match="appears 0 times"):
+        gate._require_junit_nodeids(
+            report, contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS
+        )
+
+
+def test_release_preflight_requires_the_exact_final_example_test_ledger():
+    evidence = {
+        "final_example_nodeids": list(contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS),
+    }
+
+    preflight._final_example_test_evidence(evidence)
+    evidence["final_example_nodeids"] = evidence["final_example_nodeids"][:-1]
+    with pytest.raises(preflight.PreflightError, match="test ledger drifted"):
+        preflight._final_example_test_evidence(evidence)
 
 
 def test_required_python_lane_rejects_script_style_hidden_skips():
