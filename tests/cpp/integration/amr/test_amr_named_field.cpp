@@ -43,6 +43,7 @@
 #include "load_balance_test_authority.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -195,6 +196,31 @@ class ExternalGraphIdentityProvider final : public AmrFieldSolverProvider {
                                                            expected_prepared_contract(request));
   }
 };
+
+static std::array<int, 2> level_boundary_prepare_visits{};
+
+static void prepare_level_qualified_boundary(int, const MultiFab& iterate, MultiFab&,
+                                             const Geometry&,
+                                             const FieldBoundaryExecutionContext& context) {
+  if (context.point.level < 0 ||
+      context.point.level >= static_cast<int>(level_boundary_prepare_visits.size()))
+    throw std::runtime_error("field boundary received an invalid AMR level");
+  if (context.state_count != 1 || context.states == nullptr ||
+      context.state_distributions == nullptr || context.states[0] == nullptr)
+    throw std::runtime_error("field boundary did not receive its one state dependency");
+  const MultiFab& state = *context.states[0];
+  if (state.box_array().boxes() != iterate.box_array().boxes() ||
+      state.dmap().ranks() != iterate.dmap().ranks() || state.local_size() != iterate.local_size())
+    throw std::runtime_error("field boundary dependency belongs to another AMR level");
+  const FieldDistribution expected =
+      context.point.level == 0 ? FieldDistribution::Replicated : FieldDistribution::Distributed;
+  if (context.state_distributions[0] != expected)
+    throw std::runtime_error("field boundary dependency has the wrong level distribution");
+  ++level_boundary_prepare_visits[static_cast<std::size_t>(context.point.level)];
+}
+
+static void add_noop_level_qualified_boundary(int, const MultiFab&, MultiFab&, const Geometry&,
+                                              const FieldBoundaryExecutionContext&) {}
 
 #if defined(POPS_HAS_KOKKOS)
 class KokkosEnvironment : public ::testing::Environment {
@@ -493,6 +519,75 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   // provider, so an identity provider must observe the negated public closure output.
   add_scaled_component(state, -charge, 0, expected);
   EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential(selected), expected), Real(0));
+}
+
+TEST(test_amr_named_field, LevelLocalDynamicBoundaryReceivesLevelQualifiedState) {
+  constexpr int n = 16;
+  constexpr Real charge = Real(-1);
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{false, false};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc.xlo = params.poisson.bc.xhi = BCType::Dirichlet;
+  params.poisson.bc.ylo = params.poisson.bc.yhi = BCType::Dirichlet;
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 2);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks[0].aux_ncomp = kAuxNamedBase + 1;
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+  AmrFieldSolveConfig plan;
+  plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  plan.plan_identity = "tests:plasma/level-boundary:plan@1";
+  plan.provider_identity = "tests:plasma/level-boundary";
+  plan.topology_provider_kind = "builtin_rectangular_cell_graph_v1";
+  plan.topology_provenance = "tests:level-qualified-boundary";
+  plan.topology_digest = "tests:level-qualified-boundary:layout@1";
+  plan.output_owner_identity = "tests:plasma";
+  plan.output_block = "plasma";
+  plan.output_key = "level_boundary";
+  plan.hierarchy_policy = level_local_hierarchy_policy();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
+  plan.has_reaction = true;
+  plan.reaction = Real(1);
+  plan.providers.push_back(
+      FieldProviderBinding{"tests:plasma/level-boundary/rhs", "plasma", "level_boundary", Real(1)});
+  runtime.install_field_plan("level_boundary", plan);
+  runtime.register_named_field("plasma", "level_boundary", kAuxNamedBase, -1, -1,
+                               /*gradient_sign=*/Real(1));
+  runtime.set_block_named_elliptic_rhs(0, "level_boundary",
+                                       [charge](const MultiFab& state, MultiFab& rhs) {
+                                         add_scaled_component(state, charge, 0, rhs);
+                                       });
+  runtime.set_field_boundary_dependencies("level_boundary", {"plasma"}, {0});
+  runtime.set_field_boundary_kernel(
+      "level_boundary",
+      CompiledFieldBoundaryKernel{"tests.level-qualified-boundary",
+                                  "tests.level-qualified-boundary.residual", "",
+                                  prepare_level_qualified_boundary, nullptr,
+                                  add_noop_level_qualified_boundary, nullptr, false});
+  FieldLogicalTimePoint point;
+  point.time = Real(0.25);
+  point.dt = Real(0.01);
+  point.level = -1;  // runtime materialization must replace this authoring baseline per level
+  runtime.set_field_logical_timepoint("level_boundary", point);
+
+  level_boundary_prepare_visits.fill(0);
+  const std::string selected = "level_boundary";
+  const SolveReport report = consume_expected_solved(runtime.solve_named_fields(&selected));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_GT(level_boundary_prepare_visits[0], 0);
+  EXPECT_GT(level_boundary_prepare_visits[1], 0);
 }
 
 TEST(test_amr_named_field, Runs) {

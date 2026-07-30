@@ -400,9 +400,11 @@ remain Boolean/hashable identities and a vector state cannot be sampled without 
 An iterate-dependent law installs its exact symbolic JVP and requires an explicit nonlinear solver,
 and a device-invalid denominator is reduced to one rank-consistent witness before the solve can
 publish. Uniform state/field dependencies and single-level AMR state dependencies are prepared
-outside the iteration; multilevel AMR state providers and AMR field-to-field providers are rejected
-until a per-level materialization contract exists. No route falls through to a Python callback or a
-per-cell registry lookup.
+outside the iteration. A linear dynamic boundary on a level-local AMR named-field solve receives one
+exact `FieldLogicalTimePoint.level` and state-provider storage materialized from that level before
+the solve. Composite-FAC boundary contexts, iterate-dependent multilevel boundaries, and AMR
+field-to-field providers remain explicit refusals until their own per-level carriers exist. No route
+falls through to a Python callback or a per-cell registry lookup.
 Linear and nonlinear field routes both retain the accepted warm start until their `SolveReport` is
 consumed; an invalid boundary evaluation or iteration limit restores that value and cannot update the
 published aux channel.

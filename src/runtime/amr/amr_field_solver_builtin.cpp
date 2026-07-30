@@ -184,6 +184,13 @@ class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
     for (auto& solver : level_solvers_)
       solver->set_boundary_context(context);
   }
+  void set_boundary_context_for_level(int level,
+                                      const FieldBoundaryExecutionContext& context) override {
+    if (fac_)
+      throw std::invalid_argument(
+          "composite geometric-MG has no per-level boundary-context carrier");
+    level_solvers_.at(static_cast<std::size_t>(level))->set_boundary_context(context);
+  }
   SolveReport solve() override {
     if (fac_) {
       if (plan_.has_boundary_kernel && plan_.boundary_kernel.observes_iteration) {
@@ -241,6 +248,7 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
         "pops.amr.field-solver.geometric-mg.distributed-coarse@1",
         "pops.amr.field-solver.geometric-mg.dynamic-boundary@1",
         "pops.amr.field-solver.geometric-mg.exact-preparation@1",
+        "pops.amr.field-solver.geometric-mg.level-qualified-linear-boundary@1",
         "pops.amr.field-solver.geometric-mg.level-local-hierarchy@1",
         "pops.amr.field-solver.geometric-mg.nonlinear-boundary@1",
         "pops.amr.field-solver.geometric-mg.reaction@1",
@@ -292,10 +300,15 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
         (!request.replicated_coarse || static_cast<bool>(request.active)))
       return PreparedProviderSupport::reject(
           14, "composite hierarchy cannot represent this coarse distribution or active region");
-    if (level_local && request.hierarchy.nlev() > 1 &&
-        (request.plan.has_boundary_kernel || request.plan.has_newton))
+    if (composite && request.hierarchy.nlev() > 1 && request.plan.has_boundary_kernel)
       return PreparedProviderSupport::reject(
-          15, "multi-level local hierarchy cannot represent dynamic or nonlinear boundaries");
+          16, "composite hierarchy has no per-level dynamic-boundary context carrier");
+    if (level_local && request.hierarchy.nlev() > 1 &&
+        (request.plan.has_newton ||
+         (request.plan.has_boundary_kernel && request.plan.boundary_kernel.observes_iteration)))
+      return PreparedProviderSupport::reject(
+          15,
+          "multi-level local hierarchy cannot represent an iterate-dependent nonlinear boundary");
     return PreparedProviderSupport::accept();
   }
   [[nodiscard]] std::string expected_prepared_contract(

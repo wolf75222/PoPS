@@ -124,8 +124,6 @@ struct AmrFieldSolveConfig {
   std::shared_ptr<std::vector<Real>> boundary_parameters = std::make_shared<std::vector<Real>>();
   std::vector<std::string> boundary_state_blocks;
   std::vector<int> boundary_state_components;
-  std::vector<const MultiFab*> boundary_state_buffers;
-  std::vector<FieldDistribution> boundary_state_distributions;
   FieldBoundaryExecutionContext boundary_context{};
   bool has_reaction = false;
   Real reaction = Real(0);
@@ -235,6 +233,17 @@ class AmrPreparedFieldSolver {
   virtual MultiFab& rhs_level(int level) = 0;
   virtual MultiFab& phi_level(int level) = 0;
   virtual void set_boundary_context(const FieldBoundaryExecutionContext& context) = 0;
+  /// Install one context whose dependency buffers and logical point belong to exactly @p level.
+  /// Existing one-level providers retain their source contract through set_boundary_context().
+  /// A multilevel provider must opt in explicitly; the core never reuses a coarse dependency on a
+  /// fine solve.
+  virtual void set_boundary_context_for_level(int level,
+                                              const FieldBoundaryExecutionContext& context) {
+    if (level != 0 || level_count() != 1)
+      throw std::invalid_argument(
+          "AMR field provider has no level-qualified boundary-context route");
+    set_boundary_context(context);
+  }
   [[nodiscard]] virtual const SolveReport& last_solve_report() const noexcept = 0;
 
  protected:
@@ -3359,7 +3368,8 @@ class AmrRuntime {
     if (provider_slot.empty() || plan.plan_identity.empty() || plan.provider_identity.empty() ||
         plan.output_owner_identity.empty() || plan.output_block.empty() ||
         plan.output_key.empty() || plan.providers.empty() || plan.topology_provider_kind.empty() ||
-        plan.topology_provenance.empty() || plan.topology_digest.empty())
+        plan.topology_provenance.empty() || plan.topology_digest.empty() ||
+        plan.boundary_state_blocks.size() != plan.boundary_state_components.size())
       throw std::runtime_error("AmrRuntime: incomplete qualified field provider plan");
     for (const auto& provider : plan.providers)
       if (provider.identity.empty() || provider.owner_block.empty() ||
@@ -3410,10 +3420,10 @@ class AmrRuntime {
     field.plan.boundary_context.point = point;
     if (!field.plan.has_boundary_kernel || !field.plan.boundary_kernel.observes_iteration)
       field.plan.boundary_context.point.iteration = 0;
-    if (field.plan.has_boundary_kernel) {
-      if (field.solver)
-        field.solver->set_boundary_context(field.plan.boundary_context);
-    }
+    // A multilevel context is materialized immediately before solve, when every level's dependency
+    // storage is known. Do not replace it here with the unqualified authoring baseline.
+    if (field.plan.has_boundary_kernel && field.solver && field.solver->level_count() == 1)
+      field.solver->set_boundary_context(field.plan.boundary_context);
   }
 
   void set_field_boundary_parameters(const std::string& provider_slot,
@@ -3427,10 +3437,9 @@ class AmrRuntime {
     *plan.boundary_parameters = parameters;
     plan.boundary_context.parameters = plan.boundary_parameters.get();
     plan.boundary_context.parameter_count = static_cast<int>(parameters.size());
-    if (plan.has_boundary_kernel) {
-      if (found->second.solver)
-        found->second.solver->set_boundary_context(plan.boundary_context);
-    }
+    if (plan.has_boundary_kernel && found->second.solver &&
+        found->second.solver->level_count() == 1)
+      found->second.solver->set_boundary_context(plan.boundary_context);
   }
 
   void set_field_boundary_dependencies(const std::string& provider_slot,
@@ -3439,6 +3448,9 @@ class AmrRuntime {
     auto found = named_fields_.find(provider_slot);
     if (found == named_fields_.end())
       throw std::runtime_error("AmrRuntime: unknown field boundary-dependency slot");
+    if (state_blocks.size() != state_components.size())
+      throw std::invalid_argument(
+          "AmrRuntime: field boundary dependencies require one component per state block");
     found->second.plan.boundary_state_blocks = state_blocks;
     found->second.plan.boundary_state_components = state_components;
     invalidate_named_field_solver(found->second);
@@ -3846,31 +3858,59 @@ class AmrRuntime {
           (has_gradient && (nf.gx_comp >= aux_ncomp_ || nf.gy_comp >= aux_ncomp_)))
         throw std::runtime_error(
             "AmrRuntime: named elliptic field output components exceed the aux channel width");
-      nf.plan.boundary_state_buffers.clear();
-      nf.plan.boundary_state_distributions.clear();
-      for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
-        const int block = block_index(nf.plan.boundary_state_blocks[index]);
-        if (block < 0)
-          throw std::runtime_error("AmrRuntime: boundary state dependency names unknown block");
-        const MultiFab& state = (*blocks_[static_cast<std::size_t>(block)].levels)[0].U;
-        if (nf.plan.boundary_state_components[index] < 0 ||
-            nf.plan.boundary_state_components[index] >= state.ncomp())
-          throw std::runtime_error("AmrRuntime: boundary state component is out of range");
-        nf.plan.boundary_state_buffers.push_back(&state);
-        nf.plan.boundary_state_distributions.push_back(
-            replicated_coarse_ ? FieldDistribution::Replicated : FieldDistribution::Distributed);
-      }
-      nf.plan.boundary_context.states =
-          nf.plan.boundary_state_buffers.empty() ? nullptr : nf.plan.boundary_state_buffers.data();
-      nf.plan.boundary_context.state_distributions =
-          nf.plan.boundary_state_distributions.empty()
-              ? nullptr
-              : nf.plan.boundary_state_distributions.data();
-      nf.plan.boundary_context.state_count =
-          static_cast<int>(nf.plan.boundary_state_buffers.size());
       ensure_named_elliptic(nf);
-      if (nf.plan.has_boundary_kernel)
-        nf.solver->set_boundary_context(nf.plan.boundary_context);
+      if (nf.plan.boundary_state_blocks.size() != nf.plan.boundary_state_components.size())
+        throw std::runtime_error(
+            "AmrRuntime: field boundary dependency blocks and components differ in size");
+      // These carriers outlive the provider solve below. Each local hierarchy solver receives only
+      // the state buffers and distribution belonging to its exact AMR level. Composite FAC retains
+      // its existing coarse-context route until it owns a per-level boundary carrier.
+      const int boundary_levels =
+          nf.solver->couples_hierarchy_levels() ? 1 : nf.solver->level_count();
+      if (boundary_levels < 1)
+        throw std::runtime_error(
+            "AmrRuntime: field boundary provider has no materialized hierarchy level");
+      std::vector<std::vector<const MultiFab*>> boundary_state_buffers(
+          static_cast<std::size_t>(boundary_levels));
+      std::vector<std::vector<FieldDistribution>> boundary_state_distributions(
+          static_cast<std::size_t>(boundary_levels));
+      if (nf.plan.has_boundary_kernel) {
+        for (int level = 0; level < boundary_levels; ++level) {
+          if (level < 0 || level >= nlev_)
+            throw std::runtime_error(
+                "AmrRuntime: field boundary context level is outside the active hierarchy");
+          auto& buffers = boundary_state_buffers[static_cast<std::size_t>(level)];
+          auto& distributions = boundary_state_distributions[static_cast<std::size_t>(level)];
+          buffers.reserve(nf.plan.boundary_state_blocks.size());
+          distributions.reserve(nf.plan.boundary_state_blocks.size());
+          for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
+            const int block = block_index(nf.plan.boundary_state_blocks[index]);
+            if (block < 0)
+              throw std::runtime_error("AmrRuntime: boundary state dependency names unknown block");
+            const auto& levels = *blocks_[static_cast<std::size_t>(block)].levels;
+            if (static_cast<std::size_t>(level) >= levels.size())
+              throw std::runtime_error(
+                  "AmrRuntime: boundary state dependency has no requested AMR level");
+            const MultiFab& state = levels[static_cast<std::size_t>(level)].U;
+            if (nf.plan.boundary_state_components[index] < 0 ||
+                nf.plan.boundary_state_components[index] >= state.ncomp())
+              throw std::runtime_error("AmrRuntime: boundary state component is out of range");
+            buffers.push_back(&state);
+            distributions.push_back(level == 0 && replicated_coarse_
+                                        ? FieldDistribution::Replicated
+                                        : FieldDistribution::Distributed);
+          }
+          FieldBoundaryExecutionContext context = nf.plan.boundary_context;
+          context.point.level = level;
+          context.states = buffers.empty() ? nullptr : buffers.data();
+          context.state_distributions = distributions.empty() ? nullptr : distributions.data();
+          context.state_count = static_cast<int>(buffers.size());
+          if (nf.solver->couples_hierarchy_levels())
+            nf.solver->set_boundary_context(context);
+          else
+            nf.solver->set_boundary_context_for_level(level, context);
+        }
+      }
       prepare_named_field_providers(nf);
       prepare_named_rhs_scratch_(nf);
       // The provider registry has already resolved the complete block-qualified route.  Assembly

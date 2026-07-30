@@ -135,6 +135,10 @@ Supported native routes include:
   conditional scratch. A field-dependent boundary closure under `field_coupled=True` is refused
   until a qualified tangent-field solve exists. Core field-coupled `rhs_jacvec` currently has an
   exact provider route only on AMR level 0.
+- Level-local AMR named-field solves materialize linear dynamic-boundary state dependencies once per
+  active level. The context carries that exact level and the matching state layout/distribution;
+  coarse storage is never silently reused by a fine solver. Composite-FAC dynamic boundaries,
+  iterate-dependent multilevel boundaries, and field-to-field dependencies remain unavailable.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
 - Runtime accepted-state checkpoint v5 for Uniform and v6 for AMR. The single-file MPI route captures
