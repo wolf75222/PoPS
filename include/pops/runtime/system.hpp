@@ -11,6 +11,7 @@
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/mesh/boundary/periodicity.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>        // CoupledSourceProgram (facade POD, ADC-214)
@@ -636,11 +637,13 @@ class System {
   /// arrays of ncomp doubles. Installed by install_block / add_compiled_model / push_dynamic from
   /// the block's model, consumed by set_primitive_state / get_primitive_state.
   using CellConvert = std::function<void(const double* in, double* out)>;
+  /// Fallible conservative -> primitive conversion. A failed report forbids writing @p out.
+  using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
   /// Installs the pointwise cons <-> prim conversions of a block (after install_block). Called by
   /// the header template add_compiled_model (compiled model); the native path add_block and the dynamic
   /// .so path set them directly. POPS_EXPORT: resolved by the native loader through dlopen.
   POPS_EXPORT void set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                        CellConvert cons_to_prim);
+                                        CellRecovery cons_to_prim);
 
   /// Installs the optional STEP BOUNDS of a block (after install_block): reduction of the
   /// max source frequency (HasSourceFrequency trait, bound dt <= cfl*substeps/(stride*mu)) and of the

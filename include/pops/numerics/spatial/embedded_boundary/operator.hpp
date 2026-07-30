@@ -218,13 +218,18 @@ struct EbFaceFluxXKernel {
         fx(i, j, c) = Real(0);
       return;
     }
-    const auto L =
-        reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rr =
-        reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto L = reconstruct_pp_recovered<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim,
+                                                   pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp_recovered<Model>(model, u, i, j, 0, -1, lim, recon_prim,
+                                                    pos_floor, pos_comp);
+    if (!record_reconstruction_recoveries(failures, failure, L, Rr)) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        fx(i, j, c) = Real(0);
+      return;
+    }
     const FaceContext face = FaceContext::axis_aligned(0, alpha);
     const auto evaluation =
-        evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+        evaluate_numerical_flux_at(nflux, model, L.value, ax, i - 1, j, Rr.value, ax, i, j, face);
     failures.record(evaluation, failure);
     if (!evaluation.succeeded()) {
       // This face field is transactional scratch.  Keep later divergence arithmetic finite while
@@ -264,13 +269,18 @@ struct EbFaceFluxYKernel {
         fy(i, j, c) = Real(0);
       return;
     }
-    const auto L =
-        reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rr =
-        reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto L = reconstruct_pp_recovered<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim,
+                                                   pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp_recovered<Model>(model, u, i, j, 1, -1, lim, recon_prim,
+                                                    pos_floor, pos_comp);
+    if (!record_reconstruction_recoveries(failures, failure, L, Rr)) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        fy(i, j, c) = Real(0);
+      return;
+    }
     const FaceContext face = FaceContext::axis_aligned(1, alpha);
     const auto evaluation =
-        evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+        evaluate_numerical_flux_at(nflux, model, L.value, ax, i, j - 1, Rr.value, ax, i, j, face);
     failures.record(evaluation, failure);
     if (!evaluation.succeeded()) {
       for (int c = 0; c < Model::n_vars; ++c)

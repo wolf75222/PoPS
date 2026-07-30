@@ -84,6 +84,16 @@ ModelSpec periodic_exb_model() {
   return spec;
 }
 
+ModelSpec compressible_model() {
+  ModelSpec spec;
+  spec.transport = "compressible";
+  spec.source = "none";
+  spec.elliptic = "background";
+  spec.gamma = 1.4;
+  spec.n0 = 0.0;
+  return spec;
+}
+
 // Construit un System scalaire ExB diocotron pret a stepper. Le disque/mode est pose par l'appelant.
 void build_exb(System& s, double R_wall) {
   ModelSpec spec;
@@ -346,4 +356,32 @@ TEST(FacadeRouting, PeriodicAnalyticLevelSetUsesTopologyAtTheSeam) {
   explicit_wrap.step(2e-4);
   EXPECT_EQ(topology.get_state("n"), explicit_wrap.get_state("n"));
   EXPECT_GT(max_abs_diff(topology.get_state("n"), rho0), 0.0);
+}
+
+TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedState) {
+#if defined(POPS_HAS_KOKKOS)
+  (void)kokkos_scope();
+#endif
+  constexpr int n = 4;
+  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
+  system.add_block("gas", compressible_model(), "none", "rusanov", "conservative");
+
+  // All components are finite, but Euler conservative -> primitive is undefined at rho=0.
+  // This exercises the real runtime registry and its prepared conversion, not a test-only callback.
+  const std::vector<double> accepted(static_cast<std::size_t>(4 * n * n), 0.0);
+  system.set_state("gas", accepted);
+
+  bool rejected = false;
+  try {
+    (void)system.get_primitive_state("gas");
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    rejected = message.find("variable recovery failed") != std::string::npos &&
+               message.find("status=invalid_contract") != std::string::npos &&
+               message.find("cause=non_finite_candidate") != std::string::npos &&
+               message.find("attempted_methods=1") != std::string::npos;
+  }
+  EXPECT_TRUE(rejected);
+  EXPECT_EQ(system.get_state("gas"), accepted)
+      << "failed diagnostic recovery must not mutate the accepted conservative state";
 }

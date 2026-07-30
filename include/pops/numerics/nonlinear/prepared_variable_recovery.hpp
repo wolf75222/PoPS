@@ -10,6 +10,7 @@
 /// explicit publication transaction below.
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/model/physical_model.hpp>
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>
 
 #include <cstdint>
@@ -142,6 +143,96 @@ struct RecoveryOutcome {
   POPS_HD bool recovered() const { return status == RecoveryStatus::kRecovered; }
   POPS_HD bool publication_permitted() const { return recovered(); }
 };
+
+/// Fixed-width, type-erased summary carried across runtime/component seams.
+///
+/// RecoveryOutcome keeps the recovered value at its compile-time width.  Runtime block registries
+/// erase that width, but must not erase the decision that controls publication.  RecoveryReport is
+/// therefore the exact scalar control metadata of an outcome, without a candidate buffer.
+struct RecoveryReport {
+  RecoveryStatus status = RecoveryStatus::kExhausted;
+  RecoveryCause cause = RecoveryCause::kNone;
+  int attempted_methods = 0;
+  int selected_method = -1;
+  int last_method = -1;
+  int total_iterations = 0;
+  int total_evaluations = 0;
+  Real residual_norm = std::numeric_limits<Real>::max();
+  int failing_component = -1;
+  std::uint32_t reason_code = 0;
+
+  POPS_HD bool recovered() const { return status == RecoveryStatus::kRecovered; }
+  POPS_HD bool publication_permitted() const { return recovered(); }
+};
+
+static_assert(std::is_trivially_copyable_v<RecoveryReport>,
+              "type-erased recovery reports must remain fixed-layout copyable values");
+
+template <int N>
+POPS_HD inline RecoveryReport recovery_report(const RecoveryOutcome<N>& outcome) {
+  return RecoveryReport{outcome.status,
+                        outcome.cause,
+                        outcome.attempted_methods,
+                        outcome.selected_method,
+                        outcome.last_method,
+                        outcome.total_iterations,
+                        outcome.total_evaluations,
+                        outcome.residual_norm,
+                        outcome.failing_component,
+                        outcome.reason_code};
+}
+
+inline constexpr const char* recovery_status_name(RecoveryStatus status) {
+  switch (status) {
+    case RecoveryStatus::kRecovered:
+      return "recovered";
+    case RecoveryStatus::kExhausted:
+      return "exhausted";
+    case RecoveryStatus::kRejected:
+      return "rejected";
+    case RecoveryStatus::kInvalidContract:
+      return "invalid_contract";
+  }
+  return "unknown";
+}
+
+inline constexpr const char* recovery_cause_name(RecoveryCause cause) {
+  switch (cause) {
+    case RecoveryCause::kNone:
+      return "none";
+    case RecoveryCause::kClosedFormUnavailable:
+      return "closed_form_unavailable";
+    case RecoveryCause::kIterationLimit:
+      return "iteration_limit";
+    case RecoveryCause::kSingularJacobian:
+      return "singular_jacobian";
+    case RecoveryCause::kInadmissibleCandidate:
+      return "inadmissible_candidate";
+    case RecoveryCause::kSafeguardFailure:
+      return "safeguard_failure";
+    case RecoveryCause::kInvalidEvaluation:
+      return "invalid_evaluation";
+    case RecoveryCause::kUnsupportedCapability:
+      return "unsupported_capability";
+    case RecoveryCause::kEvaluationRetry:
+      return "evaluation_retry";
+    case RecoveryCause::kEvaluationReject:
+      return "evaluation_reject";
+    case RecoveryCause::kEvaluationFailed:
+      return "evaluation_failed";
+    case RecoveryCause::kExplicitRejection:
+      return "explicit_rejection";
+    case RecoveryCause::kNonFiniteCandidate:
+      return "non_finite_candidate";
+    case RecoveryCause::kRepairPublicationForbidden:
+      return "repair_publication_forbidden";
+    case RecoveryCause::kMissingFailureCause:
+      return "missing_failure_cause";
+    case RecoveryCause::kInvalidMethodAction:
+      return "invalid_method_action";
+  }
+  return "unknown";
+}
 
 struct EmptyRecoveryMethodList {
   static constexpr int size = 0;
@@ -300,6 +391,64 @@ POPS_HD inline RecoveryOutcome<N> recover_prepared_variable(
   recovery_detail::execute_recovery_chain<0>(plan.methods, plan.admissible, conserved,
                                              initial_guess, outcome);
   return outcome;
+}
+
+/// Admissibility provider for model conversions that impose no additional physical policy.
+/// recover_prepared_variable has already rejected every non-finite component before this provider is
+/// called.  This preserves each model's historical closed-form conversion without adding a hidden
+/// repair, floor or fallback.
+template <int N>
+struct FiniteModelRecoveryAdmissibility {
+  POPS_HD bool operator()(const Real (&)[N], int* failing_component) const {
+    if (failing_component != nullptr)
+      *failing_component = -1;
+    return true;
+  }
+};
+
+/// One declared closed-form method around the model-owned conservative -> primitive formula.
+template <HasPrimitiveVars Model>
+struct ClosedFormModelRecoveryMethod {
+  static constexpr RecoveryMethodKind kind = RecoveryMethodKind::kClosedForm;
+  Model model;
+
+  POPS_HD RecoveryMethodResult<Model::n_vars> operator()(const Real (&conserved)[Model::n_vars],
+                                                         const Real (&)[Model::n_vars]) const {
+    typename Model::State state{};
+    for (int component = 0; component < Model::n_vars; ++component)
+      state[component] = conserved[component];
+    const typename Model::Prim primitive = model.to_primitive(state);
+    Real candidate[Model::n_vars] = {};
+    for (int component = 0; component < Model::n_vars; ++component)
+      candidate[component] = primitive[component];
+    return RecoveryMethodResult<Model::n_vars>::candidate(candidate);
+  }
+};
+
+/// Identity is still an explicit prepared method for scalar/no-primitive models.  Consequently the
+/// type-erased runtime consumer receives the same failure contract for every block.
+template <int N>
+struct IdentityModelRecoveryMethod {
+  static constexpr RecoveryMethodKind kind = RecoveryMethodKind::kClosedForm;
+
+  POPS_HD RecoveryMethodResult<N> operator()(const Real (&conserved)[N], const Real (&)[N]) const {
+    return RecoveryMethodResult<N>::candidate(conserved);
+  }
+};
+
+/// Prepare exactly one conservative -> primitive method.  There is deliberately no repair or
+/// fallback method in this compatibility route.
+template <class Model>
+POPS_HD constexpr auto prepare_model_variable_recovery(const Model& model) {
+  constexpr int N = Model::n_vars;
+  if constexpr (HasPrimitiveVars<Model>) {
+    return prepare_variable_recovery<N>(
+        FiniteModelRecoveryAdmissibility<N>{},
+        recovery_methods(ClosedFormModelRecoveryMethod<Model>{model}));
+  } else {
+    return prepare_variable_recovery<N>(FiniteModelRecoveryAdmissibility<N>{},
+                                        recovery_methods(IdentityModelRecoveryMethod<N>{}));
+  }
 }
 
 /// Adapter from the common ADC-750 prepared nonlinear provider to one explicit recovery method.
