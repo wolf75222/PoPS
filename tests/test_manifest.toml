@@ -883,6 +883,11 @@ sources = ["tests/cpp/unit/numerics/test_positivity_floor.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_numerics_gate"
+sources = ["tests/cpp/unit/numerics/test_prepared_numerics_gate.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_primitive_recon"
 sources = ["tests/cpp/unit/numerics/test_primitive_recon.cpp"]
 labels = ["unit", "numerics", "fast"]
