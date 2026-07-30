@@ -27,6 +27,26 @@ PLATFORM_CONTRACT_SCHEMA_VERSION = 1
 _CENTERINGS = frozenset({"cell", "node", "face_x", "face_y", "face_z"})
 _LAYOUTS = frozenset({"right", "left", "strided"})
 _OWNERSHIP = frozenset({"borrowed", "owned", "shared"})
+_FIELD_CAPABILITIES = (
+    "dimensions",
+    "centerings",
+    "scalars",
+    "layouts",
+    "ownership",
+    "generic_field_view",
+)
+_EXACT_FIELD_ATTRIBUTES = (
+    "dimension",
+    "extents",
+    "strides",
+    "centering",
+    "ghosts",
+    "scalar",
+    "memory_space",
+    "patch",
+    "layout",
+    "ownership",
+)
 _STD_YEARS = {"11": "201103", "14": "201402", "17": "201703",
               "20": "202002", "23": "202302"}
 
@@ -324,6 +344,10 @@ class FieldViewDescriptor:
                 len(pair) != 2 or any(isinstance(item, bool) or not isinstance(item, int)
                                       or item < 0 for item in pair) for pair in ghosts):
             raise ValueError("FieldViewDescriptor.ghosts must contain one non-negative pair per axis")
+        if any(lower >= extent or upper >= extent - lower
+               for extent, (lower, upper) in zip(self.extents, ghosts, strict=True)):
+            raise ValueError(
+                "FieldViewDescriptor.ghosts must leave a positive interior extent on every axis")
         object.__setattr__(self, "ghosts", ghosts)
         if self.centering not in _CENTERINGS:
             raise ValueError("unsupported field centering %r" % self.centering)
@@ -411,35 +435,71 @@ def _validate_launch_facts(platform: PlatformManifest, context: ExecutionContext
     for name in ("storage", "compute", "accumulation", "reduction"):
         _require_same("precision.%s" % name, getattr(platform.precision, name),
                       getattr(backend.precision, name))
-    supported_dimensions = tuple(backend.capabilities["dimensions"].require(
+    for name in _FIELD_CAPABILITIES:
+        _require_same(
+            "capabilities.%s" % name,
+            _field_capability(platform, name, owner="artifact"),
+            _field_capability(backend, name, owner="runtime"),
+        )
+    generic_field_view = _field_capability(
+        backend, "generic_field_view", owner="runtime").require(
+            "runtime.capabilities.generic_field_view")
+    if type(generic_field_view) is not bool or not generic_field_view:
+        raise PlatformContractError(
+            "runtime does not prove the generic field-view launch contract",
+            field="generic_field_view", expected=True, actual=generic_field_view)
+    supported_dimensions = tuple(_field_capability(
+        backend, "dimensions", owner="runtime").require(
         "runtime.capabilities.dimensions"))
-    supported_centerings = tuple(backend.capabilities["centerings"].require(
+    supported_centerings = tuple(_field_capability(
+        backend, "centerings", owner="runtime").require(
         "runtime.capabilities.centerings"))
-    supported_scalars = tuple(backend.capabilities["scalars"].require(
+    supported_scalars = tuple(_field_capability(
+        backend, "scalars", owner="runtime").require(
         "runtime.capabilities.scalars"))
+    supported_layouts = tuple(_field_capability(
+        backend, "layouts", owner="runtime").require(
+        "runtime.capabilities.layouts"))
+    supported_ownership = tuple(_field_capability(
+        backend, "ownership", owner="runtime").require(
+        "runtime.capabilities.ownership"))
     supported_memory = tuple(backend.memory_spaces.require("runtime.memory_spaces"))
     actual = tuple(fields)
-    expected = {item.name: item for item in expected_fields}
-    if len(expected) != len(tuple(expected_fields)):
-        raise ValueError("expected field names must be unique")
+    required = tuple(expected_fields)
+    _require_unique_field_names(actual, owner="launch")
+    _require_unique_field_names(required, owner="expected")
+    expected = {item.name: item for item in required}
     for view in actual:
-        if type(view) is not FieldViewDescriptor:
-            raise TypeError("fields must contain exact FieldViewDescriptor values")
-        _require_field_capability(view, "dimension", view.dimension, supported_dimensions)
-        _require_field_capability(view, "centering", view.centering, supported_centerings)
-        _require_field_capability(view, "scalar", view.scalar, supported_scalars)
-        _require_field_capability(view, "memory_space", view.memory_space, supported_memory)
+        _validate_field_capabilities(
+            view,
+            dimensions=supported_dimensions,
+            centerings=supported_centerings,
+            scalars=supported_scalars,
+            memory_spaces=supported_memory,
+            layouts=supported_layouts,
+            ownership=supported_ownership,
+        )
         if view.scalar != context.datatype.identity:
             raise PlatformContractError(
                 "field scalar does not match ExecutionContext datatype", field="datatype",
                 expected=view.scalar, actual=context.datatype.identity)
         requirement = expected.get(view.name)
         if requirement is not None:
-            for name in ("dimension", "extents", "centering", "scalar", "memory_space"):
+            for name in _EXACT_FIELD_ATTRIBUTES:
                 if getattr(view, name) != getattr(requirement, name):
                     raise PlatformContractError(
                         "field %r %s mismatch" % (view.name, name), field=name,
                         expected=getattr(requirement, name), actual=getattr(view, name))
+    for view in required:
+        _validate_field_capabilities(
+            view,
+            dimensions=supported_dimensions,
+            centerings=supported_centerings,
+            scalars=supported_scalars,
+            memory_spaces=supported_memory,
+            layouts=supported_layouts,
+            ownership=supported_ownership,
+        )
     missing = sorted(set(expected) - {item.name for item in actual})
     if missing:
         raise PlatformContractError("required field view(s) are missing: %s" % missing,
@@ -502,6 +562,12 @@ def validate_component_runtime(platform: PlatformManifest,
         _require_same(
             "capabilities.%s" % name,
             platform.capabilities[name], runtime.capabilities[name])
+    for name in _FIELD_CAPABILITIES:
+        _require_same(
+            "capabilities.%s" % name,
+            _field_capability(platform, name, owner="component"),
+            _field_capability(runtime, name, owner="runtime"),
+        )
     expected_abi = platform.abi.require("component.abi")
     actual_abi = runtime.abi.require("runtime.abi")
     if expected_abi != actual_abi:
@@ -520,6 +586,46 @@ def _require_field_capability(view: FieldViewDescriptor, field_name: str,
             "field %r requests unsupported %s=%r; runtime proves only %r"
             % (view.name, field_name, value, supported), field=field_name,
             expected=supported, actual=value)
+
+
+def _field_capability(manifest: PlatformManifest | RuntimeBackendManifest, name: str,
+                      *, owner: str) -> CapabilityProof:
+    proof = manifest.capabilities.get(name)
+    if proof is None:
+        raise PlatformContractError(
+            "%s omitted required field-view capability %r" % (owner, name),
+            field="capabilities.%s" % name, expected="explicit proof", actual=None)
+    return proof
+
+
+def _require_unique_field_names(fields: tuple[FieldViewDescriptor, ...], *, owner: str) -> None:
+    names: set[str] = set()
+    for view in fields:
+        if type(view) is not FieldViewDescriptor:
+            raise TypeError("%s fields must contain exact FieldViewDescriptor values" % owner)
+        if view.name in names:
+            raise PlatformContractError(
+                "%s field descriptors contain duplicate name %r" % (owner, view.name),
+                field="fields.%s" % view.name, expected="unique name", actual=view.name)
+        names.add(view.name)
+
+
+def _validate_field_capabilities(
+    view: FieldViewDescriptor,
+    *,
+    dimensions: tuple[Any, ...],
+    centerings: tuple[Any, ...],
+    scalars: tuple[Any, ...],
+    memory_spaces: tuple[Any, ...],
+    layouts: tuple[Any, ...],
+    ownership: tuple[Any, ...],
+) -> None:
+    _require_field_capability(view, "dimension", view.dimension, dimensions)
+    _require_field_capability(view, "centering", view.centering, centerings)
+    _require_field_capability(view, "scalar", view.scalar, scalars)
+    _require_field_capability(view, "memory_space", view.memory_space, memory_spaces)
+    _require_field_capability(view, "layout", view.layout, layouts)
+    _require_field_capability(view, "ownership", view.ownership, ownership)
 
 
 def launch_checked(platform: PlatformManifest, context: ExecutionContext,
