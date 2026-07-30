@@ -462,6 +462,7 @@ struct AmrSystem::Impl {
     int cadence_clock_restore_macro_step = 0;
     std::map<std::string, Real> program_diagnostics;
     std::map<std::string, Real> step_balance_terms;
+    std::map<pops::runtime::program::AutomaticBalanceKey, Real> automatic_balance_terms;
     bool balance_step_completed = false;
     bool balance_program_was_due = false;
     pops::runtime::program::CacheManager cache;
@@ -509,6 +510,7 @@ struct AmrSystem::Impl {
       cadence_clock_restore_macro_step = impl.program_.cadence_clock_restore_macro_step_;
       copy_value_map_into(program_diagnostics, impl.program_.diagnostics_);
       copy_value_map_into(step_balance_terms, impl.program_.step_balance_terms_);
+      copy_value_map_into(automatic_balance_terms, impl.program_.automatic_balance_terms_);
       balance_step_completed = impl.program_.balance_step_completed_;
       balance_program_was_due = impl.program_.balance_program_was_due_;
       // AMR currently owns its native cache/history rings inside AmrRuntime.  These two shared
@@ -542,6 +544,7 @@ struct AmrSystem::Impl {
       impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       copy_value_map_into(impl.program_.diagnostics_, program_diagnostics);
       copy_value_map_into(impl.program_.step_balance_terms_, step_balance_terms);
+      copy_value_map_into(impl.program_.automatic_balance_terms_, automatic_balance_terms);
       impl.program_.balance_step_completed_ = balance_step_completed;
       impl.program_.balance_program_was_due_ = balance_program_was_due;
       impl.program_.cache_ = cache;
