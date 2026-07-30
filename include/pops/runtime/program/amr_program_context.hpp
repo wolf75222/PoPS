@@ -1115,7 +1115,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     amr::ClockStamp sync_clock = accepted;
     sync_clock.level = parent;
     for (int b = 0; b < n_blocks(); ++b) {
-      const std::size_t sb = static_cast<std::size_t>(sys_block(b));
+      const int runtime_block = sys_block(b);
+      const std::size_t sb = static_cast<std::size_t>(runtime_block);
       if (capturing()) {
         sync_report_.push_back({parent, child, b, SyncPhase::Reflux, sync_clock});
         const EdgeFlux coarse_role = reflux_flux_from_ledger_(b, parent, ledger_begin, ledger_end);
@@ -1123,8 +1124,26 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         if (coarse_role.empty() != fine_role.empty())
           throw std::runtime_error(
               "AMR conservative ledger contains only one side of a parent/child flux pair");
-        if (!coarse_role.empty())
-          pops::detail::route_reflux_program(*eng_, sb, child, coarse_role, fine_role);
+        const bool capture_balance =
+            facade_->program_runtime_state_().automatic_balance_capture_due();
+        std::vector<Real> integrated_reflux;
+        if (!coarse_role.empty()) {
+          pops::detail::route_reflux_program(*eng_, sb, child, coarse_role, fine_role,
+                                             capture_balance ? &integrated_reflux : nullptr);
+        } else if (capture_balance) {
+          integrated_reflux.assign(static_cast<std::size_t>(eng_->level_state(sb, parent).ncomp()),
+                                   Real(0));
+        }
+        if (capture_balance) {
+          const int components = eng_->level_state(sb, parent).ncomp();
+          if (integrated_reflux.size() != static_cast<std::size_t>(components))
+            throw std::runtime_error(
+                "AMR automatic reflux balance contribution changed component width");
+          for (int component = 0; component < components; ++component)
+            facade_->program_runtime_state_().record_automatic_balance_term(
+                runtime_block, parent, component, "reflux",
+                integrated_reflux[static_cast<std::size_t>(component)], "AmrProgramContext");
+        }
       }
       sync_report_.push_back({parent, child, b, SyncPhase::AverageDown, sync_clock});
       eng_->average_down_level(sb, child);
