@@ -107,7 +107,10 @@ Supported native routes include:
   boundary admissibility projection. Separate `unavailable` rows expose the missing characteristic
   no-inflow kernel, device-side analytic `(x,t,params)` data, and post-Riemann flux transformation.
   These requests fail during resolution or lowering; none silently degrades to component-wise
-  ghost filling. The explicit public route is
+  ghost filling. A native rank-1/2/4 regrid fixture removes and recreates the fine hierarchy, then
+  proves that uncovered internal fine ghosts retain the conservative coarse-fine transfer and are
+  never treated as physical faces by the rematerialized prepared boundary session. The explicit
+  public route is
   `Inflow(state=U, value=primitive_values, representation=Primitive(),
   converter=pops.boundary.model_primitive_to_conservative(U))`; the converter is derived from the
   authenticated block state and cannot name an unrelated callback or kernel.
