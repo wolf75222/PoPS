@@ -468,10 +468,13 @@ composite conservation, publishes a rank-consensus before/after
 topology receipt and derives a new continuation run identity. The restored tagging hysteresis enters
 that same transaction: a failed transform restores its exact accepted bytes, while a successful
 transform advances one tagging cycle and publishes the transformed image. The bounded route requires
-one AMR layout and unchanged MPI cardinality. Serial shared-interface flux groups participate in the
-same topology rematerialization, conservation check, rollback and retry; distributed dynamic
-interface rematerialization, elliptic providers and bootstrap staggered caches remain refused. PoPS
-never silently changes patch geometry under
+one AMR layout and unchanged MPI cardinality. Depth-preserving shared-interface flux groups
+participate in the same topology rematerialization, conservation check, rollback and retry in serial
+and under `MPI_COMM_WORLD`. One rank-local post-transform failure is closed collectively; rollback
+restores the complete accepted image before a retry may publish one common receipt and resume the
+rematerialized interface. Active-depth changes, unsupported non-finest replacements at depth greater
+than two, elliptic providers and bootstrap staggered caches remain refused. PoPS never silently
+changes patch geometry under
 `RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
