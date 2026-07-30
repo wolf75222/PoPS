@@ -32,7 +32,7 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 6
+EVIDENCE_SCHEMA_VERSION = 7
 
 
 class PreflightError(RuntimeError):
@@ -336,7 +336,11 @@ def _codesign_evidence(
         raise PreflightError("codesign gate did not run the exact structured verifier")
 
 
-def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
+def _examples_evidence(
+    directory: Path,
+    gates: dict[str, Any],
+    runtime: dict[str, str],
+) -> None:
     examples = gates["examples"]["evidence"]
     reopen = gates["artifact_reopen"]["evidence"]
     restart = gates["strict_restart"]["evidence"]
@@ -350,25 +354,41 @@ def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
     logs = _command_evidence(directory, command_rows, gate="examples")
     if len(logs) != len(FINAL_EXAMPLES):
         raise PreflightError("final examples must have one execution transcript each")
-    for example in FINAL_EXAMPLES:
+    for index, example in enumerate(FINAL_EXAMPLES):
         key = example.as_posix()
         row = examples["examples"][key]
-        if not isinstance(row, dict) or set(row) != {"source_sha256", "stdout_sha256", "output_root"}:
+        if not isinstance(row, dict) or set(row) != {
+                "source_sha256", "stdout_sha256", "output_root", "runtime_sha256"}:
             raise PreflightError("release evidence %s is malformed" % key)
         if row["source_sha256"] != hashlib.sha256((ROOT / example).read_bytes()).hexdigest():
             raise PreflightError("release evidence source drifted for %s" % key)
         if not isinstance(row["output_root"], str):
             raise PreflightError("release evidence output root is invalid for %s" % key)
-        matching = [log for log, command in zip(logs, command_rows, strict=True)
-                    if key in " ".join(command["argv"])]
-        if len(matching) != 1:
-            raise PreflightError("release evidence has no unique command transcript for %s" % key)
-        transcript = matching[0].read_text(encoding="utf-8")
+        if row["runtime_sha256"] != runtime["native_sha256"]:
+            raise PreflightError("release evidence runtime digest drifted for %s" % key)
+        output_root = (directory / row["output_root"]).resolve()
+        expected_suffix = [
+            "python",
+            "scripts/run_installed_example.py",
+            "--runtime-sha256",
+            runtime["native_sha256"],
+            "--example",
+            key,
+            "--",
+            "--output-dir",
+            str(output_root),
+        ]
+        command = command_rows[index]["argv"]
+        if command[-len(expected_suffix):] != expected_suffix:
+            raise PreflightError("release evidence command drifted for %s" % key)
+        transcript = logs[index].read_text(encoding="utf-8")
         if row["stdout_sha256"] != hashlib.sha256(transcript.encode("utf-8")).hexdigest():
             raise PreflightError("release evidence stdout hash drifted for %s" % key)
         if any(marker not in transcript for marker in REQUIRED_PROOF_MARKERS):
             raise PreflightError("release evidence lacks restart/reopen proof output for %s" % key)
-        output_root = (directory / row["output_root"]).resolve()
+        runtime_marker = "PoPS release runtime | native_sha256=" + runtime["native_sha256"]
+        if transcript.count(runtime_marker) != 1:
+            raise PreflightError("release evidence runtime binding drifted for %s" % key)
         if not _inside(directory, output_root) or not output_root.is_dir():
             raise PreflightError("release evidence output root is absent for %s" % key)
         reopened = reopen["examples"][key]
@@ -462,7 +482,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
                        label="%s JUnit" % name)
     if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
         raise PreflightError("release evidence Python required-lane selection drifted")
-    _examples_evidence(directory, gates)
+    _examples_evidence(directory, gates, runtime)
 
 
 def main() -> int:

@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import types
 import zipfile
 
 import pytest
@@ -28,6 +29,7 @@ contract = _load("final_release_contract", SCRIPTS / "final_release_contract.py"
 gate = _load("_final_release_gate_test", SCRIPTS / "run_final_gate.py")
 preflight = _load("_release_preflight_test", SCRIPTS / "release_preflight.py")
 installed = _load("_installed_wheel_proof_test", SCRIPTS / "prove_installed_wheel.py")
+example_runner = _load("_installed_example_test", SCRIPTS / "run_installed_example.py")
 
 
 def _write_final_source_tree(root: Path) -> None:
@@ -377,6 +379,164 @@ def test_release_preflight_binds_codesign_to_live_runtime(tmp_path):
     gates["codesign"]["evidence"]["extensions"][0]["sha256"] = "b" * 64
     with pytest.raises(preflight.PreflightError, match="live native extension"):
         preflight._codesign_evidence(tmp_path, gates, runtime)
+
+
+def test_installed_example_authenticates_native_bytes_before_execution(
+    monkeypatch, tmp_path, capsys,
+):
+    package = tmp_path / "site-packages" / "pops" / "__init__.py"
+    extension = package.parent / "_pops.so"
+    package.parent.mkdir(parents=True)
+    package.write_text("", encoding="utf-8")
+    extension.write_bytes(b"signed release runtime")
+    native = types.ModuleType("pops._pops")
+    native.__file__ = str(extension)
+    native.__version__ = "1.0.0"
+    pops = types.ModuleType("pops")
+    pops.__file__ = str(package)
+    pops.__version__ = "1.0.0"
+    pops._pops = native
+    monkeypatch.setitem(sys.modules, "pops", pops)
+    monkeypatch.setitem(sys.modules, "pops._pops", native)
+    digest = hashlib.sha256(extension.read_bytes()).hexdigest()
+
+    assert example_runner.verify_installed_runtime(digest) == digest
+    with pytest.raises(example_runner.InstalledExampleError, match="does not match"):
+        example_runner.verify_installed_runtime("0" * 64)
+
+    monkeypatch.setattr(example_runner, "ROOT", tmp_path)
+    example = tmp_path / "example.py"
+    example.write_text(
+        "import sys\nprint('example_args=' + '|'.join(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(example_runner, "verify_installed_runtime", lambda expected: expected)
+    assert example_runner.main([
+        "--runtime-sha256",
+        digest,
+        "--example",
+        str(example),
+        "--",
+        "--output-dir",
+        "/proof/output",
+    ]) == 0
+    output = capsys.readouterr().out
+    assert example_runner.RUNTIME_MARKER + digest in output
+    assert "example_args=--output-dir|/proof/output" in output
+
+
+def test_final_gate_rejects_incomplete_or_non_darwin_codesign_runtime():
+    evidence = {
+        "schema_version": 1,
+        "platform": "darwin",
+        "extensions": [
+            {
+                "path": "/proof/pops/_pops.so",
+                "sha256": "a" * 64,
+                "signature": "adhoc",
+            }
+        ],
+    }
+
+    assert gate._signed_runtime_sha256(evidence) == "a" * 64
+    evidence["platform"] = "linux"
+    with pytest.raises(gate.FinalGateError, match="Darwin release proof"):
+        gate._signed_runtime_sha256(evidence)
+
+
+def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_path):
+    runtime = {
+        "python_executable": "/proof/bin/python",
+        "pops_file": "/proof/site-packages/pops/__init__.py",
+        "native_extension": "/proof/site-packages/pops/_pops.so",
+        "native_sha256": "c" * 64,
+    }
+    examples = {}
+    reopened = {}
+    restarted = {}
+    commands = []
+    for index, example in enumerate(contract.FINAL_EXAMPLES, 1):
+        key = example.as_posix()
+        output_root = tmp_path / "examples" / example.stem
+        output_root.mkdir(parents=True)
+        hdf5 = output_root / "state.h5"
+        hdf5.write_bytes(b"\x89HDF\r\n\x1a\npayload")
+        npz = output_root / "state.npz"
+        with zipfile.ZipFile(npz, "w") as archive:
+            archive.writestr("state.npy", b"payload")
+        paraview = output_root / "state.vtu"
+        paraview.write_text("<VTKFile/>", encoding="utf-8")
+        checkpoint = output_root / "checkpoint.bin"
+        checkpoint.write_bytes(b"restart")
+        transcript = "\n".join(
+            [
+                example_runner.RUNTIME_MARKER + runtime["native_sha256"],
+                *contract.REQUIRED_PROOF_MARKERS,
+            ]
+        ) + "\n"
+        log = tmp_path / "logs" / f"{index:02d}_examples.log"
+        log.parent.mkdir(exist_ok=True)
+        log.write_text(transcript, encoding="utf-8")
+        commands.append(
+            {
+                "argv": [
+                    "/proof/conda",
+                    "run",
+                    "python",
+                    "scripts/run_installed_example.py",
+                    "--runtime-sha256",
+                    runtime["native_sha256"],
+                    "--example",
+                    key,
+                    "--",
+                    "--output-dir",
+                    str(output_root),
+                ],
+                "log": str(log.relative_to(tmp_path)),
+                "sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+            }
+        )
+        examples[key] = {
+            "source_sha256": hashlib.sha256((ROOT / example).read_bytes()).hexdigest(),
+            "stdout_sha256": hashlib.sha256(transcript.encode("utf-8")).hexdigest(),
+            "output_root": str(output_root.relative_to(tmp_path)),
+            "runtime_sha256": runtime["native_sha256"],
+        }
+        reopened[key] = {
+            "hdf5": [
+                {
+                    "path": hdf5.name,
+                    "sha256": hashlib.sha256(hdf5.read_bytes()).hexdigest(),
+                }
+            ],
+            "npz": [
+                {
+                    "path": npz.name,
+                    "sha256": hashlib.sha256(npz.read_bytes()).hexdigest(),
+                }
+            ],
+            "paraview": [
+                {
+                    "path": paraview.name,
+                    "sha256": hashlib.sha256(paraview.read_bytes()).hexdigest(),
+                }
+            ],
+        }
+        restarted[key] = {
+            "checkpoint": str(checkpoint),
+            "tree_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+            "proof_markers": list(contract.REQUIRED_PROOF_MARKERS),
+        }
+    gates = {
+        "examples": {"commands": commands, "evidence": {"examples": examples}},
+        "artifact_reopen": {"evidence": {"examples": reopened}},
+        "strict_restart": {"evidence": {"examples": restarted}},
+    }
+
+    preflight._examples_evidence(tmp_path, gates, runtime)
+    commands[0]["argv"][commands[0]["argv"].index(runtime["native_sha256"])] = "d" * 64
+    with pytest.raises(preflight.PreflightError, match="command drifted"):
+        preflight._examples_evidence(tmp_path, gates, runtime)
 
 
 def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate():
