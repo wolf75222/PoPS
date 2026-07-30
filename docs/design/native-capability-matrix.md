@@ -199,7 +199,11 @@ Explicit unsupported rows include:
 - `amr:field_coupled_rhs_jacvec`: AMR level greater than zero is explicitly unavailable because the
   provider ABI does not transport a level-qualified tangent field. The reported error identifies
   the level-0 field-coupled route as the available route; a multi-level request must fail rather
-  than silently reuse the coarse provider.
+  than silently reuse the coarse provider. The shared execution service additionally requires the
+  JVP evaluation point to match the active Program resource level before either the perturbed solve
+  or frozen-state restoration can dispatch. Closing the remaining gap requires a typed per-level
+  tangent-field publication and transactional primal restoration, plus CompositeFAC coupling where
+  selected; the existing primal `fields` table cannot represent that derivative.
 
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and

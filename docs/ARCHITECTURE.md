@@ -405,6 +405,14 @@ exact `FieldLogicalTimePoint.level` and state-provider storage materialized from
 the solve. Composite-FAC boundary contexts, iterate-dependent multilevel boundaries, and AMR
 field-to-field providers remain explicit refusals until their own per-level carriers exist. No route
 falls through to a Python callback or a per-cell registry lookup.
+For field-coupled finite-difference JVPs, the exact boundary evaluation level must also equal the
+active Program resource level before the perturbed field solve or the frozen-field restoration is
+allowed to dispatch. A fine-level caller therefore cannot forge a coarse point and reuse level 0.
+This identity guard does not create a fine-level tangent-field solve. Supporting a boundary JVP that
+reads solved fields requires a provider contract that materializes the field tangent from the state
+direction on every participating level, couples those tangents across CompositeFAC when requested,
+and restores the frozen primal field transactionally. Reusing the primal field pointer would omit
+the derivative of the field solve and is therefore not a valid fallback.
 Linear and nonlinear field routes both retain the accepted warm start until their `SolveReport` is
 consumed; an invalid boundary evaluation or iteration limit restores that value and cannot update the
 published aux channel.
