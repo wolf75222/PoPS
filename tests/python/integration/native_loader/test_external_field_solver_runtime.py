@@ -147,13 +147,21 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{
 '''
 
 
-def _solver_source(manifest, *, solution_expression="7.0"):
+def _solver_source(
+    manifest,
+    *,
+    solution_expression="7.0",
+    solve_count_statement="++state->solve_count;",
+    iterations_expression="state->solve_count",
+    extra_includes="",
+):
     expected_parameters_json = json.dumps(
         {"answer": 7}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return f'''#include <pops/runtime/config/generated_component_abi.hpp>
 #include <cstddef>
 #include <cstring>
 #include <limits>
+{extra_includes}
 
 namespace {{
 struct State {{ int prepare_count; int solve_count; }};
@@ -199,7 +207,7 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
       !request->boundary_contract_json ||
       std::strstr(request->boundary_contract_json, "identity") == nullptr)
     return 3;
-  ++state->solve_count;
+  {solve_count_statement}
   for (std::size_t local = 0; local < request->local_patch_count; ++local) {{
     const auto& patch = request->local_patches[local];
     if (patch.metadata_index >= request->topology.patch_count ||
@@ -227,7 +235,7 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
   }}
   report->status = POPS_SOLVE_SOLVED_V2;
   report->action = POPS_SOLVE_ACTION_NONE_V2;
-  report->iterations = state->solve_count;
+  report->iterations = {iterations_expression};
   report->relative_residual = 0.0;
   report->reference_residual_norm = 1.0;
   report->residual_norm = 0.0;
@@ -261,13 +269,17 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{
 '''
 
 
-def _first_nonfinite_solver_source(manifest):
+def _externally_faulted_solver_source(manifest, fault_marker):
     return _solver_source(
         manifest,
         solution_expression=(
-            "state->solve_count == 1 "
+            "std::filesystem::exists(%s) "
             "? std::numeric_limits<double>::quiet_NaN() : 7.0"
+            % json.dumps(str(fault_marker))
         ),
+        solve_count_statement="",
+        iterations_expression="1",
+        extra_includes="#include <filesystem>",
     )
 
 
@@ -346,12 +358,16 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
 def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(
     tmp_path,
 ):
+    fault_marker = tmp_path / "external-field-solver-fault"
+    fault_marker.write_text("force a non-finite component result", encoding="utf-8")
     topology = _component(
         tmp_path, name="nonfinite-topology", interface=interfaces.FieldTopology,
         source_factory=_topology_source)
     solver = _component(
         tmp_path, name="nonfinite-solver", interface=interfaces.FieldSolver,
-        source_factory=_first_nonfinite_solver_source,
+        source_factory=lambda manifest: _externally_faulted_solver_source(
+            manifest, fault_marker
+        ),
         manifest_parameters=({"name": "answer", "kind": "runtime"},),
         instance_parameters={"answer": 7})
     provider = ExternalFieldSolver(
@@ -423,6 +439,8 @@ def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retr
     assert failed.staged_effects
     assert failed.rolled_back_effects == failed.staged_effects
 
+    assert fault_marker.is_file()
+    fault_marker.unlink()
     retry = pops.run(simulation, t_end=1.0e-4, max_steps=1)
     assert retry.accepted_steps == 1
     assert simulation.time() == 1.0e-4
