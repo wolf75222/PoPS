@@ -55,3 +55,24 @@ def test_provider_selection_is_qualified_and_never_returns_a_neutral_value():
     assert "owner_qid" in source
     assert "return 0" not in source
     assert "return 0.0" not in source
+
+
+def test_hllc_rejects_nonfinite_provider_stages_before_publication():
+    policy = _behavior(ROOT / "include/pops/numerics/fv/numerical_flux.hpp")
+    interface = _behavior(ROOT / "include/pops/numerics/fv/flux_interfaces.hpp")
+    hllc = policy.split("struct HLLCFlux", 1)[1].split(
+        "concept RoePhysicalFlux", 1
+    )[0]
+    causes = (
+        "kHllcNonFinitePhysicalFlux",
+        "kHllcNonFinitePressure",
+        "kHllcNonFiniteContact",
+        "kHllcNonFiniteStarState",
+        "kHllcNonFiniteFlux",
+    )
+
+    for cause in causes:
+        assert cause in interface
+        assert cause in hllc
+    assert hllc.count("detail::finite_state") >= 6
+    assert hllc.count("Kokkos::isfinite") >= 2

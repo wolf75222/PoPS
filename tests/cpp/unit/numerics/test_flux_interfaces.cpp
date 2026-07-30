@@ -44,6 +44,47 @@ struct NonFiniteRoeFluxAdvect : Advect {
   }
 };
 
+enum class HllcFailureSite { kPhysicalFlux, kPressure, kContact, kStarState, kFinalFlux };
+
+struct SelectiveInvalidHllc {
+  using State = pops::StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  HllcFailureSite failure_site;
+
+  POPS_HD State flux(const State& state, const Aux&, int) const {
+    return failure_site == HllcFailureSite::kPhysicalFlux
+               ? State{std::numeric_limits<pops::Real>::quiet_NaN()}
+               : state;
+  }
+  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(1); }
+  POPS_HD void wave_speeds(const State&, const Aux&, int, pops::Real& lower,
+                           pops::Real& upper) const {
+    const pops::Real magnitude = failure_site == HllcFailureSite::kFinalFlux
+                                     ? std::numeric_limits<pops::Real>::max()
+                                     : pops::Real(1);
+    lower = -magnitude;
+    upper = magnitude;
+  }
+  POPS_HD pops::Real pressure(const State&) const {
+    return failure_site == HllcFailureSite::kPressure ? std::numeric_limits<pops::Real>::quiet_NaN()
+                                                      : pops::Real(1);
+  }
+  POPS_HD pops::Real contact_speed(const State&, const State&, pops::Real, pops::Real, pops::Real,
+                                   pops::Real, int) const {
+    return failure_site == HllcFailureSite::kContact ? std::numeric_limits<pops::Real>::quiet_NaN()
+                                                     : pops::Real(0);
+  }
+  POPS_HD State hllc_star_state(const State& state, pops::Real, pops::Real, pops::Real, int) const {
+    if (failure_site == HllcFailureSite::kStarState)
+      return State{std::numeric_limits<pops::Real>::quiet_NaN()};
+    if (failure_site == HllcFailureSite::kFinalFlux)
+      return State{std::numeric_limits<pops::Real>::max()};
+    return state;
+  }
+};
+
 struct SelectiveInvalidAdvect {
   using State = pops::StateVec<1>;
   using Aux = pops::Aux;
@@ -325,6 +366,33 @@ TEST(test_flux_interfaces, roe_rejects_nonfinite_dissipation_with_a_typed_cause)
   EXPECT_EQ(flux_evaluation.reason_code,
             pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteFlux));
   EXPECT_TRUE(std::isnan(flux_evaluation.checked_density().value[0]));
+}
+
+TEST(test_flux_interfaces, hllc_rejects_each_nonfinite_provider_stage_with_a_typed_cause) {
+  struct ExpectedFailure {
+    HllcFailureSite site;
+    pops::RiemannFailureCause cause;
+  };
+  const ExpectedFailure expected[] = {
+      {HllcFailureSite::kPhysicalFlux, pops::RiemannFailureCause::kHllcNonFinitePhysicalFlux},
+      {HllcFailureSite::kPressure, pops::RiemannFailureCause::kHllcNonFinitePressure},
+      {HllcFailureSite::kContact, pops::RiemannFailureCause::kHllcNonFiniteContact},
+      {HllcFailureSite::kStarState, pops::RiemannFailureCause::kHllcNonFiniteStarState},
+      {HllcFailureSite::kFinalFlux, pops::RiemannFailureCause::kHllcNonFiniteFlux},
+  };
+
+  for (const auto& failure : expected) {
+    const SelectiveInvalidHllc physical{failure.site};
+    const auto bound = providers<SelectiveInvalidHllc>();
+    const auto evaluation = pops::evaluate_numerical_flux(
+        pops::HLLCFlux{}, physical, SelectiveInvalidHllc::State{pops::Real(1)}, bound,
+        SelectiveInvalidHllc::State{pops::Real(2)}, bound, pops::FaceContext::axis_aligned(0));
+
+    EXPECT_EQ(evaluation.status, pops::EvaluationStatus::kReject);
+    EXPECT_EQ(evaluation.failure_action(), pops::TransactionFailureAction::kRejectStep);
+    EXPECT_EQ(evaluation.reason_code, pops::riemann_reason_code(failure.cause));
+    EXPECT_TRUE(std::isnan(evaluation.checked_density().value[0]));
+  }
 }
 
 TEST(test_flux_interfaces, device_failure_reduction_orders_status_then_reason_deterministically) {

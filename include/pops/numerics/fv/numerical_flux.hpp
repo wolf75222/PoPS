@@ -206,26 +206,52 @@ struct HLLCFlux {
             RiemannFailureCause::kHllcInvalidStability);
       const auto left_density = physical.evaluate(left, face);
       const auto right_density = physical.evaluate(right, face);
-      if (lower >= Real(0))
+      if (lower >= Real(0)) {
+        if (!detail::finite_state(left_density.value))
+          return FluxEvaluation<typename Physical::State>::reject(
+              RiemannFailureCause::kHllcNonFinitePhysicalFlux);
         return FluxEvaluation<typename Physical::State>::ok(left_density.value, bound);
-      if (upper <= Real(0))
+      }
+      if (upper <= Real(0)) {
+        if (!detail::finite_state(right_density.value))
+          return FluxEvaluation<typename Physical::State>::reject(
+              RiemannFailureCause::kHllcNonFinitePhysicalFlux);
         return FluxEvaluation<typename Physical::State>::ok(right_density.value, bound);
+      }
+      if (!detail::finite_state(left_density.value) || !detail::finite_state(right_density.value))
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kHllcNonFinitePhysicalFlux);
       const Real pressure_left = physical.pressure(left.state);
       const Real pressure_right = physical.pressure(right.state);
+      if (!Kokkos::isfinite(pressure_left) || !Kokkos::isfinite(pressure_right))
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kHllcNonFinitePressure);
       const Real contact = physical.contact_speed(left.state, right.state, pressure_left,
                                                   pressure_right, lower, upper, face);
+      if (!Kokkos::isfinite(contact))
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kHllcNonFiniteContact);
       typename Physical::State density{};
       if (contact >= Real(0)) {
         const auto star = physical.star_state(left.state, pressure_left, lower, contact, face);
+        if (!detail::finite_state(star))
+          return FluxEvaluation<typename Physical::State>::reject(
+              RiemannFailureCause::kHllcNonFiniteStarState);
         for (int component = 0; component < Physical::n_vars; ++component)
           density[component] =
               left_density.value[component] + lower * (star[component] - left.state[component]);
       } else {
         const auto star = physical.star_state(right.state, pressure_right, upper, contact, face);
+        if (!detail::finite_state(star))
+          return FluxEvaluation<typename Physical::State>::reject(
+              RiemannFailureCause::kHllcNonFiniteStarState);
         for (int component = 0; component < Physical::n_vars; ++component)
           density[component] =
               right_density.value[component] + upper * (star[component] - right.state[component]);
       }
+      if (!detail::finite_state(density))
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kHllcNonFiniteFlux);
       return FluxEvaluation<typename Physical::State>::ok(density, bound);
     } else {
       static_assert(detail::dependent_false<Physical>,

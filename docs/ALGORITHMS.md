@@ -230,8 +230,10 @@ through those same capabilities. A missing capability is rejected during route r
 is no component-count inference and no implicit HLL/Rusanov substitution. The
 four built-ins return the common device-copyable `FluxEvaluation`. Built-in rejection reasons use
 the typed `RiemannFailureCause` vocabulary before device/MPI reduction. In particular, Roe rejects
-a non-finite dissipation or final candidate flux instead of publishing a successful NaN result; the
-runtime then rolls the owning step transaction back without selecting another solver.
+a non-finite dissipation or final candidate flux, while HLLC attributes non-finite physical flux,
+pressure, contact speed, star state, and final candidate flux separately. Neither policy publishes a
+successful NaN result; the runtime rolls the owning step transaction back without selecting another
+solver.
 The compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to
 `RusanovFlux{}` for serial references. The flux is passed by template:
 `compute_face_fluxes<Limiter, NumericalFlux, Model>` and
