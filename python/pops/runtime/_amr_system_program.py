@@ -41,6 +41,11 @@ class _AmrSystemProgram(_AmrSystem):
           - (6) attach the exact typed StepTransactionPlan authored by the installed Program.
         """
         if so_path is not None:
+            component = getattr(compiled, "program", None)
+            authored = getattr(component, "program", component)
+            from pops.runtime._program_cadence_install import install_program_cadence
+
+            install_program_cadence(self, authored)
             self.install_program(so_path)
             # (5a) HISTORY-PERSISTENCE POLICIES (ADC-631, parity with the uniform step-5a): the compiled
             # Program records a per-ring persistence policy (Dense / Interval / Revolve) on
@@ -54,8 +59,6 @@ class _AmrSystemProgram(_AmrSystem):
                 set_persistence(
                     {name: policy for name, (_depth, policy) in persistence.items()})
             self._install_program_params(compiled, schema, params)
-            component = getattr(compiled, "program", None)
-            authored = getattr(component, "program", component)
             self._step_strategy = getattr(authored, "_step_strategy", None)
             self._step_transaction_plan = (
                 authored.transaction_plan() if authored is not None else None)

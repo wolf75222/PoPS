@@ -109,6 +109,14 @@ class Trigger:
             "schedule trigger %s does not implement consumer_due()" % type(self).__name__
         )
 
+    def consumer_may_fire_at_start(self) -> bool:
+        """Whether this trigger can publish before the first accepted step.
+
+        Unknown extension triggers are conservatively start-capable until they override this
+        planning capability. This lets accepted-step-only consumers fail closed at bind time.
+        """
+        return True
+
     def consumer_next_deadline(self, *, physical_time_hex: str) -> str | None:
         """Return the next hard physical-time boundary, if this trigger owns one.
 
@@ -145,6 +153,9 @@ class Always(Trigger):
         del coordinate
         return not moment.at_start
 
+    def consumer_may_fire_at_start(self) -> bool:
+        return False
+
 
 @stable_component_identity("pops://time/schedule/triggers/every")
 @dataclass(frozen=True, slots=True)
@@ -168,6 +179,9 @@ class Every(Trigger):
 
     def consumer_due(self, coordinate: int, moment: Any) -> bool:
         return not moment.at_start and coordinate % self.n == 0
+
+    def consumer_may_fire_at_start(self) -> bool:
+        return False
 
 
 def _canonical_binary64(value: Any, *, where: str, positive: bool = False) -> float:
@@ -273,6 +287,9 @@ class EveryDt(Trigger):
         target = _every_dt_lattice_time(nearest, self.interval)
         return math.isfinite(target) and now >= target and _same_physical_time(now, target)
 
+    def consumer_may_fire_at_start(self) -> bool:
+        return False
+
     def consumer_occurrence_evidence(
         self, coordinate: int, moment: Any,
     ) -> dict[str, Any] | None:
@@ -324,6 +341,9 @@ class AtStart(Trigger):
         del coordinate
         return moment.at_start
 
+    def consumer_may_fire_at_start(self) -> bool:
+        return True
+
 
 @stable_component_identity("pops://time/schedule/triggers/at-end")
 @dataclass(frozen=True, slots=True)
@@ -337,6 +357,9 @@ class AtEnd(Trigger):
     def consumer_due(self, coordinate: int, moment: Any) -> bool:
         del coordinate
         return not moment.at_start and moment.at_end
+
+    def consumer_may_fire_at_start(self) -> bool:
+        return False
 
 
 @stable_component_identity("pops://time/schedule/triggers/when")
@@ -359,6 +382,9 @@ class When(Trigger):
         if type(self.condition) is not bool:
             raise UnresolvedScheduleCondition(self.condition)
         return self.condition
+
+    def consumer_may_fire_at_start(self) -> bool:
+        return False
 
 
 @stable_component_identity("pops://time/schedule/off-policy")
@@ -516,6 +542,14 @@ class Schedule:
         result = self.trigger.is_always()
         if type(result) is not bool:
             raise TypeError("Trigger.is_always() must return an exact bool")
+        return result
+
+    def consumer_may_fire_at_start(self) -> bool:
+        result = self.trigger.consumer_may_fire_at_start()
+        if type(result) is not bool:
+            raise TypeError(
+                "Trigger.consumer_may_fire_at_start() must return an exact bool"
+            )
         return result
 
     def needs_cache(self) -> bool:

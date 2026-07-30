@@ -136,6 +136,19 @@ def _observer_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
     return freeze_data(first, "%s.consumer_data" % where)
 
 
+def _is_async_scientific_observer(operation_data: Any) -> bool:
+    """Authenticate the one monitor provider allowed to carry scientific diagnostics."""
+    if not isinstance(operation_data, Mapping):
+        return False
+    observer = operation_data.get("observer")
+    return (
+        isinstance(observer, Mapping)
+        and observer.get("observer_kind") == "async_scientific_output"
+        and observer.get("provider_id")
+        == "pops.output.async-scientific-writer.v1"
+    )
+
+
 def _console_provider_data(value: Any, *, where: str) -> Mapping[str, Any]:
     """Authenticate the Python-only renderer of a rank-zero diagnostic consumer."""
     if getattr(value, "__pops_ir_immutable__", False) is not True:
@@ -291,6 +304,7 @@ class ConsumerQuantity:
 
 _DIAGNOSTIC_REDUCTIONS = frozenset({
     "sum", "abs_sum", "sum_sq", "min", "max", "abs_max", "step_change_l2",
+    "accepted_balance",
 })
 _DIAGNOSTIC_TRANSFORMS = frozenset({"identity", "sqrt"})
 _DIAGNOSTIC_COLLECTIVES = {
@@ -301,6 +315,9 @@ _DIAGNOSTIC_COLLECTIVES = {
     "max": "global_max",
     "abs_max": "global_max",
     "step_change_l2": "global_sum",
+    # The five Program scalars were already reduced while executing the native
+    # accepted attempt. Reading its mailbox adds no second consumer collective.
+    "accepted_balance": None,
 }
 
 
@@ -320,11 +337,15 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
     normalized = []
     for index, operation in enumerate(operations):
         where = "DiagnosticQuantity.execution.operations[%d]" % index
-        if not isinstance(operation, Mapping) or set(operation) != {
-                "name", "reduction", "transform", "metric_weighted"}:
+        if not isinstance(operation, Mapping):
+            raise TypeError("%s has an unknown schema" % where)
+        reduction = operation.get("reduction")
+        expected = {"name", "reduction", "transform", "metric_weighted"}
+        if reduction == "accepted_balance":
+            expected.add("balance_route")
+        if set(operation) != expected:
             raise TypeError("%s has an unknown schema" % where)
         name = _text(operation["name"], "%s.name" % where)
-        reduction = operation["reduction"]
         if reduction not in _DIAGNOSTIC_REDUCTIONS:
             raise ValueError("%s.reduction is not a supported native reduction" % where)
         transform = operation["transform"]
@@ -335,17 +356,42 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
             raise TypeError("%s.metric_weighted must be an exact bool" % where)
         if weighted and reduction not in {"sum", "abs_sum", "sum_sq"}:
             raise ValueError("only additive diagnostic reductions may be metric-weighted")
-        normalized.append({
+        row = {
             "name": name,
             "reduction": reduction,
             "transform": transform,
             "metric_weighted": weighted,
-        })
+        }
+        if reduction == "accepted_balance":
+            if transform != "identity" or weighted:
+                raise ValueError(
+                    "accepted balance evidence cannot apply a scalar transform or metric weight"
+                )
+            route = Identity.from_token(operation["balance_route"])
+            if route.domain != "balance-ledger-route" or route.schema_version != 1:
+                raise ValueError(
+                    "accepted balance route must use the version-1 balance-ledger-route identity"
+                )
+            row["balance_route"] = route.token
+        normalized.append(row)
     if len({row["name"] for row in normalized}) != len(normalized):
         raise ValueError("DiagnosticQuantity execution operation names must be unique")
+    has_accepted_balance = any(
+        row["reduction"] == "accepted_balance" for row in normalized
+    )
+    if has_accepted_balance and len(normalized) != 1:
+        raise ValueError(
+            "accepted balance evidence must be the sole diagnostic execution operation"
+        )
+    if has_accepted_balance and role is not None:
+        raise ValueError("accepted balance evidence cannot select one component role")
     conservation = value["conservation"]
     normalized_conservation = None
     if conservation is not None:
+        if has_accepted_balance:
+            raise ValueError(
+                "accepted open-domain balance evidence cannot declare an invariant tolerance"
+            )
         if not isinstance(conservation, Mapping) or set(conservation) != {"tolerance"}:
             raise TypeError("DiagnosticQuantity.execution.conservation has an unknown schema")
         tolerance = _nonnegative_binary64_hex(
@@ -367,6 +413,7 @@ def diagnostic_collective_operations(execution: Any) -> tuple[str, ...]:
     return tuple(sorted({
         _DIAGNOSTIC_COLLECTIVES[operation["reduction"]]
         for operation in canonical["operations"]
+        if _DIAGNOSTIC_COLLECTIVES[operation["reduction"]] is not None
     }))
 
 
@@ -519,10 +566,16 @@ class ConsumerManifest:
                 "descriptor": first,
                 "references": [value.canonical_identity() for value in resolved_references],
             }, "%s.consumer_data" % where))
+        async_scientific_monitor = (
+            self.kind is ConsumerKind.MONITOR
+            and _is_async_scientific_observer(operation_data)
+        )
         if diagnostic_rows and self.kind not in {
-                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT
+        } and not async_scientific_monitor:
             raise ValueError(
-                "only ConsoleMonitor or ScientificOutput can embed diagnostic providers")
+                "only ConsoleMonitor, ScientificOutput, or AsyncScientificOutput "
+                "can embed diagnostic providers")
         object.__setattr__(self, "diagnostics_data", tuple(diagnostic_rows))
         if not isinstance(self.diagnostic_quantities, tuple) or any(
                 type(value) is not DiagnosticQuantity
@@ -539,9 +592,21 @@ class ConsumerManifest:
             raise ValueError(
                 "ConsumerManifest must lower every diagnostic descriptor exactly once")
         if diagnostic_quantities and self.kind not in {
-                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT}:
+                ConsumerKind.DIAGNOSTIC, ConsumerKind.SCIENTIFIC_OUTPUT
+        } and not async_scientific_monitor:
             raise ValueError(
-                "only ConsoleMonitor or ScientificOutput can carry diagnostic quantities")
+                "only ConsoleMonitor, ScientificOutput, or AsyncScientificOutput "
+                "can carry diagnostic quantities")
+        has_accepted_balance = any(
+            operation["reduction"] == "accepted_balance"
+            for quantity in diagnostic_quantities
+            for operation in quantity.execution["operations"]
+        )
+        if has_accepted_balance and self.schedule.consumer_may_fire_at_start():
+            raise ValueError(
+                "Balance schedule cannot fire at_start: accepted balance evidence exists "
+                "only after a native step attempt"
+            )
         object.__setattr__(self, "diagnostic_quantities", diagnostic_quantities)
         if not isinstance(self.dependencies, tuple):
             raise TypeError("ConsumerManifest.dependencies must be a tuple")

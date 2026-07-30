@@ -171,7 +171,7 @@ def _emit_contiguous_rhs_group(
 
 
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
-               field_plans: Any = None) -> tuple:
+               field_plans: Any = None, balance_due_contract: Any = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
@@ -243,6 +243,18 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                           -1 if owner_index is None else int(owner_index),
                           json.dumps(state_identity), json.dumps(space_identity),
                           json.dumps(row["clock"]), json.dumps(interpolation)))
+    from pops.codegen.program_balance_due import (
+        emit_balance_due_guards,
+        prepare_balance_due_lowering,
+    )
+    if balance_due_contract is None:
+        from pops._balance_due_contract import BalanceDueContract
+        balance_due_contract = BalanceDueContract.from_consumer_graph(None)
+    emit_balance_due_guards(
+        prepare_balance_due_lowering(program, balance_due_contract),
+        var,
+        lines,
+    )
     values = list(program._values)
     index = 0
     # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are

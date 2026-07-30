@@ -548,6 +548,24 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("ctx.record_scalar(%s, %s);"
                      % (json.dumps(v.attrs["diagnostic"]), var[scalar_in.id]))
         var[v.id] = var[scalar_in.id]
+    elif v.op == "record_balance_term":
+        # Dedicated, non-bindable sink for a validated Program.record_balance term. Ordinary
+        # record_scalar names cannot enter the reserved native attempt mailbox.
+        from pops.codegen.program_balance_due import balance_record_due_expression
+
+        (scalar_in,) = v.inputs
+        due = balance_record_due_expression(var, v.id)
+        if due != "false":
+            lines.append(
+                "if (%s) { ctx.record_balance_term(%s, %s, %s); }"
+                % (
+                    due,
+                    json.dumps(v.attrs["route"]),
+                    json.dumps(v.attrs["term"]),
+                    var[scalar_in.id],
+                )
+            )
+        var[v.id] = var[scalar_in.id]
     elif v.op == "rhs":
         state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
@@ -770,12 +788,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         owner = _required_block_index(block_idx, v.block, "reduce value %r" % v.name)
         if kind == "norm2":
             (u,) = v.inputs
-            lines.append("const pops::Real %s = ctx.norm2(%d, %s);"
-                         % (var[v.id], owner, var[u.id]))
+            reduction = "ctx.norm2(%d, %s)" % (owner, var[u.id])
         elif kind == "norm_inf":
             (u,) = v.inputs
-            lines.append("const pops::Real %s = ctx.norm_inf(%d, %s);"
-                         % (var[v.id], owner, var[u.id]))
+            reduction = "ctx.norm_inf(%d, %s)" % (owner, var[u.id])
         elif kind in ("sum", "max", "min", "abs_sum"):
             (u,) = v.inputs
             comp = int(v.attrs.get("comp", 0))
@@ -785,12 +801,25 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 "min": "min_component",
                 "abs_sum": "abs_sum_component",
             }[kind]
-            lines.append("const pops::Real %s = ctx.%s(%d, %s, %d);"
-                         % (var[v.id], context_op, owner, var[u.id], comp))
+            reduction = "ctx.%s(%d, %s, %d)" % (
+                context_op,
+                owner,
+                var[u.id],
+                comp,
+            )
         else:  # dot
             a, b = v.inputs
-            lines.append("const pops::Real %s = ctx.dot(%d, %s, %s);"
-                         % (var[v.id], owner, var[a.id], var[b.id]))
+            reduction = "ctx.dot(%d, %s, %s)" % (
+                owner,
+                var[a.id],
+                var[b.id],
+            )
+        from pops.codegen.program_balance_due import balance_value_due_expression
+
+        due = balance_value_due_expression(var, v.id)
+        if due is not None:
+            reduction = "(%s) ? (%s) : pops::Real(0)" % (due, reduction)
+        lines.append("const pops::Real %s = %s;" % (var[v.id], reduction))
     elif v.op == "cfl":
         # The dt_bound's runtime cfl argument -- the C++ parameter of pops_program_dt_bound. It is
         # NOT a statement; its token is the bound parameter name (spec s18 / ADC-417).
@@ -819,8 +848,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             else:  # a literal constant
                 toks.append(scalar_cpp(val))
         cppop = {"add": "+", "sub": "-", "mul": "*", "div": "/"}[v.attrs["fn"]]
-        lines.append("const pops::Real %s = (%s %s %s);"
-                     % (var[v.id], toks[0], cppop, toks[1]))
+        expression = "(%s %s %s)" % (toks[0], cppop, toks[1])
+        from pops.codegen.program_balance_due import balance_value_due_expression
+
+        due = balance_value_due_expression(var, v.id)
+        if due is not None:
+            expression = "(%s) ? (%s) : pops::Real(0)" % (due, expression)
+        lines.append("const pops::Real %s = %s;" % (var[v.id], expression))
     elif v.op == "compare":
         # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
         # while op embeds it directly in `if (!(<expr>)) break;`).

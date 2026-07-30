@@ -425,6 +425,86 @@ quantity an invariant. Diagnostic-only outputs remain valid: their owner-qualifi
 terms, layout metadata and provenance are preserved even when no field array is selected. Geometry
 origins and spacings use the conventional `(x, y)` and `(dx, dy)` order.
 
+An executable open-domain balance uses one shared typed identity rather than a Python callback:
+
+```python
+from pops.diagnostics import Balance, BalanceLedger
+
+mass = BalanceLedger("mass")
+program.record_balance(
+    mass,
+    storage_change=storage_increment,
+    outward_boundary_flux=boundary_flux_increment,
+    sources=source_increment,
+    reflux=reflux_increment,
+    projection=projection_increment,
+)
+
+ScientificOutput(
+    ...,
+    diagnostics=(Balance(mass, block=fluid),),
+)
+```
+
+`AsyncScientificOutput(..., diagnostics=(Balance(mass, block=fluid),))` uses the same exact
+schedule and transaction. Its reductions are completed on the simulation thread before detachment;
+the post-commit worker receives only immutable arrays and scalar payloads, never the native mailbox
+or communicator facade.
+
+Each argument to `record_balance` is a signed, time-integrated native Program sum/dot reduction,
+or scalar arithmetic composed only from such reductions and exact literals.
+The reported residual is `storage_change + outward_boundary_flux - sources - reflux - projection`.
+The native attempt mailbox accumulates repeated cadence/substep invocations, rejects missing or
+non-finite terms, and is cleared before the next attempt. The consumer reads it only while the
+outer accepted-step transaction still retains the pre-step image. Python therefore packages the
+five returned scalars and residual but never traverses arrays, invents a zero term, or reuses a
+previous step. A rejected attempt or failed consumer publication restores the mailbox with the
+rest of the native transaction.
+
+The `pops.balance-term` namespace is reserved. Ordinary `Program.record_scalar(...)` authoring and
+the Python runtime diagnostic binding both reject it; generated `record_balance` code reaches a
+separate native sink that validates the route and canonical term before touching the mailbox.
+
+The resolved `ConsumerGraph` now compiles one immutable `BalanceDueContract` into the Program
+artifact. For `every(n, clock=program.clock)`, the native Program queries the next outer accepted
+macro-step before any balance reduction. Off-cadence sum/dot and scalar-arithmetic chains are
+short-circuited, and the five terminal records are omitted; no Kokkos kernel, MPI collective or
+Python callback is entered for that balance route. Multiple consumers of the same route are joined
+by an OR of their exact accepted-step periods. `Always` and `when(True)` are period one,
+`when(False)` contributes no occurrence, and a route with no consumer is compiled off.
+
+The compiler traces the complete reduction/scalar chain rather than scheduling only the terminal
+records. If a value is also consumed by an ordinary Program diagnostic or another non-balance
+operation, that shared producer remains unconditional so cadence fusion cannot change unrelated
+semantics. A `Balance` consumer with no matching five-term `Program.record_balance` producer fails
+before native code generation. Program stride/substeps use one attempt-local outer accepted-step
+target, so every substep of one due public step sees the same decision and accumulates into the same
+attempt mailbox. The cadence is authored once as part of the Program identity, for example
+`program.cadence(substeps=2, stride=3)`, then authenticated and installed before runtime freeze on
+both Uniform and AMR targets. A stride-held public step executes no Program work and therefore
+publishes the exact additive-identity balance (all five terms are zero); a due Program that omits
+even one term still fails closed. Accepted-step periods larger than the native signed-32-bit ceiling
+can never fire in a representable run and are compiled off instead of being narrowed into C++.
+Selective checkpoint reconstruction may re-execute the Program to rebuild omitted history slots,
+but that work is not a public accepted step. Uniform and AMR replay therefore enter an explicit
+native replay guard: every Balance due query returns false, no term reaches the accepted-attempt
+mailbox, and the guard is restored on both success and exception. The replay still executes all
+non-Balance scientific operations needed to reconstruct the history exactly.
+
+This first sparse cutover is exact only for accepted-step `every(n)` schedules. Physical-time
+`every_dt`, `on_end`, and extension domains/triggers remain conservatively active for every Program
+invocation; their consumer still publishes only when its own runtime schedule is due, but upstream
+balance reductions are not yet skipped. This fallback can add work but cannot suppress required
+evidence. A zero-step run has no accepted native occurrence: its coincident start/end moment cannot
+publish an accepted-step consumer, including `Balance`.
+
+This route is explicit evidence, not automatic numerical instrumentation: a Program that cannot
+produce its actual reflux or projection increment cannot declare `Balance`. In particular, the
+generic automatic extraction of AMR reflux/projection contributions from the internal native
+operator ledgers remains separate work. On an adaptive layout the recorded values must already be
+composite and coverage-corrected; an ordinary sum of every per-level state would double-count
+covered coarse cells. Neither `Balance` nor `BalanceTerms` silently claims otherwise.
+
 Checkpoint remains a separate restart effect. These consumers do not define a checkpoint schema or
 reader and do not call the scientific-output manifest a restart identity. The checkpoint provider
 remains the sole owner of sealing, hierarchy/history persistence and strict identity-checked

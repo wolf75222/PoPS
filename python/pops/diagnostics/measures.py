@@ -2,7 +2,7 @@
 
 Spec 5 names a diagnostic with a TYPED object, not the string form
 ``diagnostics.norm(kind="l2")``. :class:`Norm` / :class:`Integral` / :class:`MinMax` /
-:class:`ConservationCheck` are those objects -- inert descriptors that DESCRIBE a scalar
+:class:`Balance` / :class:`ConservationCheck` are those objects -- inert descriptors that DESCRIBE a scalar
 reduction over a block (and an optional model role): the reduction kind, whether it needs an
 MPI reduction, its cadence slot and its AMR / multi-level compatibility, all carried as
 METADATA. They compute nothing; the C++ / Kokkos / MPI runtime evaluates the reduction.
@@ -22,6 +22,8 @@ from typing import Any
 
 from pops.descriptors import Availability, Descriptor
 from pops.linalg.norms import _Norm
+
+from .balance import BalanceLedger
 
 
 def _ref_name(value: Any) -> Any:
@@ -304,6 +306,57 @@ class MinMax(_Measure):
         }
 
 
+class Balance(_Measure):
+    """Accepted five-term discrete balance produced by the native time Program.
+
+    ``Balance`` never reconstructs terms from output arrays.  The matching
+    :class:`BalanceLedger` must be populated with ``Program.record_balance`` during
+    the same native attempt.  The runtime then consumes exactly storage change,
+    outward boundary flux, sources, reflux and projection while its accepted-state
+    transaction still retains the pre-step image. The residual convention is storage
+    change plus outward flux, minus sources, reflux and projection.
+    """
+
+    category = "diagnostic_balance"
+    scheme = "discrete_balance"
+    reduction = "accepted_balance"
+
+    def __init__(
+        self,
+        ledger: Any,
+        *,
+        block: Any,
+        cadence: Any = None,
+    ) -> None:
+        if type(ledger) is not BalanceLedger:
+            raise TypeError(
+                "Balance(ledger=...) requires an exact pops.diagnostics.BalanceLedger"
+            )
+        if block is None:
+            raise TypeError("Balance(block=...) requires an exact physics BlockHandle")
+        super().__init__(block=block, role=None, cadence=cadence)
+        self.ledger = ledger
+
+    def options(self) -> dict:
+        options = super().options()
+        options["ledger"] = self.ledger.to_data()
+        return options
+
+    def diagnostic_execution(self) -> dict[str, Any]:
+        route = self.ledger.route_identity(self.block)
+        return {
+            "schema_version": 1,
+            "role": None,
+            "operations": [
+                {
+                    **_operation("balance", "accepted_balance"),
+                    "balance_route": route.token,
+                },
+            ],
+            "conservation": None,
+        }
+
+
 class ConservationCheck(Descriptor):
     """A typed conservation check on a diagnostic quantity: ``ConservationCheck(Integral(...))``.
 
@@ -380,6 +433,11 @@ class ConservationCheck(Descriptor):
             raise ValueError(
                 "ConservationCheck requires one scalar diagnostic quantity; "
                 "a multi-valued MinMax check is ambiguous")
+        if operations[0].get("reduction") == "accepted_balance":
+            raise ValueError(
+                "ConservationCheck cannot wrap an open-domain Balance; inspect its explicit "
+                "five-term residual instead"
+            )
         return {
             "schema_version": 1,
             "role": plan.get("role"),
@@ -425,4 +483,11 @@ class ConservationCheck(Descriptor):
         return info
 
 
-__all__ = ["Norm", "Integral", "MinMax", "ConservationCheck"]
+__all__ = [
+    "Balance",
+    "Norm",
+    "Integral",
+    "MinMax",
+    "ConservationCheck",
+    "StepChangeNorm",
+]

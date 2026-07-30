@@ -3436,6 +3436,14 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {static_cast<Real>(facade_->time()), facade_->macro_step(), level_};
   }
+  void program_execution_record_balance_term_(const std::string& route, const std::string& term,
+                                              Real value) const {
+    facade_->record_program_balance_term(route, term, value);
+  }
+  bool program_execution_balance_consumer_is_due_(const std::string& contract,
+                                                  const std::string& route, int every_n) const {
+    return facade_->program_balance_consumer_is_due(contract, route, every_n);
+  }
   void program_execution_set_field_timepoint_(const std::string& field,
                                               const FieldLogicalTimePoint& point) const {
     facade_->set_field_logical_timepoint(field, point);

@@ -90,6 +90,7 @@ class _ProgramBase:
     _capture_source: bool
     _provenance_context: Any
     _step_strategy: Any
+    _cadence: Any
     _transaction_stores: Any
     _acceptance_guards: tuple
     _frozen: bool
@@ -144,6 +145,8 @@ class _ProgramBase:
     def _allow_region_capture(self, source: int, destination: int) -> None: ...
     def _register_acceptance_guard(self, guard: Any) -> None: ...
     def transaction_plan(self) -> Any: ...
+    def cadence(self, *, substeps: Any = 1, stride: Any = 1) -> Any: ...
+    def cadence_contract(self) -> Any: ...
     def state(self, state: Any, *, clock: Any = None) -> Any: ...
     def synchronize(
         self, value: Any, *, at: Any, relation: Any, name: Any = None
@@ -198,6 +201,16 @@ class _ProgramBase:
     def _compare(self, lhs: Any, rhs: Any, cmp: Any) -> Any: ...
     def _scalar_binop(self, a: Any, b: Any, fn: Any) -> Any: ...
     def record_scalar(self, name: Any, value: Any) -> Any: ...
+    def record_balance(
+        self,
+        ledger: Any,
+        *,
+        storage_change: Any,
+        outward_boundary_flux: Any,
+        sources: Any,
+        reflux: Any,
+        projection: Any,
+    ) -> tuple[Any, ...]: ...
 
     # --- solve / commit / board sugar (_ProgramSolve) ---
     def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any, properties: Any,
