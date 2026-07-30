@@ -158,9 +158,9 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
     ("target_axis", "target_face", "permutation", "signs", "face_types"),
     (
         (0, 1, [0, 1], [1, -1],
-         ["periodic", "periodic", "foextrap", "foextrap"]),
+         ["periodic", "periodic", "dirichlet", "foextrap"]),
         (1, 3, [1, 0], [1, 1],
-         ["periodic", "foextrap", "foextrap", "periodic"]),
+         ["periodic", "foextrap", "dirichlet", "periodic"]),
     ),
 )
 def test_signed_periodic_identification_reaches_native_install_without_callback(
@@ -189,7 +189,13 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
                 "ordinal": ordinal,
                 "producer": "case::block::reflected-periodic::face::%d" % ordinal,
                 "type": face_types[ordinal],
+                "representation": "conservative",
                 "values": [0.0],
+                "analytic_programs": (
+                    [{"opcodes": ["x", "input", "add"], "literals": [0.0, 0.0, 0.0]}]
+                    if ordinal == 2 else []
+                ),
+                "analytic_clock": "clock.analytic" if ordinal == 2 else None,
             }
             for ordinal in range(4)
         ],
@@ -259,3 +265,6 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     assert native.installed[9] == [[0, target_face, *permutation, *signs]]
     assert native.installed[10] == ["conservative"] * 4
     assert native.installed[11] == [""] * 4
+    assert native.installed[12] == [[], [], ["x", "input", "add"], []]
+    assert native.installed[13] == [[], [], [0.0, 0.0, 0.0], []]
+    assert native.installed[14] == ["", "", "clock.analytic", ""]

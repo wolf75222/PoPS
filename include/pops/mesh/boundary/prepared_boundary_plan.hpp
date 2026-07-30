@@ -23,9 +23,12 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -88,6 +91,102 @@ struct PreparedBoundaryReadDependencies {
   std::vector<std::string> fields;
 };
 
+namespace detail {
+
+inline void append_boundary_request_u64(std::string& payload, std::uint64_t value) {
+  for (int shift = 56; shift >= 0; shift -= 8)
+    payload.push_back(static_cast<char>((value >> shift) & UINT64_C(0xff)));
+}
+
+inline void append_boundary_request_size(std::string& payload, std::size_t value) {
+  if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+    if (value > static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max()))
+      throw std::length_error("boundary request exceeds canonical uint64 length capacity");
+  }
+  append_boundary_request_u64(payload, static_cast<std::uint64_t>(value));
+}
+
+inline void append_boundary_request_bytes(std::string& payload, std::string_view value) {
+  append_boundary_request_size(payload, value.size());
+  if (!value.empty())
+    payload.append(value.data(), value.size());
+}
+
+inline void append_boundary_request_int(std::string& payload, int value) {
+  append_boundary_request_u64(payload,
+                              static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
+}
+
+inline void append_boundary_request_strings(std::string& payload,
+                                            const std::vector<std::string>& values) {
+  append_boundary_request_size(payload, values.size());
+  for (const auto& value : values)
+    append_boundary_request_bytes(payload, value);
+}
+
+inline void append_boundary_request_reals(std::string& payload, const std::vector<double>& values) {
+  static_assert(sizeof(double) == sizeof(std::uint64_t));
+  static_assert(std::numeric_limits<double>::is_iec559,
+                "boundary request consensus requires IEEE-754 binary64");
+  append_boundary_request_size(payload, values.size());
+  for (double value : values)
+    append_boundary_request_u64(payload, std::bit_cast<std::uint64_t>(value));
+}
+
+/// Exact byte identity of every argument that can affect one prepared boundary plan.  Analytic
+/// opcode/literal rows are included here as well as fixed-state and topology metadata so a
+/// collectively prepared plan cannot diverge through a non-program field.
+inline std::string canonical_prepared_boundary_plan_request(
+    std::string_view name, std::string_view identity, int required_depth,
+    const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+    const std::vector<std::string>& face_identities,
+    const std::vector<std::string>& component_roles,
+    const std::vector<int>& omitted_interface_faces, std::string_view state_identity,
+    const PreparedBoundaryReadDependencies& read_dependencies,
+    const std::vector<PeriodicIdentification2D>& periodic_identifications,
+    const std::vector<std::string>& face_representations,
+    const std::vector<std::string>& face_converter_identities,
+    const std::vector<std::vector<std::string>>& face_analytic_opcodes,
+    const std::vector<std::vector<double>>& face_analytic_literals,
+    const std::vector<std::string>& face_analytic_clocks) {
+  std::string payload;
+  append_boundary_request_bytes(payload, "pops.prepared-boundary-plan.request.v1");
+  append_boundary_request_bytes(payload, name);
+  append_boundary_request_bytes(payload, identity);
+  append_boundary_request_int(payload, required_depth);
+  append_boundary_request_strings(payload, face_types);
+  append_boundary_request_reals(payload, face_values);
+  append_boundary_request_strings(payload, face_identities);
+  append_boundary_request_strings(payload, component_roles);
+  append_boundary_request_size(payload, omitted_interface_faces.size());
+  for (int face : omitted_interface_faces)
+    append_boundary_request_int(payload, face);
+  append_boundary_request_bytes(payload, state_identity);
+  append_boundary_request_strings(payload, read_dependencies.states);
+  append_boundary_request_strings(payload, read_dependencies.fields);
+  append_boundary_request_size(payload, periodic_identifications.size());
+  for (const auto& periodic : periodic_identifications) {
+    append_boundary_request_int(payload, periodic.source_face);
+    append_boundary_request_int(payload, periodic.target_face);
+    for (int axis : periodic.permutation)
+      append_boundary_request_int(payload, axis);
+    for (int sign : periodic.signs)
+      append_boundary_request_int(payload, sign);
+  }
+  append_boundary_request_strings(payload, face_representations);
+  append_boundary_request_strings(payload, face_converter_identities);
+  append_boundary_request_size(payload, face_analytic_opcodes.size());
+  for (const auto& row : face_analytic_opcodes)
+    append_boundary_request_strings(payload, row);
+  append_boundary_request_size(payload, face_analytic_literals.size());
+  for (const auto& row : face_analytic_literals)
+    append_boundary_request_reals(payload, row);
+  append_boundary_request_strings(payload, face_analytic_clocks);
+  return payload;
+}
+
+}  // namespace detail
+
 /// Native boundary plan captured by every block closure. The built-in physical-face authority is
 /// one model-aware hyperbolic plan; field/elliptic BCRec data is not a transport semantic here.
 class PreparedBoundaryPlan {
@@ -131,6 +230,9 @@ class PreparedBoundaryPlan {
 
     void fill_same_level_and_physical(MultiFab& state, const Box2D& domain) const;
     void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry) const;
+    void fill_same_level_and_physical(
+        MultiFab& state, const Geometry& geometry,
+        const runtime::multiblock::BoundaryEvaluationPoint& point) const;
     void fill_same_level_and_physical(
         MultiFab& state, const detail::BoundaryFieldRegistry& fields, const Geometry& geometry,
         const runtime::multiblock::BoundaryEvaluationPoint& point) const;
@@ -422,8 +524,9 @@ class PreparedBoundaryPlan {
       throw std::runtime_error(
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
+    auto physical_preflight = hyperbolic_boundary_.preflight_physical(state, domain);
     fill_native_halos_(state, domain);
-    hyperbolic_boundary_.fill_physical(state, domain);
+    hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Box2D& domain,
@@ -432,8 +535,9 @@ class PreparedBoundaryPlan {
       throw std::runtime_error(
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
+    auto physical_preflight = hyperbolic_boundary_.preflight_physical(state, domain);
     fill_native_halos_(state, domain, lane);
-    hyperbolic_boundary_.fill_physical(state, domain);
+    hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry) const {
@@ -441,8 +545,9 @@ class PreparedBoundaryPlan {
       throw std::runtime_error(
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
+    auto physical_preflight = hyperbolic_boundary_.preflight_physical(state, geometry);
     fill_native_halos_(state, geometry.domain);
-    hyperbolic_boundary_.fill_physical(state, geometry.domain);
+    hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry,
@@ -451,8 +556,10 @@ class PreparedBoundaryPlan {
       throw std::runtime_error(
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
+    auto physical_preflight =
+        hyperbolic_boundary_.preflight_physical(state, geometry, lane.communicator());
     fill_native_halos_(state, geometry.domain, lane);
-    hyperbolic_boundary_.fill_physical(state, geometry.domain);
+    hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
   }
 
   /// One-shot control/diagnostic adapter. It materializes a fresh component session and workspace;
@@ -741,6 +848,10 @@ class PreparedBoundaryPlan {
       throw std::runtime_error(
           "PreparedBoundaryPlan mapped periodic topology currently requires one identification; "
           "mixed periodic corners need a composed scheduler");
+    if (has_mapped_periodicity_() && hyperbolic_boundary_.has_analytic_state())
+      throw std::runtime_error(
+          "PreparedBoundaryPlan analytic faces do not yet support mapped periodic coordinates; "
+          "install an axis-aligned periodic identification or a prepared coordinate map");
     if (has_mapped_periodicity_())
       for (int component = 0; component < hyperbolic_boundary_.ncomp(); ++component)
         if (hyperbolic_boundary_.component_transform(component).parity !=
@@ -787,8 +898,9 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(MultiFab
     throw std::invalid_argument(
         "PreparedBoundaryPlan component session requires an exact BoundaryEvaluationPoint");
   plan_->validate_for(state);
+  auto physical_preflight = plan_->hyperbolic_boundary_.preflight_physical(state, domain);
   plan_->fill_native_halos_(state, domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical(state, domain);
+  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
@@ -798,8 +910,24 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
     throw std::invalid_argument(
         "PreparedBoundaryPlan component session requires an exact BoundaryEvaluationPoint");
   plan_->validate_for(state);
+  auto physical_preflight =
+      plan_->hyperbolic_boundary_.preflight_physical(state, geometry, lane_->communicator());
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
+  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+}
+
+inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
+    MultiFab& state, const Geometry& geometry,
+    const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+  validate_current_();
+  if (!ghost_components_.empty())
+    throw std::invalid_argument(
+        "PreparedBoundaryPlan component session requires its prepared field registry");
+  plan_->validate_for(state);
+  auto physical_preflight = plan_->hyperbolic_boundary_.preflight_physical(
+      state, geometry, static_cast<Real>(point.physical_time), point.clock, lane_->communicator());
+  plan_->fill_native_halos_(state, geometry.domain, *lane_);
+  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
@@ -807,8 +935,10 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
     const runtime::multiblock::BoundaryEvaluationPoint& point) const {
   validate_current_();
   plan_->validate_for(state);
+  auto physical_preflight = plan_->hyperbolic_boundary_.preflight_physical(
+      state, geometry, static_cast<Real>(point.physical_time), point.clock, lane_->communicator());
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
+  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
   detail::BoundaryFieldRegistry fields;
   fields.configure_states(plan_->required_state_identities());
   fields.configure_fields(plan_->required_field_identities());
@@ -838,8 +968,10 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
     const runtime::multiblock::BoundaryEvaluationPoint& point) const {
   validate_current_();
   plan_->validate_for(state);
+  auto physical_preflight = plan_->hyperbolic_boundary_.preflight_physical(
+      state, geometry, static_cast<Real>(point.physical_time), point.clock, lane_->communicator());
   plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical(state, geometry.domain);
+  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
   if (ghost_workspaces_.size() != ghost_components_.size())
     throw std::logic_error(
         "PreparedBoundaryPlan ghost executor was not materialized before numerical execution");

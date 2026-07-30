@@ -53,6 +53,21 @@ class Clock:
             "owner": self.owner.to_data() if self.owner is not None else None,
         }
 
+    @classmethod
+    def from_data(cls, data: Any) -> Clock:
+        """Strict inverse of :meth:`to_data` for data-only clock consumers."""
+        required = {"schema_version", "name", "owner"}
+        if not isinstance(data, Mapping) or set(data) != required:
+            raise TypeError("Clock data has an unsupported shape")
+        if data["schema_version"] != 1:
+            raise ValueError("Clock data uses an unsupported schema version")
+        owner_data = data["owner"]
+        owner = None if owner_data is None else OwnerPath.from_data(owner_data)
+        result = cls(data["name"], owner=owner)
+        if result.to_data() != dict(data):
+            raise ValueError("Clock data is not canonical")
+        return result
+
 
 @dataclass(frozen=True, slots=True, init=False)
 class TimePoint:

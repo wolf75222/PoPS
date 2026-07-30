@@ -11,8 +11,11 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/parallel/comm.hpp>
+#include <pops/runtime/analytic/expression.hpp>
 
 #if defined(POPS_HAS_KOKKOS)
 #include <Kokkos_Core.hpp>
@@ -113,6 +116,8 @@ struct PreparedHyperbolicFace {
       HyperbolicStateRepresentation::Conservative;
   std::string converter_identity;
   bool fixed_state_converted = true;
+  std::vector<analytic::AnalyticProgram> analytic_state;
+  std::string analytic_clock;
 };
 
 /// Dimension-split FV stencils do not read double-physical corners.  Such corners are therefore
@@ -279,6 +284,80 @@ struct HyperbolicFaceYKernel {
   }
 };
 
+POPS_HD inline int periodic_index(int index, int lo, int hi) {
+  const int count = hi - lo + 1;
+  int offset = (index - lo) % count;
+  if (offset < 0)
+    offset += count;
+  return lo + offset;
+}
+
+struct AnalyticFixedSource {
+  int i = 0;
+  int j = 0;
+};
+
+template <int Axis>
+struct AnalyticFixedFaceEvaluator {
+  static_assert(Axis == 0 || Axis == 1);
+
+  // The analytic value is the Dirichlet trace on the physical face, not a ghost-cell sample.
+  // AnalyticFixedFaceKernel applies the same affine mirror rule as a constant FixedState face.
+  analytic::AnalyticProgramView program;
+  Geometry geometry;
+  int side;
+  bool periodic_tangent;
+  Real time;
+
+  POPS_HD analytic::AnalyticEvaluation evaluate(int i, int j) const {
+    int coordinate_i = i;
+    int coordinate_j = j;
+    if constexpr (Axis == 0) {
+      if (periodic_tangent)
+        coordinate_j = periodic_index(j, geometry.domain.lo[1], geometry.domain.hi[1]);
+    } else if (periodic_tangent) {
+      coordinate_i = periodic_index(i, geometry.domain.lo[0], geometry.domain.hi[0]);
+    }
+    const Real x =
+        Axis == 0 ? (side < 0 ? geometry.xlo : geometry.xhi) : geometry.x_cell(coordinate_i);
+    const Real y =
+        Axis == 1 ? (side < 0 ? geometry.ylo : geometry.yhi) : geometry.y_cell(coordinate_j);
+    return program.eval_checked(x, y, &time, std::uint8_t{1});
+  }
+
+  POPS_HD AnalyticFixedSource source(int i, int j) const {
+    if constexpr (Axis == 0) {
+      const int boundary = side < 0 ? geometry.domain.lo[0] : geometry.domain.hi[0];
+      return {side < 0 ? 2 * boundary - i - 1 : 2 * boundary - i + 1, j};
+    } else {
+      const int boundary = side < 0 ? geometry.domain.lo[1] : geometry.domain.hi[1];
+      return {i, side < 0 ? 2 * boundary - j - 1 : 2 * boundary - j + 1};
+    }
+  }
+};
+
+template <int Axis>
+struct AnalyticFixedFaceFiniteKernel {
+  AnalyticFixedFaceEvaluator<Axis> evaluator;
+
+  POPS_HD Real operator()(int i, int j) const {
+    return evaluator.evaluate(i, j).valid ? Real(0) : Real(1);
+  }
+};
+
+template <int Axis>
+struct AnalyticFixedFaceKernel {
+  Array4 state;
+  int component;
+  AnalyticFixedFaceEvaluator<Axis> evaluator;
+
+  POPS_HD void operator()(int i, int j) const {
+    const auto value = evaluator.evaluate(i, j);
+    const auto source = evaluator.source(i, j);
+    state(i, j, component) = Real(2) * value.value - state(source.i, source.j, component);
+  }
+};
+
 template <int Dim>
 inline HyperbolicComponentTransform<Dim> transform_from_role(std::string_view role) {
   if (role == "MomentumX" || role == "VelocityX")
@@ -332,6 +411,60 @@ class PreparedHyperbolicBoundary {
   static_assert(Dim >= 1 && Dim <= 3);
   using Transform = HyperbolicComponentTransform<Dim>;
 
+  /// Opaque proof that every fallible physical-face check, including the collective finite-value
+  /// scan of analytic programs, completed for one exact state/layout.  PreparedBoundaryPlan obtains
+  /// this proof before mutating same-level, periodic or MPI halos, then consumes it immediately.
+  class PhysicalFillPreflight final {
+   public:
+    PhysicalFillPreflight(const PhysicalFillPreflight&) = delete;
+    PhysicalFillPreflight& operator=(const PhysicalFillPreflight&) = delete;
+    PhysicalFillPreflight(PhysicalFillPreflight&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)),
+          state_(std::exchange(other.state_, nullptr)),
+          domain_(other.domain_),
+          geometry_(other.geometry_),
+          has_geometry_(other.has_geometry_),
+          physical_time_(other.physical_time_),
+          ncomp_(other.ncomp_),
+          depth_(other.depth_) {}
+    PhysicalFillPreflight& operator=(PhysicalFillPreflight&& other) noexcept {
+      if (this == &other)
+        return *this;
+      owner_ = std::exchange(other.owner_, nullptr);
+      state_ = std::exchange(other.state_, nullptr);
+      domain_ = other.domain_;
+      geometry_ = other.geometry_;
+      has_geometry_ = other.has_geometry_;
+      physical_time_ = other.physical_time_;
+      ncomp_ = other.ncomp_;
+      depth_ = other.depth_;
+      return *this;
+    }
+
+   private:
+    friend class PreparedHyperbolicBoundary;
+
+    PhysicalFillPreflight(const PreparedHyperbolicBoundary* owner, const MultiFab* state,
+                          Box2D domain, const Geometry* geometry, Real physical_time)
+        : owner_(owner),
+          state_(state),
+          domain_(domain),
+          geometry_(geometry == nullptr ? Geometry{} : *geometry),
+          has_geometry_(geometry != nullptr),
+          physical_time_(physical_time),
+          ncomp_(state->ncomp()),
+          depth_(state->n_grow()) {}
+
+    const PreparedHyperbolicBoundary* owner_ = nullptr;
+    const MultiFab* state_ = nullptr;
+    Box2D domain_{};
+    Geometry geometry_{};
+    bool has_geometry_ = false;
+    Real physical_time_ = Real(0);
+    int ncomp_ = 0;
+    int depth_ = 0;
+  };
+
   PreparedHyperbolicBoundary() = default;
 
   PreparedHyperbolicBoundary(
@@ -359,6 +492,11 @@ class PreparedHyperbolicBoundary {
     return component_transforms_[static_cast<std::size_t>(component)];
   }
   HyperbolicCornerPolicy corner_policy() const { return corner_policy_; }
+  bool has_analytic_state() const {
+    return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& face) {
+      return !face.analytic_state.empty();
+    });
+  }
 
   bool requires_fixed_state_conversion() const {
     return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& prepared) {
@@ -430,6 +568,79 @@ class PreparedHyperbolicBoundary {
   /// The explicit NotRequired corner policy excludes double-physical corners. Periodic tangential
   /// ghosts are included because they were already produced by fill_boundary and are valid inputs.
   void fill_physical(MultiFab& state, const Box2D& domain) const {
+    auto preflight = preflight_physical(state, domain);
+    fill_physical_preflighted(state, std::move(preflight));
+  }
+
+  void fill_physical(MultiFab& state, const Geometry& geometry) const {
+    fill_physical(state, geometry, world_communicator_view());
+  }
+
+  void fill_physical(MultiFab& state, const Geometry& geometry,
+                     CommunicatorView communicator) const {
+    auto preflight = preflight_physical(state, geometry, communicator);
+    fill_physical_preflighted(state, std::move(preflight));
+  }
+
+  void fill_physical(MultiFab& state, const Geometry& geometry, Real physical_time,
+                     std::string_view clock) const {
+    fill_physical(state, geometry, physical_time, clock, world_communicator_view());
+  }
+
+  void fill_physical(MultiFab& state, const Geometry& geometry, Real physical_time,
+                     std::string_view clock, CommunicatorView communicator) const {
+    auto preflight = preflight_physical(state, geometry, physical_time, clock, communicator);
+    fill_physical_preflighted(state, std::move(preflight));
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Box2D& domain) const {
+    if (has_analytic_state())
+      throw std::logic_error(
+          "analytic hyperbolic boundary requires physical Geometry at execution");
+    return preflight_physical_impl_(state, domain, nullptr, Real(0), {}, false,
+                                    world_communicator_view());
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Geometry& geometry) const {
+    return preflight_physical(state, geometry, world_communicator_view());
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Geometry& geometry,
+                                           CommunicatorView communicator) const {
+    return preflight_physical_impl_(state, geometry.domain, &geometry, Real(0), {}, false,
+                                    communicator);
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Geometry& geometry,
+                                           Real physical_time, std::string_view clock) const {
+    return preflight_physical(state, geometry, physical_time, clock, world_communicator_view());
+  }
+
+  PhysicalFillPreflight preflight_physical(MultiFab& state, const Geometry& geometry,
+                                           Real physical_time, std::string_view clock,
+                                           CommunicatorView communicator) const {
+    return preflight_physical_impl_(state, geometry.domain, &geometry, physical_time, clock, true,
+                                    communicator);
+  }
+
+  /// Consume one exact preflight after the owning PreparedBoundaryPlan has produced native halos.
+  /// No validation or host allocation remains on this commit path.
+  void fill_physical_preflighted(MultiFab& state, PhysicalFillPreflight&& preflight) const {
+    if (preflight.owner_ != this || preflight.state_ != &state ||
+        preflight.ncomp_ != state.ncomp() || preflight.depth_ != state.n_grow())
+      throw std::logic_error(
+          "prepared hyperbolic boundary received a foreign or stale physical preflight");
+    preflight.owner_ = nullptr;
+    fill_physical_preflighted_impl_(state, preflight.domain_,
+                                    preflight.has_geometry_ ? &preflight.geometry_ : nullptr,
+                                    preflight.physical_time_);
+  }
+
+ private:
+  PhysicalFillPreflight preflight_physical_impl_(MultiFab& state, const Box2D& domain,
+                                                 const Geometry* geometry, Real physical_time,
+                                                 std::string_view clock, bool has_evaluation_point,
+                                                 CommunicatorView communicator) const {
     static_assert(Dim == 2, "the current MultiFab storage is two-dimensional");
     if (requires_fixed_state_conversion())
       throw std::logic_error(
@@ -439,7 +650,27 @@ class PreparedHyperbolicBoundary {
           "prepared hyperbolic boundary component count differs from the state");
     const int depth = state.n_grow();
     if (depth == 0)
-      return;
+      return PhysicalFillPreflight(this, &state, domain, geometry, physical_time);
+    if (has_analytic_state()) {
+      if (geometry == nullptr || geometry->domain != domain)
+        throw std::invalid_argument(
+            "analytic hyperbolic boundary requires matching physical Geometry");
+      for (int face = 0; face < 2 * Dim; ++face) {
+        const auto& prepared = faces_[static_cast<std::size_t>(face)];
+        if (prepared.analytic_state.empty())
+          continue;
+        const int axis_cells = face / 2 == 0 ? domain.nx() : domain.ny();
+        if (depth > axis_cells)
+          throw std::invalid_argument(
+              "analytic hyperbolic boundary does not support multi-reflection ghost depth");
+        if (!prepared.analytic_clock.empty() &&
+            (!has_evaluation_point || prepared.analytic_clock != clock ||
+             !std::isfinite(physical_time)))
+          throw std::invalid_argument(
+              "analytic hyperbolic boundary requires its exact finite BoundaryEvaluationPoint");
+      }
+      validate_analytic_values_(state, *geometry, physical_time, communicator);
+    }
     const auto table = table_view();
     for (int component = 0; component < ncomp(); ++component) {
       for (int offset = 1; offset <= depth; ++offset) {
@@ -457,7 +688,15 @@ class PreparedHyperbolicBoundary {
                                                 1, faces_[2].law, faces_[3].law, table, component);
       }
     }
+    return PhysicalFillPreflight(this, &state, domain, geometry, physical_time);
+  }
 
+  void fill_physical_preflighted_impl_(MultiFab& state, const Box2D& domain,
+                                       const Geometry* geometry, Real physical_time) const {
+    const int depth = state.n_grow();
+    if (depth == 0)
+      return;
+    const auto table = table_view();
     for (int local = 0; local < state.local_size(); ++local) {
       Fab2D& fab = state.fab(local);
       const Box2D valid = fab.box();
@@ -470,15 +709,13 @@ class PreparedHyperbolicBoundary {
       if (faces_[3].law != HyperbolicBoundaryLaw::Periodic)
         tangential_hi = std::min(tangential_hi, domain.hi[1]);
       if (detail::is_physical_hyperbolic_law(faces_[0].law) && valid.lo[0] == domain.lo[0])
-        for_each_cell(
-            Box2D{{domain.lo[0] - depth, tangential_lo}, {domain.lo[0] - 1, tangential_hi}},
-            detail::HyperbolicFaceXKernel<Dim>{values, table, domain.lo[0], domain.hi[0],
-                                               faces_[0].law, faces_[1].law});
+        fill_x_face_(
+            values, Box2D{{domain.lo[0] - depth, tangential_lo}, {domain.lo[0] - 1, tangential_hi}},
+            0, domain, geometry, physical_time, table);
       if (detail::is_physical_hyperbolic_law(faces_[1].law) && valid.hi[0] == domain.hi[0])
-        for_each_cell(
-            Box2D{{domain.hi[0] + 1, tangential_lo}, {domain.hi[0] + depth, tangential_hi}},
-            detail::HyperbolicFaceXKernel<Dim>{values, table, domain.lo[0], domain.hi[0],
-                                               faces_[0].law, faces_[1].law});
+        fill_x_face_(
+            values, Box2D{{domain.hi[0] + 1, tangential_lo}, {domain.hi[0] + depth, tangential_hi}},
+            1, domain, geometry, physical_time, table);
 
       tangential_lo = valid.lo[0] - depth;
       tangential_hi = valid.hi[0] + depth;
@@ -487,19 +724,16 @@ class PreparedHyperbolicBoundary {
       if (faces_[1].law != HyperbolicBoundaryLaw::Periodic)
         tangential_hi = std::min(tangential_hi, domain.hi[0]);
       if (detail::is_physical_hyperbolic_law(faces_[2].law) && valid.lo[1] == domain.lo[1])
-        for_each_cell(
-            Box2D{{tangential_lo, domain.lo[1] - depth}, {tangential_hi, domain.lo[1] - 1}},
-            detail::HyperbolicFaceYKernel<Dim>{values, table, domain.lo[1], domain.hi[1],
-                                               faces_[2].law, faces_[3].law});
+        fill_y_face_(
+            values, Box2D{{tangential_lo, domain.lo[1] - depth}, {tangential_hi, domain.lo[1] - 1}},
+            2, domain, geometry, physical_time, table);
       if (detail::is_physical_hyperbolic_law(faces_[3].law) && valid.hi[1] == domain.hi[1])
-        for_each_cell(
-            Box2D{{tangential_lo, domain.hi[1] + 1}, {tangential_hi, domain.hi[1] + depth}},
-            detail::HyperbolicFaceYKernel<Dim>{values, table, domain.lo[1], domain.hi[1],
-                                               faces_[2].law, faces_[3].law});
+        fill_y_face_(
+            values, Box2D{{tangential_lo, domain.hi[1] + 1}, {tangential_hi, domain.hi[1] + depth}},
+            3, domain, geometry, physical_time, table);
     }
   }
 
- private:
   std::array<PreparedHyperbolicFace, 2 * Dim> faces_{};
   std::vector<Transform> component_transforms_;
   HyperbolicCornerPolicy corner_policy_ = HyperbolicCornerPolicy::NotRequired;
@@ -511,6 +745,113 @@ class PreparedHyperbolicBoundary {
   std::vector<Transform> device_transforms_;
   std::vector<Real> device_fixed_values_;
 #endif
+
+  template <int Axis>
+  detail::AnalyticFixedFaceEvaluator<Axis> analytic_evaluator_(int face_ordinal, int component,
+                                                               const Geometry& geometry,
+                                                               Real physical_time) const {
+    const auto& face = faces_[static_cast<std::size_t>(face_ordinal)];
+    const bool periodic_tangent = Axis == 0 ? faces_[2].law == HyperbolicBoundaryLaw::Periodic
+                                            : faces_[0].law == HyperbolicBoundaryLaw::Periodic;
+    return {face.analytic_state[static_cast<std::size_t>(component)].view(), geometry,
+            face_ordinal % 2 == 0 ? -1 : 1, periodic_tangent, physical_time};
+  }
+
+  void fill_x_face_(const Array4& values, const Box2D& region, int face_ordinal,
+                    const Box2D& domain, const Geometry* geometry, Real physical_time,
+                    const detail::HyperbolicBoundaryTableView<Dim>& table) const {
+    const auto& face = faces_[static_cast<std::size_t>(face_ordinal)];
+    if (face.analytic_state.empty()) {
+      for_each_cell(region,
+                    detail::HyperbolicFaceXKernel<Dim>{values, table, domain.lo[0], domain.hi[0],
+                                                       faces_[0].law, faces_[1].law});
+      return;
+    }
+    if (geometry == nullptr)
+      throw std::logic_error("analytic x-face execution lost physical Geometry");
+    for (int component = 0; component < ncomp(); ++component)
+      for_each_cell(region,
+                    detail::AnalyticFixedFaceKernel<0>{
+                        values, component,
+                        analytic_evaluator_<0>(face_ordinal, component, *geometry, physical_time)});
+  }
+
+  void fill_y_face_(const Array4& values, const Box2D& region, int face_ordinal,
+                    const Box2D& domain, const Geometry* geometry, Real physical_time,
+                    const detail::HyperbolicBoundaryTableView<Dim>& table) const {
+    const auto& face = faces_[static_cast<std::size_t>(face_ordinal)];
+    if (face.analytic_state.empty()) {
+      for_each_cell(region,
+                    detail::HyperbolicFaceYKernel<Dim>{values, table, domain.lo[1], domain.hi[1],
+                                                       faces_[2].law, faces_[3].law});
+      return;
+    }
+    if (geometry == nullptr)
+      throw std::logic_error("analytic y-face execution lost physical Geometry");
+    for (int component = 0; component < ncomp(); ++component)
+      for_each_cell(region,
+                    detail::AnalyticFixedFaceKernel<1>{
+                        values, component,
+                        analytic_evaluator_<1>(face_ordinal, component, *geometry, physical_time)});
+  }
+
+  void validate_analytic_values_(const MultiFab& state, const Geometry& geometry,
+                                 Real physical_time, CommunicatorView communicator) const {
+    const int depth = state.n_grow();
+    long invalid_local = 0;
+    for (int local = 0; local < state.local_size(); ++local) {
+      const Box2D valid = state.fab(local).box();
+      int tangential_lo = valid.lo[1] - depth;
+      int tangential_hi = valid.hi[1] + depth;
+      if (faces_[2].law != HyperbolicBoundaryLaw::Periodic)
+        tangential_lo = std::max(tangential_lo, geometry.domain.lo[1]);
+      if (faces_[3].law != HyperbolicBoundaryLaw::Periodic)
+        tangential_hi = std::min(tangential_hi, geometry.domain.hi[1]);
+      for (int face_ordinal = 0; face_ordinal < 2; ++face_ordinal) {
+        const auto& face = faces_[static_cast<std::size_t>(face_ordinal)];
+        const bool touches = face_ordinal == 0 ? valid.lo[0] == geometry.domain.lo[0]
+                                               : valid.hi[0] == geometry.domain.hi[0];
+        if (face.analytic_state.empty() || !touches)
+          continue;
+        const Box2D region = face_ordinal == 0
+                                 ? Box2D{{geometry.domain.lo[0] - depth, tangential_lo},
+                                         {geometry.domain.lo[0] - 1, tangential_hi}}
+                                 : Box2D{{geometry.domain.hi[0] + 1, tangential_lo},
+                                         {geometry.domain.hi[0] + depth, tangential_hi}};
+        for (int component = 0; component < ncomp(); ++component)
+          invalid_local += static_cast<long>(for_each_cell_reduce_sum(
+              region, detail::AnalyticFixedFaceFiniteKernel<0>{analytic_evaluator_<0>(
+                          face_ordinal, component, geometry, physical_time)}));
+      }
+
+      tangential_lo = valid.lo[0] - depth;
+      tangential_hi = valid.hi[0] + depth;
+      if (faces_[0].law != HyperbolicBoundaryLaw::Periodic)
+        tangential_lo = std::max(tangential_lo, geometry.domain.lo[0]);
+      if (faces_[1].law != HyperbolicBoundaryLaw::Periodic)
+        tangential_hi = std::min(tangential_hi, geometry.domain.hi[0]);
+      for (int face_ordinal = 2; face_ordinal < 4; ++face_ordinal) {
+        const auto& face = faces_[static_cast<std::size_t>(face_ordinal)];
+        const bool touches = face_ordinal == 2 ? valid.lo[1] == geometry.domain.lo[1]
+                                               : valid.hi[1] == geometry.domain.hi[1];
+        if (face.analytic_state.empty() || !touches)
+          continue;
+        const Box2D region = face_ordinal == 2
+                                 ? Box2D{{tangential_lo, geometry.domain.lo[1] - depth},
+                                         {tangential_hi, geometry.domain.lo[1] - 1}}
+                                 : Box2D{{tangential_lo, geometry.domain.hi[1] + 1},
+                                         {tangential_hi, geometry.domain.hi[1] + depth}};
+        for (int component = 0; component < ncomp(); ++component)
+          invalid_local += static_cast<long>(for_each_cell_reduce_sum(
+              region, detail::AnalyticFixedFaceFiniteKernel<1>{analytic_evaluator_<1>(
+                          face_ordinal, component, geometry, physical_time)}));
+      }
+    }
+    const long invalid = all_reduce_sum(invalid_local, communicator);
+    if (invalid != 0)
+      throw std::runtime_error("analytic hyperbolic boundary produced non-finite values (count=" +
+                               std::to_string(invalid) + ")");
+  }
 
   void validate(bool explicit_periodic_identifications) const {
     if (component_transforms_.empty())
@@ -530,6 +871,25 @@ class PreparedHyperbolicBoundary {
       const auto& prepared_face = faces_[static_cast<std::size_t>(face_ordinal)];
       if (prepared_face.identity.empty() || prepared_face.identity_token == 0)
         throw std::invalid_argument("prepared hyperbolic faces require owner-qualified identities");
+      if (!prepared_face.analytic_state.empty()) {
+        if (prepared_face.law != HyperbolicBoundaryLaw::FixedState ||
+            prepared_face.authored_representation != HyperbolicStateRepresentation::Conservative ||
+            !prepared_face.converter_identity.empty() || !prepared_face.fixed_state_converted ||
+            prepared_face.analytic_state.size() != component_transforms_.size() ||
+            std::any_of(prepared_face.fixed_state.begin(), prepared_face.fixed_state.end(),
+                        [](Real value) { return value != Real(0); }) ||
+            std::any_of(prepared_face.analytic_state.begin(), prepared_face.analytic_state.end(),
+                        [](const analytic::AnalyticProgram& program) {
+                          return program.empty() ||
+                                 program.result_type() != analytic::AnalyticValueType::Scalar;
+                        }))
+          throw std::invalid_argument(
+              "analytic hyperbolic boundary requires zero fixed-state placeholders and one "
+              "conservative scalar program per component");
+      } else if (!prepared_face.analytic_clock.empty()) {
+        throw std::invalid_argument(
+            "only an analytic hyperbolic boundary may carry a logical Clock");
+      }
       if (prepared_face.law == HyperbolicBoundaryLaw::FixedState) {
         if (prepared_face.fixed_state.size() != component_transforms_.size() ||
             std::any_of(prepared_face.fixed_state.begin(), prepared_face.fixed_state.end(),
@@ -616,7 +976,10 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
     const std::vector<std::string>& face_identities,
     const std::vector<std::string>& component_roles, bool explicit_periodic_identifications = false,
     const std::vector<std::string>& face_representations = {},
-    const std::vector<std::string>& face_converter_identities = {}) {
+    const std::vector<std::string>& face_converter_identities = {},
+    const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
+    const std::vector<std::vector<double>>& face_analytic_literals = {},
+    const std::vector<std::string>& face_analytic_clocks = {}) {
   if (face_types.size() != static_cast<std::size_t>(2 * Dim) ||
       face_identities.size() != static_cast<std::size_t>(2 * Dim))
     throw std::invalid_argument(
@@ -631,12 +994,22 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
        face_converter_identities.size() != static_cast<std::size_t>(2 * Dim)))
     throw std::invalid_argument(
         "prepared hyperbolic boundary conversion metadata must cover every oriented face");
+  const std::size_t analytic_rows = static_cast<std::size_t>(2 * Dim) * component_roles.size();
+  if (face_analytic_opcodes.empty() != face_analytic_literals.empty() ||
+      (!face_analytic_opcodes.empty() &&
+       (face_analytic_opcodes.size() != analytic_rows ||
+        face_analytic_literals.size() != analytic_rows ||
+        face_analytic_clocks.size() != static_cast<std::size_t>(2 * Dim))) ||
+      (face_analytic_opcodes.empty() && !face_analytic_clocks.empty()))
+    throw std::invalid_argument(
+        "prepared hyperbolic analytic tables must cover every face/component and Clock");
 
   std::vector<HyperbolicComponentTransform<Dim>> transforms;
   transforms.reserve(component_roles.size());
   for (const auto& role : component_roles)
     transforms.push_back(detail::transform_from_role<Dim>(role));
 
+  std::string plan_analytic_clock;
   std::array<PreparedHyperbolicFace, 2 * Dim> faces;
   for (int face = 0; face < 2 * Dim; ++face) {
     auto& destination = faces[static_cast<std::size_t>(face)];
@@ -659,6 +1032,59 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
                                           static_cast<std::size_t>(face)]));
       destination.fixed_state_converted =
           destination.authored_representation == HyperbolicStateRepresentation::Conservative;
+    }
+    if (!face_analytic_opcodes.empty()) {
+      bool any_program = false;
+      bool every_program = true;
+      bool reads_time = false;
+      destination.analytic_clock = face_analytic_clocks[static_cast<std::size_t>(face)];
+      for (std::size_t component = 0; component < component_roles.size(); ++component) {
+        const std::size_t row = static_cast<std::size_t>(face) * component_roles.size() + component;
+        const auto& opcodes = face_analytic_opcodes[row];
+        const auto& literals = face_analytic_literals[row];
+        any_program = any_program || !opcodes.empty();
+        every_program = every_program && !opcodes.empty();
+        if (opcodes.empty() && literals.empty())
+          continue;
+        if (opcodes.empty() || opcodes.size() != literals.size())
+          throw std::invalid_argument(
+              "prepared hyperbolic analytic opcode/literal rows must be non-empty and aligned");
+        std::vector<analytic::AnalyticToken> tokens;
+        tokens.reserve(opcodes.size());
+        for (std::size_t index = 0; index < opcodes.size(); ++index) {
+          const analytic::AnalyticOp op = analytic::analytic_op_from_name(opcodes[index]);
+          const double raw = literals[index];
+          if (!std::isfinite(raw))
+            throw std::invalid_argument(
+                "prepared hyperbolic analytic token literal must be finite");
+          if (op == analytic::AnalyticOp::Input) {
+            if (raw != 0.0)
+              throw std::invalid_argument(
+                  "prepared hyperbolic analytic input is reserved for physical time slot zero");
+            reads_time = true;
+          }
+          tokens.push_back({op, static_cast<Real>(raw)});
+        }
+        destination.analytic_state.push_back(analytic::compile_analytic_postfix(tokens));
+      }
+      if (any_program != every_program)
+        throw std::invalid_argument(
+            "prepared hyperbolic analytic face must cover every state component");
+      if (!any_program) {
+        if (!destination.analytic_clock.empty())
+          throw std::invalid_argument(
+              "prepared hyperbolic analytic Clock requires a program on the same face");
+        destination.analytic_clock.clear();
+      } else if (reads_time != !destination.analytic_clock.empty()) {
+        throw std::invalid_argument(
+            "prepared hyperbolic analytic physical-time input requires one exact logical Clock");
+      } else if (reads_time) {
+        if (plan_analytic_clock.empty())
+          plan_analytic_clock = destination.analytic_clock;
+        else if (plan_analytic_clock != destination.analytic_clock)
+          throw std::invalid_argument(
+              "prepared hyperbolic analytic plan cannot mix logical Clocks");
+      }
     }
   }
   return PreparedHyperbolicBoundary<Dim>(std::move(faces), std::move(transforms),

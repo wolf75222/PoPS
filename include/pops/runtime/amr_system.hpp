@@ -367,7 +367,10 @@ class AmrSystem {
       PreparedBoundaryReadDependencies read_dependencies,
       std::vector<PeriodicIdentification2D> periodic_identifications,
       const std::vector<std::string>& face_representations = {},
-      const std::vector<std::string>& face_converter_identities = {});
+      const std::vector<std::string>& face_converter_identities = {},
+      const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
+      const std::vector<std::vector<double>>& face_analytic_literals = {},
+      const std::vector<std::string>& face_analytic_clocks = {});
   /// Register the exact state Handle independently from physical-boundary ownership.
   POPS_EXPORT void install_block_state_route(const std::string& name,
                                              const std::string& state_identity);

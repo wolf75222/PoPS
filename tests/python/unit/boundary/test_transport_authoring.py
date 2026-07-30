@@ -190,6 +190,140 @@ def test_primitive_fixed_state_lowers_only_through_the_exact_block_model_convert
         forged_authority.compile_boundary_data()
 
 
+def test_analytic_inflow_lowers_typed_x_time_and_bound_parameters_without_callback():
+    from pops.analytic import param, time, x
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+    from pops.model import BindSchema
+
+    frame, _, inlet, _, numerics, case, block, block_state = _authoring()
+    program = pops.Program("analytic-boundary-clock")
+    analytic_value = 1.0 + x(frame) + time(program.clock) + param(inlet)
+    numerics.boundaries.add(
+        TransportBoundarySet(
+            {
+                frame.boundaries.x_min: Inflow(state=block_state, value=analytic_value),
+                frame.boundaries.x_max: Outflow(state=block_state),
+                frame.boundaries.y_min: Inflow(state=block_state, value=0.25),
+                frame.boundaries.y_max: Outflow(state=block_state),
+            }
+        )
+    )
+    case.numerics(numerics, block=block)
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+
+    analytic_condition = next(
+        row
+        for row in authority.conditions
+        if row.geometry.axis.index == 0 and row.geometry.side.value == "lower"
+    )
+    assert analytic_condition.provider.dependencies.states == ()
+    assert len(analytic_condition.provider.dependencies.time) == 1
+    assert len(analytic_condition.provider.dependencies.runtime_params) == 1
+    assert analytic_condition.values[0].frame_id == frame.canonical_id
+
+    schema = BindSchema.from_problem(case)
+    bindings = schema.resolve_bind({}, compile_values=schema.resolve_compile())
+    runtime = authority.runtime_boundary_data(bindings)
+    xlo = next(face for face in runtime["faces"] if face["ordinal"] == 0)
+    assert xlo["values"] == [0.0]
+    assert xlo["analytic_clock"] == program.clock.qualified_id
+    assert xlo["analytic_programs"][0]["opcodes"] == [
+        "constant",
+        "x",
+        "add",
+        "input",
+        "add",
+        "constant",
+        "add",
+    ]
+    assert xlo["analytic_programs"][0]["literals"][3] == 0.0
+    assert xlo["analytic_programs"][0]["literals"][5] == 0.25
+
+    compiled = authority.compile_boundary_data()
+    compiled.update(
+        {
+            "ghost_plan_identity": authority.plan.canonical_id,
+            "producer_order": [],
+            "component_region_templates": [],
+        }
+    )
+    detached = CompiledBoundaryPlan(compiled).runtime_boundary_data(bindings)
+    assert detached["faces"] == runtime["faces"]
+
+
+def test_analytic_inflow_fails_closed_for_primitive_per_point_conversion():
+    from pops.analytic import x
+
+    frame, _, _, _, numerics, case, block, block_state = _authoring()
+    numerics.boundaries.add(
+        TransportBoundarySet(
+            {
+                frame.boundaries.x_min: Inflow(
+                    state=block_state,
+                    value=x(frame),
+                    representation=Primitive(),
+                    converter=model_primitive_to_conservative(block_state),
+                ),
+                frame.boundaries.x_max: Outflow(state=block_state),
+                frame.boundaries.y_min: Inflow(state=block_state, value=0.25),
+                frame.boundaries.y_max: Outflow(state=block_state),
+            }
+        )
+    )
+    case.numerics(numerics, block=block)
+
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    with pytest.raises(NotImplementedError, match="analytic primitive inflow"):
+        authority.compile_boundary_data()
+
+
+def test_analytic_inflow_fails_closed_for_discrete_setup_inputs():
+    from pops.analytic import input
+
+    frame, _, _, _, numerics, case, block, block_state = _authoring()
+    numerics.boundaries.add(
+        TransportBoundarySet(
+            {
+                frame.boundaries.x_min: Inflow(
+                    state=block_state, value=input(0, "n")),
+                frame.boundaries.x_max: Outflow(state=block_state),
+                frame.boundaries.y_min: Inflow(state=block_state, value=0.25),
+                frame.boundaries.y_max: Outflow(state=block_state),
+            }
+        )
+    )
+    case.numerics(numerics, block=block)
+
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    with pytest.raises(NotImplementedError, match="setup-program discrete inputs"):
+        authority.compile_boundary_data()
+
+
+def test_analytic_inflow_fails_closed_when_one_plan_mixes_logical_clocks():
+    from pops.analytic import time
+
+    frame, _, _, _, numerics, case, block, block_state = _authoring()
+    first = pops.Program("analytic-boundary-first-clock")
+    second = pops.Program("analytic-boundary-second-clock")
+    numerics.boundaries.add(
+        TransportBoundarySet(
+            {
+                frame.boundaries.x_min: Inflow(
+                    state=block_state, value=time(first.clock)),
+                frame.boundaries.x_max: Outflow(state=block_state),
+                frame.boundaries.y_min: Inflow(
+                    state=block_state, value=time(second.clock)),
+                frame.boundaries.y_max: Outflow(state=block_state),
+            }
+        )
+    )
+    case.numerics(numerics, block=block)
+
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    with pytest.raises(ValueError, match="plan cannot mix several logical Clocks"):
+        authority.compile_boundary_data()
+
+
 def test_transport_set_rejects_incomplete_geometry_at_resolution():
     frame, _, _, inlet_value, numerics, case, block, block_state = _authoring()
     numerics.boundaries.add(TransportBoundarySet({

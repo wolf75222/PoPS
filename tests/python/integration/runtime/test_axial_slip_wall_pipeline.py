@@ -18,6 +18,7 @@ from pops.physics import Axial, Density, Momentum
 from pops.representations import Conservative
 from pops.spaces import CellState
 from pops.time import FixedDt
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
@@ -91,7 +92,11 @@ def test_axial_role_compiles_binds_and_round_trips_native_metadata(
     case, layout = _axial_wall_case()
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     initial = np.ones((4, 4, 4), dtype=np.float64)
-    runtime = pops.bind(artifact, initial_state={"fluid": initial})
+    runtime = pops.bind(
+        artifact,
+        initial_state={"fluid": initial},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
 
     assert list(runtime._executor._s.variable_roles("fluid", "conservative")) == [
         "density",

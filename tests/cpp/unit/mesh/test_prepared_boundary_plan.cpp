@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <pops/core/foundation/allocator.hpp>
 #include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -39,6 +40,22 @@ PreparedHyperbolicBoundary<2> periodic_boundary(
       face_types, std::vector<double>(4, 0.0),
       {"case::periodic::xlo", "case::periodic::xhi", "case::periodic::ylo", "case::periodic::yhi"},
       {"Scalar"}, explicit_identifications);
+}
+
+PreparedHyperbolicBoundary<2> analytic_xlo_boundary(
+    std::vector<std::string> opcodes = {"x", "y", "add", "input", "add"},
+    std::vector<double> literals = {0.0, 0.0, 0.0, 0.0, 0.0}, bool periodic_tangent = false) {
+  const bool reads_time = std::find(opcodes.begin(), opcodes.end(), "input") != opcodes.end();
+  return prepare_hyperbolic_boundary<2>(
+      periodic_tangent ? std::vector<std::string>{"dirichlet", "foextrap", "periodic", "periodic"}
+                       : std::vector<std::string>{"dirichlet", "foextrap", "foextrap", "foextrap"},
+      std::vector<double>(4, 0.0),
+      {"case::analytic::xlo", "case::analytic::xhi", "case::analytic::ylo", "case::analytic::yhi"},
+      {"Scalar"}, false, {}, {},
+      {std::move(opcodes), std::vector<std::string>{}, std::vector<std::string>{},
+       std::vector<std::string>{}},
+      {std::move(literals), std::vector<double>{}, std::vector<double>{}, std::vector<double>{}},
+      {reads_time ? "clock.analytic" : "", "", "", ""});
 }
 
 PreparedBoundaryComponentSpec linearization_spec(bool jvp, std::string target, std::string output) {
@@ -153,6 +170,106 @@ TEST(test_prepared_boundary_plan, executes_same_level_and_component_physical_pro
   EXPECT_EQ(field(-1, 2, 1), Real(2));
   EXPECT_EQ(field(4, 2, 0), Real(7));   // 2*4 - interior(1)
   EXPECT_EQ(field(4, 2, 1), Real(16));  // 2*9 - interior(2)
+}
+
+TEST(test_prepared_boundary_plan,
+     evaluates_prepared_coordinate_time_inflow_on_device_without_hot_path_allocation) {
+  const Box2D domain = Box2D::from_extents(4, 3);
+  const Geometry geometry(domain, Real(1), Real(5), Real(0), Real(3));
+  MultiFab state = scalar_field(domain, 1, 1);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(2); });
+  }
+  PreparedBoundaryPlan plan("case::analytic::plan", 1, analytic_xlo_boundary());
+  const auto lane = ExecutionLane::world("case::analytic::lane");
+  auto session = plan.make_session(lane);
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.analytic",    1,   0,   0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.25};
+
+  EXPECT_THROW(session.fill_same_level_and_physical(state, domain), std::logic_error);
+  EXPECT_THROW(session.fill_same_level_and_physical(
+                   state, geometry,
+                   runtime::multiblock::BoundaryEvaluationPoint{"clock.other", 1, 0, 0, 0,
+                                                                amr::Rational(0, 1), 0.1, 0.25}),
+               std::invalid_argument);
+  if (state.local_size() > 0)
+    EXPECT_EQ(state.fab(0)(-1, 1, 0), Real(-99));
+
+  session.fill_same_level_and_physical(state, geometry, point);
+  if (state.local_size() > 0)
+    EXPECT_EQ(state.fab(0)(-1, 1, 0), Real(3.5));
+  const AllocationEventStats before = allocation_event_stats();
+  session.fill_same_level_and_physical(state, geometry, point);
+  const AllocationEventStats after = allocation_event_stats();
+  EXPECT_EQ(after, before);
+}
+
+TEST(test_prepared_boundary_plan, analytic_inflow_preflights_nonfinite_values_before_any_mutation) {
+  const Box2D domain = Box2D::from_extents(4, 3);
+  const Geometry geometry(domain, Real(0), Real(4), Real(0), Real(3));
+  const BoxArray boxes = BoxArray::from_domain(domain, 2);
+  MultiFab state(boxes, DistributionMapping(boxes.size(), n_ranks()), 1, 1);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(2 + i + 10 * j); });
+  }
+  device_fence();
+  const MultiFab before = state;
+  PreparedBoundaryPlan plan("case::analytic::invalid-plan", 1,
+                            analytic_xlo_boundary({"constant", "log"}, {-1.0, 0.0}, true));
+  const auto lane = ExecutionLane::world("case::analytic::invalid-lane");
+  auto session = plan.make_session(lane);
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.analytic",    1,   0,   0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.25};
+
+  EXPECT_THROW(session.fill_same_level_and_physical(state, geometry, point), std::runtime_error);
+  state.sync_host();
+  before.sync_host();
+  ASSERT_EQ(state.local_size(), before.local_size());
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& observed = state.fab(local);
+    const Fab2D& expected = before.fab(local);
+    const Box2D grown = observed.grown_box();
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        EXPECT_EQ(observed(i, j, 0), expected(i, j, 0))
+            << "analytic refusal mutated local fab " << local << " at (" << i << ", " << j << ")";
+  }
+}
+
+TEST(test_prepared_boundary_plan, analytic_inflow_authenticates_one_clock_and_time_slot_per_plan) {
+  const auto face_types =
+      std::vector<std::string>{"dirichlet", "foextrap", "dirichlet", "foextrap"};
+  const auto face_values = std::vector<double>(4, 0.0);
+  const auto face_identities = std::vector<std::string>{
+      "case::analytic::xlo", "case::analytic::xhi", "case::analytic::ylo", "case::analytic::yhi"};
+  const auto roles = std::vector<std::string>{"Scalar"};
+  const auto opcodes = std::vector<std::vector<std::string>>{{"input"}, {}, {"input"}, {}};
+  const auto literals = std::vector<std::vector<double>>{{0.0}, {}, {0.0}, {}};
+
+  EXPECT_THROW(
+      prepare_hyperbolic_boundary<2>(face_types, face_values, face_identities, roles, false, {}, {},
+                                     opcodes, literals, {"clock.first", "", "clock.second", ""}),
+      std::invalid_argument);
+  EXPECT_THROW(
+      prepare_hyperbolic_boundary<2>({"dirichlet", "foextrap", "foextrap", "foextrap"}, face_values,
+                                     face_identities, roles, false, {}, {}, {{"input"}, {}, {}, {}},
+                                     {{1.0}, {}, {}, {}}, {"clock.first", "", "", ""}),
+      std::invalid_argument);
+  auto ambiguous_values = face_values;
+  ambiguous_values[0] = 1.0;
+  EXPECT_THROW(
+      prepare_hyperbolic_boundary<2>({"dirichlet", "foextrap", "foextrap", "foextrap"},
+                                     ambiguous_values, face_identities, roles, false, {}, {},
+                                     {{"x"}, {}, {}, {}}, {{0.0}, {}, {}, {}}, {"", "", "", ""}),
+      std::invalid_argument);
+  EXPECT_THROW(prepare_hyperbolic_boundary<2>(face_types, face_values, face_identities, roles,
+                                              false, {}, {}, {{}, {}, {}, {}}, {{}, {}, {}, {}},
+                                              {"clock.without-program", "", "", ""}),
+               std::invalid_argument);
 }
 
 TEST(test_prepared_boundary_plan,
@@ -445,6 +562,19 @@ TEST(test_prepared_boundary_plan, mapped_periodicity_refuses_unmapped_vector_com
       {"Density", "MomentumX"}, true);
   EXPECT_THROW(PreparedBoundaryPlan("case::block::rotated-vector-periodic", 1,
                                     std::move(vector_boundary), {}, "", {}, {xlo_to_yhi}),
+               std::runtime_error);
+}
+
+TEST(test_prepared_boundary_plan, mapped_periodicity_refuses_unmapped_analytic_coordinates) {
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+  auto analytic_boundary = prepare_hyperbolic_boundary<2>(
+      {"periodic", "dirichlet", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+      {"case::analytic::xlo", "case::analytic::xhi", "case::analytic::ylo", "case::analytic::yhi"},
+      {"Scalar"}, true, {}, {}, {{}, {"x"}, {}, {}}, {{}, {0.0}, {}, {}}, {"", "", "", ""});
+
+  EXPECT_THROW(PreparedBoundaryPlan("case::block::rotated-analytic-periodic", 1,
+                                    std::move(analytic_boundary), {}, "", {}, {xlo_to_yhi}),
                std::runtime_error);
 }
 

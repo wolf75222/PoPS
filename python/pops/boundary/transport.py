@@ -5,8 +5,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
+from pops.analytic import ScalarExpr
 from pops.domain import DomainBoundary
 from pops._ir import Expr
 from pops._ir.expr import Const
@@ -31,8 +32,13 @@ def _expression(value: Any, *, where: str) -> Expr:
         raise TypeError("%s must be a PoPS Expr or an exact scalar" % where) from exc
 
 
-def _expression_data(value: Expr, *, qualified: bool = False) -> Any:
+def _expression_data(value: Expr | ScalarExpr, *, qualified: bool = False) -> Any:
     """Return the same stable structural protocol used by derived parameter expressions."""
+    if isinstance(value, ScalarExpr):
+        return {
+            "protocol": "pops.analytic.scalar.v1",
+            "value": value.to_data(),
+        }
     if qualified:
         from pops.model._bind_expression import qualified_expression_key
 
@@ -140,13 +146,37 @@ def _provider_handle(state: Handle, boundary: Any, condition_type: str) -> Handl
     )
 
 
+def _analytic_time_handle(clock: Any) -> Handle:
+    from pops.time import Clock
+
+    if type(clock) is not Clock or clock.owner is None:
+        raise TypeError("analytic boundary time requires one owner-qualified exact Clock")
+    digest = hashlib.sha256(clock.qualified_id.encode("utf-8")).hexdigest()[:24]
+    return Handle(
+        "clock-%s" % digest,
+        kind="time",
+        owner=clock.owner,
+    )
+
+
 def _dependency_handles(
-    values: tuple[Expr, ...], *, include_state: Handle | None = None
+    values: tuple[Expr | ScalarExpr, ...], *, include_state: Handle | None = None
 ) -> tuple[tuple[Handle, ...], tuple[Handle, ...], tuple[Handle, ...], tuple[ParamHandle, ...]]:
-    references = _unique_references(*(value.declaration_references() for value in values))
+    references = _unique_references(
+        *(
+            value.declaration_references() if isinstance(value, Expr) else value.parameter_handles()
+            for value in values
+        )
+    )
     states = [reference for reference in references if reference.kind == "state"]
     fields = [reference for reference in references if reference.kind == "field"]
     time = [reference for reference in references if reference.kind == "time"]
+    for value in values:
+        if isinstance(value, ScalarExpr):
+            for clock in value.time_clocks():
+                handle = _analytic_time_handle(clock)
+                if handle not in time:
+                    time.append(handle)
     params = [
         reference for reference in references
         if isinstance(reference, ParamHandle) and reference.param_kind == "runtime"
@@ -223,7 +253,7 @@ class ResolvedTransportCondition:
     geometry: DomainBoundary
     condition_type: str
     state: Handle
-    values: tuple[Expr, ...]
+    values: tuple[Expr | ScalarExpr, ...]
     requirement: BoundaryStencilRequirement
     provider: Any
 
@@ -237,8 +267,9 @@ class ResolvedTransportCondition:
         _state(self.state, where="ResolvedTransportCondition.state")
         if not self.state.is_resolved:
             raise TypeError("ResolvedTransportCondition.state must be canonical")
-        if not isinstance(self.values, tuple) or any(not isinstance(row, Expr) for row in self.values):
-            raise TypeError("ResolvedTransportCondition.values must contain Expr values")
+        if not isinstance(self.values, tuple) \
+                or any(not isinstance(row, (Expr, ScalarExpr)) for row in self.values):
+            raise TypeError("ResolvedTransportCondition.values must contain Expr or ScalarExpr values")
         if self.requirement.state != self.state:
             raise ValueError("transport condition and stencil requirement refer to different states")
         if not isinstance(self.provider, BoundaryProvider):
@@ -323,7 +354,7 @@ class Inflow:
 
     condition_type: ClassVar[str] = "inflow"
     state: Handle
-    values: tuple[Expr, ...]
+    values: tuple[Expr | ScalarExpr, ...]
     representation: Representation | None
     converter: Handle | None
 
@@ -341,11 +372,34 @@ class Inflow:
         raw_values = value if isinstance(value, tuple) else (value,)
         if not raw_values:
             raise ValueError("Inflow.value must prescribe at least one state component")
+        analytic = any(isinstance(row, ScalarExpr) for row in raw_values)
+        if analytic:
+            from pops.analytic import constant as analytic_constant
+
+            checked_values = []
+            for index, row in enumerate(raw_values):
+                if isinstance(row, ScalarExpr):
+                    checked_values.append(row)
+                elif isinstance(row, Expr):
+                    raise TypeError(
+                        "Inflow.value cannot mix PoPS Expr and analytic ScalarExpr values; "
+                        "use pops.analytic.param(...) for parameters"
+                    )
+                else:
+                    try:
+                        checked_values.append(analytic_constant(row))
+                    except (TypeError, ValueError) as exc:
+                        raise TypeError(
+                            "Inflow.value[%d] must be an analytic ScalarExpr or exact scalar"
+                            % index
+                        ) from exc
+        else:
+            checked_values = [
+                _expression(row, where="Inflow.value[%d]" % index)
+                for index, row in enumerate(raw_values)
+            ]
         object.__setattr__(self, "state", checked_state)
-        object.__setattr__(self, "values", tuple(
-            _expression(row, where="Inflow.value[%d]" % index)
-            for index, row in enumerate(raw_values)
-        ))
+        object.__setattr__(self, "values", tuple(checked_values))
         object.__setattr__(self, "representation", representation)
         object.__setattr__(self, "converter", _converter(converter))
 
@@ -353,7 +407,12 @@ class Inflow:
         converter = () if self.converter is None else (self.converter,)
         return _unique_references(
             (self.state,),
-            *(value.declaration_references() for value in self.values),
+            *(
+                value.declaration_references()
+                if isinstance(value, Expr)
+                else value.parameter_handles()
+                for value in self.values
+            ),
             converter,
         )
 
@@ -542,6 +601,7 @@ class SlipWall:
 @dataclass(frozen=True, slots=True, eq=False)
 class ResolvedTransportBoundarySet:
     domain_geometry_id: str
+    frame_id: str
     conditions: tuple[ResolvedTransportCondition, ...]
     plan: Any
 
@@ -550,6 +610,8 @@ class ResolvedTransportBoundarySet:
 
         if not isinstance(self.domain_geometry_id, str) or not self.domain_geometry_id:
             raise TypeError("resolved transport domain identity must be non-empty text")
+        if not isinstance(self.frame_id, str) or not self.frame_id:
+            raise TypeError("resolved transport frame identity must be non-empty text")
         if not isinstance(self.conditions, tuple) or not self.conditions \
                 or any(not isinstance(row, ResolvedTransportCondition)
                        for row in self.conditions):
@@ -562,6 +624,7 @@ class ResolvedTransportBoundarySet:
             "schema_version": _SCHEMA_VERSION,
             "authority_type": "transport_boundary_set",
             "domain_geometry_id": self.domain_geometry_id,
+            "frame_id": self.frame_id,
             "conditions": [row.canonical_identity() for row in self.conditions],
             "plan": self.plan.canonical_identity(),
         }
@@ -602,6 +665,7 @@ class ResolvedTransportBoundarySet:
             raise TypeError("resolved transport boundary state has no component manifest")
         ncomp = len(components)
         face_rows: list[ResolvedTransportCondition | None] = [None, None, None, None]
+        analytic_plan_clocks: set[str] = set()
         depth = 0
         for condition in self.conditions:
             geometry = condition.geometry
@@ -621,23 +685,63 @@ class ResolvedTransportBoundarySet:
                     "for characteristic closure; directional modes cannot fall back to "
                     "component-wise ghost filling"
                 )
-            self._native_representation_contract(condition, state)
+            representation, _ = self._native_representation_contract(condition, state)
             if condition.condition_type == "inflow":
-                if dependencies.states or dependencies.fields or dependencies.time:
-                    raise NotImplementedError(
-                        "state/field/time-dependent inflow requires a compiled boundary kernel; "
-                        "the built-in native provider accepts only constants and RuntimeParams"
-                    )
                 if len(condition.values) != ncomp:
                     raise ValueError(
                         "native inflow must prescribe exactly %d state components" % ncomp
                     )
-                for expression in condition.values:
-                    if _expression_data(
-                            expression, qualified=True).get("protocol") != "pops.expr.key.v1":
-                        raise NotImplementedError("unsupported boundary expression protocol")
+                analytic = all(isinstance(row, ScalarExpr) for row in condition.values)
+                if analytic:
+                    analytic_expressions = tuple(
+                        cast(ScalarExpr, expression) for expression in condition.values
+                    )
+                    if representation != "conservative":
+                        raise NotImplementedError(
+                            "analytic primitive inflow is unavailable because model conversion "
+                            "must execute per boundary point; author conservative values instead"
+                        )
+                    if dependencies.states or dependencies.fields:
+                        raise NotImplementedError(
+                            "analytic inflow cannot read discrete state or field storage"
+                        )
+                    clocks = {
+                        clock.qualified_id
+                        for expression in analytic_expressions
+                        for clock in expression.time_clocks()
+                    }
+                    if len(clocks) > 1:
+                        raise ValueError(
+                            "one analytic inflow face cannot mix several logical Clocks"
+                        )
+                    analytic_plan_clocks.update(clocks)
+                    for expression in analytic_expressions:
+                        if expression.frame_id not in (None, self.frame_id):
+                            raise ValueError("analytic inflow coordinate belongs to another frame")
+                        if expression.input_references():
+                            raise NotImplementedError(
+                                "analytic inflow cannot read setup-program discrete inputs"
+                            )
+                else:
+                    if any(isinstance(row, ScalarExpr) for row in condition.values):
+                        raise TypeError(
+                            "native inflow values must use one expression protocol per face"
+                        )
+                    if dependencies.states or dependencies.fields or dependencies.time:
+                        raise NotImplementedError(
+                            "state/field/time-dependent PoPS Expr inflow requires a compiled "
+                            "boundary component"
+                        )
+                    for expression in condition.values:
+                        if (
+                            _expression_data(expression, qualified=True).get("protocol")
+                            != "pops.expr.key.v1"
+                        ):
+                            raise NotImplementedError("unsupported boundary expression protocol")
         if any(row is None for row in face_rows):
             raise ValueError("native transport boundary has incomplete physical-face coverage")
+        if len(analytic_plan_clocks) > 1:
+            raise ValueError("one prepared analytic boundary plan cannot mix several logical Clocks")
         return state, ncomp, tuple(row for row in face_rows if row is not None), depth
 
     @staticmethod
@@ -682,6 +786,7 @@ class ResolvedTransportBoundarySet:
             "schema_version": 1,
             "authority_type": "prepared_boundary_plan_compile",
             "source_plan": self.plan.canonical_id,
+            "frame_id": self.frame_id,
             "state": state.canonical_identity(),
             "ncomp": ncomp,
             "required_depth": depth,
@@ -702,9 +807,16 @@ class ResolvedTransportBoundarySet:
                     "converter": self._native_representation_contract(
                         row, state)[1],
                     "values": (
-                        [] if row.condition_type == "outflow" else
-                        [_expression_data(expression, qualified=True)["value"]
-                         for expression in row.values]
+                        []
+                        if row.condition_type == "outflow"
+                        else [
+                            (
+                                _expression_data(expression, qualified=True)
+                                if isinstance(expression, ScalarExpr)
+                                else _expression_data(expression, qualified=True)["value"]
+                            )
+                            for expression in row.values
+                        ]
                     ),
                 }
                 for row in conditions
@@ -715,11 +827,13 @@ class ResolvedTransportBoundarySet:
         """Lower this resolved authority to the executable native v1 transport contract.
 
         The built-in provider intentionally supports only data that can be executed without a
-        Python callback: outflow and scalar expressions closed over BindSchema parameters.  A
-        state/field/time-dependent inflow needs a compiled boundary kernel and therefore fails here
-        instead of being retained as ignored metadata.
+        Python callback: outflow, scalar expressions closed over BindSchema parameters, and
+        conservative analytic ``(x, y, t, params)`` inflow programs.  Discrete state/field reads
+        need a compiled boundary component and therefore fail here instead of being retained as
+        ignored metadata.
         """
         from pops.model._bind_expression import eval_expression_key
+        from pops.runtime._analytic_expression_lowering import lower_analytic_components
 
         if not isinstance(params, Mapping):
             raise TypeError("runtime boundary lowering requires resolved BindSchema values")
@@ -739,19 +853,50 @@ class ResolvedTransportBoundarySet:
                 face_type = (
                     "foextrap" if condition.condition_type == "outflow" else "slip_wall")
             else:
-                values = []
-                for index, expression in enumerate(condition.values):
-                    data = _expression_data(expression, qualified=True)
-                    value = eval_expression_key(
-                        data["value"], env,
-                        where="transport boundary %s component %d" % (geometry.name, index),
+                analytic_values = all(
+                    isinstance(expression, ScalarExpr) for expression in condition.values
+                )
+                if analytic_values:
+                    analytic_expressions = tuple(
+                        cast(ScalarExpr, expression) for expression in condition.values
                     )
-                    if isinstance(value, bool) or not isinstance(value, (int, float)):
-                        raise TypeError(
-                            "transport boundary values must lower to real scalars, got %r" % value
+                    clocks = {
+                        clock.qualified_id
+                        for expression in analytic_expressions
+                        for clock in expression.time_clocks()
+                    }
+                    clock_id = next(iter(clocks), None)
+                    lowered = lower_analytic_components(
+                        [expression.to_data() for expression in analytic_expressions],
+                        frame_id=self.frame_id,
+                        bindings=params,
+                        time_clock_id=clock_id,
+                    )
+                    analytic_programs = [
+                        {"opcodes": list(opcodes), "literals": list(literals)}
+                        for opcodes, literals in lowered
+                    ]
+                    values = [0.0] * ncomp
+                else:
+                    clock_id = None
+                    analytic_programs = []
+                    values = []
+                    for index, expression in enumerate(condition.values):
+                        data = _expression_data(expression, qualified=True)
+                        value = eval_expression_key(
+                            data["value"], env,
+                            where="transport boundary %s component %d" % (geometry.name, index),
                         )
-                    values.append(float(value))
+                        if isinstance(value, bool) or not isinstance(value, (int, float)):
+                            raise TypeError(
+                                "transport boundary values must lower to real scalars, got %r"
+                                % value
+                            )
+                        values.append(float(value))
                 face_type = "dirichlet"
+            if condition.condition_type in {"outflow", "slip_wall"}:
+                analytic_programs = []
+                clock_id = None
             face_rows[face] = {
                 "ordinal": face,
                 "geometry": geometry.canonical_identity(),
@@ -762,6 +907,8 @@ class ResolvedTransportBoundarySet:
                 "converter": self._native_representation_contract(
                     condition, state)[1],
                 "values": values,
+                "analytic_programs": analytic_programs,
+                "analytic_clock": clock_id,
             }
         rows = tuple(row for row in face_rows if row is not None)
         evidence = {
@@ -980,6 +1127,7 @@ class TransportBoundarySet:
         plan = BoundaryProviderRegistry(*providers).resolve(topology, needs)
         return ResolvedTransportBoundarySet(
             domain_geometry_id=expected[0].domain_geometry_id,
+            frame_id=context.frame.canonical_id,
             conditions=tuple(resolved_conditions),
             plan=plan,
         )
