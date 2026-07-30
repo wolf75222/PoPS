@@ -10,6 +10,7 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb (cut-cell EB) + detail::DiscLevelSet (T5-PR2)
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
@@ -896,17 +897,21 @@ std::function<void(const MultiFab&, MultiFab&)> make_poisson_rhs(const Model& m)
 
 /// PER-CELL (one cell) cons <-> prim conversions of the MODEL, type-erased over arrays of
 /// Model::n_vars doubles. First = primitive -> conservative (M.to_conservative, init from the
-/// primitives), second = conservative -> primitive (M.to_primitive, diagnostic). Captures the model by
-/// value (frozen when the block is added). For a model WITHOUT a conversion (pure scalar, no
-/// hyperbolic brick) both are the IDENTITY -- exact for a scalar transport (prim == cons).
+/// primitives), second = conservative -> primitive through one PreparedVariableRecovery method.
+/// The second closure returns a RecoveryReport and writes its output only after recovery succeeds.
+/// Captures the model by value (frozen when the block is added). For a model WITHOUT a conversion
+/// (pure scalar, no hyperbolic brick) both formulas are the IDENTITY -- exact for scalar transport
+/// (prim == cons) -- while the recovery route still rejects non-finite publication.
 /// This flat ABI requires Model::Prim to share the Model::n_vars width of State; make_cell_convert
 /// enforces that additional constraint at compile time because HyperbolicPhysicalModel itself only
 /// types the forward/inverse maps. Shared by add_block (native) and add_compiled_model (compiled):
 /// the SAME conversion serves both paths.
 template <class Model>
-std::pair<std::function<void(const double*, double*)>, std::function<void(const double*, double*)>>
+std::pair<std::function<void(const double*, double*)>,
+          std::function<RecoveryReport(const double*, double*)>>
 make_cell_convert(const Model& m) {
   constexpr int NV = Model::n_vars;
+  const auto recovery_plan = prepare_model_variable_recovery(m);
   if constexpr (HasPrimitiveVars<Model>) {
     static_assert(
         requires { std::integral_constant<int, Model::Prim::size()>{}; },
@@ -923,23 +928,43 @@ make_cell_convert(const Model& m) {
       for (int c = 0; c < NV; ++c)
         out[c] = static_cast<double>(u[c]);
     };
-    auto c2p = [m](const double* in, double* out) {
-      typename Model::State u{};
-      for (int c = 0; c < NV; ++c)
-        u[c] = static_cast<Real>(in[c]);
-      const typename Model::Prim p = m.to_primitive(u);
-      for (int c = 0; c < NV; ++c)
-        out[c] = static_cast<double>(p[c]);
+    auto c2p = [recovery_plan](const double* in, double* out) {
+      constexpr int N = Model::n_vars;
+      Real conserved[N] = {};
+      Real initial_guess[N] = {};
+      for (int c = 0; c < N; ++c)
+        conserved[c] = initial_guess[c] = static_cast<Real>(in[c]);
+      const RecoveryOutcome<N> outcome =
+          recover_prepared_variable(recovery_plan, conserved, initial_guess);
+      if (!outcome.publication_permitted())
+        return recovery_report(outcome);
+      for (int c = 0; c < N; ++c)
+        out[c] = static_cast<double>(outcome.value[c]);
+      return recovery_report(outcome);
     };
     return {std::function<void(const double*, double*)>(p2c),
-            std::function<void(const double*, double*)>(c2p)};
+            std::function<RecoveryReport(const double*, double*)>(c2p)};
   } else {
-    auto id = [](const double* in, double* out) {
+    auto p2c = [](const double* in, double* out) {
       for (int c = 0; c < NV; ++c)
         out[c] = in[c];
     };
-    return {std::function<void(const double*, double*)>(id),
-            std::function<void(const double*, double*)>(id)};
+    auto c2p = [recovery_plan](const double* in, double* out) {
+      constexpr int N = Model::n_vars;
+      Real conserved[N] = {};
+      Real initial_guess[N] = {};
+      for (int c = 0; c < N; ++c)
+        conserved[c] = initial_guess[c] = static_cast<Real>(in[c]);
+      const RecoveryOutcome<N> outcome =
+          recover_prepared_variable(recovery_plan, conserved, initial_guess);
+      if (!outcome.publication_permitted())
+        return recovery_report(outcome);
+      for (int c = 0; c < N; ++c)
+        out[c] = static_cast<double>(outcome.value[c]);
+      return recovery_report(outcome);
+    };
+    return {std::function<void(const double*, double*)>(p2c),
+            std::function<RecoveryReport(const double*, double*)>(c2p)};
   }
 }
 

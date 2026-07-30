@@ -135,7 +135,8 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   std::function<Real(const MultiFab&)> max_speed;
   std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;
   std::function<Real(const MultiFab&)> src_freq, stab_dt;  // optional step bounds (model traits)
-  CellConvert prim_to_cons, cons_to_prim;  // pointwise model conversions (set/get_primitive_state)
+  CellConvert prim_to_cons;   // pointwise model conversion (set_primitive_state)
+  CellRecovery cons_to_prim;  // fallible prepared recovery (get_primitive_state)
   VariableSet cons_vs, prim_vs;
   detail::BuiltBlock bb;
   if (P->polar_) {

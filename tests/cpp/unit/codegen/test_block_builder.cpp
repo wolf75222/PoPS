@@ -23,7 +23,9 @@
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 
+#include <array>
 #include <cmath>
+#include <limits>
 #include <string>
 
 using namespace pops;
@@ -147,4 +149,36 @@ TEST(test_block_builder, isothermal_model_without_hllc_capability_is_rejected) {
   };
   EXPECT_TRUE(refused_with("hllc", "capability"))
       << "isotherme + hllc refuse (nomme la capability)";
+}
+
+TEST(test_block_builder, cell_primitive_conversion_consumes_prepared_recovery_outcome) {
+  const Model model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}};
+  const auto conversion = make_cell_convert(model);
+
+  // rho=1, (u,v)=(0.2,-0.1), p=1 -> E=p/(gamma-1)+rho*(u^2+v^2)/2=2.525.
+  const std::array<double, 4> conservative{1.0, 0.2, -0.1, 2.525};
+  std::array<double, 4> primitive{-9.0, -9.0, -9.0, -9.0};
+  const RecoveryReport success = conversion.second(conservative.data(), primitive.data());
+  EXPECT_TRUE(success.recovered());
+  EXPECT_EQ(success.status, RecoveryStatus::kRecovered);
+  EXPECT_EQ(success.cause, RecoveryCause::kNone);
+  EXPECT_EQ(success.attempted_methods, 1);
+  EXPECT_EQ(success.selected_method, 0);
+  EXPECT_DOUBLE_EQ(primitive[0], 1.0);
+  EXPECT_DOUBLE_EQ(primitive[1], 0.2);
+  EXPECT_DOUBLE_EQ(primitive[2], -0.1);
+  EXPECT_NEAR(primitive[3], 1.0, 1e-14);
+
+  // The Euler closed form produces non-finite velocity/pressure for rho=0. The common prepared
+  // authority rejects that candidate and the type-erased closure must leave output byte-exact.
+  const std::array<double, 4> invalid_conservative{0.0, 0.0, 0.0, 0.0};
+  const std::array<double, 4> sentinel{1.25, -2.5, 3.75, -5.0};
+  primitive = sentinel;
+  const RecoveryReport failure = conversion.second(invalid_conservative.data(), primitive.data());
+  EXPECT_FALSE(failure.publication_permitted());
+  EXPECT_EQ(failure.status, RecoveryStatus::kInvalidContract);
+  EXPECT_EQ(failure.cause, RecoveryCause::kNonFiniteCandidate);
+  EXPECT_EQ(failure.attempted_methods, 1);
+  EXPECT_GE(failure.failing_component, 1);
+  EXPECT_EQ(primitive, sentinel);
 }

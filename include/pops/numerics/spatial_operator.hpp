@@ -12,7 +12,7 @@
 /// Modules (one-way dependency DAG, bottom to top):
 ///   - spatial/state_access.hpp     DiffusiveModel, SourceFreeModel, load_state, load_aux.
 ///   - spatial/positivity.hpp       zhang_shu_scale, detail::positivity_comp.
-///   - spatial/face_flux.hpp        reconstruct, reconstruct_pp, require_reconstruction_ghosts,
+///   - spatial/face_flux.hpp        typed/fallible face reconstruction, positivity,
 ///                                  xface_box / yface_box, compute_face_fluxes.
 ///   - spatial/wave_speed.hpp       max_wave_speed_mf and step-bound reductions, the hotspot
 ///                                  diagnostic.

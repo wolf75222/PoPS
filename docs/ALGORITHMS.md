@@ -145,6 +145,14 @@ global auxiliary slot, or provider outside its resolved pack. It returns `FluxDe
 applied exactly once by the spatial layer. A fallible evaluation maps explicitly to retry, reject or
 abort transaction actions.
 
+Primitive face reconstruction is a fallible numerical operation, not an unchecked model callback.
+Every conservative-to-primitive stencil sample is evaluated through
+`PreparedVariableRecovery` and returned as a `ReconstructedFaceState` carrying both the candidate
+and its `RecoveryReport`. Cartesian, cached-HLL, masked, polar and embedded-boundary kernels consume
+that report before calling the numerical flux. A refused candidate therefore writes only finite
+transactional scratch, joins the same device/MPI failure reduction as a fallible flux, and cannot be
+published. The pointwise route is fixed-size, `POPS_HD`, allocation-free and callback-free.
+
 **Constraints / remarks.** CFL condition: $\Delta t \le C\,\dfrac{\min(\Delta x,\Delta y)}{\max|\lambda|}$,
 where $\lambda$ is the local wave speed and $C \le 1$ at order 1; `max_wave_speed_mf` provides
 $\max|\lambda|$. A model without transport ($\max|\lambda| = 0$) does not constrain the step
@@ -383,7 +391,9 @@ reversed stencil. All are `POPS_HD` (device-callable, static polymorphism: the l
 parameter of `assemble_rhs` / `compute_face_fluxes`, inlined on device). The mesh stencil access and the
 routing by `n_ghost` are in `reconstruct` of `numerics/spatial_operator.hpp`; the policy itself
 loops over no grid. The reconstruction can act on the conserved or primitive variables
-(`rho, u, p`) depending on the block.
+(`rho, u, p`) depending on the block. Production kernels use the typed
+`reconstruct_recovered`/`reconstruct_pp_recovered` entry points and consume their `RecoveryReport`
+before any face flux; the value-only wrappers remain low-level compatibility helpers.
 
 **Constraints / remarks.** The reconstruction does not change the hyperbolic stability condition: the
 step stays bounded by the CFL of section 1, `dt <= C dx / max|lambda|`. Limits and pitfalls:

@@ -60,7 +60,7 @@ void System::set_density(const std::string& name, const std::vector<double>& rho
 }
 
 POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                              CellConvert cons_to_prim) {
+                                              CellRecovery cons_to_prim) {
   Impl::Species& s = p_->find(name);
   const auto boundary = p_->boundary_plans_.find(name);
   if (boundary != p_->boundary_plans_.end() &&
@@ -126,7 +126,14 @@ std::vector<double> System::get_primitive_state(const std::string& name) {
   for (std::size_t k = 0; k < nn; ++k) {
     for (int c = 0; c < nc; ++c)
       cell_in[c] = cons[static_cast<std::size_t>(c) * nn + k];
-    s.cons_to_prim(cell_in.data(), cell_out.data());
+    const RecoveryReport recovery = s.cons_to_prim(cell_in.data(), cell_out.data());
+    if (!recovery.publication_permitted())
+      throw std::runtime_error(
+          "System::get_primitive_state : variable recovery failed for block '" + name +
+          "' at local cell " + std::to_string(k) + " (status=" +
+          recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
+          ", failing_component=" + std::to_string(recovery.failing_component) +
+          ", attempted_methods=" + std::to_string(recovery.attempted_methods) + ")");
     for (int c = 0; c < nc; ++c)
       prim[static_cast<std::size_t>(c) * nn + k] = cell_out[c];
   }
