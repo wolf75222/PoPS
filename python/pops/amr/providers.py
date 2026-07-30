@@ -424,6 +424,64 @@ class ClusteringProvider:
 
 
 @dataclass(frozen=True, slots=True)
+class RefluxProvider:
+    """Bind one external local Reflux table to the conservative AMR transition."""
+
+    component: Any
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self) -> None:
+        from pops import interfaces
+
+        _external_component(
+            self.component,
+            interface=interfaces.Reflux,
+            where="RefluxProvider.component",
+        )
+
+    def resolve_references(self, resolver: Any) -> RefluxProvider:
+        if not callable(resolver):
+            raise TypeError("RefluxProvider.resolve_references requires a callable resolver")
+        return self
+
+    def require_component_inputs(self, components: Any) -> None:
+        _require_component(self.component, components, where="RefluxProvider")
+
+    def lower_amr_provider(
+        self, context: AMRProviderLoweringContext,
+    ) -> ResolvedAMRProviderBinding:
+        """Authenticate the component, hierarchy layout and Program clock."""
+        if type(context) is not AMRProviderLoweringContext:
+            raise TypeError("RefluxProvider requires an AMRProviderLoweringContext")
+        self.require_component_inputs(context.components)
+        data = {
+            **self.runtime_binding_data(),
+            "layout_identity": context.layout_identity,
+            "clock_identity": context.clock_identity,
+        }
+        data["provider_identity"] = amr_provider_binding_identity("reflux", data)
+        return ResolvedAMRProviderBinding("reflux", data)
+
+    def runtime_binding_data(self) -> dict[str, Any]:
+        from pops import interfaces
+
+        data = {
+            "schema_version": 1,
+            "provider_type": "external_amr_reflux",
+            "runtime_installation": {
+                "schema_version": 1,
+                "protocol": "external_component",
+            },
+            **_component_binding(self.component, interfaces.Reflux),
+        }
+        data["provider_identity"] = make_identity("amr-reflux-provider", data).token
+        return data
+
+    inspect = runtime_binding_data
+    canonical_identity = runtime_binding_data
+
+
+@dataclass(frozen=True, slots=True)
 class _AMRRuntimeInterfaceProtocol:
     """Native-interface-owned validation and installation route."""
 
@@ -598,6 +656,26 @@ class _TaggerRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
                 "external AMR Tagger lacks its exact graph/capability/clock contract")
 
 
+@dataclass(frozen=True, slots=True)
+class _RefluxRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
+    """The local Reflux callback is qualified by the accepted Program clock."""
+
+    def validate_resolved_capability(
+        self, binding: Mapping[str, Any], resolved_tagging_identity: str | None,
+    ) -> None:
+        del resolved_tagging_identity
+        if not isinstance(binding.get("clock_identity"), str) \
+                or not binding["clock_identity"]:
+            raise ValueError("AMR Reflux lacks its exact Program clock authority")
+
+    def validate_installed_capability(
+        self, binding: Mapping[str, Any], installed: Any,
+        resolved_tagging_identity: str | None,
+    ) -> None:
+        del installed
+        self.validate_resolved_capability(binding, resolved_tagging_identity)
+
+
 def _runtime_interface_key(value: Any) -> tuple[Any, ...]:
     if not isinstance(value, Mapping):
         raise TypeError("AMR provider binding has no native-interface protocol")
@@ -631,6 +709,12 @@ def _runtime_interface_protocols() -> dict[tuple[Any, ...], _AMRRuntimeInterface
             native_interface=interfaces.Tagger.to_data(),
             builtin_provider_id="pops.lib.amr::symbolic_tagger",
             component_installer="_install_amr_tagger_component",
+        ),
+        _RefluxRuntimeInterfaceProtocol(
+            role="reflux",
+            native_interface=interfaces.Reflux.to_data(),
+            builtin_provider_id="pops.lib.amr::flux_register_reflux",
+            component_installer="_install_amr_reflux_component",
         ),
     )
     return {_runtime_interface_key(row.native_interface): row for row in protocols}
@@ -933,6 +1017,7 @@ __all__ = [
     "amr_provider_binding_identity",
     "ClusteringProvider",
     "PreparedAMRProviderNativeConfig",
+    "RefluxProvider",
     "ResolvedAMRProviderBinding",
     "TaggerProvider",
     "validate_amr_provider_binding",
