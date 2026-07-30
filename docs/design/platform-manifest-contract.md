@@ -50,6 +50,48 @@ loaded, so plugins share the already-owned Kokkos/MPI runtimes. The external com
 records `MPI_COMM_WORLD` plus the MPI ABI proof and is checked against the explicit execution
 context at installation.
 
+## Remaining native `System` communicator injection boundary
+
+The uniform native provider validates an `ExecutionContext` before launch, but it currently
+constructs `System(SystemConfig)` before passing that authority into C++. `SystemDomain` therefore
+builds its `DistributionMapping` from process-global rank queries, while `SystemFieldSolver`,
+`ProgramContext`, `SystemProgramDriver`, field publication, and global field gathers still use
+argument-free world collectives. This is an incomplete authority flow, not a missing collective
+primitive: exact contract consensus already accepts a `CommunicatorView`, exact `SolveReport`
+consensus accepts an `ExecutionLane`, and `SolveOutcome` already exposes `collective_lane`.
+
+Creating another private `MPI_COMM_WORLD` lane inside one of those consumers would not close the
+contract. It would still capture process-global state, could order collectives differently from the
+field owner, and would not prove that the lane rank space matches the process-world-indexed
+`DistributionMapping`.
+
+The minimum native ABI cut is:
+
+1. Decode and validate the owned `PreparedExecutionContextV1` before constructing `System`; the
+   Python runtime provider must pass it to the native constructor/factory instead of attaching only
+   a Python `_execution_context` attribute after construction.
+2. Store that authority for the complete `System::Impl` lifetime. Construct `SystemDomain` from its
+   explicit communicator rank/size, admit only `MPI_IDENT` or `MPI_CONGRUENT` with the current
+   process-world field rank space, and reject a subgroup or reordered communicator before allocating
+   fields.
+3. Materialize one deterministically named, owning field-execution lane from that authenticated
+   communicator during construction. Pass it to `SystemFieldSolver`, its nested elliptic provider
+   registry, `ProgramContext`, `SystemProgramDriver`, field publication, and global gathers; none of
+   those consumers may create or rediscover a world lane in a solve/publication hot path.
+4. Replace every argument-free reduction, rank query, ordered-byte consensus, and `SolveReport`
+   consensus in that graph with its lane-scoped overload. Return
+   `SolveOutcome::collective_lane` using the same lifetime-stable lane so accept/reject consensus and
+   publication hooks cannot escape onto a different communicator.
+5. Keep the existing custom-communicator refusal until field storage owns a communicator-relative
+   rank space. A low-level test-only constructor may select an explicit serial/world authority, but
+   the final Python runtime path must not retain `System(SystemConfig)` as an implicit-world route.
+
+The closure proof must include an `MPI_Comm_dup` world-congruent launch, rank-local construction and
+solve failures, divergent `SolveReport`/consumption actions, and refusal of wrong-rank-space
+communicators before mutation. A source architecture fence must additionally show that the complete
+uniform field-solve/publication graph contains no argument-free collective, `ExecutionLane::world`,
+`world_communicator_view`, or raw `MPI_COMM_WORLD` capture.
+
 `compile_native` has an explicit PE/COFF command and `_pops.lib` contract. By contrast,
 `compile_problem` and `compile_component` are currently fail-closed on Windows because their final
 authenticated PE/COFF symbol-inspection/publication pipeline does not yet exist. They never run a
