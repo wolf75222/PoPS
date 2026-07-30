@@ -1,10 +1,11 @@
 # M4 native runtime and scientific I/O conformance gate
 
-The current status is **AUDITED OPEN**. The ledger in
+The current status is **CLOSED AND CI-EXECUTED**. The ledger in
 `tests/gates/m4_runtime_io.toml` records exact executable evidence for
-ADC-679 through ADC-687 and exact deferred gaps. It deliberately does not
-claim M4 closure while any `[[deferred]]` row remains. The current ledger has
-exactly 50 executable checks and one deferred requirement.
+ADC-679 through ADC-687. It contains exactly 51 executable checks and
+`deferred = []`. Closure is accepted only for a commit whose required MPI job
+successfully executes the complete installed gate; source audit alone is not
+the acceptance evidence.
 
 The source audit already authenticates real proofs for:
 
@@ -30,12 +31,12 @@ The source audit already authenticates real proofs for:
 - accepted scientific publication, diagnostics, two-rank collective HDF5,
   and a two-rank PVD/PVTU/rank-VTU hierarchy reopened by native VTK readers.
 
-This evidence is intentionally narrower than the final ADC-687 acceptance
-contract. The deferred rows name the missing polarity and the nearby source
-that must not be mistaken for closure. The only remaining gap is:
-
-- a CI lane that installs every mandatory dependency, including VTK, and
-  executes every selected pytest and CTest proof with zero skips;
+The required Ubuntu 24.04 MPI lane installs Open MPI, parallel HDF5, NumPy,
+h5py, pytest, and the native VTK Python readers. It builds the MPI-enabled
+extension plus every exact CTest target selected by the ledger, then runs the
+complete gate. The global required-check aggregator rejects a skipped, failed,
+cancelled, or timed-out MPI lane whenever the M4 runner, ledger, source fence,
+or CI workflow changes.
 
 ## Exact output evidence
 
@@ -53,7 +54,8 @@ There are four serial proofs that are real and remain selected:
 An additional HDF5 refusal mutates a dataset with h5py and proves that the
 authenticated PoPS reader rejects it. These tests contain no optional import
 or skip. That makes their dependencies mandatory wherever the executable gate
-runs; it does not prove that CI currently provisions those dependencies.
+runs; the required MPI lane provisions and imports those readers before
+launching the matrix.
 
 The selected two-rank ParaView entrypoint starts from the standard `.pvd`
 catalogue, preserves its exact temporal ordering, and requires the native VTK
@@ -61,8 +63,8 @@ parallel reader to assemble every referenced `.pvtu`. It also reopens every
 rank-local `.vtu` directly with VTK and checks its geometry, public arrays,
 component name, and `TimeValue`. VTK imports are unconditional in the required
 MPI lane: `POPS_REQUIRE_MPI_TESTS=1` turns an absent reader into a test failure.
-The separate `gate_execution` gap remains open until CI provisions VTK and
-executes this selected entrypoint rather than auditing only its source.
+The selected `gate_execution` proof authenticates that exact CI route, and the
+same required job executes the entrypoint rather than auditing only its source.
 
 The strict-checkpoint refusal is also provider-backed. A correctly sealed AMR
 checkpoint with an inconsistent dynamic accepted-ledger claim passes the real
@@ -108,33 +110,37 @@ monkeypatch.
 
 ## Gate modes
 
-The architecture CI runs:
-
-```bash
-python scripts/run_m4_gate.py --audit-only
-```
-
-`--audit-only` verifies the exact nodeids, CTest selectors, manifest ownership,
-deferred-gap schema, and source-level anti-skip rules. It prints
-`AUDITED OPEN` and launches no compiler, test, MPI process, or native reader.
-
-The closure check is intentionally red while the ledger is open:
+The source-only architecture CI checks that the ledger is closed:
 
 ```bash
 python scripts/run_m4_gate.py --check-only
 ```
 
-`--check-only` rejects every remaining deferred row and exits nonzero before
-launching anything. Running the script without either audit flag, or with
-`--python-only`, is also fail-closed until all deferred gaps are replaced by
-real selected proofs.
+`--check-only` verifies the exact nodeids, CTest selectors, manifest ownership,
+empty deferred-gap ledger, and source-level anti-skip rules without launching
+a compiler, test, MPI process, or native reader. `--audit-only` performs the
+same structural audit and reports `AUDITED CLOSED`.
 
-Once `deferred = []` is honestly restored, the full command requires an
-MPI-enabled build containing every selected CTest and environments with NumPy,
-h5py, and VTK. Every pytest and CTest execution must emit a JUnit report with
-zero skipped or xfailed proofs.
+The installed MPI lane asks the same closed manifest for its exact native build
+targets:
 
-Each deferred row contains `issue`, `requirement`, `polarity`, a precise
-`reason`, and existing `evidence_paths`. The validator rejects malformed or
-duplicate gaps, wildcard selectors, missing manifest ownership, optional
-pytest imports, skip/xfail markers, mock fixtures/imports, and disabled CTests.
+```bash
+python scripts/run_m4_gate.py --list-ctest-targets
+```
+
+It then invokes the complete executable gate, with no audit-only or
+Python-only reduction:
+
+```bash
+/usr/bin/python3 scripts/run_m4_gate.py \
+  --build-dir build-mpi \
+  --mpi-exec mpiexec
+```
+
+The full command requires the MPI-enabled extension, every selected CTest
+target, NumPy, h5py, and VTK. Every selected pytest and CTest execution emits a
+JUnit report and fails on any skipped or xfailed proof. A future limitation
+must be restored as an explicit `[[deferred]]` row; the validator rejects
+malformed or duplicate gaps, wildcard selectors, missing manifest ownership,
+optional pytest imports, skip/xfail markers, mock fixtures/imports, and
+disabled CTests.
