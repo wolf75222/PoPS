@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping, Sequence
 import hashlib
+import importlib.metadata
 import json
 from pathlib import Path, PurePosixPath
 import subprocess
@@ -17,7 +18,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PACKAGE = ROOT / "python" / "pops"
-PROOF_SCHEMA_VERSION = 1
+PROOF_SCHEMA_VERSION = 2
 TYPED_PAYLOAD_SUFFIXES = (".py", ".pyi")
 PUBLIC_ROOT = (
     "Model",
@@ -174,9 +175,9 @@ def _is_typed_payload(relative: str) -> bool:
     return path.name == "py.typed" or path.suffix in TYPED_PAYLOAD_SUFFIXES
 
 
-def _source_manifest(package: Path = SOURCE_PACKAGE) -> dict[str, str]:
+def _typed_manifest(package: Path, *, label: str) -> dict[str, str]:
     if not package.is_dir():
-        raise PublicApiParityError("source package is absent: %s" % package)
+        raise PublicApiParityError("%s package is absent: %s" % (label, package))
     manifest = {
         path.relative_to(package).as_posix(): _sha256(path)
         for path in sorted(package.rglob("*"))
@@ -186,7 +187,7 @@ def _source_manifest(package: Path = SOURCE_PACKAGE) -> dict[str, str]:
     }
     required = {"__init__.py", "_pops.pyi", "py.typed"}
     if not required.issubset(manifest):
-        raise PublicApiParityError("source package lacks its root API or typing payload")
+        raise PublicApiParityError("%s package lacks its root API or typing payload" % label)
     return manifest
 
 
@@ -251,40 +252,96 @@ def _canonical_sha256(payload: Mapping[str, Any]) -> str:
     return _sha256_bytes(encoded)
 
 
-def build_proof(wheel: Path) -> dict[str, Any]:
+def _require_manifest_parity(
+    reference: Mapping[str, str],
+    candidate: Mapping[str, str],
+    *,
+    label: str,
+) -> None:
+    if candidate == reference:
+        return
+    missing = sorted(set(reference) - set(candidate))
+    extra = sorted(set(candidate) - set(reference))
+    changed = sorted(
+        name
+        for name in set(reference) & set(candidate)
+        if reference[name] != candidate[name]
+    )
+    raise PublicApiParityError(
+        "%s Python/typing payload differs from source "
+        "(missing=%s, extra=%s, changed=%s)"
+        % (label, missing[:8], extra[:8], changed[:8])
+    )
+
+
+def _installed_package_from_distribution() -> Path:
+    try:
+        distribution = importlib.metadata.distribution("PoPS")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise PublicApiParityError("the PoPS distribution is not installed") from exc
+    files = distribution.files
+    if files is None:
+        raise PublicApiParityError("the installed PoPS distribution has no file inventory")
+    package_initializers = [
+        row for row in files if PurePosixPath(str(row)).as_posix() == "pops/__init__.py"
+    ]
+    if len(package_initializers) != 1:
+        raise PublicApiParityError(
+            "the installed PoPS distribution has no unique pops/__init__.py")
+    package = Path(distribution.locate_file(package_initializers[0])).resolve().parent
+    if not package.is_dir():
+        raise PublicApiParityError("the installed PoPS package directory is absent")
+    try:
+        package.relative_to(ROOT)
+    except ValueError:
+        return package
+    raise PublicApiParityError(
+        "the installed-package proof resolved inside the source checkout: %s" % package)
+
+
+def build_proof(
+    wheel: Path,
+    *,
+    installed_package: Path | None = None,
+) -> dict[str, Any]:
     """Compare one exact wheel archive with the current source checkout."""
     retained = wheel.expanduser().resolve()
     if retained.suffix != ".whl" or not retained.is_file():
         raise PublicApiParityError("release artifact is not one readable wheel")
-    source_manifest = _source_manifest()
+    source_manifest = _typed_manifest(SOURCE_PACKAGE, label="source")
+    installed = None if installed_package is None else installed_package.expanduser().resolve()
+    if installed is not None:
+        try:
+            installed.relative_to(ROOT)
+        except ValueError:
+            pass
+        else:
+            raise PublicApiParityError(
+                "the installed-package proof resolved inside the source checkout: %s" % installed)
     try:
         with tempfile.TemporaryDirectory(prefix="pops-public-api-") as temporary:
             extracted = Path(temporary)
             with zipfile.ZipFile(retained) as archive:
                 wheel_manifest = _wheel_manifest(archive)
-                if wheel_manifest != source_manifest:
-                    missing = sorted(set(source_manifest) - set(wheel_manifest))
-                    extra = sorted(set(wheel_manifest) - set(source_manifest))
-                    changed = sorted(
-                        name
-                        for name in set(source_manifest) & set(wheel_manifest)
-                        if source_manifest[name] != wheel_manifest[name]
-                    )
-                    raise PublicApiParityError(
-                        "wheel Python/typing payload differs from source "
-                        "(missing=%s, extra=%s, changed=%s)"
-                        % (missing[:8], extra[:8], changed[:8])
-                    )
+                _require_manifest_parity(
+                    source_manifest, wheel_manifest, label="wheel")
                 _safe_extract(archive, extracted)
             source_snapshot = _snapshot(SOURCE_PACKAGE.parent)
             wheel_snapshot = _snapshot(extracted)
+            if installed is not None:
+                installed_manifest = _typed_manifest(installed, label="installed")
+                _require_manifest_parity(
+                    source_manifest, installed_manifest, label="installed")
+                installed_snapshot = _snapshot(installed.parent)
     except (OSError, zipfile.BadZipFile) as exc:
         raise PublicApiParityError("release wheel is unreadable: %s" % exc) from exc
     if wheel_snapshot != source_snapshot:
         raise PublicApiParityError("wheel and source public API snapshots differ")
+    if installed is not None and installed_snapshot != source_snapshot:
+        raise PublicApiParityError("installed and source public API snapshots differ")
     if tuple(source_snapshot["public"]) != PUBLIC_ROOT:
         raise PublicApiParityError("public API snapshot differs from the final root contract")
-    return {
+    proof = {
         "schema_version": PROOF_SCHEMA_VERSION,
         "wheel_path": str(retained),
         "wheel_sha256": _sha256(retained),
@@ -295,7 +352,15 @@ def build_proof(wheel: Path) -> dict[str, Any]:
         "pure_authoring": source_snapshot["pure_authoring"],
         "qualified_handles": source_snapshot["qualified_handles"],
         "py_typed": source_snapshot["py_typed"],
+        "installed": installed is not None,
     }
+    if installed is not None:
+        proof.update({
+            "installed_package": str(installed),
+            "installed_typed_payload_sha256": _canonical_sha256(installed_manifest),
+            "installed_public_api_sha256": _canonical_sha256(installed_snapshot),
+        })
+    return proof
 
 
 def _write_evidence(path: Path, proof: Mapping[str, Any]) -> None:
@@ -321,10 +386,16 @@ def _write_evidence(path: Path, proof: Mapping[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel", required=True, type=Path)
+    parser.add_argument(
+        "--installed",
+        action="store_true",
+        help="also prove the importlib.metadata-resolved installed distribution outside checkout",
+    )
     parser.add_argument("--evidence", type=Path)
     args = parser.parse_args(argv)
     try:
-        proof = build_proof(args.wheel)
+        installed = _installed_package_from_distribution() if args.installed else None
+        proof = build_proof(args.wheel, installed_package=installed)
         if args.evidence is not None:
             _write_evidence(args.evidence, proof)
     except (PublicApiParityError, OSError, ValueError) as exc:
