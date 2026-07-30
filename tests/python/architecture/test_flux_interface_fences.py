@@ -76,3 +76,22 @@ def test_hllc_rejects_nonfinite_provider_stages_before_publication():
         assert cause in hllc
     assert hllc.count("detail::finite_state") >= 6
     assert hllc.count("Kokkos::isfinite") >= 2
+
+
+def test_capability_driven_riemann_has_no_euler_specific_production_authority():
+    production_roots = (ROOT / "include/pops", ROOT / "src", ROOT / "python/pops")
+    sources = (
+        path
+        for root in production_roots
+        for path in root.rglob("*")
+        if path.suffix in {".hpp", ".cpp", ".py"}
+    )
+    production = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+
+    for retired_authority in (
+        "EulerHLLCFlux2D",
+        "EulerRoeFlux2D",
+        "euler_hllc",
+        "euler_roe",
+    ):
+        assert retired_authority not in production

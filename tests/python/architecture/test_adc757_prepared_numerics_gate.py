@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 15
+    assert len(data["check"]) == 18
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-749",
@@ -46,7 +46,8 @@ def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
     assert data["deferred"] == list(runner.EXPECTED_DEFERRED)
     assert "mpi_collective_execution" not in data["deferred"]
     assert "gpu_backend_execution" in data["deferred"]
-    assert "remaining_legacy_recovery_boundary_and_riemann_authority_deletion" in data["deferred"]
+    assert "remaining_legacy_recovery_and_boundary_authority_deletion" in data["deferred"]
+    assert all("riemann_authority" not in family for family in data["deferred"])
     assert "runtime_consumer_cutover_and_legacy_deletion" not in data["deferred"]
     assert "boundary_geometry_riemann_and_spatial_provider_families" not in data["deferred"]
     assert [

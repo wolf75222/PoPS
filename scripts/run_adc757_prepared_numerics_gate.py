@@ -21,13 +21,14 @@ EXPECTED_REQUIREMENTS = {
     "transactional_recovery_publication",
     "allocation_aware_cell_hot_path",
     "prepared_boundary_publication",
+    "capability_driven_riemann",
     "typed_flux_recovery_consumption",
     "runtime_recovery_consumer_publication",
 }
 EXPECTED_DEFERRED = (
     "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
     "python_ir_generated_abi_and_restart_parity",
-    "remaining_legacy_recovery_boundary_and_riemann_authority_deletion",
+    "remaining_legacy_recovery_and_boundary_authority_deletion",
     "amr_regrid_migration_and_restart_coherence",
     "gpu_backend_execution",
     "workspace_reentrancy_and_stream_partitioning",

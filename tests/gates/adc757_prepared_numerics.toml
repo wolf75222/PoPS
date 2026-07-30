@@ -5,7 +5,7 @@ evidence_from = ["ADC-749", "ADC-750", "ADC-752", "ADC-753", "ADC-754", "ADC-755
 deferred = [
   "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
   "python_ir_generated_abi_and_restart_parity",
-  "remaining_legacy_recovery_boundary_and_riemann_authority_deletion",
+  "remaining_legacy_recovery_and_boundary_authority_deletion",
   "amr_regrid_migration_and_restart_coherence",
   "gpu_backend_execution",
   "workspace_reentrancy_and_stream_partitioning",
@@ -82,6 +82,24 @@ kind = "mpi_ctest"
 target = "test_mpi_system_analytic_level_set"
 test_regex = "^test_mpi_system_analytic_level_set_np2$"
 nproc = 2
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "positive"
+target = "test_riemann_capabilities"
+test_regex = "^test_riemann_capabilities\\.state_layout_permutation_is_provider_owned$"
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.hllc_rejects_each_nonfinite_provider_stage_with_a_typed_cause$"
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.roe_rejects_nonfinite_dissipation_with_a_typed_cause$"
 
 [[check]]
 requirement = "typed_flux_recovery_consumption"
