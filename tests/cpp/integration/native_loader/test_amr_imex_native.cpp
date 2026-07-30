@@ -254,7 +254,8 @@ void install_single_block_test_program(AmrSystem& system, Model model, bool impl
   context->install([context, model, implicit_source](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context, model, implicit_source](double level_dt) {
       context->set_stage_time(0, 1);
-      (void)consume_solve_outcome(context->solve_fields());
+      if (context->level() == 0)
+        (void)consume_solve_outcome(context->solve_default_field_on_coarse_level());
 
       MultiFab& live = context->state(0);
       MultiFab& candidate = context->scratch_state(1000, 0, live);

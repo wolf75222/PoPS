@@ -132,13 +132,34 @@ Supported native routes include:
 - Prepared state-boundary residual/JVP pairs on Program matrix-free solves. The exact base
   `BoundaryEvaluationPoint` is transported into the apply closure, the core RHS is
   finite-differenced, and the authenticated state-only boundary JVP is added once with persistent
-  conditional scratch. A field-dependent boundary closure under `field_coupled=True` is refused
-  until a qualified tangent-field solve exists. Core field-coupled `rhs_jacvec` currently has an
-  exact provider route only on AMR level 0.
-- Level-local AMR named-field solves materialize linear dynamic-boundary state dependencies once per
-  active level. The context carries that exact level and the matching state layout/distribution;
-  coarse storage is never silently reused by a fine solver. Composite-FAC dynamic boundaries,
-  iterate-dependent multilevel boundaries, and field-to-field dependencies remain unavailable.
+  conditional scratch. Field-coupled `rhs_jacvec` re-solves its exact prepared provider from the
+  perturbed state on level zero and every refined level; if a transport boundary reads that solved
+  field, its complete residual is finite-differenced before the perturbed provider is restored.
+  Ordinary single-state field solves use that same owner-qualified provider ABI on Uniform and AMR:
+  the generated call carries the exact `BoundaryEvaluationPoint`, provider slot, active level and
+  stage state, with no AMR coarse-report reuse overload.
+  Dynamic physical field boundaries may read level-qualified conservative states, already-solved
+  fields and the exact stage/local time under both `LevelByLevelSolve` and
+  `CompositeHierarchySolve`; the composite FAC provider requires one exact dependency carrier per
+  materialized level before entering a solve. The generated resolve/source contract covers the
+  field-dependent transport-boundary JVP route. A native L0/L1 level-local oracle now places that
+  dependency on a physical face of a fully refined domain and checks the complete core-plus-boundary
+  `rhs_jacvec(field_coupled=True)` against an independent centered finite difference; it also proves
+  physical-face locality, provider sensitivity and restoration after every perturbation. The core
+  field-coupled JVP has a two-rank level-local oracle over genuinely distributed L0/L1 state and
+  provider storage. Its composite-policy MPI oracle exercises the ownership topology supported by
+  the builtin FAC provider: one complete replicated L0 copy per rank and a genuinely distributed
+  L1. Both check centered-difference parity, frozen-provider sensitivity and collective restoration
+  of the complete provider hierarchy plus the active-level residual carrier. A second two-rank L0/L1
+  oracle drives the level-local solved field through an x-low physical-face residual split across
+  both ranks, proving that its JVP contribution is non-trivial, face-local, provider-sensitive and
+  collectively restored.
+  Partially refined FAC patches carrying a dynamic physical boundary must remain strictly interior;
+  a patch touching a non-periodic domain face fails closed. A selected solve with a field dependency
+  also fails closed until its complete dependency closure can share one transaction. Simultaneous
+  multi-block stage solves use one exact hierarchy-qualified multi-state request carrying the same
+  `BoundaryEvaluationPoint`, provider slot and active level; every provisional conservative state is
+  restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
 - Runtime accepted-state checkpoint v5 for Uniform and v6 for AMR. The single-file MPI route captures
@@ -196,20 +217,25 @@ Explicit unsupported rows include:
   GPU Kokkos execution space before constructing `System`/`AmrSystem`; build-time availability is
   not launch authorization. The native providers do accept an explicit, authenticated
   `MPI_COMM_WORLD` context; custom communicators remain unavailable.
-- `amr:field_coupled_rhs_jacvec`: AMR level greater than zero is explicitly unavailable because the
-  provider ABI does not transport a level-qualified tangent field. The reported error identifies
-  the level-0 field-coupled route as the available route; a multi-level request must fail rather
-  than silently reuse the coarse provider. The shared execution service additionally requires the
-  JVP evaluation point to match the active Program resource level before either the perturbed solve
-  or frozen-state restoration can dispatch. Closing the remaining gap requires a typed per-level
-  tangent-field publication and transactional primal restoration, plus CompositeFAC coupling where
-  selected; the existing primal `fields` table cannot represent that derivative.
 - `amr:composite_dynamic_boundary`: a fully refined hierarchy uses the exact finest-level uniform
   field solver and receives that level's logical time, state dependencies, distributions, and
   nonlinear/JVP context. A partially refined FAC hierarchy refuses the same request because its
   interface correction does not yet own the required homogeneous/JVP boundary operator per level;
   it never reuses the inhomogeneous primal closure as a correction boundary.
-
+- `amr:external_field_solver_v2`: the generated ABI already carries a `level` in every global patch
+  metadata row, but the installed external-component adapter materializes one uniform `System`
+  `MultiFab`. There is no authenticated bridge from the component pair to
+  `AmrFieldSolverProvider`, no complete coarse/fine topology materialization, and no collective
+  hierarchy solve ownership. The provider authority therefore advertises `max_levels=1`,
+  `hierarchy_materialization=false` and `amr_provider_bridge=false`; any AMR target or non-level-local
+  hierarchy policy is rejected during field-plan resolution rather than dispatched to a builtin.
+  Closing this row does not start by flipping that capability: it requires an AMR component installer
+  in `_PreparedAmrFieldSolverInstall`, a native `AmrFieldSolverProvider`/`AmrPreparedFieldSolver`
+  adapter over the component pair, one regrid-aware all-level topology/request lifetime replacing the
+  single-`MultiFab` cache in `PreparedFieldSolverComponent`, and communicator-wide
+  declaration/materialization/solve consensus. The existing v2 patch metadata may remain the data
+  carrier for the restricted full-material case, but that bridge must prove coarse/fine coverage and
+  ownership before the public capability can become available.
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and
 future validators:

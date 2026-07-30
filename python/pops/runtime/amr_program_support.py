@@ -108,33 +108,23 @@ DEFERRED_GROUPS: dict = {
     },
     "coupled_solve": {
         "issue": None,
-        "op_source": "program_emit_kernels._AUX_OUTPUT_OPS['solve_fields_from_blocks']",
+        "op_source": "Program IR solve_fields_from_blocks -> program_emit_ops "
+                     "ctx.solve_fields_from_blocks_at",
         "ir_ops": frozenset({"solve_fields_from_blocks"}),
         "header_methods": frozenset(),
     },
     "named_field_solve": {
         "issue": None,
-        "op_source": "Program IR solve_fields -> program_emit_ops ctx.solve_fields_from_state",
+        "op_source": "Program IR solve_fields -> program_emit_ops "
+                     "ctx.solve_fields_from_state_at",
         "ir_ops": frozenset({"solve_fields"}),
         "header_methods": frozenset(),
-    },
-    "unqualified_field_solve": {
-        "issue": None,
-        "op_source": "not representable in final Program IR (field identity is mandatory)",
-        "ir_ops": frozenset(),
-        "header_methods": frozenset({"solve_fields_from_state_default"}),
     },
     "unqualified_coupled_solve": {
         "issue": None,
         "op_source": "not representable in final Program IR (field identity is mandatory)",
         "ir_ops": frozenset(),
         "header_methods": frozenset({"solve_fields_from_blocks_default"}),
-    },
-    "fine_level_field_perturbation": {
-        "issue": None,
-        "op_source": "field-provider perturbation inside an implicit solve",
-        "ir_ops": frozenset(),
-        "header_methods": frozenset({"solve_fields_from_state_at_fine_level"}),
     },
     "scheduler": {
         "issue": None,
@@ -232,19 +222,12 @@ def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
         if op == "rhs" and _has_named_fluxes(attrs):
             used.add("named_flux")
         # The canonical IR op is solve_fields; code generation alone lowers that operation to the
-        # C++ AmrProgramContext::solve_fields_from_state seam.
+        # exact C++ AmrProgramContext::solve_fields_from_state_at seam.
         if op == "solve_fields" and attrs.get("field"):
             used.add("named_field_solve")
         # A held / scheduled node lowers to the deferred scheduler cache seams.
         if attrs.get("schedule") is not None:
             used.add("scheduler")
-        # A field-coupled finite-difference Jacobian re-solves the provider at a perturbed state.
-        # AmrProgramContext serves this on the coarse level, but cannot do so on a fine level until
-        # a composite stage solver exists.  This is conditional on resolved hierarchy evidence, not
-        # a property that Program IR can decide alone.
-        if op == "rhs_jacvec" and attrs.get("field_coupled") is True \
-                and context.refined_hierarchy:
-            used.add("fine_level_field_perturbation")
     return used
 
 

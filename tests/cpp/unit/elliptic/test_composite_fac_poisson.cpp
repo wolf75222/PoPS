@@ -30,7 +30,9 @@
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 using namespace pops;
 
@@ -70,6 +72,25 @@ static void apply_noop_fully_refined_boundary_jvp(int, const MultiFab&, const Mu
   if (context.point.level < 0 || context.point.level > 1)
     throw std::runtime_error("fully refined boundary JVP received an invalid AMR level");
   ++fully_refined_jvp_visits[context.point.level];
+}
+
+static void boundary_prepare_noop(int, const MultiFab&, MultiFab&, const Geometry&,
+                                  const FieldBoundaryExecutionContext&) {}
+
+static void boundary_residual_noop(int, const MultiFab&, MultiFab&, const Geometry&,
+                                   const FieldBoundaryExecutionContext&) {}
+
+static const MultiFab* expected_boundary_state = nullptr;
+static bool observed_expected_boundary_state = false;
+static bool observed_unexpected_boundary_state = false;
+
+static void boundary_residual_observe_state(int, const MultiFab&, MultiFab&, const Geometry&,
+                                            const FieldBoundaryExecutionContext& context) {
+  if (context.state_count == 1 && context.states != nullptr &&
+      context.states[0] == expected_boundary_state)
+    observed_expected_boundary_state = true;
+  else
+    observed_unexpected_boundary_state = true;
 }
 
 TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
@@ -232,8 +253,8 @@ TEST(CompositeFacPoissonTest, fully_refined_boundary_uses_finest_level_context) 
   coarse_context.point.level = -1;
   FieldBoundaryExecutionContext fine_context;
   fine_context.point.level = -1;
-  fac.set_boundary_context_for_level(0, coarse_context);
-  fac.set_boundary_context_for_level(1, fine_context);
+  fac.set_boundary_context_at_level(0, coarse_context);
+  fac.set_boundary_context_at_level(1, fine_context);
 
   fac.rhs_level(0).set_val(Real(0));
   fac.rhs_level(1).set_val(Real(0));
@@ -299,8 +320,8 @@ TEST(CompositeFacPoissonTest, fully_refined_nonlinear_boundary_uses_finest_jvp_c
   coarse_context.point.level = -1;
   FieldBoundaryExecutionContext fine_context;
   fine_context.point.level = -1;
-  fac.set_boundary_context_for_level(0, coarse_context);
-  fac.set_boundary_context_for_level(1, fine_context);
+  fac.set_boundary_context_at_level(0, coarse_context);
+  fac.set_boundary_context_at_level(1, fine_context);
   const FieldNewtonOptions options;
   fac.set_field_nonlinear_options(options);
   fac.rhs_level(0).set_val(Real(-1));
@@ -484,5 +505,215 @@ TEST(CompositeFacPoissonTest, nonfinite_composite_residual_fails_closed) {
   EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(report.action, SolveAction::kRejectAttempt);
 
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, level_qualified_boundary_carrier_requires_every_level) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse = BoxArray::from_domain(domain, n);
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
+  CompositeFacPoisson fac(geometry, coarse, boundary, fine_box, r);
+  fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+      "tests.composite-fac.level-carrier@1",
+      "tests.composite-fac.level-carrier.residual@1",
+      "",
+      boundary_prepare_noop,
+      nullptr,
+      boundary_residual_noop,
+      nullptr,
+      false,
+  });
+
+  const MultiFab* states[] = {&fac.rhs_level(0)};
+  const FieldDistribution distributions[] = {FieldDistribution::Replicated};
+  const std::string identities[] = {"tests.composite-fac.state"};
+  FieldBoundaryExecutionContext coarse_context;
+  coarse_context.states = states;
+  coarse_context.state_distributions = distributions;
+  coarse_context.state_identities = identities;
+  coarse_context.state_count = 1;
+  fac.set_boundary_context_at_level(0, coarse_context);
+
+  try {
+    (void)fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
+                    /*rel_tol=*/Real(0), /*abs_tol=*/Real(0));
+    FAIL() << "a composite dynamic boundary accepted a missing fine-level carrier";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(
+        std::string(error.what()).find("missing a level-qualified boundary carrier for level 1"),
+        std::string::npos)
+        << error.what();
+  }
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, late_invalid_carrier_does_not_replace_committed_batch) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse = BoxArray::from_domain(domain, n);
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
+  CompositeFacPoisson fac(geometry, coarse, boundary, fine_box, r);
+  fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+      "tests.composite-fac.transactional-level-carrier@1",
+      "tests.composite-fac.transactional-level-carrier.residual@1",
+      "",
+      boundary_prepare_noop,
+      nullptr,
+      boundary_residual_observe_state,
+      nullptr,
+      false,
+  });
+
+  const MultiFab* accepted_coarse_states[] = {&fac.rhs_level(0)};
+  const MultiFab* accepted_fine_states[] = {&fac.rhs_level(1)};
+  const FieldDistribution coarse_distribution[] = {FieldDistribution::Replicated};
+  const FieldDistribution fine_distribution[] = {FieldDistribution::Distributed};
+  const std::string state_identities[] = {"tests.composite-fac.transactional-state"};
+  FieldBoundaryExecutionContext accepted_coarse;
+  accepted_coarse.states = accepted_coarse_states;
+  accepted_coarse.state_distributions = coarse_distribution;
+  accepted_coarse.state_identities = state_identities;
+  accepted_coarse.state_count = 1;
+  FieldBoundaryExecutionContext accepted_fine;
+  accepted_fine.states = accepted_fine_states;
+  accepted_fine.state_distributions = fine_distribution;
+  accepted_fine.state_identities = state_identities;
+  accepted_fine.state_count = 1;
+  fac.set_boundary_context_at_level(0, accepted_coarse);
+  fac.set_boundary_context_at_level(1, accepted_fine);
+
+  MultiFab replacement_coarse(fac.rhs_level(0).box_array(), fac.rhs_level(0).dmap(), 1, 0);
+  const MultiFab* replacement_coarse_states[] = {&replacement_coarse};
+  FieldBoundaryExecutionContext candidate_coarse = accepted_coarse;
+  candidate_coarse.states = replacement_coarse_states;
+  fac.set_boundary_context_at_level(0, candidate_coarse);
+
+  const std::vector<Real> one_parameter{Real(1)};
+  FieldBoundaryExecutionContext invalid_fine = accepted_fine;
+  invalid_fine.parameters = &one_parameter;
+  invalid_fine.parameter_count = 2;
+  EXPECT_THROW(fac.set_boundary_context_at_level(1, invalid_fine), std::invalid_argument);
+
+  expected_boundary_state = &fac.rhs_level(0);
+  observed_expected_boundary_state = false;
+  observed_unexpected_boundary_state = false;
+  EXPECT_NO_THROW((void)fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
+                                  /*rel_tol=*/Real(0), /*abs_tol=*/Real(0)));
+  EXPECT_TRUE(observed_expected_boundary_state);
+  EXPECT_FALSE(observed_unexpected_boundary_state)
+      << "a late carrier failure changed the previously committed coarse boundary context";
+
+  fac.force_general_path_for_test(true);
+  observed_expected_boundary_state = false;
+  observed_unexpected_boundary_state = false;
+  EXPECT_NO_THROW((void)fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
+                                  /*rel_tol=*/Real(0), /*abs_tol=*/Real(0)));
+  EXPECT_TRUE(observed_expected_boundary_state);
+  EXPECT_FALSE(observed_unexpected_boundary_state)
+      << "the general FAC path did not preserve the committed coarse boundary context";
+  expected_boundary_state = nullptr;
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, fully_refined_hierarchy_consumes_finest_level_carrier) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse = BoxArray::from_domain(domain, n);
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  const Box2D full_fine_domain = geometry.refine(r).domain;
+  CompositeFacPoisson fac(geometry, coarse, boundary, full_fine_domain, r);
+  fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+      "tests.composite-fac.finest-level-carrier@1",
+      "tests.composite-fac.finest-level-carrier.residual@1",
+      "",
+      boundary_prepare_noop,
+      nullptr,
+      boundary_residual_observe_state,
+      nullptr,
+      false,
+  });
+
+  const MultiFab* coarse_states[] = {&fac.rhs_level(0)};
+  const MultiFab* fine_states[] = {&fac.rhs_level(1)};
+  const FieldDistribution coarse_distribution[] = {FieldDistribution::Replicated};
+  const FieldDistribution fine_distribution[] = {FieldDistribution::Distributed};
+  const std::string state_identities[] = {"tests.composite-fac.finest-state"};
+  FieldBoundaryExecutionContext coarse_context;
+  coarse_context.states = coarse_states;
+  coarse_context.state_distributions = coarse_distribution;
+  coarse_context.state_identities = state_identities;
+  coarse_context.state_count = 1;
+  FieldBoundaryExecutionContext fine_context;
+  fine_context.states = fine_states;
+  fine_context.state_distributions = fine_distribution;
+  fine_context.state_identities = state_identities;
+  fine_context.state_count = 1;
+  fac.set_boundary_context_at_level(0, coarse_context);
+  fac.set_boundary_context_at_level(1, fine_context);
+
+  expected_boundary_state = &fac.rhs_level(1);
+  observed_expected_boundary_state = false;
+  observed_unexpected_boundary_state = false;
+  EXPECT_NO_THROW((void)fac.solve(/*max_iters=*/1, /*fine_sweeps=*/0,
+                                  /*rel_tol=*/Real(1e-8), /*abs_tol=*/Real(0)));
+  EXPECT_TRUE(observed_expected_boundary_state);
+  EXPECT_FALSE(observed_unexpected_boundary_state);
+  expected_boundary_state = nullptr;
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, partial_dynamic_boundary_touching_physical_face_fails_closed) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray coarse = BoxArray::from_domain(domain, n);
+  BCRec boundary;
+  boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
+  const Box2D fine_box{{0, n / 2}, {n - 1, n - 1}};
+  CompositeFacPoisson fac(geometry, coarse, boundary, fine_box, r);
+  fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+      "tests.composite-fac.partial-physical-boundary@1",
+      "tests.composite-fac.partial-physical-boundary.residual@1",
+      "",
+      boundary_prepare_noop,
+      nullptr,
+      boundary_residual_noop,
+      nullptr,
+      false,
+  });
+
+  const MultiFab* coarse_states[] = {&fac.rhs_level(0)};
+  const MultiFab* fine_states[] = {&fac.rhs_level(1)};
+  const FieldDistribution coarse_distribution[] = {FieldDistribution::Replicated};
+  const FieldDistribution fine_distribution[] = {FieldDistribution::Distributed};
+  const std::string state_identities[] = {"tests.composite-fac.partial-boundary-state"};
+  FieldBoundaryExecutionContext coarse_context;
+  coarse_context.states = coarse_states;
+  coarse_context.state_distributions = coarse_distribution;
+  coarse_context.state_identities = state_identities;
+  coarse_context.state_count = 1;
+  FieldBoundaryExecutionContext fine_context;
+  fine_context.states = fine_states;
+  fine_context.state_distributions = fine_distribution;
+  fine_context.state_identities = state_identities;
+  fine_context.state_count = 1;
+  fac.set_boundary_context_at_level(0, coarse_context);
+  EXPECT_THROW(fac.set_boundary_context_at_level(1, fine_context), std::invalid_argument);
+  EXPECT_THROW((void)fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
+                               /*rel_tol=*/Real(0), /*abs_tol=*/Real(0)),
+               std::runtime_error);
   comm_finalize();
 }

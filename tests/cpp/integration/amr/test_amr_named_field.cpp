@@ -39,6 +39,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>   // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
+#include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 #include "load_balance_test_authority.hpp"
 
@@ -46,6 +47,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -222,6 +224,190 @@ static void prepare_level_qualified_boundary(int, const MultiFab& iterate, Multi
 static void add_noop_level_qualified_boundary(int, const MultiFab&, MultiFab&, const Geometry&,
                                               const FieldBoundaryExecutionContext&) {}
 
+static void boundary_carrier_prepare_noop(int face, const MultiFab& iterate,
+                                          MultiFab& operator_view, const Geometry& geometry,
+                                          const FieldBoundaryExecutionContext& context) {
+  (void)face;
+  (void)iterate;
+  (void)operator_view;
+  (void)geometry;
+  (void)context;
+}
+
+static void boundary_carrier_residual_noop(int face, const MultiFab& iterate, MultiFab& residual,
+                                           const Geometry& geometry,
+                                           const FieldBoundaryExecutionContext& context) {
+  (void)face;
+  (void)iterate;
+  (void)residual;
+  (void)geometry;
+  (void)context;
+}
+
+static void require_composite_boundary_carriers(const MultiFab& iterate,
+                                                const FieldBoundaryExecutionContext& context) {
+  if (context.state_count != 1 || context.states == nullptr ||
+      context.state_distributions == nullptr || context.states[0] == nullptr ||
+      context.field_count != 1 || context.fields == nullptr ||
+      context.field_distributions == nullptr || context.fields[0] == nullptr)
+    throw std::runtime_error(
+        "composite boundary launcher did not receive its state and field carriers");
+  for (const MultiFab* dependency : {context.states[0], context.fields[0]})
+    if (dependency->box_array().boxes() != iterate.box_array().boxes() ||
+        dependency->dmap().ranks() != iterate.dmap().ranks())
+      throw std::runtime_error(
+          "composite boundary launcher received a carrier from the wrong AMR level");
+}
+
+static void composite_boundary_prepare(int, const MultiFab& iterate, MultiFab&, const Geometry&,
+                                       const FieldBoundaryExecutionContext& context) {
+  require_composite_boundary_carriers(iterate, context);
+}
+
+static void composite_boundary_residual(int, const MultiFab& iterate, MultiFab&, const Geometry&,
+                                        const FieldBoundaryExecutionContext& context) {
+  require_composite_boundary_carriers(iterate, context);
+}
+
+class ExternalLevelBoundaryPrepared final : public AmrPreparedFieldSolver {
+ public:
+  ExternalLevelBoundaryPrepared(const AmrFieldSolverBuildRequest& request, std::string contract)
+      : contract_(std::move(contract)),
+        expects_field_dependency_(!request.plan.boundary_field_blocks.empty()) {
+    const int levels = request.hierarchy.nlev();
+    rhs_.reserve(static_cast<std::size_t>(levels));
+    phi_.reserve(static_cast<std::size_t>(levels));
+    distributions_.reserve(static_cast<std::size_t>(levels));
+    observed_context_.assign(static_cast<std::size_t>(levels), false);
+    for (int level = 0; level < levels; ++level) {
+      const std::size_t slot = static_cast<std::size_t>(level);
+      rhs_.emplace_back(request.hierarchy.ba[slot], request.hierarchy.dm[slot], 1, 0);
+      phi_.emplace_back(request.hierarchy.ba[slot], request.hierarchy.dm[slot], 1, 1);
+      rhs_.back().set_val(Real(0));
+      phi_.back().set_val(Real(0));
+      distributions_.push_back(level == 0 && request.replicated_coarse
+                                   ? FieldDistribution::Replicated
+                                   : FieldDistribution::Distributed);
+    }
+  }
+
+  std::string_view provider_identity() const noexcept override {
+    return "tests.amr.field-solver.level-boundary";
+  }
+  std::string_view exact_prepared_contract() const noexcept override { return contract_; }
+  bool couples_hierarchy_levels() const noexcept override { return false; }
+  int level_count() const noexcept override { return static_cast<int>(rhs_.size()); }
+  FieldDistribution level_distribution(int level) const override {
+    return distributions_.at(static_cast<std::size_t>(level));
+  }
+  MultiFab& rhs_level(int level) override { return rhs_.at(static_cast<std::size_t>(level)); }
+  MultiFab& phi_level(int level) override { return phi_.at(static_cast<std::size_t>(level)); }
+  void set_boundary_context(const FieldBoundaryExecutionContext& context) override {
+    if (level_count() != 1)
+      throw std::runtime_error(
+          "external level-boundary provider requires one exact context per AMR level");
+    set_boundary_context_at_level(0, context);
+  }
+  void set_boundary_context_at_level(int level,
+                                     const FieldBoundaryExecutionContext& context) override {
+    if (level < 0 || level >= level_count())
+      throw std::out_of_range("external level-boundary context level is out of range");
+    if (!expects_field_dependency_)
+      return;
+    if (context.field_count != 1 || context.fields == nullptr ||
+        context.field_distributions == nullptr || context.fields[0] == nullptr)
+      throw std::runtime_error(
+          "external level-boundary provider did not receive its exact field dependency");
+    const MultiFab& dependency = *context.fields[0];
+    const MultiFab& expected = rhs_level(level);
+    if (dependency.box_array().boxes() != expected.box_array().boxes() ||
+        dependency.dmap().ranks() != expected.dmap().ranks() || dependency.ncomp() != 1 ||
+        context.field_distributions[0] != level_distribution(level))
+      throw std::runtime_error(
+          "external level-boundary provider received a field from the wrong AMR level");
+    if (!(norm_inf(dependency) > Real(0)))
+      throw std::runtime_error(
+          "external level-boundary provider received an unsolved field dependency");
+    observed_context_[static_cast<std::size_t>(level)] = true;
+  }
+  SolveReport solve() override {
+    if (expects_field_dependency_ &&
+        !std::all_of(observed_context_.begin(), observed_context_.end(),
+                     [](bool value) { return value; })) {
+      report_ = SolveReport::capability_failure();
+      return report_;
+    }
+    for (int level = 0; level < level_count(); ++level) {
+      phi_level(level).set_val(Real(0));
+      parallel_copy(phi_level(level), rhs_level(level));
+    }
+    report_.iters = 0;
+    report_.reference_residual_norm = norm_inf(rhs_level(0));
+    report_.residual_norm = Real(0);
+    report_.rel_residual = Real(0);
+    report_.mark_solved("external level-qualified boundary carrier");
+    return report_;
+  }
+  const SolveReport& last_solve_report() const noexcept override { return report_; }
+
+ private:
+  std::string contract_;
+  bool expects_field_dependency_ = false;
+  std::vector<MultiFab> rhs_;
+  std::vector<MultiFab> phi_;
+  std::vector<FieldDistribution> distributions_;
+  std::vector<bool> observed_context_;
+  SolveReport report_{};
+};
+
+class ExternalLevelBoundaryProvider final : public AmrFieldSolverProvider {
+ public:
+  std::string_view identity() const noexcept override {
+    return "tests.amr.field-solver.level-boundary";
+  }
+  std::uint64_t interface_version() const noexcept override { return 1; }
+  std::string_view collective_contract() const noexcept override {
+    return "tests.amr.field-solver.level-boundary@1";
+  }
+  std::vector<std::string> capability_contracts() const override {
+    return {"tests.amr.field-solver.level-boundary.level-qualified-fields@1"};
+  }
+  AmrFieldSolverOptions default_field_options() const override {
+    return {"tests.amr.field-solver.level-boundary.options@1", {}};
+  }
+  std::optional<AmrFieldHierarchyPolicyAuthority> default_hierarchy_policy(
+      std::string_view) const override {
+    return level_local_hierarchy_policy();
+  }
+  PreparedProviderSupport accepts_options(
+      const AmrFieldSolverOptions& options) const noexcept override {
+    return options.schema_identity == "tests.amr.field-solver.level-boundary.options@1" &&
+                   options.values.empty()
+               ? PreparedProviderSupport::accept()
+               : PreparedProviderSupport::reject(1, "level-boundary options are invalid");
+  }
+  PreparedProviderSupport supports(
+      const AmrFieldSolverBuildRequest& request) const noexcept override {
+    const bool accepted =
+        request.use_contract_identity == "pops.amr.field-solver-use.named@1" &&
+        request.hierarchy.nlev() >= 1 && accepts_options(request.plan.solver_options).accepted() &&
+        request.plan.hierarchy_policy.policy_id == "pops.field-hierarchy.level-local";
+    return accepted ? PreparedProviderSupport::accept()
+                    : PreparedProviderSupport::reject(
+                          2, "level-boundary provider requires a named level-local hierarchy");
+  }
+  std::string expected_prepared_contract(const AmrFieldSolverBuildRequest& request) const override {
+    if (!supports(request).accepted())
+      throw std::invalid_argument("external level-boundary provider rejected the request");
+    return make_amr_field_solver_contract(identity(), request);
+  }
+  std::unique_ptr<AmrPreparedFieldSolver> build(
+      const AmrFieldSolverBuildRequest& request) const override {
+    return std::make_unique<ExternalLevelBoundaryPrepared>(request,
+                                                           expected_prepared_contract(request));
+  }
+};
+
 #if defined(POPS_HAS_KOKKOS)
 class KokkosEnvironment : public ::testing::Environment {
  public:
@@ -298,6 +484,89 @@ static Real max_valid_scalar_diff(const MultiFab& lhs, const MultiFab& rhs) {
         result = std::max(result, std::fabs(left(i, j, 0) - right(i, j, 0)));
   }
   return result;
+}
+
+struct PhysicalBoundarySupport {
+  Real boundary = Real(0);
+  Real interior = Real(0);
+};
+
+static PhysicalBoundarySupport physical_boundary_support(const MultiFab& values,
+                                                         const Box2D& domain) {
+  device_fence();
+  PhysicalBoundarySupport result;
+  for (int li = 0; li < values.local_size(); ++li) {
+    const ConstArray4 data = values.fab(li).const_array();
+    const Box2D valid = values.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        const Real magnitude = std::fabs(data(i, j, 0));
+        const bool physical =
+            i == domain.lo[0] || i == domain.hi[0] || j == domain.lo[1] || j == domain.hi[1];
+        Real& maximum = physical ? result.boundary : result.interior;
+        maximum = std::max(maximum, magnitude);
+      }
+  }
+  return result;
+}
+
+static std::pair<Real, Real> fine_difference_linearity_error(const MultiFab& full_step,
+                                                             const MultiFab& half_step,
+                                                             const MultiFab& base) {
+  if (full_step.box_array().boxes() != half_step.box_array().boxes() ||
+      full_step.box_array().boxes() != base.box_array().boxes() ||
+      full_step.dmap().ranks() != half_step.dmap().ranks() ||
+      full_step.dmap().ranks() != base.dmap().ranks() ||
+      full_step.local_size() != half_step.local_size() ||
+      full_step.local_size() != base.local_size())
+    throw std::invalid_argument("fine-difference linearity oracle requires identical layouts");
+  device_fence();
+  Real error = Real(0);
+  Real response = Real(0);
+  for (int li = 0; li < full_step.local_size(); ++li) {
+    const ConstArray4 full = full_step.fab(li).const_array();
+    const ConstArray4 half = half_step.fab(li).const_array();
+    const ConstArray4 origin = base.fab(li).const_array();
+    const Box2D valid = full_step.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        const Real full_response = full(i, j) - origin(i, j);
+        const Real half_response = half(i, j) - origin(i, j);
+        error = std::max(error, std::fabs(full_response - Real(2) * half_response));
+        response = std::max(response, std::fabs(full_response));
+      }
+  }
+  return {error, response};
+}
+
+static std::pair<Real, Real> multi_state_superposition_error(const MultiFab& both,
+                                                             const MultiFab& only_a,
+                                                             const MultiFab& only_b,
+                                                             const MultiFab& base) {
+  if (both.box_array().boxes() != only_a.box_array().boxes() ||
+      both.box_array().boxes() != only_b.box_array().boxes() ||
+      both.box_array().boxes() != base.box_array().boxes() ||
+      both.dmap().ranks() != only_a.dmap().ranks() ||
+      both.dmap().ranks() != only_b.dmap().ranks() || both.dmap().ranks() != base.dmap().ranks())
+    throw std::invalid_argument("multi-state superposition oracle requires identical layouts");
+  device_fence();
+  Real error = Real(0);
+  Real response = Real(0);
+  for (int li = 0; li < both.local_size(); ++li) {
+    const ConstArray4 simultaneous = both.fab(li).const_array();
+    const ConstArray4 a = only_a.fab(li).const_array();
+    const ConstArray4 b = only_b.fab(li).const_array();
+    const ConstArray4 origin = base.fab(li).const_array();
+    const Box2D valid = both.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        const Real simultaneous_response = simultaneous(i, j) - origin(i, j);
+        const Real separate_response = (a(i, j) - origin(i, j)) + (b(i, j) - origin(i, j));
+        error = std::max(error, std::fabs(simultaneous_response - separate_response));
+        response = std::max(response, std::fabs(simultaneous_response));
+      }
+  }
+  return {error, response};
 }
 
 static Real max_abs_component_diff(const MultiFab& lhs, const MultiFab& rhs, int component) {
@@ -519,6 +788,342 @@ TEST(test_amr_named_field, ExternalPolicyAndEmptyCapabilityProviderRunWithoutCor
   // provider, so an identity provider must observe the negated public closure output.
   add_scaled_component(state, -charge, 0, expected);
   EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential(selected), expected), Real(0));
+}
+
+TEST(test_amr_named_field, ExternalProviderReceivesSolvedFieldDependencyOnEveryLevel) {
+  constexpr int n = 16;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks[0].state_identity = "test://amr-named-field/plasma/state/U";
+  blocks[0].aux_ncomp = kAuxNamedBase + 2;
+
+  auto registry = make_default_amr_field_solver_registry();
+  registry->add(std::make_shared<ExternalLevelBoundaryProvider>());
+  const auto provider = registry->resolve("tests.amr.field-solver.level-boundary");
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall, registry);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+
+  auto plan = [&](const std::string& field, int component) {
+    AmrFieldSolveConfig result;
+    result.plan_identity = "tests:plasma/" + field + ":plan@1";
+    result.provider_identity = "tests:plasma/" + field;
+    result.topology_provider_kind = "tests.level-qualified-topology";
+    result.topology_provenance = "tests:level-qualified-boundary";
+    result.topology_digest = "tests:level-qualified-boundary:layout@1";
+    result.output_owner_identity = "tests:plasma";
+    result.output_block = "plasma";
+    result.output_key = field;
+    result.solver = "tests.amr.field-solver.level-boundary";
+    result.hierarchy_policy = level_local_hierarchy_policy();
+    result.solver_options = provider->default_field_options();
+    result.nullspace = operator_topology_zero_mean_nullspace();
+    result.has_reaction = true;
+    result.reaction = Real(1);
+    result.providers.push_back(
+        FieldProviderBinding{"tests:plasma/" + field + "/rhs", "plasma", field, Real(1)});
+    runtime.install_field_plan(field, result);
+    runtime.register_named_field("plasma", field, component, -1, -1, /*gradient_sign=*/1);
+    runtime.set_block_named_elliptic_rhs(0, field, [](const MultiFab& state, MultiFab& rhs) {
+      add_scaled_component(state, Real(1), 0, rhs);
+    });
+  };
+
+  // The producer sorts after the consumer by slot name. The runtime must therefore use the
+  // dependency graph, not std::map iteration order, to solve the producer first.
+  plan("z_driver", kAuxNamedBase);
+
+  AmrFieldSolveConfig dependent;
+  dependent.plan_identity = "tests:plasma/a_potential:plan@1";
+  dependent.provider_identity = "tests:plasma/a_potential";
+  dependent.topology_provider_kind = "tests.level-qualified-topology";
+  dependent.topology_provenance = "tests:level-qualified-boundary";
+  dependent.topology_digest = "tests:level-qualified-boundary:layout@1";
+  dependent.output_owner_identity = "tests:plasma";
+  dependent.output_block = "plasma";
+  dependent.output_key = "a_potential";
+  dependent.solver = "tests.amr.field-solver.level-boundary";
+  dependent.hierarchy_policy = level_local_hierarchy_policy();
+  dependent.solver_options = provider->default_field_options();
+  dependent.nullspace = operator_topology_zero_mean_nullspace();
+  dependent.has_reaction = true;
+  dependent.reaction = Real(1);
+  dependent.has_boundary_kernel = true;
+  dependent.boundary_kernel = CompiledFieldBoundaryKernel{
+      "tests:a_potential/field-dependent-boundary@1",
+      "tests:a_potential/field-dependent-boundary-residual@1",
+      "",
+      boundary_carrier_prepare_noop,
+      nullptr,
+      boundary_carrier_residual_noop,
+      nullptr,
+      false,
+  };
+  dependent.boundary_field_blocks = {"plasma"};
+  dependent.boundary_field_keys = {"z_driver"};
+  dependent.boundary_field_components = {0};
+  dependent.providers.push_back(
+      FieldProviderBinding{"tests:plasma/a_potential/rhs", "plasma", "a_potential", Real(1)});
+  runtime.install_field_plan("a_potential", dependent);
+  runtime.register_named_field("plasma", "a_potential", kAuxNamedBase + 1, -1, -1,
+                               /*gradient_sign=*/1);
+  runtime.set_block_named_elliptic_rhs(0, "a_potential", [](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(0.5), 0, rhs);
+  });
+
+  SolveOutcome outcome = runtime.solve_named_fields();
+  const SolveReport report = consume_expected_solved(std::move(outcome));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_EQ(runtime.provider_potential_levels("z_driver"), runtime.nlev());
+  ASSERT_EQ(runtime.provider_potential_levels("a_potential"), runtime.nlev());
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("z_driver", level)), Real(0));
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("a_potential", level)), Real(0));
+  }
+
+  // A topology change destroys and rematerializes both prepared providers. The semantic dependency
+  // pack must survive that invalidation, and the rebuilt consumer must receive the producer from
+  // each new exact level rather than retaining pointers into the retired hierarchy.
+  runtime.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(1.1)}});
+  runtime.regrid();
+  ASSERT_GE(runtime.regrid_count(), 1);
+
+  SolveOutcome regridded_outcome = runtime.solve_named_fields();
+  const SolveReport regridded_report = consume_expected_solved(std::move(regridded_outcome));
+  ASSERT_TRUE(regridded_report.solved()) << regridded_report.reason;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("z_driver", level)), Real(0));
+    EXPECT_GT(norm_inf(runtime.provider_potential_level("a_potential", level)), Real(0));
+  }
+}
+
+TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenciesOnEveryLevel) {
+  constexpr int n = 16;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{false, false};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc.xlo = params.poisson.bc.xhi = BCType::Dirichlet;
+  params.poisson.bc.ylo = params.poisson.bc.yhi = BCType::Dirichlet;
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks[0].state_identity = "test://amr-named-field/plasma/state/U";
+  blocks[0].aux_ncomp = kAuxNamedBase + 3;
+
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+  EXPECT_THROW((void)runtime.level_state(1, 0), std::out_of_range);
+  EXPECT_THROW((void)runtime.level_state(0, -1), std::out_of_range);
+
+  auto driver_rhs_calls = std::make_shared<int>(0);
+  auto plan = [&](const std::string& field, int component) {
+    AmrFieldSolveConfig result;
+    result.solver_options =
+        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+    result.plan_identity = "tests:plasma/" + field + ":composite-plan@1";
+    result.provider_identity = "tests:plasma/" + field;
+    result.topology_provider_kind = "tests.composite-level-qualified-topology";
+    result.topology_provenance = "tests:composite-level-qualified-boundary";
+    result.topology_digest = "tests:composite-level-qualified-boundary:layout@1";
+    result.output_owner_identity = "tests:plasma";
+    result.output_block = "plasma";
+    result.output_key = field;
+    result.hierarchy_policy = composite_hierarchy_policy();
+    result.nullspace = operator_topology_zero_mean_nullspace();
+    result.has_reaction = true;
+    result.reaction = Real(1);
+    result.providers.push_back(
+        FieldProviderBinding{"tests:plasma/" + field + "/rhs", "plasma", field, Real(1)});
+    runtime.install_field_plan(field, result);
+    runtime.register_named_field("plasma", field, component, -1, -1, /*gradient_sign=*/1);
+    runtime.set_block_named_elliptic_rhs(0, field,
+                                         [driver_rhs_calls](const MultiFab& state, MultiFab& rhs) {
+                                           ++*driver_rhs_calls;
+                                           add_scaled_component(state, Real(1), 0, rhs);
+                                         });
+  };
+
+  // The dependency sorts after its consumer. Exact graph traversal must still solve z_driver first,
+  // because the composite consumer refuses an unpublished dependency before installing any level
+  // carrier.
+  plan("z_driver", kAuxNamedBase);
+
+  AmrFieldSolveConfig dependent;
+  dependent.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  dependent.plan_identity = "tests:plasma/a_potential:composite-plan@1";
+  dependent.provider_identity = "tests:plasma/a_potential";
+  dependent.topology_provider_kind = "tests.composite-level-qualified-topology";
+  dependent.topology_provenance = "tests:composite-level-qualified-boundary";
+  dependent.topology_digest = "tests:composite-level-qualified-boundary:layout@1";
+  dependent.output_owner_identity = "tests:plasma";
+  dependent.output_block = "plasma";
+  dependent.output_key = "a_potential";
+  dependent.hierarchy_policy = composite_hierarchy_policy();
+  dependent.nullspace = operator_topology_zero_mean_nullspace();
+  dependent.has_reaction = true;
+  dependent.reaction = Real(1);
+  dependent.has_boundary_kernel = true;
+  dependent.boundary_kernel = CompiledFieldBoundaryKernel{
+      "tests:a_potential/composite-field-dependent-boundary@1",
+      "tests:a_potential/composite-field-dependent-boundary-residual@1",
+      "",
+      composite_boundary_prepare,
+      nullptr,
+      composite_boundary_residual,
+      nullptr,
+      false,
+  };
+  dependent.boundary_state_blocks = {"plasma"};
+  dependent.boundary_state_components = {0};
+  dependent.boundary_field_blocks = {"plasma"};
+  dependent.boundary_field_keys = {"z_driver"};
+  dependent.boundary_field_components = {0};
+  dependent.providers.push_back(
+      FieldProviderBinding{"tests:plasma/a_potential/rhs", "plasma", "a_potential", Real(1)});
+  runtime.install_field_plan("a_potential", dependent);
+  runtime.register_named_field("plasma", "a_potential", kAuxNamedBase + 1, -1, -1,
+                               /*gradient_sign=*/1);
+  auto dependent_rhs_calls = std::make_shared<int>(0);
+  runtime.set_block_named_elliptic_rhs(0, "a_potential",
+                                       [dependent_rhs_calls](const MultiFab& state, MultiFab& rhs) {
+                                         ++*dependent_rhs_calls;
+                                         add_scaled_component(state, Real(0.5), 0, rhs);
+                                       });
+  runtime.set_field_logical_timepoint(
+      "a_potential", FieldLogicalTimePoint{Real(0.25), Real(0.01), 1, 0, 2, 3, 1, 0});
+
+  const SolveReport initial_report = consume_expected_solved(runtime.solve_named_fields());
+  ASSERT_TRUE(initial_report.solved()) << initial_report.reason;
+  std::vector<MultiFab> accepted_driver;
+  std::vector<MultiFab> accepted_potential;
+  std::vector<MultiFab> accepted_aux;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    accepted_driver.push_back(runtime.provider_potential_level("z_driver", level));
+    accepted_potential.push_back(runtime.provider_potential_level("a_potential", level));
+    accepted_aux.push_back(runtime.aux(level));
+    scale(runtime.level_state(0, level), Real(1.25));
+  }
+
+  *driver_rhs_calls = 0;
+  *dependent_rhs_calls = 0;
+  const std::string selected = "a_potential";
+  SolveOutcome selected_outcome = runtime.solve_named_fields(&selected);
+  ASSERT_TRUE(selected_outcome.report().solved()) << selected_outcome.report().reason;
+  EXPECT_EQ(*driver_rhs_calls, runtime.nlev());
+  EXPECT_EQ(*dependent_rhs_calls, runtime.nlev());
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("z_driver", level),
+                                    accepted_driver[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("a_potential", level),
+                                    accepted_potential[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.aux(level), accepted_aux[static_cast<std::size_t>(level)]),
+              Real(0));
+  }
+
+  const SolveReport report = selected_outcome.consume(SolveConsumption::kAccept);
+  ASSERT_TRUE(report.solved()) << report.reason;
+  ASSERT_EQ(runtime.nlev(), 2);
+  ASSERT_EQ(runtime.provider_potential_levels("z_driver"), runtime.nlev());
+  ASSERT_EQ(runtime.provider_potential_levels("a_potential"), runtime.nlev());
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_GT(max_valid_scalar_diff(runtime.provider_potential_level("z_driver", level),
+                                    accepted_driver[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_GT(max_valid_scalar_diff(runtime.provider_potential_level("a_potential", level),
+                                    accepted_potential[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_GT(max_abs_component_diff(runtime.aux(level),
+                                     accepted_aux[static_cast<std::size_t>(level)], kAuxNamedBase),
+              Real(0));
+    EXPECT_GT(
+        max_abs_component_diff(runtime.aux(level), accepted_aux[static_cast<std::size_t>(level)],
+                               kAuxNamedBase + 1),
+        Real(0));
+  }
+
+  // A selected failure after its producer has run must restore the complete bounded closure and
+  // leave an unrelated consumer untouched. One FAC iteration cannot meet this deliberately strict
+  // tolerance, so the outcome exercises the ordinary RejectAttempt path rather than an exception.
+  AmrFieldSolveConfig failing = dependent;
+  failing.solver_options.values["fac.rel_tol"] = 1e-30;
+  failing.solver_options.values["fac.abs_tol"] = 0.0;
+  failing.solver_options.values["fac.max_iters"] = std::int64_t{1};
+  failing.plan_identity = "tests:plasma/zz_failure:composite-plan@1";
+  failing.provider_identity = "tests:plasma/zz_failure";
+  failing.output_key = "zz_failure";
+  failing.boundary_kernel = CompiledFieldBoundaryKernel{
+      "tests:zz_failure/composite-field-dependent-boundary@1",
+      "tests:zz_failure/composite-field-dependent-boundary-residual@1",
+      "",
+      composite_boundary_prepare,
+      nullptr,
+      composite_boundary_residual,
+      nullptr,
+      false,
+  };
+  failing.providers = {
+      FieldProviderBinding{"tests:plasma/zz_failure/rhs", "plasma", "zz_failure", Real(1)}};
+  runtime.install_field_plan("zz_failure", failing);
+  runtime.register_named_field("plasma", "zz_failure", kAuxNamedBase + 2, -1, -1,
+                               /*gradient_sign=*/1);
+  runtime.set_block_named_elliptic_rhs(0, "zz_failure", [](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(1), 0, rhs);
+  });
+
+  std::vector<MultiFab> rollback_driver;
+  std::vector<MultiFab> rollback_potential;
+  std::vector<MultiFab> rollback_aux;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    rollback_driver.push_back(runtime.provider_potential_level("z_driver", level));
+    rollback_potential.push_back(runtime.provider_potential_level("a_potential", level));
+    rollback_aux.push_back(runtime.aux(level));
+    scale(runtime.level_state(0, level), Real(1.25));
+  }
+  *driver_rhs_calls = 0;
+  *dependent_rhs_calls = 0;
+  const std::string failing_selected = "zz_failure";
+  SolveOutcome failed_outcome = runtime.solve_named_fields(&failing_selected);
+  const SolveReport failed = failed_outcome.consume(SolveConsumption::kRejectAttempt);
+  EXPECT_EQ(failed.status, SolveStatus::kIterationLimit);
+  EXPECT_EQ(failed.action, SolveAction::kRejectAttempt);
+  EXPECT_EQ(failed.iters, 1);
+  EXPECT_EQ(*driver_rhs_calls, runtime.nlev())
+      << "the dependency closure must solve the producer before the late failure";
+  EXPECT_EQ(*dependent_rhs_calls, 0)
+      << "the bounded closure must not solve an unrelated field consumer";
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("z_driver", level),
+                                    rollback_driver[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(max_valid_scalar_diff(runtime.provider_potential_level("a_potential", level),
+                                    rollback_potential[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.aux(level), rollback_aux[static_cast<std::size_t>(level)]),
+              Real(0));
+    EXPECT_EQ(norm_inf(runtime.provider_potential_level("zz_failure", level)), Real(0));
+  }
 }
 
 TEST(test_amr_named_field, LevelLocalDynamicBoundaryReceivesLevelQualifiedState) {
@@ -846,7 +1451,7 @@ TEST(test_amr_named_field, Runs) {
   std::string context_diagnostic;
   try {
     {
-      auto outcome = context.solve_fields();
+      auto outcome = context.solve_default_field_on_coarse_level();
       (void)outcome.consume(SolveConsumption::kAccept);
     }
     FAIL() << "periodic default RHS with non-zero mean was accepted or silently projected";
@@ -983,6 +1588,62 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   const std::string field = "screened";
   ASSERT_TRUE(consume_expected_solved(runtime.solve_named_fields(&field)).solved());
   ASSERT_EQ(runtime.nlev(), 2);
+  const MultiFab accepted_fine_state = runtime.level_state(0, 1);
+  const MultiFab accepted_fine_phi = runtime.provider_potential_level(field, 1);
+  const MultiFab accepted_fine_aux = runtime.aux(1);
+  MultiFab perturbed_fine_state = accepted_fine_state;
+  add_valid_constant(perturbed_fine_state, Real(0.125));
+  const ::pops::runtime::multiblock::BoundaryEvaluationPoint fine_point{
+      "main", 7, 1, 0, 3, ::pops::amr::Rational(1, 2), 0.01, 0.075};
+  SolveOutcome perturbed =
+      runtime.solve_named_fields_from_state_at(fine_point, field, 0, perturbed_fine_state);
+  EXPECT_THROW(
+      {
+        SolveOutcome overlapping =
+            runtime.solve_named_fields_from_state_at(fine_point, field, 0, perturbed_fine_state);
+        (void)consume_expected_solved(std::move(overlapping));
+      },
+      std::logic_error)
+      << "one fine-level perturbation must retain exclusive ownership of its field transaction";
+  EXPECT_EQ(max_abs_diff(runtime.level_state(0, 1), accepted_fine_state), Real(0))
+      << "the provisional fine stage state must be restored before outcome consumption";
+  EXPECT_EQ(max_abs_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi), Real(0));
+  EXPECT_EQ(max_abs_diff(runtime.aux(1), accepted_fine_aux), Real(0))
+      << "the fine provider publication must remain private before Accept";
+  ASSERT_TRUE(consume_expected_solved(std::move(perturbed)).solved());
+  EXPECT_GT(max_valid_scalar_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi),
+            Real(1e-6))
+      << "the composite provider must assemble from the exact fine-level stage state";
+  EXPECT_EQ(max_abs_diff(runtime.level_state(0, 1), accepted_fine_state), Real(0));
+  const MultiFab full_step_phi = runtime.provider_potential_level(field, 1);
+
+  SolveOutcome restored =
+      runtime.solve_named_fields_from_state_at(fine_point, field, 0, accepted_fine_state);
+  ASSERT_TRUE(consume_expected_solved(std::move(restored)).solved());
+  EXPECT_LT(max_valid_scalar_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi),
+            Real(1e-8))
+      << "re-solving from the frozen accepted state restores the field-coupled evaluation";
+
+  MultiFab half_perturbed_fine_state = accepted_fine_state;
+  add_valid_constant(half_perturbed_fine_state, Real(0.0625));
+  SolveOutcome half_perturbed =
+      runtime.solve_named_fields_from_state_at(fine_point, field, 0, half_perturbed_fine_state);
+  ASSERT_TRUE(consume_expected_solved(std::move(half_perturbed)).solved());
+  const MultiFab half_step_phi = runtime.provider_potential_level(field, 1);
+  const auto [jvp_linearity_error, jvp_response] =
+      fine_difference_linearity_error(full_step_phi, half_step_phi, accepted_fine_phi);
+  EXPECT_GT(jvp_response, Real(1e-6))
+      << "the fine-level finite-difference direction must produce a nonzero field response";
+  EXPECT_LT(jvp_linearity_error, Real(5e-4) * jvp_response + Real(1e-10))
+      << "halving the exact fine-level state perturbation must halve the prepared provider "
+         "response, the numerical contract used by field-coupled rhs_jacvec";
+
+  SolveOutcome final_restore =
+      runtime.solve_named_fields_from_state_at(fine_point, field, 0, accepted_fine_state);
+  ASSERT_TRUE(consume_expected_solved(std::move(final_restore)).solved());
+  EXPECT_LT(max_valid_scalar_diff(runtime.provider_potential_level(field, 1), accepted_fine_phi),
+            Real(1e-8));
+
   for (int level = 0; level < runtime.nlev(); ++level)
     EXPECT_EQ(max_valid_component_error(runtime.provider_potential_level(field, level),
                                         runtime.aux(level), phi_component),
@@ -1020,6 +1681,504 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   EXPECT_EQ(ghosts.error, Real(0))
       << "coarse/fine ghosts must come from the freshly published coarse solution through the "
          "configured spatial authority";
+}
+
+TEST(test_amr_named_field, FieldCoupledRhsJacvecMatchesCenteredDifferenceOnEveryLevel) {
+  constexpr int n = 16;
+  constexpr Real reaction = Real(2);
+  constexpr Real c_dt = Real(0.01);
+  constexpr Real h = Real(2e-4);
+  constexpr double charge = -1.0;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.5),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks[0].state_identity = "test://amr-named-field/jacvec/state/U";
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+  AmrFieldSolveConfig plan;
+  plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  plan.plan_identity = "test:plasma/jacvec:plan:v1";
+  plan.provider_identity = "test:plasma/jacvec";
+  plan.topology_provider_kind = "structured";
+  plan.topology_provenance = "test:periodic-cartesian";
+  plan.topology_digest = "test:periodic-cartesian:v1";
+  plan.output_owner_identity = "test:plasma";
+  plan.output_block = "plasma";
+  plan.output_key = "jacvec";
+  plan.hierarchy_policy = composite_hierarchy_policy();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
+  plan.has_reaction = true;
+  plan.reaction = reaction;
+  plan.providers.push_back(
+      FieldProviderBinding{"test:plasma/jacvec/rhs", "plasma", "jacvec", Real(1)});
+  runtime.install_field_plan("jacvec", plan);
+  // The ExB residual reads the canonical (phi, grad_x, grad_y) auxiliary components 0..2.
+  // Publishing this named provider there makes the elliptic response part of the residual whose
+  // Jacobian-vector product is checked below; a provider-only test would miss this coupling.
+  runtime.register_named_field("plasma", "jacvec", 0, 1, 2, /*gradient_sign=*/-1);
+  runtime.set_block_named_elliptic_rhs(0, "jacvec", [charge](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(charge), 0, rhs);
+  });
+
+  const std::string field = "jacvec";
+  const auto prove_field_coupled_jvp = [&](int tick_base, std::string_view phase) {
+    ASSERT_EQ(runtime.nlev(), 2) << phase;
+    std::vector<Real> forward_errors(static_cast<std::size_t>(runtime.nlev()), Real(0));
+    std::vector<Real> coupled_responses(static_cast<std::size_t>(runtime.nlev()), Real(0));
+    std::vector<Real> stale_provider_gaps(static_cast<std::size_t>(runtime.nlev()), Real(0));
+    std::vector<Real> restore_errors(static_cast<std::size_t>(runtime.nlev()), Real(0));
+
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      const runtime::multiblock::BoundaryEvaluationPoint point{
+          "main", tick_base + level, level, 0, 3, ::pops::amr::Rational(1, 2), 0.01, 0.005};
+      const MultiFab live_before = runtime.level_state(0, level);
+      MultiFab iterate = runtime.level_state(0, level);
+      MultiFab direction = iterate;
+      scale(direction, Real(0.75));
+
+      const SolveReport base_report = consume_expected_solved(
+          runtime.solve_named_fields_from_state_at(point, field, 0, iterate));
+      if (!base_report.solved())
+        throw std::runtime_error("field-coupled JVP oracle could not prepare its base provider");
+      const MultiFab base_phi = runtime.provider_potential_level(field, level);
+
+      MultiFab r0(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+      r0.set_val(Real(0));
+      runtime.level_rhs_core_into_at(0, level, point, iterate, r0, /*flux_only=*/false);
+
+      const auto residual_at = [&](Real shift, bool coupled) {
+        MultiFab state = iterate;
+        saxpy(state, shift, direction);
+        MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+        residual.set_val(Real(0));
+        if (coupled) {
+          const SolveReport perturbed = consume_expected_solved(
+              runtime.solve_named_fields_from_state_at(point, field, 0, state));
+          if (!perturbed.solved())
+            throw std::runtime_error("field-coupled JVP oracle could not solve its perturbation");
+          runtime.level_rhs_core_into_at(0, level, point, state, residual, /*flux_only=*/false);
+          const SolveReport restored = consume_expected_solved(
+              runtime.solve_named_fields_from_state_at(point, field, 0, iterate));
+          if (!restored.solved())
+            throw std::runtime_error(
+                "field-coupled JVP oracle could not restore its base provider");
+        } else {
+          runtime.level_rhs_core_into_at(0, level, point, state, residual, /*flux_only=*/false);
+        }
+        return residual;
+      };
+
+      const MultiFab plus = residual_at(h, /*coupled=*/true);
+      const MultiFab minus = residual_at(-h, /*coupled=*/true);
+      const MultiFab plus_with_stale_provider = residual_at(h, /*coupled=*/false);
+
+      // This is the exact forward-difference algebra emitted for
+      // rhs_jacvec(field_coupled=True): Jv = v - c_dt (R(U+h v)-R(U))/h.
+      MultiFab generated = direction;
+      saxpy(generated, -c_dt / h, plus);
+      saxpy(generated, c_dt / h, r0);
+
+      // A separately assembled centered finite difference is the numerical reference.  It catches
+      // using a coarse/cached provider for either perturbed residual, while remaining independent of
+      // the one-sided production formula.
+      MultiFab centered = direction;
+      saxpy(centered, -c_dt / (Real(2) * h), plus);
+      saxpy(centered, c_dt / (Real(2) * h), minus);
+      forward_errors[static_cast<std::size_t>(level)] = max_valid_scalar_diff(generated, centered);
+      coupled_responses[static_cast<std::size_t>(level)] =
+          max_valid_scalar_diff(centered, direction);
+
+      MultiFab stale = direction;
+      saxpy(stale, -c_dt / h, plus_with_stale_provider);
+      saxpy(stale, c_dt / h, r0);
+      stale_provider_gaps[static_cast<std::size_t>(level)] = max_valid_scalar_diff(stale, centered);
+      restore_errors[static_cast<std::size_t>(level)] =
+          max_valid_scalar_diff(runtime.provider_potential_level(field, level), base_phi);
+      EXPECT_EQ(max_abs_diff(runtime.level_state(0, level), live_before), Real(0))
+          << phase << ": stage-state evaluation must restore live state on level " << level;
+    }
+
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      const std::size_t k = static_cast<std::size_t>(level);
+      EXPECT_GT(coupled_responses[k], Real(1e-7))
+          << phase << ": the field-coupled residual derivative must be observable on level "
+          << level;
+      EXPECT_LT(forward_errors[k], Real(2e-2) * coupled_responses[k] + Real(2e-7))
+          << phase
+          << ": the emitted one-sided field-coupled JVP contract must match an independent "
+             "centered finite difference on level "
+          << level;
+      EXPECT_GT(stale_provider_gaps[k], Real(1e-7))
+          << phase << ": freezing the provider must produce a measurably different JVP on level "
+          << level;
+      EXPECT_LT(restore_errors[k], Real(1e-8))
+          << phase << ": every perturbed evaluation must restore the frozen provider on level "
+          << level;
+    }
+    EXPECT_FALSE(runtime.field_solve_transaction_active())
+        << phase << ": the accepted JVP sequence must leave no field transaction";
+  };
+
+  prove_field_coupled_jvp(/*tick_base=*/40, "before regrid");
+  const std::vector<PatchBox> layout_before = runtime.output_geometry_boxes();
+  const auto provider_layout_before = runtime.field_topology_patches(field);
+  ASSERT_TRUE(provider_layout_before.has_value());
+  EXPECT_EQ(*provider_layout_before, layout_before);
+  const std::uint64_t epoch_before = runtime.topology_epoch();
+  const std::uint64_t generation_before = runtime.topology_materialization_generation();
+
+  // Replace the bootstrap patch with a smaller central L1 layout while retaining uncovered active
+  // L0 cells. The provider and its stage-state scratch must not retain any box, mapping, or pointer
+  // from the retired hierarchy.
+  runtime.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.2)}});
+  runtime.regrid();
+  ASSERT_EQ(runtime.nlev(), 2);
+  EXPECT_GT(runtime.topology_epoch(), epoch_before);
+  EXPECT_GT(runtime.topology_materialization_generation(), generation_before);
+  const std::vector<PatchBox> layout_after = runtime.output_geometry_boxes();
+  EXPECT_NE(layout_after, layout_before) << "the oracle requires a real L1 layout replacement";
+  const auto provider_layout_after_regrid = runtime.field_topology_patches(field);
+  ASSERT_TRUE(provider_layout_after_regrid.has_value());
+  EXPECT_EQ(*provider_layout_after_regrid, layout_after)
+      << "the regrid transaction must rematerialize the provider before publication";
+  EXPECT_NE(*provider_layout_after_regrid, *provider_layout_before);
+
+  // Both (block, level) stage-state scratch keys were populated above on the retired layouts.
+  // Reusing them here must replace their MultiFabs before the first post-regrid perturbation.
+  prove_field_coupled_jvp(/*tick_base=*/80, "after regrid");
+  const auto provider_layout_after = runtime.field_topology_patches(field);
+  ASSERT_TRUE(provider_layout_after.has_value());
+  EXPECT_EQ(*provider_layout_after, layout_after)
+      << "the JVP must rematerialize its provider on the exact replacement hierarchy";
+  EXPECT_EQ(*provider_layout_after, *provider_layout_after_regrid);
+}
+
+TEST(test_amr_named_field,
+     PhysicalFieldBoundaryCoupledRhsJacvecMatchesCenteredDifferenceOnEveryLevel) {
+  constexpr int n = 12;
+  constexpr Real reaction = Real(2);
+  constexpr Real c_dt = Real(0.01);
+  constexpr Real h = Real(2e-4);
+  constexpr double charge = -1.0;
+  const std::string state_identity = "test://plasma/physical-boundary/state/U";
+  const std::string field_identity = "test://plasma/physical-boundary/field/jacvec";
+  const std::string field = "jacvec_boundary";
+
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{false, false};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  BCRec physical_field_bc;
+  physical_field_bc.xlo = physical_field_bc.xhi = BCType::Dirichlet;
+  physical_field_bc.ylo = physical_field_bc.yhi = BCType::Dirichlet;
+  params.poisson.bc = physical_field_bc;
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  // The ordinary deterministic AMR seed is an interior patch.  This oracle deliberately uses one
+  // fully refined domain so both L0 and L1 own the same physical x-low transport face; no synthetic
+  // coarse/fine face can accidentally satisfy the boundary assertions below.
+  const Box2D fine_domain = layout.geom.domain.refine(kAmrRefRatio);
+  layout.ba[1] = BoxArray::from_domain(fine_domain, fine_domain.nx());
+  layout.dm[1] = layout.load_balance->distribute(layout.ba[1], n_ranks());
+
+  BCRec transport_bc;
+  transport_bc.xlo = transport_bc.xhi = BCType::Foextrap;
+  transport_bc.ylo = transport_bc.yhi = BCType::Foextrap;
+  auto boundary_plan = std::make_shared<PreparedBoundaryPlan>(
+      "test://plasma/physical-boundary/plan", 1, std::vector<BCRec>{transport_bc},
+      std::vector<int>{}, state_identity, PreparedBoundaryReadDependencies{{}, {field_identity}});
+  const PreparedBoundaryFieldRead field_read = boundary_plan->prepare_field_read(field_identity);
+  std::map<std::string, std::shared_ptr<PreparedBoundaryPlan>> boundary_plans{
+      {"plasma", boundary_plan}};
+  layout.boundary_plans = &boundary_plans;
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.5),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks.back().state_identity = state_identity;
+  blocks.back().level_boundary_residual_at_point_prepared =
+      [field_read](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& state,
+                   const MultiFab&, const Geometry& geometry, MultiFab& residual,
+                   const PreparedGridBoundarySession& boundary) {
+        const PreparedBoundaryReadView reads = boundary.bind_reads(point, state);
+        const MultiFab& solved_field = reads.field(field_read);
+        for (int local = 0; local < residual.local_size(); ++local) {
+          const int field_local = solved_field.local_index_of(residual.global_index(local));
+          if (field_local < 0)
+            throw std::logic_error(
+                "physical field-boundary oracle lost co-distributed field ownership");
+          const Box2D valid = residual.box(local);
+          if (valid.lo[0] > geometry.domain.lo[0] || valid.hi[0] < geometry.domain.lo[0])
+            continue;
+          const ConstArray4 phi = solved_field.fab(field_local).const_array();
+          const Array4 output = residual.fab(local).array();
+          const int i = geometry.domain.lo[0];
+          for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+            output(i, j, 0) += Real(100) * phi(i, j, 0);
+        }
+      };
+
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+  AmrFieldSolveConfig plan;
+  plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  plan.plan_identity = "test:plasma/physical-boundary-jacvec:plan:v1";
+  plan.provider_identity = "test:plasma/physical-boundary-jacvec";
+  plan.topology_provider_kind = "structured";
+  plan.topology_provenance = "test:physical-cartesian";
+  plan.topology_digest = "test:physical-cartesian:v1";
+  plan.output_owner_identity = "test:plasma";
+  plan.output_block = "plasma";
+  plan.output_key = field;
+  plan.hierarchy_policy = level_local_hierarchy_policy();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
+  plan.has_reaction = true;
+  plan.reaction = reaction;
+  plan.providers.push_back(
+      FieldProviderBinding{"test:plasma/physical-boundary-jacvec/rhs", "plasma", field, Real(1)});
+  runtime.install_field_plan(field, plan);
+  runtime.register_named_field("plasma", field, 0, 1, 2, /*gradient_sign=*/-1);
+  runtime.set_block_named_elliptic_rhs(0, field, [charge](const MultiFab& state, MultiFab& rhs) {
+    add_scaled_component(state, Real(charge), 0, rhs);
+  });
+  runtime.install_boundary_storage_routes({{field_identity, field}});
+
+  ASSERT_EQ(runtime.nlev(), 2);
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    const runtime::multiblock::BoundaryEvaluationPoint point{
+        "main", 60 + level, level, 0, 3, ::pops::amr::Rational(1, 2), 0.01, 0.005};
+    MultiFab iterate = runtime.level_state(0, level);
+    MultiFab direction = iterate;
+    scale(direction, Real(0.75));
+
+    const SolveReport base_report =
+        consume_expected_solved(runtime.solve_named_fields_from_state_at(point, field, 0, iterate));
+    ASSERT_TRUE(base_report.solved());
+    const MultiFab base_phi = runtime.provider_potential_level(field, level);
+
+    const auto residual_at = [&](Real shift, bool coupled, bool include_boundary) {
+      MultiFab state = iterate;
+      saxpy(state, shift, direction);
+      MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+      residual.set_val(Real(0));
+      if (coupled) {
+        const SolveReport perturbed = consume_expected_solved(
+            runtime.solve_named_fields_from_state_at(point, field, 0, state));
+        if (!perturbed.solved())
+          throw std::runtime_error(
+              "physical field-boundary JVP oracle could not solve its perturbation");
+      }
+      if (include_boundary)
+        runtime.level_rhs_into_at(0, level, point, state, residual);
+      else
+        runtime.level_rhs_core_into_at(0, level, point, state, residual, /*flux_only=*/false);
+      if (coupled) {
+        const SolveReport restored = consume_expected_solved(
+            runtime.solve_named_fields_from_state_at(point, field, 0, iterate));
+        if (!restored.solved())
+          throw std::runtime_error(
+              "physical field-boundary JVP oracle could not restore its base provider");
+      }
+      return residual;
+    };
+
+    const MultiFab r0 = residual_at(Real(0), /*coupled=*/false, /*include_boundary=*/true);
+    const MultiFab plus = residual_at(h, /*coupled=*/true, /*include_boundary=*/true);
+    const MultiFab minus = residual_at(-h, /*coupled=*/true, /*include_boundary=*/true);
+    const MultiFab stale_plus = residual_at(h, /*coupled=*/false, /*include_boundary=*/true);
+    const MultiFab plus_core = residual_at(h, /*coupled=*/true, /*include_boundary=*/false);
+    const MultiFab minus_core = residual_at(-h, /*coupled=*/true, /*include_boundary=*/false);
+    const MultiFab stale_plus_core = residual_at(h, /*coupled=*/false, /*include_boundary=*/false);
+
+    // Exact one-sided algebra emitted by rhs_jacvec(field_coupled=True).
+    MultiFab generated = direction;
+    saxpy(generated, -c_dt / h, plus);
+    saxpy(generated, c_dt / h, r0);
+
+    // Independent centered reference for the complete core + physical-boundary residual.
+    MultiFab centered = direction;
+    saxpy(centered, -c_dt / (Real(2) * h), plus);
+    saxpy(centered, c_dt / (Real(2) * h), minus);
+    const Real response = max_valid_scalar_diff(centered, direction);
+    EXPECT_GT(response, Real(1e-7));
+    EXPECT_LT(max_valid_scalar_diff(generated, centered), Real(2e-2) * response + Real(2e-7))
+        << "field-coupled physical-boundary JVP mismatch on level " << level;
+
+    MultiFab centered_core = direction;
+    saxpy(centered_core, -c_dt / (Real(2) * h), plus_core);
+    saxpy(centered_core, c_dt / (Real(2) * h), minus_core);
+    EXPECT_GT(max_valid_scalar_diff(centered, centered_core), Real(1e-8))
+        << "the solved-field physical boundary must affect the JVP on level " << level;
+
+    MultiFab coupled_boundary = plus;
+    saxpy(coupled_boundary, Real(-1), plus_core);
+    MultiFab stale_boundary = stale_plus;
+    saxpy(stale_boundary, Real(-1), stale_plus_core);
+    EXPECT_GT(max_valid_scalar_diff(coupled_boundary, stale_boundary), Real(1e-8))
+        << "freezing the provider must change the physical boundary residual on level " << level;
+
+    const PhysicalBoundarySupport support =
+        physical_boundary_support(coupled_boundary, runtime.level_geom(level).domain);
+    EXPECT_GT(support.boundary, Real(1e-8))
+        << "the physical boundary contribution is missing on level " << level;
+    EXPECT_LT(support.interior, Real(1e-13))
+        << "the physical boundary contribution leaked into interior cells on level " << level;
+    EXPECT_LT(max_valid_scalar_diff(runtime.provider_potential_level(field, level), base_phi),
+              Real(1e-8))
+        << "the perturbed field provider was not restored on level " << level;
+  }
+}
+
+TEST(test_amr_named_field, ExactMultiStateStagePackRunsOnEveryMaterializedLevel) {
+  constexpr int n = 16;
+  constexpr int phi_component = kAuxNamedBase;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(1.0, 1.0), "minmod", "rusanov", layout,
+                                              "a", blob(n, 0.35),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(1.0, 1.0), "minmod", "rusanov", layout,
+                                              "b", blob(n, 0.65),
+                                              /*has_density=*/true, 1.4, 1, false));
+  for (AmrRuntimeBlock& block : blocks)
+    block.aux_ncomp = phi_component + 1;
+
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+  AmrFieldSolveConfig plan;
+  plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  plan.plan_identity = "test:a/coupled_screened:plan:v1";
+  plan.provider_identity = "test:a/coupled_screened";
+  plan.topology_provider_kind = "structured";
+  plan.topology_provenance = "test:periodic-cartesian";
+  plan.topology_digest = "test:periodic-cartesian:v1";
+  plan.output_owner_identity = "test:a";
+  plan.output_block = "a";
+  plan.output_key = "coupled_screened";
+  plan.hierarchy_policy = composite_hierarchy_policy();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
+  plan.has_reaction = true;
+  plan.reaction = Real(2);
+  plan.providers.push_back(
+      FieldProviderBinding{"test:a/coupled_screened/rhs", "a", "coupled_screened", Real(1)});
+  plan.providers.push_back(
+      FieldProviderBinding{"test:b/coupled_screened/rhs", "b", "coupled_screened", Real(1)});
+  runtime.install_field_plan("coupled_screened", plan);
+  runtime.register_named_field("a", "coupled_screened", phi_component,
+                               /*gx=*/-1, /*gy=*/-1, /*gradient_sign=*/1);
+  runtime.set_block_named_elliptic_rhs(
+      0, "coupled_screened",
+      [](const MultiFab& state, MultiFab& rhs) { add_scaled_component(state, Real(1), 0, rhs); });
+  runtime.set_block_named_elliptic_rhs(
+      1, "coupled_screened",
+      [](const MultiFab& state, MultiFab& rhs) { add_scaled_component(state, Real(1), 0, rhs); });
+
+  const std::string field = "coupled_screened";
+  ASSERT_TRUE(consume_expected_solved(runtime.solve_named_fields(&field)).solved());
+  ASSERT_EQ(runtime.nlev(), 2);
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    const MultiFab base_phi = runtime.provider_potential_level(field, level);
+    const MultiFab accepted_a = runtime.level_state(0, level);
+    const MultiFab accepted_b = runtime.level_state(1, level);
+    MultiFab stage_a = accepted_a;
+    MultiFab stage_b = accepted_b;
+    add_valid_constant(stage_a, Real(0.05));
+    add_valid_constant(stage_b, Real(0.08));
+    const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
+        "main",
+        11,
+        level,
+        level,
+        23,
+        ::pops::amr::Rational(1, 2),
+        0.01 / static_cast<double>(1 << level),
+        0.205};
+
+    std::vector<const MultiFab*> stages(2, nullptr);
+    stages[0] = &stage_a;
+    if (level == 0) {
+      auto incomplete_point = point;
+      incomplete_point.clock.clear();
+      EXPECT_THROW((void)runtime.solve_named_fields_from_states_at(incomplete_point, field, stages),
+                   std::invalid_argument)
+          << "the native stage-pack route must retain its complete BoundaryEvaluationPoint";
+    }
+    SolveOutcome only_a_pending = runtime.solve_named_fields_from_states_at(point, field, stages);
+    EXPECT_EQ(max_abs_diff(runtime.level_state(0, level), accepted_a), Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.level_state(1, level), accepted_b), Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.provider_potential_level(field, level), base_phi), Real(0))
+        << "the level-qualified multi-state candidate must remain private before Accept";
+    ASSERT_TRUE(consume_expected_solved(std::move(only_a_pending)).solved());
+    const MultiFab only_a = runtime.provider_potential_level(field, level);
+
+    stages[0] = nullptr;
+    stages[1] = &stage_b;
+    ASSERT_TRUE(
+        consume_expected_solved(runtime.solve_named_fields_from_states_at(point, field, stages))
+            .solved());
+    const MultiFab only_b = runtime.provider_potential_level(field, level);
+
+    stages[0] = &stage_a;
+    stages[1] = &stage_b;
+    ASSERT_TRUE(
+        consume_expected_solved(runtime.solve_named_fields_from_states_at(point, field, stages))
+            .solved());
+    const MultiFab both = runtime.provider_potential_level(field, level);
+    const auto [superposition_error, response] =
+        multi_state_superposition_error(both, only_a, only_b, base_phi);
+    EXPECT_GT(response, Real(1e-6))
+        << "both stage overrides must contribute on materialized level " << level;
+    EXPECT_LT(superposition_error, Real(5e-4) * response + Real(1e-10))
+        << "the exact multi-state request must assemble both level-qualified stage states";
+    EXPECT_EQ(max_abs_diff(runtime.level_state(0, level), accepted_a), Real(0));
+    EXPECT_EQ(max_abs_diff(runtime.level_state(1, level), accepted_b), Real(0));
+
+    stages[0] = &accepted_a;
+    stages[1] = &accepted_b;
+    ASSERT_TRUE(
+        consume_expected_solved(runtime.solve_named_fields_from_states_at(point, field, stages))
+            .solved());
+    EXPECT_LT(max_valid_scalar_diff(runtime.provider_potential_level(field, level), base_phi),
+              Real(1e-8))
+        << "the accepted hierarchy state must restore the level-qualified field";
+  }
 }
 
 TEST(test_amr_named_field, CoarseAuthoritativeAuxUsesPreparedTransferAndComponentBcOnFineBoundary) {
