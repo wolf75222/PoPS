@@ -37,8 +37,8 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["deferred"]) == 8
-    assert len(data["check"]) >= 37
+    assert len(data["deferred"]) == 7
+    assert len(data["check"]) >= 44
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -62,7 +62,6 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
         ("ADC-686", "strict_checkpoint", "refusal"),
         ("ADC-686", "exact_paraview", "positive"),
         ("ADC-687", "gate_execution", "positive"),
-        ("ADC-687", "legacy_stepper_retirement", "positive"),
     }
 
     _, closure_errors = runner.validate_manifest(MANIFEST)
@@ -288,20 +287,32 @@ def test_m4_gate_pins_mandatory_native_reopen_and_collective_hdf5_np2():
     } in checks
 
 
-def test_m4_gate_keeps_schur_evidence_but_ci_only_claims_an_open_audit():
+def test_m4_gate_pins_complete_program_only_dispatch_and_fallback_fences():
     data, errors = _load_runner().audit_manifest(MANIFEST)
     assert not errors
-    assert {
-        "issue": "ADC-687",
-        "requirement": "legacy_stepper_retirement",
-        "polarity": "positive",
-        "kind": "pytest",
-        "target": "legacy_stepper_retirement",
-        "nodeid": (
-            "tests/python/architecture/test_no_schur_header_leak.py::"
-            "test_native_source_stage_headers_are_retired"
-        ),
-    } in data["check"]
+    selected = {
+        row["nodeid"]
+        for row in data["check"]
+        if row["requirement"] == "legacy_stepper_retirement"
+    }
+    assert selected == {
+        "tests/python/architecture/test_no_schur_header_leak.py::"
+        "test_native_source_stage_headers_are_retired",
+        "tests/python/architecture/test_program_only_temporal_facades.py::"
+        "test_system_temporal_facades_dispatch_only_through_an_installed_program",
+        "tests/python/architecture/test_program_only_temporal_facades.py::"
+        "test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine",
+        "tests/python/architecture/test_program_only_temporal_facades.py::"
+        "test_historical_block_scheduler_is_not_an_installed_temporal_authority",
+        "tests/python/architecture/test_program_only_temporal_facades.py::"
+        "test_production_has_no_second_amr_time_engine",
+        "tests/python/architecture/test_component_interface_dispatch.py::"
+        "test_component_trust_boundary_never_classifies_the_scientific_component_type",
+        "tests/python/architecture/test_component_interface_dispatch.py::"
+        "test_native_registry_has_no_rtti_or_untyped_capability_escape_hatch",
+        "tests/python/unit/codegen/test_component_adapters.py::"
+        "test_native_interface_is_declared_and_unbound_never_falls_back",
+    }
 
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     job = workflow.split("\n  gate-python-architecture:\n", 1)[1]

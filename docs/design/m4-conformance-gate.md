@@ -13,6 +13,9 @@ The source audit already authenticates real proofs for:
   tables, and platform launch checks;
 - source, manifest, and installed-binary tamper refusals, provider absence,
   native parameter capacity overflow, and a genuine wrong-ABI DSO refusal;
+- Program-only Uniform/AMR temporal facades, retired native source-stage
+  headers and schedulers, typed component dispatch, and fail-closed unbound
+  native interfaces;
 - real Uniform and AMR writer transactions, a real multi-layout transfer,
   and a positive multi-layout checkpoint/restart;
 - accepted scientific publication, diagnostics, and two-rank collective
@@ -30,8 +33,6 @@ that must not be mistaken for closure. They currently cover:
 - checkpoint restore rollback caused by a real provider failure;
 - complete Uniform, AMR, and multi-layout public-contract/report parity;
 - mandatory native VTK reopen of the MPI PVD to PVTU to rank-VTU hierarchy;
-- Program-only execution and complete retirement of legacy steppers, central
-  concrete dispatch, and silent fallback.
 
 ## Serial output evidence
 

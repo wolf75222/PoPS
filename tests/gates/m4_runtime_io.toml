@@ -82,18 +82,6 @@ evidence_paths = [
   "tests/python/integration/mpi/test_scientific_output_mpi.py",
 ]
 
-[[deferred]]
-issue = "ADC-687"
-requirement = "legacy_stepper_retirement"
-polarity = "positive"
-reason = "The selected Schur-header fence does not by itself prove Program-only execution or the absence of every legacy stepper, concrete central dispatch, and silent fallback."
-evidence_paths = [
-  "tests/python/architecture/test_no_schur_header_leak.py",
-  "tests/python/architecture/test_program_only_temporal_facades.py",
-  "tests/python/architecture/test_no_legacy_runtime_routes.py",
-  "tests/python/architecture/test_component_interface_dispatch.py",
-]
-
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
 # optional imports, skip/xfail, non-exact CTest selectors, duplicate proofs,
@@ -394,3 +382,59 @@ polarity = "positive"
 kind = "pytest"
 target = "legacy_stepper_retirement"
 nodeid = "tests/python/architecture/test_no_schur_header_leak.py::test_native_source_stage_headers_are_retired"
+
+[[check]]
+issue = "ADC-687"
+requirement = "legacy_stepper_retirement"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_stepper_retirement"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_system_temporal_facades_dispatch_only_through_an_installed_program"
+
+[[check]]
+issue = "ADC-687"
+requirement = "legacy_stepper_retirement"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_stepper_retirement"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_amr_temporal_facades_use_amr_runtime_only_as_the_spatial_engine"
+
+[[check]]
+issue = "ADC-687"
+requirement = "legacy_stepper_retirement"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_stepper_retirement"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_historical_block_scheduler_is_not_an_installed_temporal_authority"
+
+[[check]]
+issue = "ADC-687"
+requirement = "legacy_stepper_retirement"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_stepper_retirement"
+nodeid = "tests/python/architecture/test_program_only_temporal_facades.py::test_production_has_no_second_amr_time_engine"
+
+[[check]]
+issue = "ADC-687"
+requirement = "legacy_stepper_retirement"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_stepper_retirement"
+nodeid = "tests/python/architecture/test_component_interface_dispatch.py::test_component_trust_boundary_never_classifies_the_scientific_component_type"
+
+[[check]]
+issue = "ADC-687"
+requirement = "legacy_stepper_retirement"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_stepper_retirement"
+nodeid = "tests/python/architecture/test_component_interface_dispatch.py::test_native_registry_has_no_rtti_or_untyped_capability_escape_hatch"
+
+[[check]]
+issue = "ADC-687"
+requirement = "legacy_stepper_retirement"
+polarity = "positive"
+kind = "pytest"
+target = "legacy_stepper_retirement"
+nodeid = "tests/python/unit/codegen/test_component_adapters.py::test_native_interface_is_declared_and_unbound_never_falls_back"
