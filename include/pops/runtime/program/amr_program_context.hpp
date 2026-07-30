@@ -3431,18 +3431,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {static_cast<Real>(facade_->time()), facade_->macro_step(), level_};
   }
-  void program_execution_set_field_timepoint_(const std::string& field,
-                                              const FieldLogicalTimePoint& point) const {
-    facade_->set_field_logical_timepoint(field, point);
-  }
-  void program_execution_set_field_parameters_(const std::string& field,
-                                               const std::vector<double>& parameters) const {
-    facade_->set_field_boundary_parameters(field, parameters);
-  }
-  void program_execution_set_field_kernel_(const std::string& field,
-                                           const CompiledFieldBoundaryKernel& kernel) const {
-    facade_->set_field_boundary_kernel(field, kernel);
-  }
+  AmrSystem& program_execution_field_facade_() const { return *facade_; }
   AmrSystem* facade_;
   AmrRuntime* eng_;
   mutable int level_ = 0;

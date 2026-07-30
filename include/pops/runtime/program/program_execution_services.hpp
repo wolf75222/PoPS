@@ -1396,17 +1396,17 @@ class ProgramExecutionServices {
 
   void set_field_logical_timepoint(const std::string& field,
                                    const FieldLogicalTimePoint& point) const {
-    provider_().program_execution_set_field_timepoint_(field, point);
+    provider_().program_execution_field_facade_().set_field_logical_timepoint(field, point);
   }
 
   void set_field_boundary_parameters(const std::string& field,
                                      const std::vector<double>& parameters) const {
-    provider_().program_execution_set_field_parameters_(field, parameters);
+    provider_().program_execution_field_facade_().set_field_boundary_parameters(field, parameters);
   }
 
   void set_field_boundary_kernel(const std::string& field,
                                  const CompiledFieldBoundaryKernel& kernel) const {
-    provider_().program_execution_set_field_kernel_(field, kernel);
+    provider_().program_execution_field_facade_().set_field_boundary_kernel(field, kernel);
   }
 
   Profiler& profiler() const { return program_runtime_state_().profiler(); }

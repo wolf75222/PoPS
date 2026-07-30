@@ -346,9 +346,7 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_validate_commit_aliases_",
             "program_execution_runtime_state_",
             "program_execution_clock_coordinate_",
-            "program_execution_set_field_timepoint_",
-            "program_execution_set_field_parameters_",
-            "program_execution_set_field_kernel_",
+            "program_execution_field_facade_",
         ):
             assert source.count(hook) == 1, (
                 "%s must provide exactly one explicit provider hook %s" % (context, hook)
@@ -389,6 +387,35 @@ def test_grid_free_program_state_services_are_shared_not_mirrored():
     ):
         assert retired_hook not in shared
         assert all(retired_hook not in provider for provider in providers)
+
+
+def test_field_configuration_uses_one_shared_facade_dispatch():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+
+    for operation in (
+        "set_field_logical_timepoint",
+        "set_field_boundary_parameters",
+        "set_field_boundary_kernel",
+    ):
+        assert shared.count(
+            "provider_().program_execution_field_facade_().%s" % operation
+        ) == 1
+        assert operation not in uniform
+        assert operation not in amr
+
+    for retired_hook in (
+        "program_execution_set_field_timepoint_",
+        "program_execution_set_field_parameters_",
+        "program_execution_set_field_kernel_",
+    ):
+        assert retired_hook not in shared
+        assert retired_hook not in uniform
+        assert retired_hook not in amr
+
+    assert "System& program_execution_field_facade_() const { return *sys_; }" in uniform
+    assert "AmrSystem& program_execution_field_facade_() const { return *facade_; }" in amr
 
 
 def test_clock_coordinate_is_one_shared_contract_not_three_provider_queries():

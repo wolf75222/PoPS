@@ -132,6 +132,23 @@ class ExecutionServicesFixture
     double dt = 0.0;
   };
 
+  struct FieldFacade {
+    int* update_count = nullptr;
+
+    void set_field_logical_timepoint(const std::string&,
+                                     const pops::FieldLogicalTimePoint&) const {
+      ++*update_count;
+    }
+    void set_field_boundary_parameters(const std::string&,
+                                       const std::vector<double>&) const {
+      ++*update_count;
+    }
+    void set_field_boundary_kernel(const std::string&,
+                                   const pops::CompiledFieldBoundaryKernel&) const {
+      ++*update_count;
+    }
+  };
+
   double program_execution_logical_parent_dt_() const noexcept { return logical_dt_; }
   void program_execution_install_(std::function<void(double)> step) const {
     ++install_count_;
@@ -301,18 +318,7 @@ class ExecutionServicesFixture
   typename SharedServices::ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {pops::Real(3.5), 4, active_level_};
   }
-  void program_execution_set_field_timepoint_(const std::string&,
-                                              const pops::FieldLogicalTimePoint&) const {
-    ++field_update_count_;
-  }
-  void program_execution_set_field_parameters_(const std::string&,
-                                               const std::vector<double>&) const {
-    ++field_update_count_;
-  }
-  void program_execution_set_field_kernel_(const std::string&,
-                                           const pops::CompiledFieldBoundaryKernel&) const {
-    ++field_update_count_;
-  }
+  FieldFacade& program_execution_field_facade_() const { return field_facade_; }
   void program_execution_register_history_storage_(
       const typename SharedServices::HistoryRegistration& registration) const {
     ++history_register_count_;
@@ -384,6 +390,7 @@ class ExecutionServicesFixture
   mutable int resource_level_ = Amr ? 1 : 0;
   mutable pops::runtime::program::ProgramRuntimeState program_runtime_state_;
   mutable int field_update_count_ = 0;
+  mutable FieldFacade field_facade_{&field_update_count_};
   mutable int history_register_count_ = 0;
   mutable int history_read_count_ = 0;
   mutable int history_store_count_ = 0;

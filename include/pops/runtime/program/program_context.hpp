@@ -880,18 +880,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {static_cast<Real>(sys_->time()), sys_->macro_step(), -1};
   }
-  void program_execution_set_field_timepoint_(const std::string& field,
-                                              const FieldLogicalTimePoint& point) const {
-    sys_->set_field_logical_timepoint(field, point);
-  }
-  void program_execution_set_field_parameters_(const std::string& field,
-                                               const std::vector<double>& parameters) const {
-    sys_->set_field_boundary_parameters(field, parameters);
-  }
-  void program_execution_set_field_kernel_(const std::string& field,
-                                           const CompiledFieldBoundaryKernel& kernel) const {
-    sys_->set_field_boundary_kernel(field, kernel);
-  }
+  System& program_execution_field_facade_() const { return *sys_; }
   mutable double current_dt_ = 0.0;
   mutable amr::Rational logical_phase_begin_{0, 1};
   mutable amr::Rational logical_phase_span_{1, 1};
