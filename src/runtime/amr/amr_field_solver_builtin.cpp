@@ -93,6 +93,30 @@ std::optional<HierarchyPolicy> decode_hierarchy_policy(
   return std::nullopt;
 }
 
+bool fully_refines_every_level(const AmrFieldSolverBuildRequest& request) {
+  if (request.hierarchy.nlev() < 2)
+    return false;
+  int refinement = 1;
+  for (int level = 0; level + 1 < request.hierarchy.nlev(); ++level) {
+    const Geometry parent_geometry = request.geometry.refine(refinement);
+    const BoxArray& children = request.hierarchy.ba.at(static_cast<std::size_t>(level + 1));
+    std::uint64_t covered_cells = 0;
+    for (int patch = 0; patch < children.size(); ++patch) {
+      const Box2D footprint = PatchRange(children[patch]).box();
+      if (!parent_geometry.domain.contains(footprint))
+        return false;
+      for (int previous = 0; previous < patch; ++previous)
+        if (!footprint.intersect(PatchRange(children[previous]).box()).empty())
+          return false;
+      covered_cells += static_cast<std::uint64_t>(footprint.num_cells());
+    }
+    if (covered_cells != static_cast<std::uint64_t>(parent_geometry.domain.num_cells()))
+      return false;
+    refinement *= request.hierarchy.refinement_ratios.at(static_cast<std::size_t>(level));
+  }
+  return true;
+}
+
 class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
  public:
   PreparedGeometricMgFieldSolver(const AmrFieldSolverBuildRequest& request, std::string contract)
@@ -186,9 +210,10 @@ class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
   }
   void set_boundary_context_for_level(int level,
                                       const FieldBoundaryExecutionContext& context) override {
-    if (fac_)
-      throw std::invalid_argument(
-          "composite geometric-MG has no per-level boundary-context carrier");
+    if (fac_) {
+      fac_->set_boundary_context_for_level(level, context);
+      return;
+    }
     level_solvers_.at(static_cast<std::size_t>(level))->set_boundary_context(context);
   }
   SolveReport solve() override {
@@ -245,6 +270,7 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
     return {
         "pops.amr.field-solver.geometric-mg.active-region@1",
         "pops.amr.field-solver.geometric-mg.composite-hierarchy@1",
+        "pops.amr.field-solver.geometric-mg.composite-fully-refined-level-qualified-boundary@1",
         "pops.amr.field-solver.geometric-mg.distributed-coarse@1",
         "pops.amr.field-solver.geometric-mg.dynamic-boundary@1",
         "pops.amr.field-solver.geometric-mg.exact-preparation@1",
@@ -300,9 +326,24 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
         (!request.replicated_coarse || static_cast<bool>(request.active)))
       return PreparedProviderSupport::reject(
           14, "composite hierarchy cannot represent this coarse distribution or active region");
-    if (composite && request.hierarchy.nlev() > 1 && request.plan.has_boundary_kernel)
+    if (composite && request.hierarchy.nlev() > 1 && request.plan.has_boundary_kernel) {
+      bool fully_refined = false;
+      try {
+        fully_refined = fully_refines_every_level(request);
+      } catch (...) {
+        return PreparedProviderSupport::reject(
+            18, "composite hierarchy coverage could not be validated for dynamic boundaries");
+      }
+      if (!fully_refined)
+        return PreparedProviderSupport::reject(
+            16,
+            "partially refined FAC has no level-qualified homogeneous/JVP boundary correction "
+            "operator");
+    }
+    if (composite && request.plan.has_boundary_kernel &&
+        request.plan.boundary_kernel.observes_iteration && !request.plan.has_newton)
       return PreparedProviderSupport::reject(
-          16, "composite hierarchy has no per-level dynamic-boundary context carrier");
+          17, "iterate-dependent composite boundary requires an explicit nonlinear solve plan");
     if (level_local && request.hierarchy.nlev() > 1 &&
         (request.plan.has_newton ||
          (request.plan.has_boundary_kernel && request.plan.boundary_kernel.observes_iteration)))

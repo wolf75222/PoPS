@@ -3862,11 +3862,10 @@ class AmrRuntime {
       if (nf.plan.boundary_state_blocks.size() != nf.plan.boundary_state_components.size())
         throw std::runtime_error(
             "AmrRuntime: field boundary dependency blocks and components differ in size");
-      // These carriers outlive the provider solve below. Each local hierarchy solver receives only
-      // the state buffers and distribution belonging to its exact AMR level. Composite FAC retains
-      // its existing coarse-context route until it owns a per-level boundary carrier.
-      const int boundary_levels =
-          nf.solver->couples_hierarchy_levels() ? 1 : nf.solver->level_count();
+      // These carriers outlive the provider solve below. Every hierarchy provider receives only the
+      // state buffers and distribution belonging to its exact AMR level; a composite provider owns
+      // one context per level instead of retaining a coarse pointer and reusing it on refined work.
+      const int boundary_levels = nf.solver->level_count();
       if (boundary_levels < 1)
         throw std::runtime_error(
             "AmrRuntime: field boundary provider has no materialized hierarchy level");
@@ -3905,10 +3904,7 @@ class AmrRuntime {
           context.states = buffers.empty() ? nullptr : buffers.data();
           context.state_distributions = distributions.empty() ? nullptr : distributions.data();
           context.state_count = static_cast<int>(buffers.size());
-          if (nf.solver->couples_hierarchy_levels())
-            nf.solver->set_boundary_context(context);
-          else
-            nf.solver->set_boundary_context_for_level(level, context);
+          nf.solver->set_boundary_context_for_level(level, context);
         }
       }
       prepare_named_field_providers(nf);
