@@ -213,6 +213,9 @@ class _ProgramSerialization(_ProgramBase):
         transaction = self.transaction_plan()
         if transaction is not None:
             result["step_transaction"] = transaction.to_data()
+        cadence = self.cadence_contract()
+        if not cadence.is_default:
+            result["cadence"] = cadence.to_data()
         if self._histories:
             result["histories"] = [
                 {

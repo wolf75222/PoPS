@@ -616,6 +616,9 @@ struct System::Impl {
     double cadence_clock_restore_accepted_time;
     int cadence_clock_restore_macro_step;
     std::map<std::string, Real> program_diagnostics;
+    std::map<std::string, Real> step_balance_terms;
+    bool balance_step_completed;
+    bool balance_program_was_due;
     pops::runtime::program::CacheManager cache;
     pops::runtime::program::HistoryManager history;
     pops::runtime::program::Profiler profiler;
@@ -639,6 +642,9 @@ struct System::Impl {
           cadence_clock_restore_accepted_time(impl.program_.cadence_clock_restore_accepted_time_),
           cadence_clock_restore_macro_step(impl.program_.cadence_clock_restore_macro_step_),
           program_diagnostics(impl.program_.diagnostics_),
+          step_balance_terms(impl.program_.step_balance_terms_),
+          balance_step_completed(impl.program_.balance_step_completed_),
+          balance_program_was_due(impl.program_.balance_program_was_due_),
           cache(impl.program_.cache_),
           history(impl.program_.hist_),
           profiler(impl.program_.profiler_),
@@ -670,6 +676,9 @@ struct System::Impl {
       impl.program_.cadence_clock_restore_accepted_time_ = cadence_clock_restore_accepted_time;
       impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       impl.program_.diagnostics_ = program_diagnostics;
+      impl.program_.step_balance_terms_ = step_balance_terms;
+      impl.program_.balance_step_completed_ = balance_step_completed;
+      impl.program_.balance_program_was_due_ = balance_program_was_due;
       impl.program_.cache_ = cache;
       impl.program_.hist_ = history;
       impl.program_.profiler_ = profiler;

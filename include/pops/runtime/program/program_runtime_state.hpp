@@ -36,12 +36,14 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -265,6 +267,25 @@ struct ProgramRuntimeState {
   /// COMPILED-PROGRAM SCALAR DIAGNOSTICS (ADC-414): name -> last value recorded via P.record_scalar.
   /// Lives here (not the .so) so it outlives the step closure and Python can read it. Used by BOTH.
   std::map<std::string, Real> diagnostics_;
+  /// Reserved balance records for the current native attempt only. Unlike diagnostics_, this
+  /// mailbox is cleared before every public step and is never checkpointed. Accepted balance
+  /// consumers read it while the facade's outer transaction still retains U^n, so a missing term
+  /// cannot silently reuse the preceding step.
+  std::map<std::string, Real> step_balance_terms_;
+  /// Attempt-local outer accepted-step target used by ConsumerGraph-fused balance guards. Program
+  /// substeps temporarily publish their window-start macro step through the facade, so generated
+  /// balance code must not infer the public target from `macro_step()+1`.
+  bool balance_due_window_active_ = false;
+  int balance_due_target_step_ = 0;
+  /// Selective checkpoint reconstruction re-executes scientific Program code without accepting a
+  /// public step. Balance evidence is therefore compiled off for that replay: it must neither query
+  /// a nonexistent public-step due window nor populate the current accepted-attempt mailbox.
+  bool balance_replay_active_ = false;
+  /// A stride-held public step executes no Program work, so its exact discrete balance is the
+  /// additive identity for every route. These transient flags distinguish that valid zero from a
+  /// due Program that failed to publish all five terms; neither flag is checkpoint state.
+  bool balance_step_completed_ = false;
+  bool balance_program_was_due_ = false;
   /// Attempt-local identities of ProjectAndRecheck branches that actually executed. This report
   /// mailbox is cleared at attempt entry and consumed by the Python transaction coordinator before
   /// commit or rollback; it is deliberately not checkpoint or accepted scientific state.
@@ -735,9 +756,65 @@ struct ProgramRuntimeState {
           " set_clock cannot reuse an active stride window; restore its strict checkpoint image");
   }
 
-  /// Record a compiled-Program scalar diagnostic (ADC-414): the installed Program writes named scalars
-  /// via P.record_scalar; Python reads them after the step. Idempotent (last write wins).
-  void record_diagnostic(const std::string& name, Real value) { diagnostics_[name] = value; }
+  static bool has_reserved_balance_namespace(const std::string& name) noexcept {
+    return name.rfind("pops.balance-term", 0) == 0;
+  }
+
+  static void require_balance_route(const std::string& route, const std::string& runtime) {
+    static constexpr std::string_view kRoutePrefix = "pops.balance-ledger-route.v1:sha256:";
+    if (route.size() != kRoutePrefix.size() + 64 ||
+        route.compare(0, kRoutePrefix.size(), kRoutePrefix.data(), kRoutePrefix.size()) != 0 ||
+        !std::all_of(route.begin() + static_cast<std::ptrdiff_t>(kRoutePrefix.size()), route.end(),
+                     [](unsigned char value) {
+                       return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+                     }))
+      throw std::invalid_argument(runtime + " requires a canonical balance-ledger-route identity");
+  }
+
+  static void require_balance_due_contract(const std::string& contract,
+                                           const std::string& runtime) {
+    static constexpr std::string_view kContractPrefix = "pops.balance-due-contract.v1:sha256:";
+    if (contract.size() != kContractPrefix.size() + 64 ||
+        contract.compare(0, kContractPrefix.size(), kContractPrefix.data(),
+                         kContractPrefix.size()) != 0 ||
+        !std::all_of(contract.begin() + static_cast<std::ptrdiff_t>(kContractPrefix.size()),
+                     contract.end(), [](unsigned char value) {
+                       return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+                     }))
+      throw std::invalid_argument(runtime + " requires a canonical balance-due-contract identity");
+  }
+
+  static void require_balance_term(const std::string& term, const std::string& runtime) {
+    static constexpr std::array<std::string_view, 5> kTerms{
+        "storage_change", "outward_boundary_flux", "sources", "reflux", "projection"};
+    if (std::find(kTerms.begin(), kTerms.end(), std::string_view(term)) == kTerms.end())
+      throw std::invalid_argument(runtime + " requires one canonical five-term balance name");
+  }
+
+  /// Record a compiled-Program scalar. Ordinary P.record_scalar names remain inspectable after the
+  /// step with last-write-wins semantics. The balance namespace has a separate typed sink.
+  void record_diagnostic(const std::string& name, Real value) {
+    if (has_reserved_balance_namespace(name))
+      throw std::invalid_argument(
+          "ProgramRuntimeState::record_diagnostic: pops.balance-term is a reserved namespace");
+    diagnostics_[name] = value;
+  }
+
+  /// Record one validated Program.record_balance term. Not exposed through the Python runtime
+  /// facade: only generated ProgramContext code reaches this sink.
+  void record_balance_term(const std::string& route, const std::string& term, Real value,
+                           const std::string& runtime) {
+    require_balance_route(route, runtime + "::record_balance_term");
+    require_balance_term(term, runtime + "::record_balance_term");
+    if (!std::isfinite(static_cast<double>(value)))
+      throw std::invalid_argument(runtime + "::record_balance_term requires a finite value");
+    const std::string name = "pops.balance-term.v1:" + route + ":" + term;
+    // A Program cadence may invoke the compiled body several times inside one public macro-step.
+    // Terms are signed, time-integrated increments and therefore accumulate across invocations.
+    auto [entry, inserted] = step_balance_terms_.try_emplace(name, value);
+    if (!inserted)
+      entry->second += value;
+  }
 
   /// Read the named diagnostic, FAIL-LOUD if the Program never recorded it. @p runtime names the
   /// Program subsystem setter in the message (not a generic getter). @throws std::out_of_range.
@@ -753,7 +830,108 @@ struct ProgramRuntimeState {
   /// The whole name -> value diagnostics map (checkpoint / inspection). By value: inert copy.
   std::map<std::string, Real> diagnostics() const { return diagnostics_; }
 
-  void begin_step_projection_report() { step_projections_.clear(); }
+  void begin_step_projection_report() {
+    step_projections_.clear();
+    step_balance_terms_.clear();
+    balance_due_window_active_ = false;
+    balance_due_target_step_ = 0;
+    balance_step_completed_ = false;
+    balance_program_was_due_ = false;
+  }
+
+  void complete_balance_step(bool program_was_due) noexcept {
+    balance_step_completed_ = true;
+    balance_program_was_due_ = program_was_due;
+  }
+
+  /// Return exactly the five native Program scalars recorded for one typed balance route during the
+  /// current attempt. The facade separately proves that an external accepted-step transaction is
+  /// active. No zero, stale value, or array-derived Python fallback is permitted.
+  std::map<std::string, Real> accepted_balance_terms(const std::string& route,
+                                                     const std::string& runtime) const {
+    static constexpr std::array<const char*, 5> kTerms{"storage_change", "outward_boundary_flux",
+                                                       "sources", "reflux", "projection"};
+    require_balance_route(route, runtime + "::_accepted_balance_terms");
+    std::map<std::string, Real> result;
+    if (step_balance_terms_.empty() && balance_step_completed_ && !balance_program_was_due_) {
+      for (const char* term : kTerms)
+        result.emplace(term, Real(0));
+      return result;
+    }
+    for (const char* term : kTerms) {
+      const std::string record = "pops.balance-term.v1:" + route + ":" + term;
+      const auto found = step_balance_terms_.find(record);
+      if (found == step_balance_terms_.end())
+        throw std::runtime_error(
+            runtime + "::_accepted_balance_terms: current native attempt omitted term '" + term +
+            "'; Program.record_balance must publish all five terms");
+      if (!std::isfinite(static_cast<double>(found->second)))
+        throw std::runtime_error(
+            runtime +
+            "::_accepted_balance_terms: current native attempt produced non-finite term '" + term +
+            "'");
+      result.emplace(term, found->second);
+    }
+    return result;
+  }
+
+  void begin_balance_due_window(int accepted_macro_step, const std::string& runtime) {
+    if (balance_due_window_active_)
+      throw std::logic_error(runtime + " balance due window is already active");
+    if (balance_replay_active_)
+      throw std::logic_error(runtime + " cannot enter a public-step window during balance replay");
+    if (accepted_macro_step < 0 || accepted_macro_step == std::numeric_limits<int>::max())
+      throw std::overflow_error(runtime + " balance due target step is not representable");
+    balance_due_target_step_ = accepted_macro_step + 1;
+    balance_due_window_active_ = true;
+  }
+
+  void end_balance_due_window() noexcept {
+    balance_due_window_active_ = false;
+    balance_due_target_step_ = 0;
+  }
+
+  template <class Body>
+  void run_balance_due_window(int accepted_macro_step, const std::string& runtime, Body&& body) {
+    begin_balance_due_window(accepted_macro_step, runtime);
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      end_balance_due_window();
+      throw;
+    }
+    end_balance_due_window();
+  }
+
+  template <class Body>
+  void run_balance_replay(const std::string& runtime, Body&& body) {
+    if (balance_replay_active_)
+      throw std::logic_error(runtime + " balance replay is already active");
+    if (balance_due_window_active_)
+      throw std::logic_error(runtime + " cannot enter balance replay inside a public-step window");
+    balance_replay_active_ = true;
+    try {
+      std::forward<Body>(body)();
+    } catch (...) {
+      balance_replay_active_ = false;
+      throw;
+    }
+    balance_replay_active_ = false;
+  }
+
+  bool balance_consumer_is_due(const std::string& contract, const std::string& route, int every_n,
+                               const std::string& runtime) const {
+    require_balance_due_contract(contract, runtime + "::balance_consumer_is_due");
+    require_balance_route(route, runtime + "::balance_consumer_is_due");
+    if (every_n <= 0)
+      throw std::invalid_argument(runtime + "::balance_consumer_is_due requires a positive period");
+    if (balance_replay_active_)
+      return false;
+    if (!balance_due_window_active_ || balance_due_target_step_ <= 0)
+      throw std::logic_error(runtime +
+                             "::balance_consumer_is_due requires an active public-step window");
+    return balance_due_target_step_ % every_n == 0;
+  }
 
   void note_step_projection(const std::string& name) {
     if (name.empty())

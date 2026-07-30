@@ -124,6 +124,62 @@ TEST(ProgramContextContract, ProjectionReportSurvivesScientificRollbackUntilCons
   EXPECT_THROW(sim.note_step_projection(""), std::invalid_argument);
 }
 
+TEST(ProgramContextContract, AcceptedBalanceEvidenceIsCurrentAttemptExactAndFailClosed) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 2;
+  cfg.L = 1.0;
+  System sim(cfg);
+  ProgramContext context(&sim);
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '1');
+  const std::array<std::pair<const char*, double>, 5> terms{{
+      {"storage_change", 11.0},
+      {"outward_boundary_flux", 2.0},
+      {"sources", 5.0},
+      {"reflux", 3.0},
+      {"projection", 1.0},
+  }};
+
+  sim.begin_step_transaction();
+  sim.begin_step_projection_report();
+  for (const auto& [name, value] : terms)
+    context.record_balance_term(route, name, 0.25 * value);
+  for (const auto& [name, value] : terms)
+    context.record_balance_term(route, name, 0.75 * value);
+  const auto accepted = sim.accepted_balance_terms(route);
+  EXPECT_EQ(accepted.size(), terms.size());
+  for (const auto& [name, value] : terms)
+    EXPECT_DOUBLE_EQ(accepted.at(name), value);
+  // Reserved balance evidence is deliberately attempt-local and therefore absent
+  // from the persistent/checkpointed inspection-diagnostic registry.
+  EXPECT_EQ(sim.program_diagnostics().count("pops.balance-term.v1:" + route + ":storage_change"),
+            0u);
+  sim.rollback_step_transaction();
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+
+  sim.begin_step_transaction();
+  sim.begin_step_projection_report();
+  for (std::size_t index = 0; index + 1 < terms.size(); ++index)
+    context.record_balance_term(route, terms[index].first, terms[index].second);
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  sim.rollback_step_transaction();
+
+  sim.begin_step_transaction();
+  sim.begin_step_projection_report();
+  for (const std::string& forged :
+       {"pops.balance-term", "pops.balance-term.v1", "pops.balance-term.v1:forged"}) {
+    EXPECT_THROW(sim.record_program_diagnostic(forged, 1.0), std::invalid_argument);
+    EXPECT_EQ(sim.program_diagnostics().count(forged), 0u);
+  }
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  EXPECT_THROW(
+      context.record_balance_term("pops.balance-ledger-route.v1:sha256:bad", "storage_change", 1.0),
+      std::invalid_argument);
+  EXPECT_THROW(context.record_balance_term(route, "unknown", 1.0), std::invalid_argument);
+  EXPECT_THROW((void)sim.accepted_balance_terms(route), std::runtime_error);
+  sim.rollback_step_transaction();
+}
+
 double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) {
   double d = 0;
   for (std::size_t k = 0; k < a.size(); ++k) {

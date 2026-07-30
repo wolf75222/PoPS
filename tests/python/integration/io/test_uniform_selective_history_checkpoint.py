@@ -79,11 +79,46 @@ CHECKPOINT_STEP = 7
 
 
 def _program(model):
-    """Five-slot affine state history with two independently replayable gaps."""
+    """Five-slot affine history plus a sparse Balance producer guarded during replay."""
+    from pops.diagnostics import BalanceLedger
+    from pops.output._balance_due_contract import (
+        BalanceDueConsumer,
+        BalanceDueContract,
+        BalanceDueRoute,
+    )
+
     program = pops.Program("uniform_selective_state5")
     _case, states = program_states(program, model, ("blk",))
     state = states["blk"]
     program.keep_history(state, depth=4, checkpoint_policy=Interval(2))
+    total = program.sum(state)
+    ledger = BalanceLedger("uniform-selective-replay")
+    program.record_balance(
+        ledger,
+        storage_change=total,
+        outward_boundary_flux=0.0 * total,
+        sources=0.0 * total,
+        reflux=0.0 * total,
+        projection=0.0 * total,
+    )
+    route = ledger.route_identity(state.block)
+    balance_due_contract = BalanceDueContract(
+        make_identity("consumer-graph", {"test": "uniform-selective-replay"}),
+        (
+            BalanceDueRoute(
+                route,
+                (
+                    BalanceDueConsumer(
+                        make_identity(
+                            "consumer-manifest",
+                            {"test": "uniform-selective-replay"},
+                        ),
+                        pops.time.every(2, clock=program.clock),
+                    ),
+                ),
+            ),
+        ),
+    )
     next_state = program.value(
         "Un",
         state.n
@@ -93,7 +128,7 @@ def _program(model):
     )
     program.commit(state.next, next_state)
     program.step_strategy(pops.time.FixedDt(DT_SEQUENCE[0]))
-    return program
+    return program, balance_due_contract
 
 
 def _initial_state():
@@ -183,8 +218,13 @@ def test_uniform_interval_history_variable_dt_restart_is_bit_identical():
     model = passive_source_model(
         "uniform_selective_history_model", coefficient=COEFFICIENT
     )
-    program = _program(model)
-    compiled = compile_problem(model=model, time=program, target="system")
+    program, balance_due_contract = _program(model)
+    compiled = compile_problem(
+        model=model,
+        time=program,
+        target="system",
+        balance_due_contract=balance_due_contract,
+    )
     compiled_block = compile_block_model(model, target="system")
     initial = _initial_state()
 

@@ -20,6 +20,7 @@ from ._consumer_contracts import (
     ParallelMode,
     _FAILURE_ACTIONS,
     _console_provider_data,
+    _is_async_scientific_observer,
     _observer_provider_data,
 )
 
@@ -120,6 +121,10 @@ class ConsumerAuthoringNode:
             if operation_data["parallel_mode"] != self.parallel_mode.value:
                 raise ValueError(
                     "Monitor authoring parallel mode differs from its operation provider")
+            if rows and not _is_async_scientific_observer(operation_data):
+                raise ValueError(
+                    "only AsyncScientificOutput monitor nodes can embed diagnostic providers"
+                )
         elif self.kind is ConsumerKind.DIAGNOSTIC:
             if self.output_format is not None or self.operation is None:
                 raise ValueError("Diagnostic authoring requires only its console provider")
@@ -350,7 +355,10 @@ class ConsumerAuthoringNode:
                 async_format.get("selection_contract")
                 if isinstance(async_format, dict) else None
             )
-            selected_layouts = {quantity.layout_id for quantity in quantities}
+            selected_layouts = {
+                quantity.layout_id
+                for quantity in (*quantities, *diagnostic_quantities)
+            }
             if isinstance(async_format, dict) and selection_contract is not None \
                     and selection_contract["layout_cardinality"] == "single" \
                     and len(selected_layouts) > 1:

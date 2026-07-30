@@ -186,7 +186,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
                     libraries: Any = None, problem_snapshot: Any = None,
-                    field_plans: Any = None) -> Any:
+                    field_plans: Any = None, balance_due_contract: Any = None) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
 
     Only the production backend is supported; ``target`` selects system or AMR entrypoints. An
@@ -234,12 +234,20 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     from pops.time._program.detach import detach_compiled_program
     time = detach_compiled_program(time)
     program_graph = time.to_graph()
+    from pops._balance_due_contract import BalanceDueContract
+    if balance_due_contract is None:
+        balance_due_contract = BalanceDueContract.from_consumer_graph(None)
+    if type(balance_due_contract) is not BalanceDueContract:
+        raise TypeError(
+            "compile_problem balance_due_contract must be an exact BalanceDueContract"
+        )
     from pops.codegen.program_emit_kernels import _prepared_native_components
     native_components = _prepared_native_components(time)
     from pops.codegen.program_graph_lowering import emit_program_graph
     src = emit_program_graph(
         program_graph, lowering_program=time, model=model,
-        model_graph=model_graph, target=target, field_plans=field_plans)
+        model_graph=model_graph, target=target, field_plans=field_plans,
+        balance_due_contract=balance_due_contract)
 
     include = include or pops_include()
     sig = pops_header_signature(include)

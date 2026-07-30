@@ -117,6 +117,53 @@ static void add_diffusive_gas(System& system, double gamma) {
   add_compiled_model(system, "gas", model, "none", "rusanov", "conservative", "explicit", gamma);
 }
 
+TEST(ProgramRuntime, BalanceDueWindowUsesTheOuterAcceptedStepAndCleansUpOnFailure) {
+  runtime::program::ProgramRuntimeState state;
+  const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '1');
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '2');
+
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 3, "test"), std::logic_error);
+  state.run_balance_due_window(2, "test", [&] {
+    EXPECT_TRUE(state.balance_consumer_is_due(contract, route, 3, "test"));
+    EXPECT_FALSE(state.balance_consumer_is_due(contract, route, 2, "test"));
+    EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 0, "test"),
+                 std::invalid_argument);
+    EXPECT_THROW((void)state.balance_consumer_is_due("forged", route, 3, "test"),
+                 std::invalid_argument);
+  });
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 3, "test"), std::logic_error);
+
+  EXPECT_THROW(
+      state.run_balance_due_window(3, "test", [] { throw std::runtime_error("attempt rejected"); }),
+      std::runtime_error);
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 4, "test"), std::logic_error);
+}
+
+TEST(ProgramRuntime, SelectiveReplayCompilesBalanceOffAndRestoresTheGuard) {
+  runtime::program::ProgramRuntimeState state;
+  const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '3');
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '4');
+
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 2, "test"), std::logic_error);
+  state.run_balance_replay("test", [&] {
+    EXPECT_FALSE(state.balance_consumer_is_due(contract, route, 2, "test"));
+    EXPECT_THROW((void)state.balance_consumer_is_due("forged", route, 2, "test"),
+                 std::invalid_argument);
+    EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 0, "test"),
+                 std::invalid_argument);
+    EXPECT_THROW(state.run_balance_replay("nested", [] {}), std::logic_error);
+    EXPECT_THROW(state.run_balance_due_window(1, "nested", [] {}), std::logic_error);
+  });
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 2, "test"), std::logic_error);
+  state.run_balance_due_window(1, "test", [&] {
+    EXPECT_THROW(state.run_balance_replay("window", [] {}), std::logic_error);
+  });
+
+  EXPECT_THROW(state.run_balance_replay("test", [] { throw std::runtime_error("replay failed"); }),
+               std::runtime_error);
+  EXPECT_THROW((void)state.balance_consumer_is_due(contract, route, 2, "test"), std::logic_error);
+}
+
 TEST(ProgramRuntime, ReplayAuthorityRequiresAnArtifactAndAnExactRingDepthPair) {
   runtime::program::ProgramRuntimeState state;
   state.history_replay_authorities_ = {{"gas.previous", 3}};
@@ -310,6 +357,65 @@ TEST(ProgramRuntime, GlobalCadencePublishesExactSubstepAndStrideWindowTimes) {
   EXPECT_DOUBLE_EQ(catchup.program_cadence_window_dt(), 0.0);
   EXPECT_EQ(catchup.program_cadence_window_steps(), 0);
   EXPECT_DOUBLE_EQ(catchup.program_cadence_window_start_time(), 0.0);
+}
+
+TEST(ProgramRuntime, StrideHeldStepsPublishTheExactZeroBalance) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  SystemConfig config;
+  config.n = 4;
+  config.L = 1.0;
+  config.periodicity = {true, true};
+
+  System system(config);
+  runtime::program::ProgramContext context(&system);
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '7');
+  const std::array<std::pair<const char*, double>, 5> records{{
+      {"storage_change", 1.0},
+      {"outward_boundary_flux", 2.0},
+      {"sources", 3.0},
+      {"reflux", 4.0},
+      {"projection", 5.0},
+  }};
+  context.install([&](double) {
+    for (const auto& [name, value] : records)
+      context.record_balance_term(route, name, value);
+  });
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/3);
+
+  const auto step_and_read = [&]() {
+    system.begin_step_transaction();
+    system.step(0.1);
+    const auto balance = system.accepted_balance_terms(route);
+    system.commit_step_transaction();
+    system.finalize_step_transaction();
+    return balance;
+  };
+
+  for (int held = 0; held < 2; ++held) {
+    const auto balance = step_and_read();
+    ASSERT_EQ(balance.size(), records.size());
+    for (const auto& [name, _value] : records)
+      EXPECT_DOUBLE_EQ(balance.at(name), 0.0);
+  }
+
+  system.begin_step_transaction();
+  system.step(0.1);
+  const auto rejected_due = system.accepted_balance_terms(route);
+  for (const auto& [name, value] : records)
+    EXPECT_DOUBLE_EQ(rejected_due.at(name), value);
+  system.rollback_step_transaction();
+  system.begin_step_transaction();
+  const auto restored_held = system.accepted_balance_terms(route);
+  for (const auto& [name, _value] : records)
+    EXPECT_DOUBLE_EQ(restored_held.at(name), 0.0);
+  system.rollback_step_transaction();
+
+  const auto due = step_and_read();
+  ASSERT_EQ(due.size(), records.size());
+  for (const auto& [name, value] : records)
+    EXPECT_DOUBLE_EQ(due.at(name), value);
 }
 
 TEST(ProgramRuntime,

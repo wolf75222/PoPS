@@ -41,7 +41,8 @@ class _ProgramConstants:
     # Deliberately EXCLUDED (kept live): the buffer-writers schur_rhs / schur_explicit_flux / laplacian
     # / gradient / divergence / apply_laplacian_coeff / schur_coeffs / schur_reconstruct / schur_energy
     # (alias an input buffer); the side-effecting solve_fields[_from_blocks] / project / fill_boundary /
-    # store_history / record_scalar; solve_linear (reads its rhs by buffer identity); scalar_field /
+    # store_history / record_scalar / record_balance_term; solve_linear (reads its rhs by buffer
+    # identity); scalar_field /
     # state / history (scratch/state bindings other ops fill or alias); and the sub-block ops below.
     _REMOVABLE_OPS = frozenset({
         "rhs", "source", "apply", "local_transform", "linear_combine", "linear_source", "solve_local_linear",

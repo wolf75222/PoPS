@@ -1040,7 +1040,8 @@ class AsyncScientificOutput(Descriptor):
     SERIAL and gathered ROOT writers need no worker MPI.  PER_RANK and COLLECTIVE writers execute
     on one duplicated MPI lane per consumer, isolated from numerical collectives.  The default
     queue is process-lifetime only; a ``DurableJournal`` policy adds the explicit crash-replay
-    handoff.
+    handoff. Fields and diagnostic reductions share one exact schedule; diagnostics are reduced
+    before the immutable accepted snapshot is handed to the worker.
     """
 
     category = "async_scientific_output"
@@ -1050,7 +1051,8 @@ class AsyncScientificOutput(Descriptor):
         *,
         format: Any,
         schedule: Any,
-        fields: Any,
+        fields: Any = (),
+        diagnostics: Any = (),
         levels: Any = None,
         target: Any,
         queue_capacity: Any = 1,
@@ -1066,14 +1068,32 @@ class AsyncScientificOutput(Descriptor):
         if type(schedule) is not Schedule:
             raise TypeError("AsyncScientificOutput.schedule must be an exact pops.time.Schedule")
         field_rows = tuple(fields)
-        if not field_rows:
-            raise ValueError("AsyncScientificOutput requires at least one field")
         if any(not isinstance(reference, Handle) for reference in field_rows):
             raise TypeError("AsyncScientificOutput fields must contain declaration Handles")
         if any(reference.kind not in _LIVE_FIELD_KINDS for reference in field_rows):
             raise TypeError("AsyncScientificOutput fields accept only state, field, or aux Handles")
         if len(set(field_rows)) != len(field_rows):
             raise ValueError("AsyncScientificOutput fields must be unique")
+        diagnostic_rows = tuple(diagnostics)
+        for index, diagnostic in enumerate(diagnostic_rows):
+            where = "AsyncScientificOutput diagnostics[%d]" % index
+            for method in (
+                "declaration_references",
+                "resolve_references",
+                "consumer_data",
+                "freeze",
+            ):
+                if not callable(getattr(diagnostic, method, None)):
+                    raise TypeError("%s must implement %s()" % (where, method))
+            cadence = getattr(diagnostic, "cadence", None)
+            if cadence is not None and cadence != schedule:
+                raise ValueError(
+                    "a diagnostic embedded in AsyncScientificOutput must use the same schedule"
+                )
+        if not field_rows and not diagnostic_rows:
+            raise ValueError(
+                "AsyncScientificOutput requires at least one field or diagnostic"
+            )
         selected_levels = AllLevels() if levels is None else levels
         if not isinstance(selected_levels, LevelSelection):
             raise TypeError("AsyncScientificOutput levels must be a typed LevelSelection")
@@ -1098,6 +1118,7 @@ class AsyncScientificOutput(Descriptor):
         self.format = format
         self.schedule = schedule
         self.fields = field_rows
+        self.diagnostics = diagnostic_rows
         self.levels = selected_levels
         self.target = _relative_target(target, where="AsyncScientificOutput.target")
         self.queue_capacity = queue_capacity
@@ -1114,7 +1135,20 @@ class AsyncScientificOutput(Descriptor):
         )
 
     def declaration_references(self) -> tuple[Handle, ...]:
-        return self.fields
+        result = list(self.fields)
+        for index, diagnostic in enumerate(self.diagnostics):
+            references = diagnostic.declaration_references()
+            if not isinstance(references, tuple) or any(
+                not isinstance(reference, Handle) for reference in references
+            ):
+                raise TypeError(
+                    "AsyncScientificOutput diagnostics[%d].declaration_references() "
+                    "must return a tuple of Handles" % index
+                )
+            for reference in references:
+                if reference not in result:
+                    result.append(reference)
+        return tuple(result)
 
     def consumer_authoring(self) -> tuple[Any, ...]:
         from ._consumer_authoring import ConsumerAuthoringNode
@@ -1130,6 +1164,7 @@ class AsyncScientificOutput(Descriptor):
             parallel_mode=self._operation.parallel_mode,
             levels=self.levels,
             operation=self._operation,
+            diagnostics=self.diagnostics,
             failure_action=FailRun(),
         ),)
 
@@ -1138,6 +1173,7 @@ class AsyncScientificOutput(Descriptor):
             "format": self._operation.consumer_data()["observer"]["format"],
             "schedule": self.schedule.to_data(),
             "fields": [reference.inspect() for reference in self.fields],
+            "n_diagnostics": len(self.diagnostics),
             "levels": self.levels.to_data(),
             "target": self.target,
             "queue_capacity": self.queue_capacity,

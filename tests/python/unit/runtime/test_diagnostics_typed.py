@@ -16,8 +16,8 @@ import pytest
 pops = pytest.importorskip("pops")
 
 from pops.descriptors import Descriptor  # noqa: E402
-from pops.diagnostics import (ConservationCheck, Integral, MinMax,  # noqa: E402
-                             Norm, StepChangeNorm)
+from pops.diagnostics import (Balance, BalanceLedger, ConservationCheck,  # noqa: E402
+                              Integral, MinMax, Norm, StepChangeNorm)
 from pops.linalg.norms import L1, L2, LInf  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.physics.roles import Density  # noqa: E402
@@ -31,7 +31,10 @@ _NE_BLOCK = _DIAGNOSTIC_PROBLEM.block("ne", Module("diagnostic-model"))
 # --- package surface --------------------------------------------------------------------
 def test_typed_measures_exported():
     import pops.diagnostics as diag
-    for name in ("Norm", "Integral", "MinMax", "ConservationCheck", "StepChangeNorm"):
+    for name in (
+        "Balance", "BalanceLedger", "Norm", "Integral", "MinMax",
+        "ConservationCheck", "StepChangeNorm",
+    ):
         assert hasattr(diag, name), name
         assert name in diag.__all__, name
 
@@ -88,6 +91,39 @@ def test_step_change_norm_is_typed_l2_and_whole_state():
         StepChangeNorm(L1())
     with pytest.raises(TypeError, match="typed pops.linalg.norms"):
         StepChangeNorm("l2")
+
+
+def test_balance_uses_one_typed_native_attempt_route():
+    ledger = BalanceLedger("mass")
+    balance = Balance(ledger, block=_NE_BLOCK)
+    execution = balance.diagnostic_execution()
+    operation, = execution["operations"]
+    assert operation["name"] == "balance"
+    assert operation["reduction"] == "accepted_balance"
+    assert operation["balance_route"].startswith(
+        "pops.balance-ledger-route.v1:sha256:")
+    assert execution["role"] is None and execution["conservation"] is None
+    assert balance.options()["ledger"] == ledger.to_data()
+    from pops.output._consumer_contracts import diagnostic_collective_operations
+
+    assert diagnostic_collective_operations(execution) == ()
+    mixed = {
+        **execution,
+        "operations": execution["operations"] + [{
+            "name": "integral",
+            "reduction": "sum",
+            "transform": "identity",
+            "metric_weighted": True,
+        }],
+    }
+    with pytest.raises(ValueError, match="sole diagnostic execution operation"):
+        diagnostic_collective_operations(mixed)
+    with pytest.raises(TypeError, match="BalanceLedger"):
+        Balance("mass", block=_NE_BLOCK)
+    with pytest.raises(TypeError, match="physics BlockHandle"):
+        Balance(ledger, block=None)
+    with pytest.raises(ValueError, match="open-domain Balance"):
+        ConservationCheck(balance).diagnostic_execution()
 
 
 # --- Integral / MinMax ------------------------------------------------------------------
@@ -204,6 +240,7 @@ def test_conservation_check_rejects_invalid_tolerance_and_multivalued_quantity()
 
 # --- inspect() / options() / __repr__ (Spec 5 sec.12.1 printable rule) ------------------
 @pytest.mark.parametrize("measure,cls_name,category", [
+    (Balance(BalanceLedger("mass"), block=_NE_BLOCK), "Balance", "diagnostic_balance"),
     (Norm(L2(), block=_NE_BLOCK), "Norm", "diagnostic_norm"),
     (Integral(role=Density()), "Integral", "diagnostic_integral"),
     (MinMax(block=_NE_BLOCK), "MinMax", "diagnostic_minmax"),

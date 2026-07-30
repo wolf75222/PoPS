@@ -1294,6 +1294,11 @@ class ProgramExecutionServices {
     return profiler().schedule_decision(due, cache_backed);
   }
 
+  bool balance_consumer_is_due(const std::string& contract, const std::string& route,
+                               int every_n) const {
+    return provider_().program_execution_balance_consumer_is_due_(contract, route, every_n);
+  }
+
   /// Scheduler cache semantics shared by every capable Program storage provider.
   ///
   /// The service owns cadence, profiling and value movement.  A provider supplies only the
@@ -1386,6 +1391,10 @@ class ProgramExecutionServices {
 
   void record_scalar(const std::string& name, Real value) const {
     program_runtime_state_().record_diagnostic(name, value);
+  }
+
+  void record_balance_term(const std::string& route, const std::string& term, Real value) const {
+    provider_().program_execution_record_balance_term_(route, term, value);
   }
 
   void note_step_projection(const std::string& name) const {

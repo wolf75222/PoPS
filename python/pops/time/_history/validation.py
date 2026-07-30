@@ -65,6 +65,7 @@ _KNOWN_DETERMINISTIC_OPS = frozenset(
         "hmin",
         "max_wave_speed",
         "record_scalar",
+        "record_balance_term",
         "reduce",
         "scalar_op",
         "compare",

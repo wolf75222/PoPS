@@ -11,6 +11,7 @@ from pops.time._graph.control import Branch, Loop
 from pops.time._graph.nodes import NODE_TYPES
 from pops.time._graph.validation import validate_nodes
 from pops.time.points import Clock
+from pops.time._cadence import ProgramCadence
 
 
 GRAPH_NODE_TYPES = (*NODE_TYPES, Branch, Loop)
@@ -23,9 +24,17 @@ class ProgramGraph:
     name: str
     clocks: tuple[Clock, ...]
     nodes: tuple[Any, ...]
+    cadence: ProgramCadence
     graph_hash: str
 
-    def __init__(self, name: str, nodes: Any, *, clocks: Any = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        nodes: Any,
+        *,
+        clocks: Any = None,
+        cadence: Any = None,
+    ) -> None:
         object.__setattr__(self, "name", nonempty(name, where="ProgramGraph name"))
         frozen_nodes = tuple(nodes)
         if any(type(node) not in GRAPH_NODE_TYPES for node in frozen_nodes):
@@ -38,6 +47,15 @@ class ProgramGraph:
             raise ValueError("ProgramGraph clocks must be unique")
         object.__setattr__(self, "clocks", declared)
         object.__setattr__(self, "nodes", frozen_nodes)
+        if cadence is None:
+            cadence = ProgramCadence()
+        elif isinstance(cadence, dict):
+            cadence = ProgramCadence.from_data(cadence)
+        if type(cadence) is not ProgramCadence:
+            raise TypeError(
+                "ProgramGraph cadence must be exact ProgramCadence data"
+            )
+        object.__setattr__(self, "cadence", cadence)
         available: dict[int, Any] = {}
         validate_nodes(self.nodes, self.clocks, available, where="ProgramGraph")
         payload = json.dumps(self.to_data(), sort_keys=True, separators=(",", ":"))
@@ -52,13 +70,16 @@ class ProgramGraph:
         return ValueRef(node.node_id)
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema_version": 1,
             "kind": "pops.program-graph",
             "name": self.name,
             "clocks": [clock.to_data() for clock in self.clocks],
             "nodes": [node.to_data() for node in self.nodes],
         }
+        if not self.cadence.is_default:
+            result["cadence"] = self.cadence.to_data()
+        return result
 
 
 __all__ = ["ProgramGraph"]

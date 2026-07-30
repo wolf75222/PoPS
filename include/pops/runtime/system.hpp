@@ -1237,6 +1237,9 @@ class System {
   /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
   /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
+  /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
+  POPS_EXPORT std::map<std::string, Real> accepted_balance_terms(const std::string& route) const;
   POPS_EXPORT void begin_step_projection_report();
   POPS_EXPORT void note_step_projection(const std::string& name);
   POPS_EXPORT std::vector<std::string> consume_step_projections();
@@ -1361,6 +1364,12 @@ class System {
  private:
   friend class runtime::program::ProgramContext;
   friend class PreparedSystemLayoutTransfer;
+  /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
+  /// private to ProgramContext and is deliberately absent from Python bindings.
+  POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
+                                               Real value);
+  POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
+                                                   const std::string& route, int every_n) const;
   POPS_EXPORT runtime::program::ProgramRuntimeState& program_runtime_state_();
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
   /// code, never a public publication route. Every public field solve and every Program solve wraps
