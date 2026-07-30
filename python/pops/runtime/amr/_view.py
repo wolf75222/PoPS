@@ -11,6 +11,7 @@ added / no first step) they raise, and the view reports an unbuilt hierarchy ins
 build. A measure the native build cannot answer (per-level ghost depth, composite Poisson) is
 reported as honestly unavailable.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -82,8 +83,13 @@ class AmrRuntimeView:
         base_nx, base_ny = int(s.nx()), int(s.ny())
         # Level 0: the coarse base covers the whole domain; report it as one covering box.
         levels = {
-            0: {"level": 0, "n_patches": 1, "cells": base_nx * base_ny,
-                "boxes": [], "rectangles": []}
+            0: {
+                "level": 0,
+                "n_patches": 1,
+                "cells": base_nx * base_ny,
+                "boxes": [],
+                "rectangles": [],
+            }
         }
         for lvl in range(1, n_levels):
             levels[lvl] = {"level": lvl, "n_patches": 0, "cells": 0, "boxes": [], "rectangles": []}
@@ -93,7 +99,8 @@ class AmrRuntimeView:
         for (level, ilo, jlo, ihi, jhi), rect in zip(s.patch_boxes(), rects, strict=True):
             level = int(level)
             entry = levels.setdefault(
-                level, {"level": level, "n_patches": 0, "cells": 0, "boxes": [], "rectangles": []})
+                level, {"level": level, "n_patches": 0, "cells": 0, "boxes": [], "rectangles": []}
+            )
             entry["n_patches"] += 1
             entry["cells"] += (int(ihi) - int(ilo) + 1) * (int(jhi) - int(jlo) + 1)
             entry["boxes"].append((int(ilo), int(jlo), int(ihi), int(jhi)))
@@ -110,14 +117,23 @@ class AmrRuntimeView:
         )
         if not self._is_built():
             return PatchReport(
-                built=False, n_levels=None, base_cells=(self._sim._s.nx(), self._sim._s.ny()),
-                domain_bounds=bounds, per_level=[],
-                coarse_local_boxes=coarse_local, coarse_total_boxes=coarse_total)
+                built=False,
+                n_levels=None,
+                base_cells=(self._sim._s.nx(), self._sim._s.ny()),
+                domain_bounds=bounds,
+                per_level=[],
+                coarse_local_boxes=coarse_local,
+                coarse_total_boxes=coarse_total,
+            )
         return PatchReport(
-            built=True, n_levels=int(self._sim._s.n_levels()),
+            built=True,
+            n_levels=int(self._sim._s.n_levels()),
             base_cells=(int(self._sim._s.nx()), int(self._sim._s.ny())),
-            domain_bounds=bounds, per_level=self._per_level(),
-            coarse_local_boxes=coarse_local, coarse_total_boxes=coarse_total)
+            domain_bounds=bounds,
+            per_level=self._per_level(),
+            coarse_local_boxes=coarse_local,
+            coarse_total_boxes=coarse_total,
+        )
 
     def explain_regrid(self) -> Any:
         """Return the regrid policy plus live completed-regrid/topology counters."""
@@ -131,13 +147,14 @@ class AmrRuntimeView:
         criteria = [
             "per-block variable threshold (AMR tagging predicate on variable/role; "
             "default the density, component 0)",
-            "grad phi (AMR tagging predicate; multi-block only, "
-            "disabled when the threshold <= 0)",
+            "grad phi (AMR tagging predicate; multi-block only, disabled when the threshold <= 0)",
         ]
         notes = []
         if frozen:
-            notes.append("regrid_every == 0: the hierarchy is built once and frozen "
-                         "(bit-identical, no dynamic regrid).")
+            notes.append(
+                "regrid_every == 0: the hierarchy is built once and frozen "
+                "(bit-identical, no dynamic regrid)."
+            )
         else:
             notes.append("a cell is tagged when ANY criterion fires (cell-by-cell OR).")
         return RegridReport(
@@ -153,25 +170,32 @@ class AmrRuntimeView:
         """Return a :class:`GhostReport`; the per-level ghost depth is honestly unavailable."""
         return GhostReport(
             per_level_depth=None,
-            requirement_note=("the reconstruction stencil sets the ghost depth "
-                              "(minmod / vanleer -> 1, weno5 -> 3); the coarse-fine fine ghosts "
-                              "are re-derived per path on the AMR transport."),
-            notes=["per-level ghost depth is not exposed by this native build."])
+            requirement_note=(
+                "the reconstruction stencil sets the ghost depth "
+                "(minmod / vanleer -> 1, weno5 -> 3); the coarse-fine fine ghosts "
+                "are re-derived per path on the AMR transport."
+            ),
+            notes=["per-level ghost depth is not exposed by this native build."],
+        )
 
     def explain_reflux(self) -> Any:
         """Return a :class:`RefluxReport` of the route reflux requirement."""
         return RefluxReport(
             enabled=True,
             per_stage=None,
-            notes=["coarse-fine flux refluxing is a native AMR route requirement (the AMR layout "
-                   "descriptor reports reflux=True); it runs on the single-block coupler path."])
+            notes=[
+                "coarse-fine flux refluxing is a native AMR route requirement (the AMR layout "
+                "descriptor reports reflux=True); it runs on the single-block coupler path."
+            ],
+        )
 
     def explain_checkpoint(self) -> Any:
         """Return a :class:`CheckpointReport` of the live system's restartability (sec.8.11)."""
-        constraints = ["same bound composition and compiled Program",
-                       "authenticated v5 accepted-state payload",
-                       "same recorded patch boxes and refinement topology under "
-                       "RestoreRecordedHierarchy()"]
+        constraints = [
+            "same bound composition and compiled Program",
+            "authenticated v5 accepted-state payload",
+            "same recorded patch boxes and refinement topology under RestoreRecordedHierarchy()",
+        ]
         violations = []
         try:
             n_blocks = int(self._sim._s.n_blocks())
@@ -187,11 +211,15 @@ class AmrRuntimeView:
             "the default non-bit-identical route may rematerialize hierarchy ownership and the "
             "rank-owned Program accepted state onto a different rank count only when every persisted "
             "history ring is Dense; selective history replay remains same-rank.",
-            "RegridOnRestart() is not implemented; there is no implicit weaker hierarchy remap "
-            "fallback.",
+            "RegridOnRestart() is an explicit weaker continuation for one AMR layout with an "
+            "artifact-backed Program and unchanged MPI cardinality: it restores the exact accepted "
+            "state first, then performs one scientific tag/regrid at the restored clock.",
+            "RegridOnRestart() currently refuses Uniform and multi-layout runtimes, shared-interface "
+            "flux groups, elliptic field providers, and bootstrap staggered caches.",
         ]
         return CheckpointReport(
-            restartable=not violations, constraints=constraints, violations=violations, notes=notes)
+            restartable=not violations, constraints=constraints, violations=violations, notes=notes
+        )
 
     def hierarchy_snapshot(self) -> Any:
         """Return the native config envelope composed with the live patch table."""
@@ -209,7 +237,8 @@ class AmrRuntimeView:
             frozen=regrid_every == 0,
             patch_table=patch_table,
             limitations=envelope["limitations"],
-            config_available=envelope["available"])
+            config_available=envelope["available"],
+        )
 
     def inspect(self) -> Any:
         """Return the unified AMR runtime inspection report (Spec 5 sec.8.12, ADC-589/ADC-555).
@@ -224,13 +253,15 @@ class AmrRuntimeView:
         """
         from pops._capabilities import native_capability_report
 
-        limitations = [row.to_dict() for row in native_capability_report().routes
-                       if row.status != "available"]
+        limitations = [
+            row.to_dict() for row in native_capability_report().routes if row.status != "available"
+        ]
         return RuntimeInspection(
             hierarchy=self.hierarchy_snapshot(),
             patches=self.patch_table(),
             regrid=self.explain_regrid(),
-            limitations=limitations)
+            limitations=limitations,
+        )
 
     def __repr__(self) -> Any:
         return "AmrRuntimeView(blocks=%r)" % (self._block_names(),)
