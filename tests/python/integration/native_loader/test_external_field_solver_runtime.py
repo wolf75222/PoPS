@@ -261,10 +261,13 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{
 '''
 
 
-def _nonfinite_solver_source(manifest):
+def _first_nonfinite_solver_source(manifest):
     return _solver_source(
         manifest,
-        solution_expression="std::numeric_limits<double>::quiet_NaN()",
+        solution_expression=(
+            "state->solve_count == 1 "
+            "? std::numeric_limits<double>::quiet_NaN() : 7.0"
+        ),
     )
 
 
@@ -340,7 +343,7 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     assert simulation.inspect().to_dict()["instance"]["field_providers"] == providers
 
 
-def test_external_field_solver_rejects_converged_nonfinite_solution_without_publishing(
+def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(
     tmp_path,
 ):
     topology = _component(
@@ -348,7 +351,7 @@ def test_external_field_solver_rejects_converged_nonfinite_solution_without_publ
         source_factory=_topology_source)
     solver = _component(
         tmp_path, name="nonfinite-solver", interface=interfaces.FieldSolver,
-        source_factory=_nonfinite_solver_source,
+        source_factory=_first_nonfinite_solver_source,
         manifest_parameters=({"name": "answer", "kind": "runtime"},),
         instance_parameters={"answer": 7})
     provider = ExternalFieldSolver(
@@ -365,8 +368,25 @@ def test_external_field_solver_rejects_converged_nonfinite_solution_without_publ
         initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
     )
     slot, = simulation.field_provider_slots()
-    before = np.asarray(simulation.field_potential_global(slot)).copy()
-    assert before.size == 64 and np.all(before == 0.0)
+    accepted_before = {
+        "time": simulation.time(),
+        "macro_step": simulation.macro_step(),
+        "state": np.asarray(
+            simulation.state_global("material"), dtype=np.float64
+        ).copy(),
+        "potential": np.asarray(
+            simulation.field_potential_global(slot), dtype=np.float64
+        ).copy(),
+        "cursors": simulation.consumer_cursors.to_data(),
+        "reports": tuple(simulation._consumer_reports),
+        "temporal": json.dumps(
+            simulation._executor._temporal_restart_state.to_data(),
+            sort_keys=True,
+        ),
+        "providers": simulation.inspect().to_dict()["instance"]["field_providers"],
+    }
+    assert accepted_before["potential"].size == 64
+    assert np.all(accepted_before["potential"] == 0.0)
 
     with pytest.raises(
         RuntimeError,
@@ -374,6 +394,53 @@ def test_external_field_solver_rejects_converged_nonfinite_solution_without_publ
     ):
         pops.run(simulation, t_end=1.0e-4, max_steps=1)
 
-    after = np.asarray(simulation.field_potential_global(slot))
-    np.testing.assert_array_equal(after, before)
+    np.testing.assert_array_equal(
+        np.asarray(simulation.state_global("material"), dtype=np.float64),
+        accepted_before["state"],
+    )
+    after = np.asarray(simulation.field_potential_global(slot), dtype=np.float64)
+    np.testing.assert_array_equal(after, accepted_before["potential"])
     assert np.all(np.isfinite(after))
+    assert simulation.time() == accepted_before["time"]
+    assert simulation.macro_step() == accepted_before["macro_step"]
+    assert simulation.consumer_cursors.to_data() == accepted_before["cursors"]
+    assert tuple(simulation._consumer_reports) == accepted_before["reports"]
+    assert json.dumps(
+        simulation._executor._temporal_restart_state.to_data(),
+        sort_keys=True,
+    ) == accepted_before["temporal"]
+    assert (
+        simulation.inspect().to_dict()["instance"]["field_providers"]
+        == accepted_before["providers"]
+    )
+    failed = simulation._executor._last_step_transaction_report
+    assert (failed.status, failed.phase, failed.action) == (
+        "failed",
+        "solve",
+        "fail_run",
+    )
+    assert failed.committed_effects == ()
+    assert failed.staged_effects
+    assert failed.rolled_back_effects == failed.staged_effects
+
+    retry = pops.run(simulation, t_end=1.0e-4, max_steps=1)
+    assert retry.accepted_steps == 1
+    assert simulation.time() == 1.0e-4
+    assert simulation.macro_step() == 1
+    np.testing.assert_array_equal(
+        np.asarray(simulation.state_global("material"), dtype=np.float64),
+        accepted_before["state"],
+    )
+    potential = np.asarray(simulation.field_potential_global(slot), dtype=np.float64)
+    assert potential.size == 64
+    assert np.all(np.isfinite(potential))
+    assert np.all(potential == 0.0)
+    accepted = simulation._executor._last_step_transaction_report
+    assert (accepted.status, accepted.phase, accepted.action) == (
+        "accepted",
+        "commit",
+        "commit",
+    )
+    assert accepted.staged_effects
+    assert accepted.committed_effects == accepted.staged_effects
+    assert accepted.rolled_back_effects == ()
