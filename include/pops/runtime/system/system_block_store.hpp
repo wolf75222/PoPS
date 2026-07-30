@@ -5,7 +5,7 @@
 #include <pops/core/state/variables.hpp>   // VariableSet (role descriptor carried by each block)
 #include <pops/mesh/index/box2d.hpp>       // Box2D
 #include <pops/mesh/execution/for_each.hpp>  // device_fence (marshaling synchronizes the device before reading the host)
-#include <pops/mesh/storage/multifab.hpp>  // MultiFab, Array4, ConstArray4
+#include <pops/mesh/storage/multifab.hpp>    // MultiFab, Array4, ConstArray4
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GeometryMode + point-qualified geometry residuals
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
