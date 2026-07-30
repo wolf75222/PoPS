@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -45,6 +46,13 @@ ALLOWED_PYTEST_TARGETS = {
 NATIVE_PYTEST_FILES = {
     "tests/python/integration/amr/test_amr_magnitude_tagging_native.py",
 }
+_GTEST_DECLARATION = re.compile(
+    r"\bTEST(?:_F)?\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+)
+_CPP_RAW_STRING_START = re.compile(
+    r'(?:u8|u|U|L)?R"([^\s()\\]{0,16})\('
+)
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -76,6 +84,96 @@ def _skip_or_xfail_markers(node: ast.AST) -> list[str]:
 def _ctest_suites() -> dict[str, dict]:
     data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
     return {str(row["name"]): row for row in data.get("cpp", {}).get("suite", ())}
+
+
+def _cpp_code_only(source: str) -> str:
+    """Mask comments and literals while preserving source positions and newlines."""
+    code = list(source)
+    size = len(source)
+
+    def mask(begin: int, end: int) -> None:
+        for offset in range(begin, end):
+            if code[offset] != "\n":
+                code[offset] = " "
+
+    index = 0
+    while index < size:
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = size if end < 0 else end
+            mask(index, end)
+            index = end
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            end = size if end < 0 else end + 2
+            mask(index, end)
+            index = end
+            continue
+        raw = _CPP_RAW_STRING_START.match(source, index)
+        if raw is not None:
+            terminator = ")" + raw.group(1) + '"'
+            end = source.find(terminator, raw.end())
+            end = size if end < 0 else end + len(terminator)
+            mask(index, end)
+            index = end
+            continue
+        if source[index] in {'"', "'"}:
+            quote = source[index]
+            end = index + 1
+            while end < size:
+                if source[end] == "\\":
+                    end = min(size, end + 2)
+                    continue
+                end += 1
+                if source[end - 1] == quote:
+                    break
+            mask(index, end)
+            index = end
+            continue
+        index += 1
+    return "".join(code)
+
+
+def _registered_gtest_cases(source: str) -> set[str]:
+    code = _cpp_code_only(source)
+    return {"%s.%s" % declaration for declaration in _GTEST_DECLARATION.findall(code)}
+
+
+def _registered_ctest_cases(target: str, suite: dict) -> set[str]:
+    """Recover the exact configure-time CTest names owned by one manifest suite."""
+    cases: set[str] = set()
+    for relative in suite.get("sources", ()):
+        source = ROOT / relative
+        if not source.is_file():
+            continue
+        cases.update(_registered_gtest_cases(source.read_text(encoding="utf-8")))
+    for field in ("mpi_nproc", "mpi_rank_parity"):
+        cases.update(
+            "%s_np%d" % (target, nproc)
+            for nproc in suite.get(field, ())
+            if not isinstance(nproc, bool) and isinstance(nproc, int) and nproc > 0
+        )
+    return cases
+
+
+def _validate_exact_ctest_selector(
+    selector: object,
+    target: str,
+    suite: dict,
+    where: str,
+    errors: list[str],
+) -> None:
+    if not isinstance(selector, str) or not selector:
+        errors.append("%s CTest row requires a non-empty test_regex" % where)
+        return
+    cases = _registered_ctest_cases(target, suite)
+    exact = {"^%s$" % re.escape(case) for case in cases}
+    if selector not in exact:
+        errors.append(
+            "%s CTest selector %r is not one exact source-registered case for target %r"
+            % (where, selector, target)
+        )
 
 
 def _python_mpi_entrypoints() -> dict[str, int]:
@@ -247,12 +345,12 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
                 native_positive_issues.add(str(issue))
         elif kind == "ctest":
             selector = row.get("test_regex")
-            if not isinstance(selector, str) or not selector:
-                errors.append("%s CTest row requires a non-empty test_regex" % where)
             if target not in cpp_suites:
                 errors.append("%s references unknown CTest target %r" % (where, target))
                 continue
-            for relative in cpp_suites[target].get("sources", ()):
+            suite = cpp_suites[target]
+            _validate_exact_ctest_selector(selector, target, suite, where, errors)
+            for relative in suite.get("sources", ()):
                 source = ROOT / relative
                 if not source.is_file():
                     errors.append("%s target %r has missing source %s" % (where, target, relative))
