@@ -1288,6 +1288,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         self._rank, self._size, self._communicator = rank, size, communicator
         self._observer_queues: dict[tuple[str, str], PostCommitObserverQueue] = {}
         self._observer_lanes: dict[tuple[str, str], Any] = {}
+        self._root_output_lanes: dict[str, Any] = {}
         self._observer_workers: dict[str, PostCommitObserverWorker] = {}
         self._observer_journals: dict[tuple[str, str], Any] = {}
         self._observer_preflight_sessions: dict[str, Any] = {}
@@ -1321,6 +1322,14 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             )
         self._builtin_catalyst_consumers = tuple(sorted(builtin_catalyst))
         self._builtin_catalyst_run_started = False
+        self._root_output_consumers = tuple(
+            sorted(
+                candidate.qualified_id
+                for candidate in owner._consumer_graph.nodes
+                if candidate.kind is ConsumerKind.SCIENTIFIC_OUTPUT
+                and candidate.parallel_mode is ParallelMode.ROOT
+            )
+        )
         from pops import interfaces
 
         for manifest in owner._consumer_graph.nodes:
@@ -1789,6 +1798,21 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         """
 
         self._observer_key("run-begin", run_identity)
+        if run_identity.token in self._closed_observer_runs:
+            raise RuntimeError("post-commit consumers cannot reopen an already closed run")
+        if self._root_output_consumers:
+            if run_identity.token in self._root_output_lanes:
+                raise RuntimeError(
+                    "the ROOT scientific-output MPI lane is already active for this run"
+                )
+            if self._communicator is None:
+                raise RuntimeError(
+                    "ROOT scientific output lost its authenticated execution communicator"
+                )
+            lane_identity = "scientific-output/root/%s" % run_identity.token
+            self._root_output_lanes[run_identity.token] = (
+                self._communicator.duplicate_observer_lane(lane_identity)
+            )
         if self._builtin_catalyst_consumers:
             if self._builtin_catalyst_run_started:
                 raise RuntimeError(
@@ -2215,6 +2239,23 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                     self._observer_diagnostics.append(rendered)
                 failures.append(rendered)
         if close:
+            root_lane = self._root_output_lanes.pop(run_identity.token, None)
+            if self._root_output_consumers and root_lane is None:
+                rendered = "ROOT scientific-output MPI lane disappeared before close"
+                if rendered not in self._observer_diagnostics:
+                    self._observer_diagnostics.append(rendered)
+                failures.append(rendered)
+            elif root_lane is not None:
+                try:
+                    root_lane.close_collectively()
+                except BaseException as error:
+                    rendered = (
+                        "ROOT scientific-output MPI lane close failed: %s"
+                        % _exception_text(error)
+                    )
+                    if rendered not in self._observer_diagnostics:
+                        self._observer_diagnostics.append(rendered)
+                    failures.append(rendered)
             worker = self._observer_workers.pop(run_identity.token, None)
             if worker is not None:
                 try:
@@ -2254,6 +2295,20 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return self.flush_live_visualizations(
             run_identity, close=True, raise_on_failure=raise_on_failure
         )
+
+    def _root_output_communicator(self) -> Any:
+        """Return the one active duplicated lane used by native ROOT snapshot gathers."""
+
+        if not self._root_output_consumers:
+            raise RuntimeError("the ConsumerGraph declares no ROOT scientific output")
+        if len(self._root_output_lanes) != 1:
+            raise RuntimeError(
+                "ROOT scientific output requires exactly one active run-scoped MPI lane"
+            )
+        lane = next(iter(self._root_output_lanes.values()))
+        if lane.active is not True or lane.closed is not False:
+            raise RuntimeError("ROOT scientific-output MPI lane is not active")
+        return lane
 
     def diagnostic_restart_state(self) -> dict[str, Any]:
         """Return the complete last-accepted typed diagnostic registry."""
@@ -3241,10 +3296,20 @@ class RuntimeOutputSnapshot:
             else method_name
         )
         try:
+            native_communicator = communicator
+            if mode is ParallelMode.ROOT:
+                lane_provider = getattr(
+                    self._owner._publisher, "_root_output_communicator", None
+                )
+                if not callable(lane_provider):
+                    raise RuntimeError(
+                        "ROOT scientific output has no run-scoped MPI lane provider"
+                    )
+                native_communicator = lane_provider()
             local = self._local_pieces(
                 native_engine,
                 selected_method,
-                (communicator, *args) if mode is ParallelMode.ROOT else args,
+                (native_communicator, *args) if mode is ParallelMode.ROOT else args,
                 mode=mode,
                 rank=rank,
                 require_local_owner=mode is not ParallelMode.ROOT,

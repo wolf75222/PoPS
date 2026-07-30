@@ -58,7 +58,7 @@
 
 namespace pops {
 
-class WorldCommunicator;
+class ObserverMpiLane;
 namespace runtime::program {
 class AmrProgramContext;
 }
@@ -668,7 +668,7 @@ class AmrSystem {
   /// Exact rank-local valid-cell pieces for one qualified field provider.  The returned metadata
   /// explicitly marks replicated level-zero ownership so output modes never infer it from box counts.
   std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
-  std::vector<OutputPiece> output_field_root_pieces(const WorldCommunicator& world,
+  std::vector<OutputPiece> output_field_root_pieces(const ObserverMpiLane& lane,
                                                     const std::string& provider_slot, int level);
   /// Transaction bracket used by the accepted-state reader after complete payload preflight. Every
   /// hierarchy,
@@ -1039,7 +1039,7 @@ class AmrSystem {
   /// without allocating a global level buffer.
   std::vector<OutputPiece> output_state_local_pieces(const std::string& name, int k);
   std::vector<PatchBox> output_geometry_boxes();
-  std::vector<OutputPiece> output_state_root_pieces(const WorldCommunicator& world,
+  std::vector<OutputPiece> output_state_root_pieces(const ObserverMpiLane& lane,
                                                     const std::string& name, int k);
   /// Owner rank per box of level @p k (the shared layout's DistributionMapping), aligned with the
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart

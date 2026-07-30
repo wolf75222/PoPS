@@ -1751,11 +1751,11 @@ std::vector<OutputPiece> AmrSystem::output_field_local_pieces(const std::string&
   return p_->runtime->output_field_local_pieces(provider_slot, level);
 }
 
-std::vector<OutputPiece> AmrSystem::output_field_root_pieces(const WorldCommunicator& world,
+std::vector<OutputPiece> AmrSystem::output_field_root_pieces(const ObserverMpiLane& lane,
                                                              const std::string& provider_slot,
                                                              int level) {
   return output_pieces_to_root(
-      world, detail::output_collective_identity("AmrSystem", "field", provider_slot, level),
+      lane, detail::output_collective_identity("AmrSystem", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
 }
 
@@ -4327,9 +4327,9 @@ std::vector<PatchBox> AmrSystem::output_geometry_boxes() {
   return p_->runtime->output_geometry_boxes();
 }
 
-std::vector<OutputPiece> AmrSystem::output_state_root_pieces(const WorldCommunicator& world,
+std::vector<OutputPiece> AmrSystem::output_state_root_pieces(const ObserverMpiLane& lane,
                                                              const std::string& name, int k) {
-  return output_pieces_to_root(world,
+  return output_pieces_to_root(lane,
                                detail::output_collective_identity("AmrSystem", "state", name, k),
                                [&] { return output_state_local_pieces(name, k); });
 }

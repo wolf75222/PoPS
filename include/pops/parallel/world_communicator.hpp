@@ -60,17 +60,6 @@ inline int validated_collective_root(int root) {
   return root;
 }
 
-inline int chunk_capacity(int ranks) {
-  const int divisor = std::max(1, ranks);
-  return std::max(1, std::numeric_limits<int>::max() / divisor);
-}
-
-inline const char* chunk_pointer(const std::string& payload, unsigned long long offset, int count) {
-  if (count == 0)
-    return nullptr;
-  return payload.data() + static_cast<std::size_t>(offset);
-}
-
 #endif
 
 }  // namespace detail

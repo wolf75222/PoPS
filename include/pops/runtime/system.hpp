@@ -47,7 +47,7 @@
 
 namespace pops {
 
-class WorldCommunicator;
+class ObserverMpiLane;
 class PreparedSystemLayoutTransfer;
 
 namespace component {
@@ -1333,9 +1333,9 @@ class System {
   std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
   /// Collective ROOT views.  Local provider errors are agreed before native MPI_Gatherv; only rank
   /// zero receives complete pieces and every non-root rank receives an empty vector.
-  std::vector<OutputPiece> output_state_root_pieces(const WorldCommunicator& world,
+  std::vector<OutputPiece> output_state_root_pieces(const ObserverMpiLane& lane,
                                                     const std::string& name, int level) const;
-  std::vector<OutputPiece> output_field_root_pieces(const WorldCommunicator& world,
+  std::vector<OutputPiece> output_field_root_pieces(const ObserverMpiLane& lane,
                                                     const std::string& provider_slot, int level);
   /// @}
 

@@ -918,19 +918,19 @@ std::vector<OutputPiece> System::output_field_local_pieces(const std::string& pr
   return output_local_pieces(field, 0, false);
 }
 
-std::vector<OutputPiece> System::output_state_root_pieces(const WorldCommunicator& world,
+std::vector<OutputPiece> System::output_state_root_pieces(const ObserverMpiLane& lane,
                                                           const std::string& name,
                                                           int level) const {
-  return output_pieces_to_root(world,
+  return output_pieces_to_root(lane,
                                detail::output_collective_identity("System", "state", name, level),
                                [&] { return output_state_local_pieces(name, level); });
 }
 
-std::vector<OutputPiece> System::output_field_root_pieces(const WorldCommunicator& world,
+std::vector<OutputPiece> System::output_field_root_pieces(const ObserverMpiLane& lane,
                                                           const std::string& provider_slot,
                                                           int level) {
   return output_pieces_to_root(
-      world, detail::output_collective_identity("System", "field", provider_slot, level),
+      lane, detail::output_collective_identity("System", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
 }
 
