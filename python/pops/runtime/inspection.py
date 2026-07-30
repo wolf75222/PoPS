@@ -204,8 +204,14 @@ def _program(sim: Any) -> Any:
     ("installed"/"hash") are preserved, with the richer transaction/block-map/parameter/history/cache
     summary
     folded in from the same report."""
-    from pops.runtime.program_report import build_program_report
-    report = build_program_report(sim)
+    from pops.runtime.program_report import ProgramRuntimeReport, build_program_report
+
+    provider = getattr(sim, "program_report", None)
+    report = provider() if callable(provider) else build_program_report(sim)
+    if type(report) is not ProgramRuntimeReport:
+        raise TypeError(
+            "runtime inspection requires the canonical ProgramRuntimeReport"
+        )
     return {
         "installed": report.installed,
         "hash": report.program_hash,
