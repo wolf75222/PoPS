@@ -55,6 +55,29 @@ def _nonnegative_binary64_hex(value: Any, where: str) -> str:
     return number.hex()
 
 
+def _finite_binary64_hex(value: Any, where: str) -> str:
+    """Normalize a signed finite binary64 value for identity-bearing manifests."""
+    if isinstance(value, bool):
+        raise TypeError("%s must be a finite number" % where)
+    if isinstance(value, str):
+        try:
+            number = float.fromhex(value)
+        except (OverflowError, ValueError) as exc:
+            raise TypeError("%s must be a canonical float.hex() string" % where) from exc
+        if number.hex() != value:
+            raise ValueError("%s must be a canonical float.hex() string" % where)
+    elif isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except OverflowError as exc:
+            raise ValueError("%s must be a finite number" % where) from exc
+    else:
+        raise TypeError("%s must be a finite number" % where)
+    if not math.isfinite(number):
+        raise ValueError("%s must be a finite number" % where)
+    return number.hex()
+
+
 def _exact_handle(value: Any, kind: str | None, where: str) -> Handle:
     if not isinstance(value, Handle) or not value.is_resolved:
         raise TypeError("%s must be a canonical Handle" % where)
@@ -309,8 +332,8 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {
             "schema_version", "role", "operations", "conservation"}:
         raise TypeError("DiagnosticQuantity.execution has an unknown schema")
-    if value["schema_version"] != 1:
-        raise ValueError("DiagnosticQuantity.execution schema_version must be 1")
+    if value["schema_version"] != 2:
+        raise ValueError("DiagnosticQuantity.execution schema_version must be 2")
     role = value["role"]
     if role is not None:
         _text(role, "DiagnosticQuantity.execution.role")
@@ -321,7 +344,7 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
     for index, operation in enumerate(operations):
         where = "DiagnosticQuantity.execution.operations[%d]" % index
         if not isinstance(operation, Mapping) or set(operation) != {
-                "name", "reduction", "transform", "metric_weighted"}:
+                "name", "reduction", "transform", "metric_weighted", "coefficient"}:
             raise TypeError("%s has an unknown schema" % where)
         name = _text(operation["name"], "%s.name" % where)
         reduction = operation["reduction"]
@@ -335,11 +358,16 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
             raise TypeError("%s.metric_weighted must be an exact bool" % where)
         if weighted and reduction not in {"sum", "abs_sum", "sum_sq"}:
             raise ValueError("only additive diagnostic reductions may be metric-weighted")
+        coefficient = _finite_binary64_hex(
+            operation["coefficient"], "%s.coefficient" % where)
+        if float.fromhex(coefficient) == 0.0:
+            raise ValueError("%s.coefficient must be nonzero" % where)
         normalized.append({
             "name": name,
             "reduction": reduction,
             "transform": transform,
             "metric_weighted": weighted,
+            "coefficient": coefficient,
         })
     if len({row["name"] for row in normalized}) != len(normalized):
         raise ValueError("DiagnosticQuantity execution operation names must be unique")
@@ -354,7 +382,7 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
             raise ValueError("a conservation check requires exactly one scalar operation")
         normalized_conservation = {"tolerance": tolerance}
     return freeze_data({
-        "schema_version": 1,
+        "schema_version": 2,
         "role": role,
         "operations": normalized,
         "conservation": normalized_conservation,

@@ -18,7 +18,7 @@ matching contract note is
 
 [`EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py`](EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py)
 selects two state spaces of one model into two owner-qualified blocks, couples them through a typed
-elliptic field on the same periodic layout, publishes owner-qualified density/charge-contribution
+elliptic field on the same periodic layout, publishes owner-qualified signed charge-contribution
 and momentum diagnostics, and proves scientific outputs plus bit-identical restart continuation
 through the public lifecycle.
 

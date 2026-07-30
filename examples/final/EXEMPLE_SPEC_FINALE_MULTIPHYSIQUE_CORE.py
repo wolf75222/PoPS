@@ -350,12 +350,22 @@ def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
         output_mode = ParallelMode.SERIAL
 
     end_schedule = on_end(clock=program.clock)
-    # The field RHS is -ne + ni, so these owner-qualified density integrals are the
-    # two signed-charge contributions before applying their model-declared signs.
+    # The field RHS is -ne + ni, so these owner-qualified density integrals publish
+    # the two signed charge contributions with the same exact coefficients.
     # Momentum is likewise selected by typed physical role, never by component name.
     end_diagnostics = (
-        Integral(block=electron_block, role=Density(), cadence=end_schedule),
-        Integral(block=ion_block, role=Density(), cadence=end_schedule),
+        Integral(
+            block=electron_block,
+            role=Density(),
+            cadence=end_schedule,
+            coefficient=-1.0,
+        ),
+        Integral(
+            block=ion_block,
+            role=Density(),
+            cadence=end_schedule,
+            coefficient=1.0,
+        ),
         Integral(
             block=electron_block,
             role=Momentum(axis=x_axis),
