@@ -20,8 +20,8 @@ The source audit already authenticates real proofs for:
   native interfaces;
 - real Uniform and AMR writer transactions, a real multi-layout transfer,
   and a positive multi-layout checkpoint/restart;
-- accepted scientific publication, diagnostics, and two-rank collective
-  HDF5.
+- accepted scientific publication, diagnostics, two-rank collective HDF5,
+  and a two-rank PVD/PVTU/rank-VTU hierarchy reopened by native VTK readers.
 
 This evidence is intentionally narrower than the final ADC-687 acceptance
 contract. The deferred rows name the missing polarity and the nearby source
@@ -32,10 +32,9 @@ that must not be mistaken for closure. They currently cover:
 - ConsumerGraph and composite runtime rollback without handwritten publishers
   or injected failure wrappers;
 - checkpoint restore rollback caused by a real provider failure;
-- complete Uniform, AMR, and multi-layout public-contract/report parity;
-- mandatory native VTK reopen of the MPI PVD to PVTU to rank-VTU hierarchy;
+- complete Uniform, AMR, and multi-layout public-contract/report parity.
 
-## Serial output evidence
+## Exact output evidence
 
 There are four serial proofs that are real and remain selected:
 
@@ -53,11 +52,14 @@ authenticated PoPS reader rejects it. These tests contain no optional import
 or skip. That makes their dependencies mandatory wherever the executable gate
 runs; it does not prove that CI currently provisions those dependencies.
 
-The ParaView proof is limited to one serial `.vtu`. The MPI test authenticates
-the `.pvd`, `.pvtu`, and rank-local `.vtu` hierarchy with PoPS and XML, but its
-independent VTK reader is optional today. Consequently the standard parallel
-ParaView hierarchy is useful existing evidence, not a closed native-reader
-proof.
+The selected two-rank ParaView entrypoint starts from the standard `.pvd`
+catalogue, preserves its exact temporal ordering, and requires the native VTK
+parallel reader to assemble every referenced `.pvtu`. It also reopens every
+rank-local `.vtu` directly with VTK and checks its geometry, public arrays,
+component name, and `TimeValue`. VTK imports are unconditional in the required
+MPI lane: `POPS_REQUIRE_MPI_TESTS=1` turns an absent reader into a test failure.
+The separate `gate_execution` gap remains open until CI provisions VTK and
+executes this selected entrypoint rather than auditing only its source.
 
 ## Gate modes
 
