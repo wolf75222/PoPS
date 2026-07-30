@@ -1,7 +1,8 @@
 """Bind-time installation of the immutable cadence carried by a compiled Program."""
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 
 def install_program_cadence(engine: Any, program: Any) -> None:
@@ -27,7 +28,9 @@ def install_program_cadence(engine: Any, program: Any) -> None:
     stride = getattr(engine, "program_stride", None)
     if not callable(substeps) or not callable(stride):
         raise RuntimeError("pops.bind runtime cannot authenticate the installed Program cadence")
-    actual = (int(substeps()), int(stride()))
+    installed_substeps = cast(Callable[[], int], substeps)
+    installed_stride = cast(Callable[[], int], stride)
+    actual = (int(installed_substeps()), int(installed_stride()))
     expected = (contract.substeps, contract.stride)
     if actual != expected:
         raise RuntimeError(
