@@ -38,8 +38,8 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["deferred"]) == 4
-    assert len(data["check"]) >= 47
+    assert len(data["deferred"]) == 3
+    assert len(data["check"]) >= 48
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -58,7 +58,6 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     } == {
         ("ADC-684", "runtime_instance", "positive"),
         ("ADC-684", "runtime_instance", "refusal"),
-        ("ADC-685", "consumer_graph", "refusal"),
         ("ADC-687", "gate_execution", "positive"),
     }
 
@@ -220,6 +219,59 @@ def test_m4_gate_pins_real_runtime_instance_and_positive_checkpoint_proofs():
         "tests/python/integration/runtime/test_multi_layout_runtime.py::"
         "test_failed_child_restart_rolls_back_already_restored_layouts"
     ) not in selected
+
+
+def test_m4_gate_pins_real_writer_refusal_without_publication_fakes():
+    data, errors = _load_runner().audit_manifest(MANIFEST)
+    assert not errors
+    expected = {
+        "issue": "ADC-685",
+        "requirement": "consumer_graph",
+        "polarity": "refusal",
+        "kind": "pytest",
+        "target": "consumer_graph",
+        "nodeid": (
+            "tests/python/integration/native_loader/"
+            "test_external_component_package.py::"
+            "test_real_writer_collision_compensates_the_complete_consumer_graph_transaction"
+        ),
+    }
+    assert expected in data["check"]
+
+    path = (
+        ROOT
+        / "tests/python/integration/native_loader/test_external_component_package.py"
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name
+        == "test_real_writer_collision_compensates_the_complete_consumer_graph_transaction"
+    )
+    calls = {
+        (
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else ""
+        )
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+    }
+    assert {
+        "_compile_writer",
+        "_bind_writer_case",
+        "_stage_consumers",
+        "accept",
+        "_fire_consumers",
+    } <= calls
+    names = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
+    assert names.isdisjoint(
+        {"_Publisher", "_Prepared", "SimpleNamespace", "Mock", "MagicMock"}
+    )
 
 
 def test_m4_gate_keeps_real_tamper_capacity_proofs_and_defers_runtime_gaps():

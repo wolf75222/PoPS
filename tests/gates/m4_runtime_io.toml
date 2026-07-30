@@ -43,16 +43,6 @@ evidence_paths = [
   "tests/python/integration/runtime/test_multi_layout_runtime.py",
 ]
 
-[[deferred]]
-issue = "ADC-685"
-requirement = "consumer_graph"
-polarity = "refusal"
-reason = "The available transaction refusal uses handwritten publisher and prepared-publication fakes; M4 still needs the same refusal through a real writer or consumer."
-evidence_paths = [
-  "tests/python/unit/runtime/test_consumer_transactions.py",
-  "tests/python/integration/native_loader/test_external_component_package.py",
-]
-
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
 # optional imports, skip/xfail, non-exact CTest selectors, duplicate proofs,
@@ -233,6 +223,14 @@ polarity = "positive"
 kind = "pytest"
 target = "consumer_graph"
 nodeid = "tests/python/unit/runtime/test_consumer_transactions.py::test_graph_and_plan_are_semantic_and_insertion_order_independent"
+
+[[check]]
+issue = "ADC-685"
+requirement = "consumer_graph"
+polarity = "refusal"
+kind = "pytest"
+target = "consumer_graph"
+nodeid = "tests/python/integration/native_loader/test_external_component_package.py::test_real_writer_collision_compensates_the_complete_consumer_graph_transaction"
 
 [[check]]
 issue = "ADC-685"
