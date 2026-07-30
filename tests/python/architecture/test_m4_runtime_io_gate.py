@@ -38,8 +38,8 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["deferred"]) == 2
-    assert len(data["check"]) >= 49
+    assert len(data["deferred"]) == 1
+    assert len(data["check"]) == 50
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -56,7 +56,6 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
         (row["issue"], row["requirement"], row["polarity"])
         for row in data["deferred"]
     } == {
-        ("ADC-684", "runtime_instance", "positive"),
         ("ADC-687", "gate_execution", "positive"),
     }
 
@@ -159,6 +158,17 @@ def test_m4_gate_pins_real_runtime_instance_and_positive_checkpoint_proofs():
         "nodeid": (
             "tests/python/integration/runtime/test_shared_interface_runtime.py::"
             "test_runtime_instance_executes_one_two_sided_shared_flux"
+        ),
+    } in checks
+    assert {
+        "issue": "ADC-684",
+        "requirement": "runtime_instance",
+        "polarity": "positive",
+        "kind": "pytest",
+        "target": "runtime_instance",
+        "nodeid": (
+            "tests/python/integration/runtime/test_multi_layout_runtime.py::"
+            "test_uniform_amr_and_multi_layout_share_complete_runtime_instance_contract"
         ),
     } in checks
     assert {
@@ -285,6 +295,70 @@ def test_m4_runtime_refusal_uses_a_real_prepared_component_without_step_wrapper(
             "Mock",
             "MagicMock",
             "SimpleNamespace",
+        }
+    )
+    attributes = {
+        node.attr for node in ast.walk(function) if isinstance(node, ast.Attribute)
+    }
+    assert "_native_step_target" not in attributes
+    assert "_engines" not in attributes
+    assert not any(isinstance(node, ast.ClassDef) for node in ast.walk(function))
+
+
+def test_m4_runtime_positive_compiles_all_layout_kinds_without_test_doubles():
+    data, errors = _load_runner().audit_manifest(MANIFEST)
+    assert not errors
+    nodeid = (
+        "tests/python/integration/runtime/test_multi_layout_runtime.py::"
+        "test_uniform_amr_and_multi_layout_share_complete_runtime_instance_contract"
+    )
+    assert [
+        row for row in data["check"] if row.get("nodeid") == nodeid
+    ] == [{
+        "issue": "ADC-684",
+        "requirement": "runtime_instance",
+        "polarity": "positive",
+        "kind": "pytest",
+        "target": "runtime_instance",
+        "nodeid": nodeid,
+    }]
+
+    path = ROOT / "tests/python/integration/runtime/test_multi_layout_runtime.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name
+        == "test_uniform_amr_and_multi_layout_share_complete_runtime_instance_contract"
+    )
+    calls = {
+        (
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else ""
+        )
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+    }
+    assert {"compile", "bind", "run", "program_report", "inspect", "integral"} <= calls
+    labels = {
+        node.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert {"uniform", "amr", "multi-layout"} <= labels
+    names = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
+    assert names.isdisjoint(
+        {
+            "FailFirstStep",
+            "_RankLocalFailureTarget",
+            "Mock",
+            "MagicMock",
+            "SimpleNamespace",
+            "monkeypatch",
         }
     )
     attributes = {

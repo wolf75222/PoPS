@@ -23,17 +23,6 @@ evidence_paths = [
   "scripts/run_m4_gate.py",
 ]
 
-[[deferred]]
-issue = "ADC-684"
-requirement = "runtime_instance"
-polarity = "positive"
-reason = "Uniform, AMR, and multi-layout executions are covered separately and only partially inspect reports; one complete public-contract and report-parity proof is still absent."
-evidence_paths = [
-  "tests/python/integration/native_loader/test_external_component_package.py",
-  "tests/python/integration/runtime/test_multi_layout_runtime.py",
-  "tests/python/integration/runtime/test_shared_interface_runtime.py",
-]
-
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
 # optional imports, skip/xfail, non-exact CTest selectors, duplicate proofs,
@@ -190,6 +179,14 @@ polarity = "positive"
 kind = "pytest"
 target = "runtime_instance"
 nodeid = "tests/python/integration/runtime/test_shared_interface_runtime.py::test_runtime_instance_executes_one_two_sided_shared_flux"
+
+[[check]]
+issue = "ADC-684"
+requirement = "runtime_instance"
+polarity = "positive"
+kind = "pytest"
+target = "runtime_instance"
+nodeid = "tests/python/integration/runtime/test_multi_layout_runtime.py::test_uniform_amr_and_multi_layout_share_complete_runtime_instance_contract"
 
 [[check]]
 issue = "ADC-684"
