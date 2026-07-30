@@ -360,6 +360,10 @@ def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
     source = emit_cpp_program(P, balance_due_contract=contract)
     assert source.count("ctx.record_balance_term(") == 5
     assert source.count("ctx.balance_consumer_is_due(") == 1
+    assert source.count("ctx.note_automatic_balance_capture_due(") == 1
+    assert source.index("ctx.note_automatic_balance_capture_due(") < source.index(
+        "ctx.record_balance_term("
+    )
     assert '"%s", 3)' % route.token in source
     assert "? (ctx.sum_component(" in source
     assert "ctx.record_scalar(" not in source
@@ -367,12 +371,11 @@ def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
 
     unreachable_source = emit_cpp_program(
         P,
-        balance_due_contract=_balance_due_contract(
-            route, every(1 << 31, clock=P.clock)
-        ),
+        balance_due_contract=_balance_due_contract(route, every(1 << 31, clock=P.clock)),
     )
     assert "2147483648" not in unreachable_source
     assert "ctx.balance_consumer_is_due(" not in unreachable_source
+    assert "ctx.note_automatic_balance_capture_due(" not in unreachable_source
 
 
 def test_balance_due_contract_unions_consumers_and_ignores_static_false(t):
@@ -420,6 +423,7 @@ def test_record_balance_elides_native_collectives_without_a_consumer(t):
     source = emit_cpp_program(P)
 
     assert "ctx.balance_consumer_is_due(" not in source
+    assert "ctx.note_automatic_balance_capture_due(" not in source
     assert "ctx.record_balance_term(" not in source
     assert "(false) ? (ctx.sum_component(" in source
 
@@ -480,6 +484,7 @@ def test_record_balance_physical_time_cadence_stays_conservatively_due(t):
     )
 
     assert source.count("ctx.balance_consumer_is_due(") == 1
+    assert source.count("ctx.note_automatic_balance_capture_due(") == 1
     assert '"%s", 1)' % route.token in source
     assert source.count("ctx.record_balance_term(") == 5
 
