@@ -117,30 +117,29 @@ inline std::string canonical_analytic_request(std::string_view operation,
 
 }  // namespace detail
 
-/// Run a non-mutating local validator/preparer on every rank, convert any rank-local exception into
-/// one collective failure, then require exact equality of the complete canonical request. The
-/// returned object may own prepared native programs or staged registry nodes; callers publish it
-/// only after this function returns.
-///
-/// This is a control-plane collective. Every rank in @p communicator must call it in the same order.
-/// With one rank the original validation exception is rethrown, preserving the serial API contract.
-template <class LocalPrepare>
-[[nodiscard]] auto collectively_prepare_analytic_request(
-    std::string_view operation, std::span<const AnalyticTextMetadata> text_metadata,
-    std::span<const AnalyticRealMetadata> real_metadata, const AnalyticOpcodeRows& opcodes,
-    const AnalyticLiteralRows& literals, LocalPrepare&& local_prepare,
+/// Run one fallible local preparation and one fallible exact canonicalization under the same
+/// collective failure boundary.  This is the common transaction used by analytic requests whose
+/// metadata is richer than the standard text/real/opcode tables.
+template <class LocalPrepare, class LocalCanonicalize>
+[[nodiscard]] auto collectively_prepare_exact_analytic_request(
+    std::string_view operation, LocalPrepare&& local_prepare,
+    LocalCanonicalize&& local_canonicalize,
     const CommunicatorView& communicator = world_communicator_view())
     -> std::invoke_result_t<LocalPrepare> {
   using Result = std::invoke_result_t<LocalPrepare>;
   static_assert(!std::is_void_v<Result>);
+  static_assert(std::is_convertible_v<std::invoke_result_t<LocalCanonicalize>, std::string>);
 
   std::optional<Result> prepared;
   std::string canonical_payload;
   std::exception_ptr local_failure;
   try {
     prepared.emplace(std::invoke(std::forward<LocalPrepare>(local_prepare)));
-    canonical_payload = detail::canonical_analytic_request(operation, text_metadata, real_metadata,
-                                                           opcodes, literals);
+    const std::string request =
+        std::string(std::invoke(std::forward<LocalCanonicalize>(local_canonicalize)));
+    detail::append_analytic_bytes(canonical_payload, "pops.analytic.exact-request.v1");
+    detail::append_analytic_bytes(canonical_payload, operation);
+    detail::append_analytic_bytes(canonical_payload, request);
   } catch (...) {
     local_failure = std::current_exception();
   }
@@ -159,6 +158,29 @@ template <class LocalPrepare>
     throw std::runtime_error(std::string(operation) +
                              ": analytic request differs across MPI ranks");
   return std::move(*prepared);
+}
+
+/// Run a non-mutating local validator/preparer on every rank, convert any rank-local exception into
+/// one collective failure, then require exact equality of the complete canonical request. The
+/// returned object may own prepared native programs or staged registry nodes; callers publish it
+/// only after this function returns.
+///
+/// This is a control-plane collective. Every rank in @p communicator must call it in the same order.
+/// With one rank the original validation exception is rethrown, preserving the serial API contract.
+template <class LocalPrepare>
+[[nodiscard]] auto collectively_prepare_analytic_request(
+    std::string_view operation, std::span<const AnalyticTextMetadata> text_metadata,
+    std::span<const AnalyticRealMetadata> real_metadata, const AnalyticOpcodeRows& opcodes,
+    const AnalyticLiteralRows& literals, LocalPrepare&& local_prepare,
+    const CommunicatorView& communicator = world_communicator_view())
+    -> std::invoke_result_t<LocalPrepare> {
+  return collectively_prepare_exact_analytic_request(
+      operation, std::forward<LocalPrepare>(local_prepare),
+      [&]() {
+        return detail::canonical_analytic_request(operation, text_metadata, real_metadata, opcodes,
+                                                  literals);
+      },
+      communicator);
 }
 
 template <class LocalPrepare>

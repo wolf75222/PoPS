@@ -23,9 +23,12 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -87,6 +90,102 @@ struct PreparedBoundaryReadDependencies {
   std::vector<std::string> states;
   std::vector<std::string> fields;
 };
+
+namespace detail {
+
+inline void append_boundary_request_u64(std::string& payload, std::uint64_t value) {
+  for (int shift = 56; shift >= 0; shift -= 8)
+    payload.push_back(static_cast<char>((value >> shift) & UINT64_C(0xff)));
+}
+
+inline void append_boundary_request_size(std::string& payload, std::size_t value) {
+  if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+    if (value > static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max()))
+      throw std::length_error("boundary request exceeds canonical uint64 length capacity");
+  }
+  append_boundary_request_u64(payload, static_cast<std::uint64_t>(value));
+}
+
+inline void append_boundary_request_bytes(std::string& payload, std::string_view value) {
+  append_boundary_request_size(payload, value.size());
+  if (!value.empty())
+    payload.append(value.data(), value.size());
+}
+
+inline void append_boundary_request_int(std::string& payload, int value) {
+  append_boundary_request_u64(payload,
+                              static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
+}
+
+inline void append_boundary_request_strings(std::string& payload,
+                                            const std::vector<std::string>& values) {
+  append_boundary_request_size(payload, values.size());
+  for (const auto& value : values)
+    append_boundary_request_bytes(payload, value);
+}
+
+inline void append_boundary_request_reals(std::string& payload, const std::vector<double>& values) {
+  static_assert(sizeof(double) == sizeof(std::uint64_t));
+  static_assert(std::numeric_limits<double>::is_iec559,
+                "boundary request consensus requires IEEE-754 binary64");
+  append_boundary_request_size(payload, values.size());
+  for (double value : values)
+    append_boundary_request_u64(payload, std::bit_cast<std::uint64_t>(value));
+}
+
+/// Exact byte identity of every argument that can affect one prepared boundary plan.  Analytic
+/// opcode/literal rows are included here as well as fixed-state and topology metadata so a
+/// collectively prepared plan cannot diverge through a non-program field.
+inline std::string canonical_prepared_boundary_plan_request(
+    std::string_view name, std::string_view identity, int required_depth,
+    const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+    const std::vector<std::string>& face_identities,
+    const std::vector<std::string>& component_roles,
+    const std::vector<int>& omitted_interface_faces, std::string_view state_identity,
+    const PreparedBoundaryReadDependencies& read_dependencies,
+    const std::vector<PeriodicIdentification2D>& periodic_identifications,
+    const std::vector<std::string>& face_representations,
+    const std::vector<std::string>& face_converter_identities,
+    const std::vector<std::vector<std::string>>& face_analytic_opcodes,
+    const std::vector<std::vector<double>>& face_analytic_literals,
+    const std::vector<std::string>& face_analytic_clocks) {
+  std::string payload;
+  append_boundary_request_bytes(payload, "pops.prepared-boundary-plan.request.v1");
+  append_boundary_request_bytes(payload, name);
+  append_boundary_request_bytes(payload, identity);
+  append_boundary_request_int(payload, required_depth);
+  append_boundary_request_strings(payload, face_types);
+  append_boundary_request_reals(payload, face_values);
+  append_boundary_request_strings(payload, face_identities);
+  append_boundary_request_strings(payload, component_roles);
+  append_boundary_request_size(payload, omitted_interface_faces.size());
+  for (int face : omitted_interface_faces)
+    append_boundary_request_int(payload, face);
+  append_boundary_request_bytes(payload, state_identity);
+  append_boundary_request_strings(payload, read_dependencies.states);
+  append_boundary_request_strings(payload, read_dependencies.fields);
+  append_boundary_request_size(payload, periodic_identifications.size());
+  for (const auto& periodic : periodic_identifications) {
+    append_boundary_request_int(payload, periodic.source_face);
+    append_boundary_request_int(payload, periodic.target_face);
+    for (int axis : periodic.permutation)
+      append_boundary_request_int(payload, axis);
+    for (int sign : periodic.signs)
+      append_boundary_request_int(payload, sign);
+  }
+  append_boundary_request_strings(payload, face_representations);
+  append_boundary_request_strings(payload, face_converter_identities);
+  append_boundary_request_size(payload, face_analytic_opcodes.size());
+  for (const auto& row : face_analytic_opcodes)
+    append_boundary_request_strings(payload, row);
+  append_boundary_request_size(payload, face_analytic_literals.size());
+  for (const auto& row : face_analytic_literals)
+    append_boundary_request_reals(payload, row);
+  append_boundary_request_strings(payload, face_analytic_clocks);
+  return payload;
+}
+
+}  // namespace detail
 
 /// Native boundary plan captured by every block closure. The built-in physical-face authority is
 /// one model-aware hyperbolic plan; field/elliptic BCRec data is not a transport semantic here.

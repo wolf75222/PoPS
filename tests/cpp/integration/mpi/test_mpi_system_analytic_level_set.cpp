@@ -190,6 +190,97 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   require(all_reduce_sum(valid_amr_registered ? 1L : 0L) == n_ranks(),
           "a rejected local AMR error must not leak a partial registration");
 
+  const std::vector<std::string> boundary_types{"dirichlet", "foextrap", "foextrap", "foextrap"};
+  const std::vector<double> boundary_values(4, 0.0);
+  const std::vector<std::string> boundary_faces{"case::boundary::xlo", "case::boundary::xhi",
+                                                "case::boundary::ylo", "case::boundary::yhi"};
+  const std::vector<std::string> boundary_roles{"Scalar"};
+  const std::vector<std::string> boundary_representations(4, "conservative");
+  const std::vector<std::string> boundary_converters(4, "");
+  const std::vector<std::string> boundary_clocks(4, "");
+  const std::vector<std::vector<double>> boundary_literals{{1.0}, {}, {}, {}};
+
+  // Boundary programs are prepared and allocate native tables during installation. A malformed
+  // opcode on one rank must reject every rank before the prepared-plan map publishes a node.
+  System boundary_system(SystemConfig{12, 1.0, Periodicity{false, false}});
+  const std::string boundary_state = "case::boundary::uniform::state";
+  boundary_system.install_block_state_route("tracer", boundary_state);
+  bool malformed_boundary_rejected = false;
+  std::string malformed_boundary_message;
+  try {
+    boundary_system.install_boundary_plan(
+        "tracer", "case::boundary::uniform::plan", 1, boundary_types, boundary_values,
+        boundary_faces, boundary_roles, {}, boundary_state, PreparedBoundaryReadDependencies{}, {},
+        boundary_representations, boundary_converters,
+        {{rank == 0 ? "constant" : "not-an-analytic-opcode"}, {}, {}, {}}, boundary_literals,
+        boundary_clocks);
+  } catch (const std::runtime_error& error) {
+    malformed_boundary_rejected = true;
+    malformed_boundary_message = error.what();
+  }
+  require(all_reduce_sum(malformed_boundary_rejected ? 1L : 0L) == n_ranks(),
+          "one malformed uniform analytic boundary must reject collectively");
+  require(malformed_boundary_rejected &&
+              malformed_boundary_message.find(
+                  "rank-local analytic validation failed collectively") != std::string::npos,
+          "uniform boundary rejection must identify rank-local collective validation");
+
+  bool valid_boundary_installed = true;
+  try {
+    boundary_system.install_boundary_plan(
+        "tracer", "case::boundary::uniform::plan", 1, boundary_types, boundary_values,
+        boundary_faces, boundary_roles, {}, boundary_state, PreparedBoundaryReadDependencies{}, {},
+        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
+        boundary_literals, boundary_clocks);
+  } catch (const std::exception& error) {
+    valid_boundary_installed = false;
+    std::cerr << "valid uniform analytic boundary failed after malformed payload on rank " << rank
+              << ": " << error.what() << '\n';
+  }
+  require(all_reduce_sum(valid_boundary_installed ? 1L : 0L) == n_ranks(),
+          "a rejected uniform boundary must not publish a partial plan");
+
+  // AMR uses the same exact transaction. Change non-program metadata only, proving that consensus
+  // covers the complete boundary request rather than merely its postfix rows.
+  AmrSystem boundary_amr(amr_config);
+  const std::string boundary_amr_state = "case::boundary::amr::state";
+  boundary_amr.install_block_state_route("tracer", boundary_amr_state);
+  auto rank_faces = boundary_faces;
+  if (rank == 1)
+    rank_faces[0] = "case::boundary::rank-one-xlo";
+  bool boundary_metadata_rejected = false;
+  std::string boundary_metadata_message;
+  try {
+    boundary_amr.install_boundary_plan(
+        "tracer", "case::boundary::amr::plan", 1, boundary_types, boundary_values, rank_faces,
+        boundary_roles, {}, boundary_amr_state, PreparedBoundaryReadDependencies{}, {},
+        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
+        boundary_literals, boundary_clocks);
+  } catch (const std::runtime_error& error) {
+    boundary_metadata_rejected = true;
+    boundary_metadata_message = error.what();
+  }
+  require(all_reduce_sum(boundary_metadata_rejected ? 1L : 0L) == n_ranks(),
+          "rank-dependent AMR analytic boundary metadata must reject collectively");
+  require(boundary_metadata_rejected &&
+              boundary_metadata_message.find("differs across MPI ranks") != std::string::npos,
+          "AMR boundary metadata rejection must identify exact MPI disagreement");
+
+  bool valid_amr_boundary_installed = true;
+  try {
+    boundary_amr.install_boundary_plan(
+        "tracer", "case::boundary::amr::plan", 1, boundary_types, boundary_values, boundary_faces,
+        boundary_roles, {}, boundary_amr_state, PreparedBoundaryReadDependencies{}, {},
+        boundary_representations, boundary_converters, {{"constant"}, {}, {}, {}},
+        boundary_literals, boundary_clocks);
+  } catch (const std::exception& error) {
+    valid_amr_boundary_installed = false;
+    std::cerr << "valid AMR analytic boundary failed after metadata mismatch on rank " << rank
+              << ": " << error.what() << '\n';
+  }
+  require(all_reduce_sum(valid_amr_boundary_installed ? 1L : 0L) == n_ranks(),
+          "a rejected AMR boundary mismatch must not publish a partial plan");
+
   const long failures = all_reduce_sum(local_failures);
   comm_finalize();
   return failures == 0 ? 0 : 1;

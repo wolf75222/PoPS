@@ -332,27 +332,48 @@ POPS_EXPORT void System::install_boundary_plan(
     const std::vector<std::vector<double>>& face_analytic_literals,
     const std::vector<std::string>& face_analytic_clocks) {
   Impl* P = p_.get();
-  require_assembling(P->lifecycle_, "install_boundary_plan");
-  if (name.empty() || state_identity.empty())
-    throw std::runtime_error(
-        "System::install_boundary_plan requires block and state-qualified identities");
-  const auto state_route = P->block_state_identities_.find(name);
-  if (state_route == P->block_state_identities_.end() || state_route->second != state_identity)
-    throw std::runtime_error(
-        "System::install_boundary_plan state differs from the exact block state route");
-  if (P->boundary_plans_.count(name) != 0)
-    throw std::runtime_error("System::install_boundary_plan duplicate block '" + name + "'");
-  auto hyperbolic = prepare_hyperbolic_boundary<2>(
-      face_types, face_values, face_identities, component_roles, !periodic_identifications.empty(),
-      face_representations, face_converter_identities, face_analytic_opcodes,
-      face_analytic_literals, face_analytic_clocks);
-  auto plan = std::make_shared<PreparedBoundaryPlan>(
-      identity, required_depth, std::move(hyperbolic), omitted_interface_faces, state_identity,
-      std::move(read_dependencies), std::move(periodic_identifications));
-  for (const auto& [_, installed] : P->boundary_plans_)
-    if (installed->state_identity() == state_identity)
-      throw std::runtime_error("System::install_boundary_plan duplicate qualified state identity");
-  P->boundary_plans_.emplace(name, std::move(plan));
+  using BoundaryPlanMap = decltype(P->boundary_plans_);
+  using BoundaryPlanNode = typename BoundaryPlanMap::node_type;
+  BoundaryPlanNode prepared = analytic::collectively_prepare_exact_analytic_request(
+      "System::install_boundary_plan",
+      [&]() -> BoundaryPlanNode {
+        require_assembling(P->lifecycle_, "install_boundary_plan");
+        if (name.empty() || state_identity.empty())
+          throw std::runtime_error(
+              "System::install_boundary_plan requires block and state-qualified identities");
+        const auto state_route = P->block_state_identities_.find(name);
+        if (state_route == P->block_state_identities_.end() ||
+            state_route->second != state_identity)
+          throw std::runtime_error(
+              "System::install_boundary_plan state differs from the exact block state route");
+        if (P->boundary_plans_.count(name) != 0)
+          throw std::runtime_error("System::install_boundary_plan duplicate block '" + name + "'");
+        for (const auto& [_, installed] : P->boundary_plans_)
+          if (installed->state_identity() == state_identity)
+            throw std::runtime_error(
+                "System::install_boundary_plan duplicate qualified state identity");
+
+        auto hyperbolic = prepare_hyperbolic_boundary<2>(
+            face_types, face_values, face_identities, component_roles,
+            !periodic_identifications.empty(), face_representations, face_converter_identities,
+            face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
+        auto plan = std::make_shared<PreparedBoundaryPlan>(
+            identity, required_depth, std::move(hyperbolic), omitted_interface_faces,
+            state_identity, read_dependencies, periodic_identifications);
+        BoundaryPlanMap staged;
+        staged.emplace(name, std::move(plan));
+        return staged.extract(staged.begin());
+      },
+      [&]() {
+        return detail::canonical_prepared_boundary_plan_request(
+            name, identity, required_depth, face_types, face_values, face_identities,
+            component_roles, omitted_interface_faces, state_identity, read_dependencies,
+            periodic_identifications, face_representations, face_converter_identities,
+            face_analytic_opcodes, face_analytic_literals, face_analytic_clocks);
+      });
+  const auto published = P->boundary_plans_.insert(std::move(prepared));
+  if (!published.inserted)
+    throw std::logic_error("System::install_boundary_plan lost its prepared publication slot");
 }
 
 POPS_EXPORT void System::install_field_storage_route(const std::string& field_identity,
