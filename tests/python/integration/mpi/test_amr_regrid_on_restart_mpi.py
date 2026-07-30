@@ -107,7 +107,7 @@ def _shared_flux_component(root: Path):
         {
             "component_id": component.component_id,
             "component_manifest": component.component_manifest.token,
-            "runtime_manifest": dict(component.runtime_contract.manifest_data),
+            "runtime_manifest": component.runtime_contract.to_data()["manifest"],
             "platform_manifest": component.platform_manifest.to_data(),
             "entry_symbols": dict(component.entry_symbols),
             "binary_identity": component.binary_identity.token,
