@@ -744,6 +744,10 @@ class PreparedBoundaryPlan {
       throw std::runtime_error(
           "PreparedBoundaryPlan mapped periodic topology currently requires one identification; "
           "mixed periodic corners need a composed scheduler");
+    if (has_mapped_periodicity_() && hyperbolic_boundary_.has_analytic_state())
+      throw std::runtime_error(
+          "PreparedBoundaryPlan analytic faces do not yet support mapped periodic coordinates; "
+          "install an axis-aligned periodic identification or a prepared coordinate map");
     if (has_mapped_periodicity_())
       for (int component = 0; component < hyperbolic_boundary_.ncomp(); ++component)
         if (hyperbolic_boundary_.component_transform(component).parity !=

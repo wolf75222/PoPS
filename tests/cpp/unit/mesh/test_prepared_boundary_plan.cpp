@@ -550,6 +550,19 @@ TEST(test_prepared_boundary_plan, mapped_periodicity_refuses_unmapped_vector_com
                std::runtime_error);
 }
 
+TEST(test_prepared_boundary_plan, mapped_periodicity_refuses_unmapped_analytic_coordinates) {
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+  auto analytic_boundary = prepare_hyperbolic_boundary<2>(
+      {"periodic", "dirichlet", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+      {"case::analytic::xlo", "case::analytic::xhi", "case::analytic::ylo", "case::analytic::yhi"},
+      {"Scalar"}, true, {}, {}, {{}, {"x"}, {}, {}}, {{}, {0.0}, {}, {}}, {"", "", "", ""});
+
+  EXPECT_THROW(PreparedBoundaryPlan("case::block::rotated-analytic-periodic", 1,
+                                    std::move(analytic_boundary), {}, "", {}, {xlo_to_yhi}),
+               std::runtime_error);
+}
+
 TEST(test_prepared_boundary_plan, axis_permutation_executes_on_a_square_domain) {
   const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
                                             std::array<int, 2>{{1, 1}}};
