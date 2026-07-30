@@ -314,6 +314,15 @@ nproc = 2
 
 [[check]]
 issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "positive"
+kind = "mpi_python"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::test_regrid_on_restart_mpi_shared_interface_collective_rollback_and_retry"
+nproc = 2
+
+[[check]]
+issue = "ADC-678"
 requirement = "lowering_coverage"
 polarity = "positive"
 kind = "pytest"

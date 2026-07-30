@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pops
@@ -338,12 +339,8 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     )
 
 
-def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
+def _shared_interface_amr_authoring(tmp_path, *, component_root=None):
     from pops.amr import (
-        AMRClockRelation,
-        AMRExecution,
-        AMRHierarchy,
-        AMRRegrid,
         AMRTagging,
         AMRTransfer,
         Buffer,
@@ -355,7 +352,6 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     from pops.boundary import TransportBoundarySet
     from pops.boundary.transport import Inflow, Outflow
     from pops.initial import InitialCondition
-    from pops.layouts import AMR
     from pops.lib.amr import StateTransfer
     from pops.lib.initial import BindArray
     from pops.math import ValueExpr
@@ -386,7 +382,9 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
 
     left_numerics = numerics(core.tracer_state)
     right_numerics = numerics(right_state)
-    component = _flux_component(tmp_path)
+    component_root = tmp_path if component_root is None else Path(component_root)
+    component_root.mkdir(parents=True, exist_ok=True)
+    component = _flux_component(component_root)
     ConservativeInterface(
         "tracer_to_right",
         left=BlockInterfaceSide(core.tracer_state, boundaries.x_max),
@@ -433,23 +431,6 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
         conflict_policy=ConflictPolicy.REFINE_WINS,
     )
-    resolved = pops.resolve(
-        pops.validate(core.case),
-        layout=AMR(
-            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
-            hierarchy=AMRHierarchy(max_levels=3, ratios=(2, 2)),
-            tagging=tagging,
-            regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
-            transfer=transfer,
-            execution=AMRExecution.subcycled((
-                AMRClockRelation(0, 1, 2),
-                AMRClockRelation(1, 2, 2),
-            )),
-        ),
-        components=(component,),
-        compile_options={"include": str(ROOT / "include")},
-    )
-    artifact = pops.compile(resolved)
     left_initial = np.zeros((1, 8, 8), dtype=np.float64)
     right_initial = np.zeros((1, 8, 8), dtype=np.float64)
     # The first public refined route requires an already matched fine interface: refine one
@@ -458,7 +439,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     # implied by this proof.
     left_initial[0, :, -1:] = 1.0
     # Keep the two traces distinct: the shared component must publish its average flux to both
-    # consumers.  Equal traces would let a one-sided publication pass by coincidence.
+    # consumers. Equal traces would let a one-sided publication pass by coincidence.
     right_initial[0, :, :1] = 3.0
     params = {
         core.case.resolve(handle, block=block): value
@@ -474,7 +455,67 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
         core.case.resolve(core.refine_threshold): 0.10,
         core.case.resolve(core.coarsen_threshold): 0.04,
     })
+    return SimpleNamespace(
+        example=example,
+        core=core,
+        right=right,
+        right_state=right_state,
+        component=component,
+        program=program,
+        transfer=transfer,
+        tagging=tagging,
+        left_initial=left_initial,
+        right_initial=right_initial,
+        params=params,
+    )
+
+
+def _resolve_shared_interface_amr(authoring, *, max_levels):
+    from pops.amr import (
+        AMRClockRelation,
+        AMRExecution,
+        AMRHierarchy,
+        AMRRegrid,
+    )
+    from pops.layouts import AMR
+
+    if not isinstance(max_levels, int) or max_levels < 2:
+        raise ValueError("shared-interface AMR proof requires at least two levels")
+    return pops.resolve(
+        pops.validate(authoring.core.case),
+        layout=AMR(
+            grid=CartesianGrid(frame=authoring.core.frame, cells=(8, 8)),
+            hierarchy=AMRHierarchy(
+                max_levels=max_levels,
+                ratios=tuple(2 for _ in range(max_levels - 1)),
+            ),
+            tagging=authoring.tagging,
+            regrid=AMRRegrid(schedule=every(100, clock=authoring.program.clock)),
+            transfer=authoring.transfer,
+            execution=AMRExecution.subcycled(
+                tuple(
+                    AMRClockRelation(level, level + 1, 2)
+                    for level in range(max_levels - 1)
+                )
+            ),
+        ),
+        components=(authoring.component,),
+        compile_options={"include": str(ROOT / "include")},
+    )
+
+
+def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
+    authoring = _shared_interface_amr_authoring(tmp_path)
+    example = authoring.example
+    core = authoring.core
+    right_state = authoring.right_state
+    left_initial = authoring.left_initial
+    right_initial = authoring.right_initial
+    params = authoring.params
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=3)
+    artifact = pops.compile(resolved)
     interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+
     # Dynamic shared interfaces cannot create a missing route after bind: the complete configured
     # prefix must already be materialized by the authenticated bootstrap transaction.
     with pytest.raises(
@@ -491,7 +532,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
 
     # A shared hierarchy does not imply that one endpoint's boundary tags are mirrored to its peer.
     # With only the left x-high band tagged, the materialized L1 layout cannot tile the right x-low
-    # face.  The incremental finalizer must reject that incomplete pair before bind freezes.
+    # face. The incremental finalizer must reject that incomplete pair before bind freezes.
     with pytest.raises(ValueError, match="does not tile its declared physical face"):
         example._bind_artifact(
             artifact,
@@ -551,19 +592,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     # The three-level route above proves arbitrary-depth execution. Use the independently compiled
     # two-level route for the restart transaction: replacing its only fine transition is the exact
     # dynamic topology capability currently authenticated by the interface scheduler.
-    restart_resolved = pops.resolve(
-        pops.validate(core.case),
-        layout=AMR(
-            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
-            hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=tagging,
-            regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
-            transfer=transfer,
-            execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
-        ),
-        components=(component,),
-        compile_options={"include": str(ROOT / "include")},
-    )
+    restart_resolved = _resolve_shared_interface_amr(authoring, max_levels=2)
     restart_artifact = pops.compile(restart_resolved)
     restart_interface = restart_resolved.blocks[0].numerics.boundaries[0].interfaces[0]
     restart_source = example._bind_artifact(
@@ -601,9 +630,9 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, mon
     )
     checkpoint = restart_source.checkpoint(tmp_path / "accepted-shared-interface")
 
-    # RegridOnRestart must enter the serial native tag/cluster/regrid boundary; a deliberately
-    # rejected post-transform validation must restore the fresh runtime exactly before the same
-    # restart is retried and committed.
+    # RegridOnRestart enters the native tag/cluster/regrid boundary. A deliberately rejected
+    # post-transform validation must restore the fresh runtime exactly before the same restart is
+    # retried and committed.
     restarted = example._bind_artifact(
         restart_artifact,
         initial_values={
