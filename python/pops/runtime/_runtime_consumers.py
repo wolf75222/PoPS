@@ -2052,13 +2052,17 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             raise RuntimeError("post-commit consensus accepted no exact run identity")
         if submission is not None:
             submission.arm()
-        if manifest.parallel_mode is not ParallelMode.SERIAL:
+        if manifest.parallel_mode in (
+            ParallelMode.PER_RANK,
+            ParallelMode.COLLECTIVE,
+        ):
             # A Catalyst implementation may enter MPI from its worker thread even when PoPS gives
             # it a duplicated communicator.  Do not let the next AMR/native step concurrently
             # enter solver collectives on the main thread: MPICH and third-party VTK internals do
             # not guarantee progress for that cross-library ordering.  Drain the accepted live
             # frame locally, then prove every rank has left the worker lane before any rank returns
-            # to the solver.  Serial observers and asynchronous scientific writers remain async.
+            # to the solver.  SERIAL and gathered ROOT workers never enter MPI, so they remain
+            # asynchronous with the next numerical step.
             delivery_error = None
             try:
                 self._observer_queue(manifest, run_identity).flush()

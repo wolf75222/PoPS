@@ -388,6 +388,15 @@ def _with_graph(
         "state:u",
         layout.qualified_id,
     )
+    resolved_mode = (
+        parallel_mode
+        if kind is ConsumerKind.SCIENTIFIC_OUTPUT
+        else (
+            ParallelMode(operation.consumer_data()["parallel_mode"])
+            if kind is ConsumerKind.MONITOR
+            else ParallelMode.SERIAL
+        )
+    )
     manifest = ConsumerManifest(
         Handle("density", kind="consumer", owner=OwnerPath.consumer("adc-687")),
         kind,
@@ -397,7 +406,7 @@ def _with_graph(
         NPZ(mode=parallel_mode)
         if output_format is None and kind is ConsumerKind.SCIENTIFIC_OUTPUT
         else output_format,
-        parallel_mode if kind is ConsumerKind.SCIENTIFIC_OUTPUT else ParallelMode.SERIAL,
+        resolved_mode,
         operation=operation,
     )
     graph = ConsumerGraph((manifest,))
@@ -710,7 +719,8 @@ class _BlockingWriter:
 class _BlockingFormat:
     __pops_ir_immutable__ = True
 
-    def __init__(self):
+    def __init__(self, mode: ParallelMode):
+        self._mode = mode
         self.writer_started = threading.Event()
         self.release_writer = threading.Event()
         self.paths = []
@@ -721,7 +731,7 @@ class _BlockingFormat:
             "provider_id": "pops.test.blocking-async.v1",
             "format_name": "blocking-test",
             "extension": ".async",
-            "parallel_mode": "serial",
+            "parallel_mode": self._mode.value,
         }
 
     def writer(self):
@@ -731,7 +741,7 @@ class _BlockingFormat:
 def test_async_scientific_output_overlaps_next_step_and_flushes_real_receipts(tmp_path):
     output_root = tmp_path / "async-output"
     output_root.mkdir()
-    format_provider = _BlockingFormat()
+    format_provider = _BlockingFormat(_scientific_output_mode(_install().artifact))
     authoring_clock = Clock("async-authoring")
     descriptor = AsyncScientificOutput(
         format=format_provider,
