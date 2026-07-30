@@ -110,11 +110,13 @@ Supported native routes include:
   proper-nesting support across an omitted physical-boundary face. This route does not mirror one
   endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
-  dynamic active-depth changes, non-finest dynamic replacements at depth greater than two,
-  historical shared-interface rates, and dynamic refined MPI rematerialization remain unavailable.
-  Frozen refined interface publication uses the same exact `MPI_COMM_WORLD` trace consensus as the
-  flat route; every rank evaluates the canonical shared flux and scatters only to its locally owned
-  endpoint cells.
+  dynamic active-depth changes, non-finest dynamic replacements at depth greater than two, and
+  historical shared-interface rates remain unavailable. Frozen and depth-preserving dynamic
+  refined interfaces use the same exact `MPI_COMM_WORLD` trace and replacement-registry consensus
+  as the flat route. Dynamic rematerialization stages a detached collective candidate; a
+  rank-local failure restores the accepted layout, topology epoch, evaluator audit count and
+  executable registry before retry. Every rank evaluates the canonical shared flux and scatters
+  only to its locally owned endpoint cells.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes

@@ -50,7 +50,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
   reflux source. `AMRRegrid.frozen()` now exposes the materialize-once public hierarchy policy, and
   the installed shared-interface route covers every materialized level of a frozen hierarchy, plus
-  a serial dynamic hierarchy whose complete configured depth is active at bind, with exact
+  a dynamic hierarchy whose complete configured depth is active at bind, with exact
   SSPRK2/subcycling evaluation when both endpoint hierarchies provide matching full-face coverage.
   Every interior level contributes its canonical evaluation to both adjacent, level-qualified
   coarse/fine audit pairs. A depth-preserving finest-transition regrid rematerializes face cells,
@@ -64,8 +64,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   level route is installed before it becomes the parent of another transition, so proper-nesting
   may cross only the exact physical faces deliberately omitted from their paired boundary plans.
   One-sided tag propagation, dynamic active-depth changes, non-finest dynamic replacements at depth
-  greater than two, dynamic refined MPI rematerialization, implicit JVP and historical-rate paths
-  remain fail-closed.
+  greater than two, implicit JVP and historical-rate paths remain fail-closed. Depth-preserving
+  refined `MPI_COMM_WORLD` rematerialization now stages one detached collective registry; a
+  rank-local preparation failure rolls back the layout, topology epoch, evaluator audit count and
+  executable registry exactly before a retry may publish the replacement hierarchy.
   Each interface endpoint now carries the exact projection Handle, reconstruction-provider
   identity, operation and provider-derived trace depth into the native collective plan identity
   `pops.multiblock.interface-plan.v2`. The
