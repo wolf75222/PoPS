@@ -28,7 +28,12 @@ try:
 
     import pops
     from pops import _pops
-    from pops._native_collectives import allgather_value, barrier, broadcast_value
+    from pops._native_collectives import (
+        allgather_value,
+        barrier,
+        broadcast_bytes,
+        broadcast_value,
+    )
     from tests.python.integration.amr.test_amr_regrid_on_restart import (
         DT,
         NSTEPS,
@@ -39,6 +44,7 @@ try:
         _resolve_shared_interface_amr,
         _shared_interface_accepted_image,
         _shared_interface_amr_authoring,
+        _flux_source_component,
     )
 except Exception as exc:  # noqa: BLE001 -- optional outside the required MPI lane
     require_mpi_or_skip("RegridOnRestart MPI runtime import failed: %s" % exc)
@@ -80,6 +86,118 @@ def _shared_temporary_directory() -> Iterator[Path]:
 def _bind(artifact):
     context = pops.ExecutionContext.mpi_world(artifact)
     return pops.bind(artifact, resources={"execution_context": context})
+
+
+def _collective_flux_component(root: Path):
+    """Compile one exact component binary, then reconstruct it on every rank."""
+
+    source = None
+    publication = None
+    if int(_COMM.rank) == 0:
+        try:
+            source = _flux_source_component(root)
+        except Exception as exc:  # noqa: BLE001 -- propagate rank-0 publication failure
+            publication = (False, "%s: %s" % (type(exc).__name__, exc))
+        else:
+            publication = (True, "")
+    publication = broadcast_value(_COMM, publication, root=0)
+    if not publication[0]:
+        raise RuntimeError("shared-interface source publication failed: " + publication[1])
+
+    source_error = ""
+    if int(_COMM.rank) != 0:
+        try:
+            from pops import interfaces
+            from pops.external import load
+
+            source = load(root / "shared-average.pops.json").require(
+                "average", interface=interfaces.NumericalFlux
+            )()
+        except Exception as exc:  # noqa: BLE001 -- collect peer authentication failures
+            source_error = "%s: %s" % (type(exc).__name__, exc)
+    source_errors = allgather_value(_COMM, source_error)
+    if any(source_errors):
+        raise RuntimeError(
+            "shared-interface source authentication failed: "
+            + "; ".join(
+                "rank %d: %s" % (rank, error)
+                for rank, error in enumerate(source_errors)
+                if error
+            )
+        )
+    if source is None:
+        raise RuntimeError("shared-interface source component was not materialized")
+
+    compiled = None
+    compilation = None
+    binary = b""
+    if int(_COMM.rank) == 0:
+        from pops.external import compile_component
+
+        try:
+            compiled = compile_component(
+                source,
+                include=str(Path(__file__).resolve().parents[4] / "include"),
+            )
+        except Exception as exc:  # noqa: BLE001 -- propagate rank-0 compiler failure
+            compilation = {
+                "ok": False,
+                "error": "%s: %s" % (type(exc).__name__, exc),
+            }
+        else:
+            compilation = {
+                "ok": True,
+                "error": "",
+                "platform": compiled.platform_manifest.to_data(),
+                "entry_symbols": dict(compiled.entry_symbols),
+                "suffix": compiled.suffix,
+            }
+            binary = compiled.binary
+
+    compilation = broadcast_value(_COMM, compilation, root=0)
+    if not compilation["ok"]:
+        raise RuntimeError("shared-interface component compilation failed: " + compilation["error"])
+    binary = broadcast_bytes(_COMM, binary, root=0)
+
+    from pops._platform_contracts import PlatformManifest
+    from pops.external import CompiledComponentArtifact, ComponentRuntimeContract
+    from pops.external.packages import _binary_identity
+
+    result = None
+    reconstruction_error = ""
+    try:
+        result = CompiledComponentArtifact(
+            component_id=source.component_manifest.component_id,
+            component_manifest=source.component_manifest.manifest_digest,
+            runtime_contract=ComponentRuntimeContract.from_manifest(source.component_manifest),
+            interface=source.component_type.interface,
+            platform_manifest=PlatformManifest.from_data(compilation["platform"]),
+            entry_symbols=compilation["entry_symbols"],
+            binary_identity=_binary_identity(binary),
+            binary=binary,
+            source_package=source.package_identity,
+            fixed_signature=False,
+            suffix=compilation["suffix"],
+        )
+        result.verify()
+    except Exception as exc:  # noqa: BLE001 -- collect peer reconstruction failures
+        reconstruction_error = "%s: %s" % (type(exc).__name__, exc)
+    reconstruction_errors = allgather_value(_COMM, reconstruction_error)
+    if any(reconstruction_errors):
+        raise RuntimeError(
+            "shared-interface artifact reconstruction failed: "
+            + "; ".join(
+                "rank %d: %s" % (rank, error)
+                for rank, error in enumerate(reconstruction_errors)
+                if error
+            )
+        )
+    if result is None:
+        raise RuntimeError("shared-interface compiled component was not reconstructed")
+    artifact_identities = allgather_value(_COMM, result.artifact_identity.token)
+    if len(set(artifact_identities)) != 1:
+        raise RuntimeError("shared-interface component identity differs across MPI ranks")
+    return result
 
 
 def _accepted_image(runtime):
@@ -271,20 +389,18 @@ def test_regrid_on_restart_mpi_shared_interface_collective_rollback_and_retry() 
         print("== RegridOnRestart two-rank refined shared-interface transaction ==", flush=True)
 
     with _shared_temporary_directory() as root:
-        # The compiled component path participates in the resolved-plan identity.  Materialize the
-        # same shared path serially on each rank: rank-local paths make otherwise identical plans
-        # diverge, while concurrent writes to one package would race on a shared filesystem.
-        authoring = None
-        for owner in range(int(_COMM.size)):
-            if int(_COMM.rank) == owner:
-                authoring = _shared_interface_amr_authoring(
-                    root / "authoring",
-                    component_root=root / "component-shared",
-                )
-            barrier(_COMM)
-        if authoring is None:
-            raise RuntimeError("shared-interface authoring was not materialized on this rank")
-        resolved = _resolve_shared_interface_amr(authoring, max_levels=2)
+        component = _collective_flux_component(root / "component-shared")
+        authoring = _shared_interface_amr_authoring(
+            root / "authoring",
+            component=component,
+        )
+        from pops.amr import PatchLayout
+
+        resolved = _resolve_shared_interface_amr(
+            authoring,
+            max_levels=2,
+            patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=4),
+        )
         artifact = compile_resolved_plan_once(
             _COMM,
             resolved,

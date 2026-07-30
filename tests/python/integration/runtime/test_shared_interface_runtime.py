@@ -38,7 +38,8 @@ def _load_example():
     return module
 
 
-def _flux_component(tmp_path: Path):
+def _flux_source_component(tmp_path: Path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     interface = interfaces.NumericalFlux
     manifest = ComponentManifest(
         uri="pops://external.test/shared-interface/average",
@@ -135,9 +136,15 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &ap
         components={"average": manifest}, payloads={source_name: ("source", source)})
     package_path = tmp_path / "shared-average.pops.json"
     package_path.write_text(json.dumps(package), encoding="utf-8")
-    component = load(package_path).require(
+    return load(package_path).require(
         "average", interface=interfaces.NumericalFlux)()
-    return compile_component(component, include=str(ROOT / "include"))
+
+
+def _flux_component(tmp_path: Path):
+    return compile_component(
+        _flux_source_component(tmp_path),
+        include=str(ROOT / "include"),
+    )
 
 
 def _program(left_state, right_state, rate):
@@ -339,7 +346,7 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     )
 
 
-def _shared_interface_amr_authoring(tmp_path, *, component_root=None):
+def _shared_interface_amr_authoring(tmp_path, *, component_root=None, component=None):
     from pops.amr import (
         AMRTagging,
         AMRTransfer,
@@ -384,7 +391,8 @@ def _shared_interface_amr_authoring(tmp_path, *, component_root=None):
     right_numerics = numerics(right_state)
     component_root = tmp_path if component_root is None else Path(component_root)
     component_root.mkdir(parents=True, exist_ok=True)
-    component = _flux_component(component_root)
+    if component is None:
+        component = _flux_component(component_root)
     ConservativeInterface(
         "tracer_to_right",
         left=BlockInterfaceSide(core.tracer_state, boundaries.x_max),
@@ -470,7 +478,7 @@ def _shared_interface_amr_authoring(tmp_path, *, component_root=None):
     )
 
 
-def _resolve_shared_interface_amr(authoring, *, max_levels):
+def _resolve_shared_interface_amr(authoring, *, max_levels, patch_layout=None):
     from pops.amr import (
         AMRClockRelation,
         AMRExecution,
@@ -498,6 +506,7 @@ def _resolve_shared_interface_amr(authoring, *, max_levels):
                     for level in range(max_levels - 1)
                 )
             ),
+            patch_layout=patch_layout,
         ),
         components=(authoring.component,),
         compile_options={"include": str(ROOT / "include")},
