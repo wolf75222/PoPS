@@ -16,7 +16,8 @@ from pops._platform_contracts import (
 from pops.runtime import _multi_layout_executor as multi_executor
 from pops.runtime import _platform_manifest as platform_manifest
 from pops.runtime import _runtime_executor as executor
-from tests.python.unit.runtime.test_runtime_planning import _install
+from pops.runtime._runtime_planning import build_runtime_plans
+from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
 
 
 def _context(*, datatype="float64"):
@@ -118,7 +119,22 @@ def test_mismatched_native_state_is_rejected_before_system_constructor(
     monkeypatch.setitem(
         sys.modules, "pops.runtime._system", SimpleNamespace(System=forbidden_constructor)
     )
+    runtime_plan = build_runtime_plans(plan, {"fluid": _manifest("fluid")})
     with pytest.raises(error, match=match):
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert calls == []
+
+
+def test_runtime_plan_is_required_before_native_preflight(monkeypatch):
+    plan = _install()
+    calls = []
+
+    def forbidden_preflight(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("native preflight became reachable")
+
+    monkeypatch.setattr(executor, "_require_supported_execution_context", forbidden_preflight)
+    with pytest.raises(TypeError, match="exact RuntimePlanBundle"):
         executor.install_runtime_executor(plan)
     assert calls == []
 

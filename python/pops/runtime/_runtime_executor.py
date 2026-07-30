@@ -276,6 +276,9 @@ _PROVIDERS: tuple[RuntimeExecutorProvider, ...] = (
 
 def install_runtime_executor(install_plan: Any, runtime_plan: Any = None) -> Any:
     plan = require_install_plan(install_plan)
+    from pops.runtime._runtime_planning import require_runtime_plan_bundle
+
+    runtime_plan = require_runtime_plan_bundle(plan, runtime_plan)
     _require_supported_execution_context(plan)
     matches = tuple(provider for provider in _PROVIDERS if provider.supports(plan))
     if len(matches) != 1:
