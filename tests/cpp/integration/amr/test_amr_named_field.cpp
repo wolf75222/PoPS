@@ -590,6 +590,78 @@ TEST(test_amr_named_field, LevelLocalDynamicBoundaryReceivesLevelQualifiedState)
   EXPECT_GT(level_boundary_prepare_visits[1], 0);
 }
 
+TEST(test_amr_named_field, FullyRefinedCompositeBoundaryReceivesFinestLevelState) {
+  constexpr int n = 16;
+  constexpr Real charge = Real(-1);
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{false, false};
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc.xlo = params.poisson.bc.xhi = BCType::Dirichlet;
+  params.poisson.bc.ylo = params.poisson.bc.yhi = BCType::Dirichlet;
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 2);
+  const BoxArray fully_refined(std::vector<Box2D>{layout.geom.refine(kAmrRefRatio).domain});
+  layout.ba[1] = fully_refined;
+  layout.dm[1] = params.mesh.load_balance->distribute(fully_refined, n_ranks());
+
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::dispatch_amr_block(exb_charge(charge, 1.0), "minmod", "rusanov", layout,
+                                              "plasma", blob(n, 0.25),
+                                              /*has_density=*/true, 1.4, 1, false));
+  blocks[0].aux_ncomp = kAuxNamedBase + 1;
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 1);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+  AmrFieldSolveConfig plan;
+  plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+  plan.plan_identity = "tests:plasma/composite-level-boundary:plan@1";
+  plan.provider_identity = "tests:plasma/composite-level-boundary";
+  plan.topology_provider_kind = "builtin_rectangular_cell_graph_v1";
+  plan.topology_provenance = "tests:composite-level-qualified-boundary";
+  plan.topology_digest = "tests:composite-level-qualified-boundary:layout@1";
+  plan.output_owner_identity = "tests:plasma";
+  plan.output_block = "plasma";
+  plan.output_key = "composite_level_boundary";
+  plan.hierarchy_policy = composite_hierarchy_policy();
+  plan.nullspace = operator_topology_zero_mean_nullspace();
+  plan.has_reaction = true;
+  plan.reaction = Real(1);
+  plan.providers.push_back(FieldProviderBinding{"tests:plasma/composite-level-boundary/rhs",
+                                                "plasma", "composite_level_boundary", Real(1)});
+  runtime.install_field_plan("composite_level_boundary", plan);
+  runtime.register_named_field("plasma", "composite_level_boundary", kAuxNamedBase, -1, -1,
+                               /*gradient_sign=*/Real(1));
+  runtime.set_block_named_elliptic_rhs(0, "composite_level_boundary",
+                                       [charge](const MultiFab& state, MultiFab& rhs) {
+                                         add_scaled_component(state, charge, 0, rhs);
+                                       });
+  runtime.set_field_boundary_dependencies("composite_level_boundary", {"plasma"}, {0});
+  runtime.set_field_boundary_kernel(
+      "composite_level_boundary",
+      CompiledFieldBoundaryKernel{"tests.composite-level-qualified-boundary",
+                                  "tests.composite-level-qualified-boundary.residual", "",
+                                  prepare_level_qualified_boundary, nullptr,
+                                  add_noop_level_qualified_boundary, nullptr, false});
+  FieldLogicalTimePoint point;
+  point.time = Real(0.25);
+  point.dt = Real(0.01);
+  point.level = -1;
+  runtime.set_field_logical_timepoint("composite_level_boundary", point);
+
+  level_boundary_prepare_visits.fill(0);
+  const std::string selected = "composite_level_boundary";
+  const SolveReport report = consume_expected_solved(runtime.solve_named_fields(&selected));
+  ASSERT_TRUE(report.solved()) << report.reason;
+  EXPECT_EQ(level_boundary_prepare_visits[0], 0);
+  EXPECT_GT(level_boundary_prepare_visits[1], 0);
+}
+
 TEST(test_amr_named_field, Runs) {
   const int N = 64;
   const double L = 1.0, B0 = 1.0, q = -1.0;
@@ -1070,6 +1142,46 @@ TEST(test_amr_named_field, ProviderSupportDistinguishesRepresentedAndUnrepresent
     EXPECT_NE(diagnostic.find("provider rejected request (code 14)"), std::string::npos)
         << diagnostic;
     EXPECT_NE(diagnostic.find("coarse distribution or active region"), std::string::npos)
+        << diagnostic;
+  }
+
+  {
+    AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{false, false};
+    params.mesh.n = 16;
+    params.mesh.regrid_every = 0;
+    params.poisson.bc.xlo = params.poisson.bc.xhi = BCType::Dirichlet;
+    params.poisson.bc.ylo = params.poisson.bc.yhi = BCType::Dirichlet;
+    const detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 2);
+    std::vector<AmrRuntimeBlock> blocks;
+    blocks.push_back(detail::dispatch_amr_block(exb_charge(-1.0, 1.0), "minmod", "rusanov", layout,
+                                                "plasma", blob(params.mesh.n, 0.25),
+                                                /*has_density=*/true, 1.4, 1, false));
+    AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                       std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    AmrFieldSolveConfig dynamic =
+        make_plan("partial-dynamic-composite", composite_hierarchy_policy());
+    dynamic.has_boundary_kernel = true;
+    dynamic.boundary_kernel =
+        CompiledFieldBoundaryKernel{"tests.partial-dynamic-composite",
+                                    "tests.partial-dynamic-composite.residual",
+                                    "",
+                                    prepare_level_qualified_boundary,
+                                    nullptr,
+                                    add_noop_level_qualified_boundary,
+                                    nullptr,
+                                    false};
+    std::string diagnostic;
+    try {
+      runtime.install_field_plan("partial-dynamic-composite", dynamic);
+      ADD_FAILURE() << "partial FAC cannot reuse an inhomogeneous boundary for corrections";
+    } catch (const std::invalid_argument& error) {
+      diagnostic = error.what();
+    }
+    EXPECT_NE(diagnostic.find("provider rejected request (code 16)"), std::string::npos)
+        << diagnostic;
+    EXPECT_NE(diagnostic.find("homogeneous/JVP boundary correction operator"), std::string::npos)
         << diagnostic;
   }
 

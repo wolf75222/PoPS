@@ -204,6 +204,11 @@ Explicit unsupported rows include:
   or frozen-state restoration can dispatch. Closing the remaining gap requires a typed per-level
   tangent-field publication and transactional primal restoration, plus CompositeFAC coupling where
   selected; the existing primal `fields` table cannot represent that derivative.
+- `amr:composite_dynamic_boundary`: a fully refined hierarchy uses the exact finest-level uniform
+  field solver and receives that level's logical time, state dependencies, distributions, and
+  nonlinear/JVP context. A partially refined FAC hierarchy refuses the same request because its
+  interface correction does not yet own the required homogeneous/JVP boundary operator per level;
+  it never reuses the inhomogeneous primal closure as a correction boundary.
 
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and
