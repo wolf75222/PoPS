@@ -21,6 +21,8 @@ The source audit already authenticates real proofs for:
 - real Uniform and AMR writer transactions, a real multi-layout transfer,
   a real two-writer collision with complete ConsumerGraph compensation, and a
   positive multi-layout checkpoint/restart;
+- a prepared native FieldSolver whose invalid first result is refused through
+  RuntimeInstance with exact accepted-state rollback and a successful retry;
 - accepted scientific publication, diagnostics, two-rank collective HDF5,
   and a two-rank PVD/PVTU/rank-VTU hierarchy reopened by native VTK readers.
 
@@ -30,7 +32,6 @@ that must not be mistaken for closure. They currently cover:
 
 - a CI lane that installs every mandatory dependency, including VTK, and
   executes every selected pytest and CTest proof with zero skips;
-- composite runtime rollback without an injected failure wrapper;
 - complete Uniform, AMR, and multi-layout public-contract/report parity.
 
 ## Exact output evidence
@@ -76,6 +77,17 @@ must compensate the first artifact, preserve the colliding file byte-for-byte,
 remove every private staging path, retain the exact accepted numerical state
 and consumer cursors, and then publish both Writers on a clean retry. The
 selected proof contains no handwritten publisher or prepared-publication fake.
+
+The RuntimeInstance refusal no longer relies on `FailFirstStep`. A qualified
+native FieldTopology/FieldSolver pair is packaged, compiled, resolved, bound,
+and prepared through the production component ABI. Its first solve reports
+convergence while returning non-finite values, so the production field
+validation fails inside the native Program step. RuntimeInstance must restore
+the conservative state, field potential, accepted clock, macro-step, temporal
+authority, consumer cursors, reports, and provider evidence exactly. The same
+prepared component then returns a finite result and the unchanged
+RuntimeInstance accepts the retry. The selected test defines no step wrapper
+and never replaces a native engine or step target.
 
 ## Gate modes
 
