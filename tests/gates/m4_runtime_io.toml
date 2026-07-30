@@ -62,16 +62,6 @@ evidence_paths = [
   "tests/python/integration/runtime/test_multi_layout_runtime.py",
 ]
 
-[[deferred]]
-issue = "ADC-686"
-requirement = "exact_paraview"
-polarity = "positive"
-reason = "Serial VTU reopens with VTK, but native VTK reopening of the mandatory MPI PVD to PVTU to rank-VTU hierarchy is still optional and therefore unproved."
-evidence_paths = [
-  "tests/python/integration/io/m4_native_reopen_proof.py",
-  "tests/python/integration/mpi/test_scientific_output_mpi.py",
-]
-
 # This is an exact evidence ledger, not a list of nearby suites. Every row names
 # one source-registered proof. The runner rejects mock fixtures/imports,
 # optional imports, skip/xfail, non-exact CTest selectors, duplicate proofs,
@@ -308,6 +298,15 @@ polarity = "positive"
 kind = "pytest"
 target = "exact_paraview"
 nodeid = "tests/python/integration/io/m4_native_reopen_proof.py::test_paraview_reopens_with_vtk_without_a_pops_reader"
+
+[[check]]
+issue = "ADC-686"
+requirement = "exact_paraview"
+polarity = "positive"
+kind = "mpi_python"
+target = "exact_paraview"
+nodeid = "tests/python/integration/mpi/test_scientific_output_mpi.py::_validate_paraview"
+nproc = 2
 
 [[check]]
 issue = "ADC-686"

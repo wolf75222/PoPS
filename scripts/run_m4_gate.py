@@ -150,6 +150,15 @@ def _forbidden_python_markers(node: ast.AST) -> list[str]:
     return markers
 
 
+def _has_authenticated_mpi_guard(module: ast.Module) -> bool:
+    return any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "tests.python.support.requirements"
+        and any(alias.name == "require_mpi_or_skip" for alias in node.names)
+        for node in ast.walk(module)
+    )
+
+
 def _ctest_suites() -> dict[str, dict]:
     data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
     return {str(row["name"]): row for row in data.get("cpp", {}).get("suite", ())}
@@ -297,6 +306,8 @@ def _validate_python_nodeid(
     nodeid: object,
     where: str,
     errors: list[str],
+    *,
+    mpi_entrypoint: bool = False,
 ) -> str | None:
     if not isinstance(nodeid, str) or nodeid.count("::") != 1:
         errors.append("%s must contain one exact file::test nodeid" % where)
@@ -324,9 +335,18 @@ def _validate_python_nodeid(
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     ]
     markers = _forbidden_python_markers(function)
-    markers.extend(
-        _forbidden_python_markers(ast.Module(body=module_nodes, type_ignores=[]))
-    )
+    module = ast.Module(body=module_nodes, type_ignores=[])
+    module_markers = _forbidden_python_markers(module)
+    if mpi_entrypoint and "require_mpi_or_skip" in module_markers:
+        if not _has_authenticated_mpi_guard(module):
+            errors.append(
+                "%s uses an unauthenticated MPI prerequisite guard" % nodeid
+            )
+        module_markers = [
+            marker for marker in module_markers
+            if marker != "require_mpi_or_skip"
+        ]
+    markers.extend(module_markers)
     if markers:
         errors.append(
             "%s is not an unconditional real proof; found %s"
@@ -495,7 +515,12 @@ def audit_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             ):
                 native_positive_issues.add(str(issue))
         elif kind == "mpi_python":
-            relative = _validate_python_nodeid(row.get("nodeid"), where, errors)
+            relative = _validate_python_nodeid(
+                row.get("nodeid"),
+                where,
+                errors,
+                mpi_entrypoint=True,
+            )
             nproc = row.get("nproc")
             if isinstance(nproc, bool) or not isinstance(nproc, int) or nproc < 1:
                 errors.append("%s MPI Python row requires a positive integer nproc" % where)

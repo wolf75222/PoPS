@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -37,8 +38,8 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
     data, errors = runner.audit_manifest(MANIFEST)
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
-    assert len(data["deferred"]) == 6
-    assert len(data["check"]) >= 45
+    assert len(data["deferred"]) == 5
+    assert len(data["check"]) >= 46
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -59,7 +60,6 @@ def test_m4_manifest_is_an_audited_open_exact_matrix():
         ("ADC-684", "runtime_instance", "refusal"),
         ("ADC-685", "consumer_graph", "refusal"),
         ("ADC-686", "strict_checkpoint", "refusal"),
-        ("ADC-686", "exact_paraview", "positive"),
         ("ADC-687", "gate_execution", "positive"),
     }
 
@@ -256,6 +256,7 @@ def test_m4_gate_pins_mandatory_native_reopen_and_collective_hdf5_np2():
         for row in checks
         if row["requirement"] in {"exact_npz", "exact_hdf5", "exact_paraview"}
         and row["polarity"] == "positive"
+        and row["kind"] == "pytest"
     }
     assert native_reopen == {
         "exact_npz": (
@@ -277,6 +278,31 @@ def test_m4_gate_pins_mandatory_native_reopen_and_collective_hdf5_np2():
     assert "pytest.importorskip" not in source
     assert "import h5py" in source
     assert "from vtkmodules.vtkIOXML import vtkXMLUnstructuredGridReader" in source
+    mpi_native = [
+        row
+        for row in checks
+        if row["requirement"] == "exact_paraview"
+        and row["kind"] == "mpi_python"
+    ]
+    assert mpi_native == [{
+        "issue": "ADC-686",
+        "requirement": "exact_paraview",
+        "polarity": "positive",
+        "kind": "mpi_python",
+        "target": "exact_paraview",
+        "nodeid": (
+            "tests/python/integration/mpi/test_scientific_output_mpi.py::"
+            "_validate_paraview"
+        ),
+        "nproc": 2,
+    }]
+    mpi_source = (
+        ROOT / "tests/python/integration/mpi/test_scientific_output_mpi.py"
+    ).read_text(encoding="utf-8")
+    assert "vtkXMLPUnstructuredGridReader" in mpi_source
+    assert "vtkXMLUnstructuredGridReader" in mpi_source
+    assert "native PVD/PVTU traversal" in mpi_source
+    assert "except ImportError" not in mpi_source
     assert {
         "issue": "ADC-686",
         "requirement": "collective_hdf5",
@@ -421,6 +447,27 @@ def test_m4_gate_rejects_importorskip_and_mock_proofs(tmp_path):
         and "fixture:monkeypatch" in error
         for error in mock_errors
     )
+
+
+def test_m4_mpi_entrypoint_accepts_only_the_required_prerequisite_guard():
+    runner = _load_runner()
+    data, errors = runner.audit_manifest(MANIFEST)
+    assert not errors
+    mpi_proof = next(
+        row for row in data["check"]
+        if row["kind"] == "mpi_python"
+    )
+    assert mpi_proof["nodeid"] == (
+        "tests/python/integration/mpi/test_scientific_output_mpi.py::"
+        "_validate_paraview"
+    )
+    assert runner._required_environment()["POPS_REQUIRE_MPI_TESTS"] == "1"
+    trusted = ast.parse(
+        "from tests.python.support.requirements import require_mpi_or_skip\n"
+    )
+    untrusted = ast.parse("def require_mpi_or_skip(_reason):\n    return None\n")
+    assert runner._has_authenticated_mpi_guard(trusted)
+    assert not runner._has_authenticated_mpi_guard(untrusted)
 
 
 def test_m4_gate_rejects_every_explicit_deferred_gap():
