@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 14
+    assert len(data["check"]) == 15
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-749",
@@ -39,20 +39,29 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     assert runner.main(["--check-only"]) == 0
 
 
-def test_adc757_slice_does_not_claim_full_mpi_gpu_or_runtime_closure():
+def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors
     assert data["deferred"] == list(runner.EXPECTED_DEFERRED)
-    assert "mpi_collective_execution" in data["deferred"]
+    assert "mpi_collective_execution" not in data["deferred"]
     assert "gpu_backend_execution" in data["deferred"]
     assert "remaining_legacy_recovery_boundary_and_riemann_authority_deletion" in data["deferred"]
     assert "runtime_consumer_cutover_and_legacy_deletion" not in data["deferred"]
     assert "boundary_geometry_riemann_and_spatial_provider_families" not in data["deferred"]
-    assert all(
-        "mpi" not in row["target"].lower() and "gpu" not in row["target"].lower()
-        for row in data["check"]
-    )
+    assert [
+        row for row in data["check"] if row.get("kind") == "mpi_ctest"
+    ] == [
+        {
+            "requirement": "prepared_boundary_publication",
+            "polarity": "positive",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_system_analytic_level_set",
+            "test_regex": "^test_mpi_system_analytic_level_set_np2$",
+            "nproc": 2,
+        }
+    ]
+    assert all("gpu" not in row["target"].lower() for row in data["check"])
     assert runner.main(["--check-only", "--closure"]) == 3
 
 
@@ -79,6 +88,14 @@ def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
     )
     _, errors = runner.validate_manifest(unknown_target)
     assert any("unknown CTest target" in error for error in errors)
+
+    wrong_mpi_rank = tmp_path / "wrong_mpi_rank.toml"
+    wrong_mpi_rank.write_text(
+        source.replace("nproc = 2", "nproc = 4", 1),
+        encoding="utf-8",
+    )
+    _, errors = runner.validate_manifest(wrong_mpi_rank)
+    assert any("one exact rank count" in error for error in errors)
 
 
 def test_adc757_runner_refuses_a_declared_but_unbuilt_proof(monkeypatch, tmp_path):

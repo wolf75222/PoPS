@@ -29,7 +29,6 @@ EXPECTED_DEFERRED = (
     "python_ir_generated_abi_and_restart_parity",
     "remaining_legacy_recovery_boundary_and_riemann_authority_deletion",
     "amr_regrid_migration_and_restart_coherence",
-    "mpi_collective_execution",
     "gpu_backend_execution",
     "workspace_reentrancy_and_stream_partitioning",
     "performance_baselines_and_end_to_end_benchmarks",
@@ -95,9 +94,14 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     suites = _cpp_suites()
     coverage: dict[str, set[str]] = defaultdict(set)
     identities = Counter()
+    mpi_checks = 0
     for index, row in enumerate(checks, 1):
         where = "check[%d]" % index
-        if set(row) != {"requirement", "polarity", "target", "test_regex"}:
+        kind = row.get("kind", "ctest")
+        expected_row_fields = {"requirement", "polarity", "target", "test_regex"}
+        if kind == "mpi_ctest":
+            expected_row_fields.update({"kind", "nproc"})
+        if set(row) != expected_row_fields:
             errors.append("%s has unknown or missing fields" % where)
             continue
         requirement = row.get("requirement")
@@ -122,8 +126,33 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         if target not in suites:
             errors.append("%s references unknown CTest target %r" % (where, target))
             continue
-        if "mpi" in str(target).lower() or "gpu" in str(target).lower():
-            errors.append("%s claims a deferred MPI/GPU target %r" % (where, target))
+        suite = suites[target]
+        labels = {str(label) for label in suite.get("labels", ())}
+        if kind == "mpi_ctest":
+            mpi_checks += 1
+            nproc = row.get("nproc")
+            if "mpi" not in labels:
+                errors.append("%s mpi_ctest target %r lacks the mpi label" % (where, target))
+            if (
+                isinstance(nproc, bool)
+                or not isinstance(nproc, int)
+                or nproc < 1
+                or nproc not in suite.get("mpi_nproc", ())
+            ):
+                errors.append(
+                    "%s nproc must be one exact rank count declared by %r" % (where, target)
+                )
+            expected_selector = "^%s_np%s$" % (target, nproc)
+            if selector != expected_selector:
+                errors.append(
+                    "%s mpi_ctest selector must be exactly %r" % (where, expected_selector)
+                )
+            continue
+        if kind != "ctest":
+            errors.append("%s has unknown check kind %r" % (where, kind))
+            continue
+        if "mpi" in labels or "gpu" in labels:
+            errors.append("%s ordinary CTest claims a deferred MPI/GPU target %r" % (where, target))
         names, source_errors = _declared_gtests(suites[target])
         errors.extend("%s: %s" % (where, error) for error in source_errors)
         try:
@@ -139,6 +168,8 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     duplicates = sorted(identity for identity, count in identities.items() if count > 1)
     if duplicates:
         errors.append("duplicate executable checks: %s" % duplicates)
+    if mpi_checks != 1:
+        errors.append("the closed mpi_collective_execution family requires exactly one MPI CTest")
     for requirement in sorted(EXPECTED_REQUIREMENTS):
         missing = {"positive", "refusal"} - coverage[requirement]
         if missing:

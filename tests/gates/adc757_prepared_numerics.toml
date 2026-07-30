@@ -7,7 +7,6 @@ deferred = [
   "python_ir_generated_abi_and_restart_parity",
   "remaining_legacy_recovery_boundary_and_riemann_authority_deletion",
   "amr_regrid_migration_and_restart_coherence",
-  "mpi_collective_execution",
   "gpu_backend_execution",
   "workspace_reentrancy_and_stream_partitioning",
   "performance_baselines_and_end_to_end_benchmarks",
@@ -75,6 +74,14 @@ requirement = "prepared_boundary_publication"
 polarity = "refusal"
 target = "test_prepared_boundary_plan"
 test_regex = "^test_prepared_boundary_plan\\.analytic_inflow_preflights_nonfinite_values_before_any_mutation$"
+
+[[check]]
+requirement = "prepared_boundary_publication"
+polarity = "positive"
+kind = "mpi_ctest"
+target = "test_mpi_system_analytic_level_set"
+test_regex = "^test_mpi_system_analytic_level_set_np2$"
+nproc = 2
 
 [[check]]
 requirement = "typed_flux_recovery_consumption"
