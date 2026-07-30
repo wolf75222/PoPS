@@ -32,7 +32,7 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 4
+EVIDENCE_SCHEMA_VERSION = 5
 
 
 class PreflightError(RuntimeError):
@@ -236,6 +236,74 @@ def _wheel_evidence(directory: Path, gates: dict[str, Any], contract: Any) -> No
         raise PreflightError("release wheel name/version disagrees with the release contract")
 
 
+def _installed_wheel_evidence(
+    directory: Path,
+    gates: dict[str, Any],
+    contract: Any,
+    runtime: dict[str, str],
+) -> None:
+    wheel = gates["official_build"]["evidence"]["wheel"]
+    retained = (directory / wheel["path"]).resolve()
+    row = gates["installed_wheel"]
+    evidence = row["evidence"]
+    expected = {
+        "schema_version",
+        "python_executable",
+        "distribution_root",
+        "package_file",
+        "native_extension",
+        "native_member",
+        "native_sha256",
+        "version",
+        "wheel_path",
+        "wheel_sha256",
+    }
+    if not isinstance(evidence, dict) or set(evidence) != expected:
+        raise PreflightError("installed wheel evidence is malformed")
+    if evidence["schema_version"] != 1:
+        raise PreflightError("installed wheel evidence schema is unsupported")
+    if evidence["version"] != contract.PACKAGE_VERSION:
+        raise PreflightError("installed wheel evidence version disagrees with release contract")
+    if Path(evidence["wheel_path"]).resolve() != retained \
+            or evidence["wheel_sha256"] != wheel["sha256"]:
+        raise PreflightError("installed wheel evidence does not authenticate the retained wheel")
+    if evidence["python_executable"] != runtime["python_executable"] \
+            or evidence["package_file"] != runtime["pops_file"] \
+            or evidence["native_extension"] != runtime["native_extension"]:
+        raise PreflightError("installed wheel evidence belongs to another runtime")
+
+    commands = row["commands"]
+    logs = _command_evidence(directory, commands, gate="installed_wheel")
+    if len(logs) != 2:
+        raise PreflightError("installed wheel gate requires reinstall and proof transcripts")
+    install_suffix = [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--force-reinstall",
+        "--no-deps",
+        str(retained),
+    ]
+    proof_suffix = [
+        "python",
+        "scripts/prove_installed_wheel.py",
+        "--wheel",
+        str(retained),
+    ]
+    if commands[0]["argv"][-len(install_suffix):] != install_suffix \
+            or commands[1]["argv"][-len(proof_suffix):] != proof_suffix:
+        raise PreflightError("installed wheel gate did not reinstall and prove the retained wheel")
+    try:
+        with zipfile.ZipFile(retained) as archive:
+            member = evidence["native_member"]
+            member_digest = hashlib.sha256(archive.read(member)).hexdigest()
+    except (KeyError, OSError, zipfile.BadZipFile) as exc:
+        raise PreflightError("installed wheel native member is unreadable: %s" % exc) from exc
+    if member_digest != evidence["native_sha256"]:
+        raise PreflightError("installed wheel native member hash drifted")
+
+
 def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
     examples = gates["examples"]["evidence"]
     reopen = gates["artifact_reopen"]["evidence"]
@@ -340,6 +408,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
         else:
             _command_evidence(directory, commands, gate=name)
     _wheel_evidence(directory, gates, contract)
+    _installed_wheel_evidence(directory, gates, contract, runtime)
     for name in ("native_conformance", "python_conformance"):
         evidence = gates[name]["evidence"]
         expected = {"required_lane"} if name == "native_conformance" \

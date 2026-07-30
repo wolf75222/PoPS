@@ -1,7 +1,9 @@
 """Source-only contract checks for the final release gate (ADC-695)."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import zipfile
@@ -25,6 +27,7 @@ def _load(name: str, path: Path):
 contract = _load("final_release_contract", SCRIPTS / "final_release_contract.py")
 gate = _load("_final_release_gate_test", SCRIPTS / "run_final_gate.py")
 preflight = _load("_release_preflight_test", SCRIPTS / "release_preflight.py")
+installed = _load("_installed_wheel_proof_test", SCRIPTS / "prove_installed_wheel.py")
 
 
 def _write_final_source_tree(root: Path) -> None:
@@ -189,6 +192,145 @@ def test_release_evidence_authenticates_the_exact_retained_wheel(tmp_path):
     gates["official_build"]["evidence"]["wheel"]["size"] += 1
     with pytest.raises(preflight.PreflightError, match="size drifted"):
         preflight._wheel_evidence(tmp_path, gates, release)
+
+
+def test_installed_wheel_proof_requires_exact_native_member_and_direct_url(tmp_path):
+    wheel = tmp_path / "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
+    native_bytes = b"exact wheel extension"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("pops/_pops.cpython-312-darwin.so", native_bytes)
+        archive.writestr(
+            "pops-0.3.0.dist-info/METADATA",
+            "Metadata-Version: 2.3\nName: PoPS\nVersion: 0.3.0\n",
+        )
+    package = tmp_path / "site-packages" / "pops" / "__init__.py"
+    extension = package.parent / "_pops.cpython-312-darwin.so"
+    distribution = package.parents[1]
+    package.parent.mkdir(parents=True)
+    package.write_text("__version__ = '0.3.0'\n", encoding="utf-8")
+    extension.write_bytes(native_bytes)
+    wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    direct_url = {
+        "archive_info": {"hashes": {"sha256": wheel_sha256}},
+        "url": wheel.as_uri(),
+    }
+
+    proof = installed.build_proof(
+        wheel,
+        package_file=package,
+        native_extension=extension,
+        distribution_root=distribution,
+        python_executable=Path(sys.executable),
+        installed_version="0.3.0",
+        direct_url=direct_url,
+    )
+
+    assert proof["wheel_sha256"] == wheel_sha256
+    assert proof["native_sha256"] == hashlib.sha256(native_bytes).hexdigest()
+    extension.write_bytes(b"not the retained wheel")
+    with pytest.raises(installed.InstalledWheelProofError, match="not byte-identical"):
+        installed.build_proof(
+            wheel,
+            package_file=package,
+            native_extension=extension,
+            distribution_root=distribution,
+            python_executable=Path(sys.executable),
+            installed_version="0.3.0",
+            direct_url=direct_url,
+        )
+
+
+def test_release_preflight_authenticates_installed_wheel_proof_and_transcripts(tmp_path):
+    wheel = tmp_path / "wheels" / "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
+    wheel.parent.mkdir()
+    native_member = "pops/_pops.cpython-312-darwin.so"
+    native_bytes = b"exact wheel extension"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(native_member, native_bytes)
+        archive.writestr(
+            "pops-0.3.0.dist-info/METADATA",
+            "Metadata-Version: 2.3\nName: PoPS\nVersion: 0.3.0\n",
+        )
+    runtime = {
+        "python_executable": "/proof/bin/python",
+        "pops_file": "/proof/site-packages/pops/__init__.py",
+        "native_extension": "/proof/site-packages/pops/_pops.so",
+        "native_sha256": "post-sign-runtime-digest",
+    }
+    wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    commands = []
+    command_argvs = (
+        [
+            "/proof/conda",
+            "run",
+            "python",
+            "-m",
+            "pip",
+            "install",
+            "--force-reinstall",
+            "--no-deps",
+            str(wheel),
+        ],
+        [
+            "/proof/conda",
+            "run",
+            "python",
+            "scripts/prove_installed_wheel.py",
+            "--wheel",
+            str(wheel),
+        ],
+    )
+    for index, argv in enumerate(command_argvs, 1):
+        log = tmp_path / "logs" / f"{index:02d}_installed_wheel.log"
+        log.parent.mkdir(exist_ok=True)
+        log.write_text(json.dumps({"ok": True}), encoding="utf-8")
+        commands.append(
+            {
+                "argv": argv,
+                "log": str(log.relative_to(tmp_path)),
+                "sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+            }
+        )
+    gates = {
+        "official_build": {
+            "evidence": {
+                "wheel": {
+                    "path": str(wheel.relative_to(tmp_path)),
+                    "sha256": wheel_sha256,
+                    "size": wheel.stat().st_size,
+                },
+            },
+        },
+        "installed_wheel": {
+            "commands": commands,
+            "evidence": {
+                "schema_version": 1,
+                "python_executable": runtime["python_executable"],
+                "distribution_root": "/proof/site-packages",
+                "package_file": runtime["pops_file"],
+                "native_extension": runtime["native_extension"],
+                "native_member": native_member,
+                "native_sha256": hashlib.sha256(native_bytes).hexdigest(),
+                "version": "0.3.0",
+                "wheel_path": str(wheel),
+                "wheel_sha256": wheel_sha256,
+            },
+        },
+    }
+    release = type("ReleaseContract", (), {"PACKAGE_VERSION": "0.3.0"})
+
+    preflight._installed_wheel_evidence(tmp_path, gates, release, runtime)
+    gates["installed_wheel"]["evidence"]["native_sha256"] = "0" * 64
+    with pytest.raises(preflight.PreflightError, match="native member hash drifted"):
+        preflight._installed_wheel_evidence(tmp_path, gates, release, runtime)
+
+
+def test_installed_wheel_gate_precedes_codesign_and_conformance():
+    gates = contract.REQUIRED_RELEASE_GATES
+
+    assert gates.index("official_build") < gates.index("installed_wheel")
+    assert gates.index("installed_wheel") < gates.index("codesign")
+    assert gates.index("codesign") < gates.index("native_conformance")
 
 
 def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate():

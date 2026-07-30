@@ -38,7 +38,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 4
+EVIDENCE_SCHEMA_VERSION = 5
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -187,6 +187,16 @@ print(json.dumps({
     if set(payload) != expected or not all(isinstance(payload[name], str) and payload[name]
                                            for name in expected):
         raise FinalGateError("runtime provenance is incomplete")
+    return payload
+
+
+def _json_evidence(stdout: str, *, gate: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise FinalGateError("%s evidence was not JSON: %s" % (gate, stdout[-4000:])) from exc
+    if not isinstance(payload, dict):
+        raise FinalGateError("%s evidence must be a JSON object" % gate)
     return payload
 
 
@@ -465,6 +475,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "size": wheel.stat().st_size,
             },
         }
+        recorder.run("installed_wheel", _conda_command([
+            "python", "-m", "pip", "install", "--force-reinstall", "--no-deps", str(wheel),
+        ]))
+        installed_wheel_stdout = recorder.run(
+            "installed_wheel",
+            _conda_command([
+                "python", "scripts/prove_installed_wheel.py", "--wheel", str(wheel),
+            ]),
+        )
+        recorder.rows["installed_wheel"]["evidence"] = _json_evidence(
+            installed_wheel_stdout, gate="installed_wheel"
+        )
         recorder.run("official_build", _conda_command(["cmake", "--preset", "serial"]))
         recorder.run("official_build", _conda_command(["cmake", "--build", "--preset", "serial"]))
         doctor_code = (

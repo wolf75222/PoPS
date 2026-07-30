@@ -37,6 +37,7 @@ FORBIDDEN_FINAL_IMPORTS = (
 PYTHON_REQUIRED_SELECTION = "not mpi and not hdf5"
 REQUIRED_RELEASE_GATES = (
     "official_build",
+    "installed_wheel",
     "doctor",
     "codesign",
     "native_conformance",
