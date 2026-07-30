@@ -85,10 +85,16 @@ complete bundle is retained in the array-free `RuntimeInstance.inspect()` report
 assumptions remain reviewable rather than becoming hidden installation state.
 Single-layout providers additionally require the exact ordered block/layout call projection,
 layout-qualified halos, and the absence of unconsumed Transfer or mapping-provider routes before
-constructing their sole native engine.
+constructing their sole native engine. Every planned halo is mapped back to its owning compiled
+block and its derived depth must fit the authenticated spatial ghost allocation; a second runtime
+ghost-depth knob does not exist.
 The multi-layout Uniform provider likewise authenticates ordered block/layout calls and the exact
 mapping-provider set backing its materialized Transfers before constructing child engines. It
 refuses non-empty runtime halo plans until an explicit per-layout halo scheduler exists.
+The provider boundary also refuses planned buffer allocations, cross-memory fences, and clock
+joins while no native owner exists for those action classes. They are never accepted as advisory
+metadata. Consumer-owned collectives remain outside this refusal because `ConsumerGraph` lowers
+and executes them transactionally through its own authenticated plan.
 
 For an accepted step, successful native finalization is an irreversible `native_finalized`
 boundary. The instance commits the engine state, accepted cursor set and consumer receipts across
