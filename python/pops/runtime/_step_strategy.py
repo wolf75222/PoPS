@@ -26,6 +26,8 @@ _SolveStatus: TypeAlias = Literal[
     "breakdown",
     "iteration_limit",
     "invalid_evaluation",
+    "inadmissible_candidate",
+    "safeguard_failure",
     "capability_failure",
     "invalid_input",
     "incompatible_rhs",
@@ -424,7 +426,16 @@ class FixedDtController(StepController[FixedDt]):
     def prepare_attempts(
         self, engine: Any, native: Any, *, t_end: float,
     ) -> _PreparedStepAttempts:
-        dt = min(self.strategy.dt, t_end - float(native.time()))
+        now = float(native.time())
+        remaining = t_end - now
+        dt = min(self.strategy.dt, remaining)
+        if math.isclose(
+            now + dt,
+            t_end,
+            rel_tol=0.0,
+            abs_tol=4.0 * max(math.ulp(now + dt), math.ulp(t_end)),
+        ):
+            dt = remaining
         if not dt > 0.0:
             raise RuntimeError("FixedDt has no positive interval left before the final time")
 

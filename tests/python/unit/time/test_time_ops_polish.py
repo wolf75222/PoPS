@@ -4,8 +4,8 @@
 The suite covers the spec ops 10/16/21/22/23 plus mandatory
 validation error #19.
 
-  - solve_local_nonlinear (op 10): a per-cell Newton solve (ADC-422); the builder validates its inputs
-    and lowers a residual sub-block to a device FD-Jacobian Newton kernel;
+  - solve_local_nonlinear (op 10): a prepared per-cell nonlinear solve; the builder validates its
+    inputs and lowers only a residual functor and controls to the shared native provider;
   - reductions (op 16): P.sum / P.max / P.min / P.sum_component build a 'reduce' IR op and lower to the
     matching pops:: collective reduction (pops::reduce_sum / reduce_max / reduce_min);
   - fill_boundary (op 22): P.fill_boundary lowers to ctx.fill_boundary (the shared ghost exchange);
@@ -89,8 +89,8 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
     from pops.solvers.nonlinear import LocalNewton
     from pops.time import FailRun, LocalResidual
 
-    # A valid implicit reaction r(U) = U - U0 - dt*S(U) builds a typed Newton IR op with a residual
-    # sub-block; the IR validates and hashes.
+    # A valid implicit reaction r(U) = U - U0 - dt*S(U) builds a typed prepared-solve IR op with a
+    # residual sub-block; the IR validates and hashes.
     P = t.Program("react")
     dt = P.dt
     U = typed_state(P, "blk")

@@ -63,8 +63,10 @@ def test_public_ars222_uses_two_consumed_local_newton_stages():
     assert all(node["attrs"]["action"]["kind"] == "fail_run" for node in consumes)
 
     generated = emit_cpp_program(program, model=model)
-    assert generated.count("for (int it_ = 0;") == 2
-    assert "pops::detail::mat_inverse<1>(" in generated
+    assert generated.count("pops::prepare_local_nonlinear_problem<1>") == 2
+    assert generated.count("pops::solve_prepared_local_nonlinear(prepared_, Gval)") == 2
+    assert "for (int it_ = 0;" not in generated
+    assert "pops::detail::mat_inverse<1>(" not in generated
 
 
 def _ars222_step(value: float, dt: float) -> float:

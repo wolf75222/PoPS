@@ -48,11 +48,13 @@ def test_resolved_amr_program_emits_only_the_amr_install_entry() -> None:
     )
 
     assert "pops_install_program_amr" in amr_source
-    assert 'extern "C" void pops_install_program(void* sys)' not in amr_source
-    assert "make_shared<pops::runtime::program::AmrProgramContext>(sys)" in amr_source
+    assert 'extern "C" void pops_install_program(pops::System* sys)' not in amr_source
+    assert "make_program_execution_provider(sys)" in amr_source
+    assert "AmrProgramContext& ctx" not in amr_source
     assert "_make_level_program" in amr_source
-    assert "ctx.program_resource_topology_epoch()" in amr_source
-    assert "ctx.program_resource_topology_generation()" in amr_source
+    assert "const auto topology = ctx.program_resource_topology();" in amr_source
+    assert "ctx.for_each_program_resource_level(" in amr_source
+    assert "ctx.set_level(" not in amr_source
     assert "_refresh_level_programs();" in amr_source
     assert "ctx.advance_hierarchy(dt, _advance_level)" in amr_source
     assert "}, ctx_owner, _refresh_level_programs);" in amr_source

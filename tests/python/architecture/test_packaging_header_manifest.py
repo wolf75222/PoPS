@@ -89,6 +89,32 @@ def test_amr_layout_paths_require_one_prepared_load_balance_authority():
     assert "bp.mesh.load_balance->distribute" in sources[paths[5]]
 
 
+def test_raw_concrete_elliptic_engines_are_transitive_sdk_support_only():
+    """Prepared field-solver façades own the supported solve/consumption boundary."""
+    manifest = packaging.read_manifest(ROOT)
+    raw_engines = {
+        PurePosixPath("pops/numerics/elliptic/mg/composite_fac_nlevel.hpp"),
+        PurePosixPath("pops/numerics/elliptic/mg/composite_fac_poisson.hpp"),
+        PurePosixPath("pops/numerics/elliptic/mg/geometric_mg.hpp"),
+        PurePosixPath("pops/numerics/elliptic/polar/polar_tensor_operator.hpp"),
+    }
+
+    assert raw_engines <= set(manifest.sdk_support)
+    assert raw_engines.isdisjoint(manifest.standalone_headers)
+
+    geometric_mg = (
+        ROOT / "include/pops/numerics/elliptic/mg/geometric_mg.hpp"
+    ).read_text(encoding="utf-8")
+    robust_solve = geometric_mg.index("int solve_robust(")
+    assert geometric_mg.rfind("private:", 0, robust_solve) > geometric_mg.rfind(
+        "public:", 0, robust_solve
+    )
+    assert (
+        PurePosixPath("pops/validation/numerics/geometric_mg.hpp")
+        in manifest.test_only
+    )
+
+
 def test_cmake_source_install_wheel_and_signature_use_the_shared_contract():
     root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     source_cmake = (ROOT / "src" / "CMakeLists.txt").read_text(encoding="utf-8")

@@ -11,7 +11,7 @@ from pops.identity import Identity, make_identity
 from pops.runtime._runtime_plan_io import freeze_data, thaw_data
 
 
-RUN_MANIFEST_SCHEMA_VERSION = 2
+RUN_MANIFEST_SCHEMA_VERSION = 3
 _MANIFEST_KIND = "run"
 
 
@@ -36,14 +36,21 @@ class RunManifest:
     """Immutable run controls and their domain-``run`` identity."""
 
     __slots__ = (
-        "schema_version", "bind_identity", "start_time", "start_macro_step", "controls",
+        "schema_version", "bind_identity", "continuation_identity", "start_time",
+        "start_macro_step", "controls",
         "run_identity",
     )
 
     def __init__(self, *, bind_identity: Any, start_time: Any, start_macro_step: Any,
-                 controls: Any) -> None:
+                 controls: Any, continuation_identity: Any = None) -> None:
         if type(bind_identity) is not Identity or bind_identity.domain != "bind":
             raise TypeError("RunManifest bind_identity must be a domain-'bind' Identity")
+        if continuation_identity is not None and (
+            type(continuation_identity) is not Identity or continuation_identity.domain != "run"
+        ):
+            raise TypeError(
+                "RunManifest continuation_identity must be None or a domain-'run' Identity"
+            )
         if not isinstance(controls, Mapping):
             raise TypeError("RunManifest controls must be a mapping")
         exact = dict(controls)
@@ -52,6 +59,10 @@ class RunManifest:
             raise ValueError("RunManifest controls keys must be exactly %s" % sorted(expected))
         object.__setattr__(self, "schema_version", RUN_MANIFEST_SCHEMA_VERSION)
         object.__setattr__(self, "bind_identity", Identity.from_data(bind_identity.to_data()))
+        object.__setattr__(self, "continuation_identity", (
+            None if continuation_identity is None
+            else Identity.from_data(continuation_identity.to_data())
+        ))
         object.__setattr__(self, "start_time", _finite_float(start_time, where="start_time"))
         object.__setattr__(self, "start_macro_step", _strict_int(
             start_macro_step, where="start_macro_step"))
@@ -73,6 +84,10 @@ class RunManifest:
         return {
             "schema_version": self.schema_version,
             "bind_identity": self.bind_identity.to_data(),
+            "continuation_identity": (
+                None if self.continuation_identity is None
+                else self.continuation_identity.to_data()
+            ),
             "start_time": self.start_time.hex(),
             "start_macro_step": self.start_macro_step,
             "controls": {
@@ -86,6 +101,10 @@ class RunManifest:
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "bind_identity": self.bind_identity.token,
+            "continuation_identity": (
+                None if self.continuation_identity is None
+                else self.continuation_identity.token
+            ),
             "start_time": self.start_time,
             "start_macro_step": self.start_macro_step,
             "controls": {
@@ -103,7 +122,8 @@ class RunManifest:
     @classmethod
     def from_dict(cls, data: Any) -> RunManifest:
         keys = {
-            "bind_identity", "start_time", "start_macro_step", "controls", "run_identity",
+            "bind_identity", "continuation_identity", "start_time", "start_macro_step",
+            "controls", "run_identity",
         }
         payload = parse_manifest_envelope(
             data,
@@ -113,8 +133,14 @@ class RunManifest:
             where="RunManifest",
         )
         bind = Identity.from_token(payload["bind_identity"])
+        continuation = (
+            None
+            if payload["continuation_identity"] is None
+            else Identity.from_token(payload["continuation_identity"])
+        )
         result = cls(
             bind_identity=bind,
+            continuation_identity=continuation,
             start_time=payload["start_time"],
             start_macro_step=payload["start_macro_step"],
             controls=payload["controls"],
@@ -140,6 +166,7 @@ def begin_run(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
         raise RuntimeError("bound runtime carries no canonical bind identity")
     manifest = RunManifest(
         bind_identity=bind_identity,
+        continuation_identity=getattr(engine, "_restart_lineage_identity", None),
         start_time=engine.time(),
         start_macro_step=engine.macro_step(),
         controls={
