@@ -498,12 +498,22 @@ balance reductions are not yet skipped. This fallback can add work but cannot su
 evidence. A zero-step run has no accepted native occurrence: its coincident start/end moment cannot
 publish an accepted-step consumer, including `Balance`.
 
-This route is explicit evidence, not automatic numerical instrumentation: a Program that cannot
-produce its actual reflux or projection increment cannot declare `Balance`. In particular, the
-generic automatic extraction of AMR reflux/projection contributions from the internal native
-operator ledgers remains separate work. On an adaptive layout the recorded values must already be
-composite and coverage-corrected; an ordinary sum of every per-level state would double-count
-covered coarse cells. Neither `Balance` nor `BalanceTerms` silently claims otherwise.
+This public route still consumes explicit evidence: a Program that cannot produce every actual term
+cannot declare `Balance`. Native operator instrumentation is deliberately kept in a separate,
+qualified attempt-local mailbox until a resolved quantity selector can prove which
+`BalanceLedger` route owns each block/level/component contribution. Generated code publishes the OR
+of the exact due route decisions before the first Program operator; the marker is monotone for the
+attempt, disabled during replay, and reset at attempt entry. Consequently off-cadence steps do not
+pay for automatic operator reductions.
+
+That private mailbox currently captures the signed AMR reflux correction and the before/after
+projection delta. Uniform Cartesian projection uses the authenticated cell measure and embedded
+boundary mask; AMR projection excludes covered coarse cells and performs one component-vector
+collective per participating level. Polar projection stays absent because no exact per-cell polar
+volume provider exists on this path. Automatic physical-boundary flux and source evidence are also
+not yet producers. None of these private values is read by `accepted_balance_terms()`, so this
+instrumentation does not silently complete an authored five-term balance or widen the public
+contract.
 
 Checkpoint remains a separate restart effect. These consumers do not define a checkpoint schema or
 reader and do not call the scientific-output manifest a restart identity. The checkpoint provider
