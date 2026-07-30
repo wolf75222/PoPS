@@ -328,6 +328,10 @@ class ExecutionServicesFixture
       const typename SharedServices::HistoryRegistration&) const {
     return history_initialized_;
   }
+  double program_execution_history_slot_dt_storage_(
+      const typename SharedServices::HistoryRegistration&, int) const {
+    return 0.25;
+  }
   void program_execution_set_history_initialized_storage_(
       const typename SharedServices::HistoryRegistration&, bool initialized) const {
     history_initialized_ = initialized;

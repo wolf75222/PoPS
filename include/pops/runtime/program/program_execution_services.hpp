@@ -865,6 +865,82 @@ class ProgramExecutionServices {
                                                                HistoryReadMode::ZeroStart);
   }
 
+  /// Reconstruct one retained state at an exact target-clock coordinate.
+  ///
+  /// Slot selection, timestamp validation and interpolation are Program semantics shared by every
+  /// execution topology. Providers expose only the initialized flag, exact outgoing interval and
+  /// level-qualified retained storage. In particular, the AMR provider keeps its native per-level
+  /// history identity checks on every read instead of reimplementing this algorithm.
+  void interpolate_history_linear(MultiFab& out, const std::string& name, int max_lag, int owner,
+                                  const std::string& source_clock, const std::string& target_clock,
+                                  int target_step, Real target_offset) const {
+    (void)sys_block(owner);
+    if (max_lag < 1)
+      throw std::invalid_argument(
+          "linear history interpolation requires at least one retained lag");
+    if (!std::isfinite(static_cast<double>(target_offset)))
+      throw std::invalid_argument("linear history interpolation offset must be finite");
+
+    HistoryRegistration registration =
+        history_registration_(name, max_lag, /*ncomp=*/-1, owner);
+    if (!provider_().program_execution_history_initialized_storage_(registration))
+      throw std::runtime_error(
+          "linear history interpolation requires an initialized native history");
+
+    const double source_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(source_clock));
+    const double target_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(target_clock));
+    const double coordinate =
+        (static_cast<double>(target_step) + static_cast<double>(target_offset)) * source_ticks /
+        target_ticks;
+    if (!std::isfinite(coordinate) || coordinate > 0.0 ||
+        coordinate < -static_cast<double>(max_lag))
+      throw std::runtime_error(
+          "linear history interpolation target lies outside retained timestamps");
+
+    if (coordinate == 0.0) {
+      registration = ensure_history_registered_(name, /*lag=*/1, /*ncomp=*/-1, owner);
+      MultiFab& exact = provider_().program_execution_read_history_storage_(
+          registration, 0, HistoryReadMode::RequireInitialized);
+      lincomb(out, Real(1), exact, Real(0), exact);
+      return;
+    }
+
+    const int older_lag = static_cast<int>(std::ceil(-coordinate));
+    if (older_lag < 1 || older_lag > max_lag)
+      throw std::runtime_error("linear history interpolation could not select bracketing slots");
+
+    double newer_time = static_cast<double>(physical_time());
+    double older_time = newer_time;
+    double bracket_dt = 0.0;
+    for (int lag = 1; lag <= older_lag; ++lag) {
+      const double interval =
+          provider_().program_execution_history_slot_dt_storage_(registration, lag);
+      if (!std::isfinite(interval) || interval <= 0.0)
+        throw std::runtime_error(
+            "linear history interpolation requires positive exact slot timestamps");
+      bracket_dt = interval;
+      older_time = newer_time - interval;
+      if (lag != older_lag)
+        newer_time = older_time;
+    }
+    const double logical_fraction = coordinate + static_cast<double>(older_lag);
+    const double target_time = older_time + logical_fraction * bracket_dt;
+    const double timestamp_fraction = (target_time - older_time) / (newer_time - older_time);
+    if (!std::isfinite(timestamp_fraction) || timestamp_fraction < 0.0 ||
+        timestamp_fraction > 1.0)
+      throw std::runtime_error(
+          "linear history interpolation target does not bracket native timestamps");
+
+    registration =
+        ensure_history_registered_(name, older_lag, /*ncomp=*/-1, owner);
+    MultiFab& older = provider_().program_execution_read_history_storage_(
+        registration, older_lag, HistoryReadMode::RequireInitialized);
+    MultiFab& newer = provider_().program_execution_read_history_storage_(
+        registration, older_lag - 1, HistoryReadMode::RequireInitialized);
+    const Real alpha = static_cast<Real>(timestamp_fraction);
+    lincomb(out, Real(1) - alpha, older, alpha, newer);
+  }
+
   /// Publish one current history value. Cadence and outgoing-time selection remain topology hooks;
   /// registration, validation and the single store decision live here.
   void store_history(const std::string& name, const MultiFab& value) const {
