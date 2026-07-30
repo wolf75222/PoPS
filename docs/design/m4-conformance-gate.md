@@ -3,7 +3,8 @@
 The current status is **AUDITED OPEN**. The ledger in
 `tests/gates/m4_runtime_io.toml` records exact executable evidence for
 ADC-679 through ADC-687 and exact deferred gaps. It deliberately does not
-claim M4 closure while any `[[deferred]]` row remains.
+claim M4 closure while any `[[deferred]]` row remains. The current ledger has
+exactly 50 executable checks and one deferred requirement.
 
 The source audit already authenticates real proofs for:
 
@@ -21,6 +22,9 @@ The source audit already authenticates real proofs for:
 - real Uniform and AMR writer transactions, a real multi-layout transfer,
   a real two-writer collision with complete ConsumerGraph compensation, and a
   positive multi-layout checkpoint/restart;
+- one complete RuntimeInstance contract proof across compiled Uniform, AMR,
+  and multi-layout execution, including RunReport and Program/inspection
+  parity;
 - a prepared native FieldSolver whose invalid first result is refused through
   RuntimeInstance with exact accepted-state rollback and a successful retry;
 - accepted scientific publication, diagnostics, two-rank collective HDF5,
@@ -28,11 +32,10 @@ The source audit already authenticates real proofs for:
 
 This evidence is intentionally narrower than the final ADC-687 acceptance
 contract. The deferred rows name the missing polarity and the nearby source
-that must not be mistaken for closure. They currently cover:
+that must not be mistaken for closure. The only remaining gap is:
 
 - a CI lane that installs every mandatory dependency, including VTK, and
   executes every selected pytest and CTest proof with zero skips;
-- complete Uniform, AMR, and multi-layout public-contract/report parity.
 
 ## Exact output evidence
 
@@ -90,6 +93,18 @@ component's prepared state is not mutated by this failure. After the external
 fault is removed, the same prepared component returns a finite result and the
 unchanged RuntimeInstance accepts the retry. The selected test defines no step
 wrapper and never replaces a native engine or step target.
+
+The positive RuntimeInstance proof is also a compiled route. It builds and
+executes one Uniform artifact, one AMR artifact, and one two-layout artifact
+with a native conservative Transfer. Every execution returns the exact public
+`RuntimeInstance` and `RunReport` types with aligned artifact, bind, execution,
+run, clock, step, and transaction evidence. The multi-layout executor
+authenticates each installed child Program, creates one domain-separated hash
+for the ordered Program set, and projects local block/parameter/cache metadata
+into deterministic layout-qualified report rows. Runtime inspection consumes
+that same complete `ProgramRuntimeReport`; the selected test proves direct and
+inspection parity without a wrapper, fake engine, replaced step target, or
+monkeypatch.
 
 ## Gate modes
 
