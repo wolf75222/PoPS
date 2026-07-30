@@ -1418,13 +1418,19 @@ taille/header de table et opérations requises avant de conserver le handle de b
 sont résolues une fois à l'installation ; aucun `dlsym`, nom de classe ou dispatch Python n'entre dans
 une boucle de cellules.
 
-Le contrat `Reflux` v1 est volontairement livré avant son branchement dans
-`PreparedAmrProgramRefluxTransition` : catalogue, manifest, loader et consumer typé peuvent qualifier
-un conformer, mais le runtime AMR continue d'utiliser son kernel interne tant qu'un adaptateur préparé
-ne peut pas fournir les vues locales sans dupliquer le ledger ni transférer l'autorité collective. Une
-configuration AMR ne prétend donc pas encore avoir sélectionné un provider `Reflux` externe. Cette
-première qualification est limitée à la cible 2D, `float64`, CPU déjà admise par le loader de
-composants ; elle ne constitue pas une promesse GPU.
+Le contrat `Reflux` v1 possède maintenant un adaptateur préparé interne vers
+`PreparedAmrProgramRefluxTransition`. Pour chaque patch enfant local, l'adaptateur reçoit quatre
+paires de flux déjà intégrés et écrit quatre corrections dans des buffers persistants empoisonnés
+avant l'appel. PoPS vérifie que chaque valeur a été écrite et reste finie, atteint un consensus
+d'échec entre rangs, puis applique seul périodicité, masque de couverture, réduction MPI et
+publication transactionnelle. La présence et le contrat exact du provider sont également comparés
+entre rangs avant toute exécution.
+
+Cette tranche ne publie pas encore la sélection `Reflux` dans la résolution normalisée des providers
+AMR : le seam d'installation demeure interne et les configurations publiques continuent donc
+d'utiliser le kernel builtin. La qualification initiale de l'adaptateur reste limitée à la cible 2D,
+`float64`, CPU avec stockage hôte. Le chemin n'est pas encore prouvé par compilation native, exécution
+MPI avec un composant externe, mesure de conservation ni backend GPU.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.
