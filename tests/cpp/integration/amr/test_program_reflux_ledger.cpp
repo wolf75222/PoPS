@@ -189,6 +189,7 @@ static runtime::program::AmrProgramAcceptedState ranked_accepted_state(
   runtime::program::AmrProgramAcceptedState state;
   state.level_clocks = {{0, 7, amr::Rational(0, 1), 0.7}, {1, 7, amr::Rational(0, 1), 0.7}};
   state.logical_clock_ticks = {{"clock.macro", 7}, {"clock.fine", 14}};
+  state.tagging_hysteresis_state = {9, 8, 7};
   state.history_owners["rhs"] = 0;
   state.history_states["rhs"] = "fluid.U";
   state.history_spaces["rhs"] = "cell.conservative";
@@ -226,6 +227,18 @@ static runtime::program::AmrProgramAcceptedState ranked_accepted_state(
   state.accepted_flux_ledger.push_back(
       {{"fluid", "U", "transport", "physical_flux", 1, {1, 7, amr::Rational(1, 2), 0.675}},
        {amr::Rational(2, 3), amr::FluxOrientation::XPlus, 0.25, 0.05}});
+  state.accepted_interface_flux_ledger.push_back(
+      {{"shared.rank-change",
+        3,
+        0,
+        1,
+        {1, 7, amr::Rational(1, 2), 0.675},
+        "program.group.node.51",
+        {{1, 7, amr::Rational(0, 1), 0.65}, {1, 7, amr::Rational(1, 1), 0.7}},
+        amr::InterfaceFluxOrientation::FineOutward,
+        0,
+        1},
+       {amr::Rational(2, 3), 0.125, 0.05, true}});
   state.accepted_sync.push_back({0, 1, 0, 1, {0, 7, amr::Rational(1, 1), 0.7}});
   return state;
 }
@@ -514,6 +527,7 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonical
   runtime::program::AmrProgramAcceptedState state;
   state.level_clocks = {{0, 9, amr::Rational(0, 1), 0.9}, {1, 9, amr::Rational(0, 1), 0.9}};
   state.logical_clock_ticks = {{"clock.macro", 9}, {"clock.fine", 18}};
+  state.tagging_hysteresis_state = {1, 3, 3, 7};
   state.history_owners["rhs"] = 0;
   state.history_states["rhs"] = "fluid.U";
   state.history_spaces["rhs"] = "cell.conservative";
@@ -541,6 +555,18 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonical
   state.ring_flux_initialized["rhs"] = {1, 1};
   state.accepted_flux_ledger.push_back(
       {scalar_key(), {amr::Rational(2, 3), amr::FluxOrientation::YPlus, 0.25, 0.05}});
+  state.accepted_interface_flux_ledger.push_back(
+      {{"shared.face",
+        4,
+        0,
+        1,
+        {1, 9, amr::Rational(1, 2), 0.85},
+        "program.group.node.42",
+        {{1, 9, amr::Rational(0, 1), 0.8}, {1, 9, amr::Rational(1, 1), 0.9}},
+        amr::InterfaceFluxOrientation::FineOutward,
+        0,
+        1},
+       {amr::Rational(2, 3), 0.125, 0.1, true}});
   state.accepted_sync.push_back({0, 1, 0, 0, {0, 9, amr::Rational(1, 1), 0.9}});
   state.accepted_sync.push_back({0, 1, 0, 1, {0, 9, amr::Rational(1, 1), 0.9}});
 
@@ -548,6 +574,7 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonical
   const auto decoded = runtime::program::deserialize_amr_program_accepted_state(encoded);
   EXPECT_EQ(decoded.level_clocks, state.level_clocks);
   EXPECT_EQ(decoded.logical_clock_ticks, state.logical_clock_ticks);
+  EXPECT_EQ(decoded.tagging_hysteresis_state, state.tagging_hysteresis_state);
   EXPECT_EQ(decoded.history_owners, state.history_owners);
   EXPECT_EQ(decoded.history_states, state.history_states);
   EXPECT_EQ(decoded.history_spaces, state.history_spaces);
@@ -563,6 +590,12 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonical
   ASSERT_EQ(decoded.accepted_flux_ledger.size(), 1u);
   EXPECT_EQ(decoded.accepted_flux_ledger[0].measure.stage_weight, amr::Rational(2, 3));
   EXPECT_EQ(decoded.accepted_flux_ledger[0].measure.orientation, amr::FluxOrientation::YPlus);
+  ASSERT_EQ(decoded.accepted_interface_flux_ledger.size(), 1u);
+  EXPECT_EQ(decoded.accepted_interface_flux_ledger[0].key.interface_identity, "shared.face");
+  EXPECT_EQ(decoded.accepted_interface_flux_ledger[0].key.topology_epoch, 4u);
+  EXPECT_EQ(decoded.accepted_interface_flux_ledger[0].key.interval.end.phase, amr::Rational(1, 1));
+  EXPECT_EQ(decoded.accepted_interface_flux_ledger[0].measure.stage_weight, amr::Rational(2, 3));
+  EXPECT_TRUE(decoded.accepted_interface_flux_ledger[0].measure.stage_weight_resolved);
   ASSERT_EQ(decoded.accepted_sync.size(), 2u);
   EXPECT_EQ(decoded.accepted_sync[0].phase, 0);
   EXPECT_EQ(decoded.accepted_sync[1].phase, 1);
@@ -597,6 +630,13 @@ TEST(test_program_reflux_ledger,
   for (const auto& state : target_states) {
     EXPECT_EQ(state.level_clocks, source_states[0].level_clocks);
     EXPECT_EQ(state.logical_clock_ticks, source_states[0].logical_clock_ticks);
+    EXPECT_EQ(state.tagging_hysteresis_state, source_states[0].tagging_hysteresis_state);
+    ASSERT_EQ(state.accepted_interface_flux_ledger.size(), 1u);
+    EXPECT_EQ(state.accepted_interface_flux_ledger[0].key.interface_identity, "shared.rank-change");
+    EXPECT_EQ(state.accepted_interface_flux_ledger[0].key.topology_epoch, 3u);
+    EXPECT_EQ(state.accepted_interface_flux_ledger[0].measure.stage_weight, amr::Rational(2, 3));
+    EXPECT_DOUBLE_EQ(state.accepted_interface_flux_ledger[0].measure.face_measure, 0.125);
+    EXPECT_TRUE(state.accepted_interface_flux_ledger[0].measure.stage_weight_resolved);
     ASSERT_EQ(state.ring_flux.at("rhs")[0][0].coarse.size(), 3u);
     ASSERT_EQ(state.ring_flux.at("rhs")[0][1].fine.size(), 3u);
     ASSERT_EQ(state.ring_flux_contributions.at("rhs")[0][1].size(), 1u);
@@ -657,6 +697,24 @@ TEST(test_program_reflux_ledger,
   EXPECT_THROW(
       runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
       std::runtime_error);
+
+  states.clear();
+  states.push_back(ranked_accepted_state(0, ownership));
+  states.push_back(ranked_accepted_state(1, ownership));
+  states[1].tagging_hysteresis_state.push_back(6);
+  EXPECT_THROW(
+      runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
+      std::runtime_error)
+      << "rank-independent tagging state must reach exact checkpoint consensus";
+
+  states.clear();
+  states.push_back(ranked_accepted_state(0, ownership));
+  states.push_back(ranked_accepted_state(1, ownership));
+  states[1].accepted_interface_flux_ledger[0].measure.face_measure = 0.25;
+  EXPECT_THROW(
+      runtime::program::rematerialize_amr_program_accepted_states(states, ownership, ownership),
+      std::runtime_error)
+      << "rank-independent interface audit state must reach exact checkpoint consensus";
 }
 
 TEST(test_program_reflux_ledger,

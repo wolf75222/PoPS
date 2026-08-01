@@ -185,6 +185,15 @@ class ProgramExecutionServices {
     return provider_().program_execution_runtime_state_();
   }
 
+  void require_active_field_evaluation_level_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    const int active_level = provider_().program_execution_resource_level_();
+    if (point.level != active_level)
+      throw std::invalid_argument(
+          "Program field solve evaluation point level " + std::to_string(point.level) +
+          " disagrees with active resource level " + std::to_string(active_level));
+  }
+
  public:
   /// Install one compiled macro-step through the execution provider's lifecycle authority.
   void install(std::function<void(double)> step) const {
@@ -206,6 +215,7 @@ class ProgramExecutionServices {
                                           MultiFab& state) const {
     if (provider_slot.empty())
       throw std::invalid_argument("Program field solve requires an exact provider slot");
+    require_active_field_evaluation_level_(point);
     return provider_().program_execution_field_solve_from_state_at_outcome_(point, provider_slot,
                                                                             block, state);
   }
@@ -321,6 +331,9 @@ class ProgramExecutionServices {
                                     const std::string& provider_slot, int block,
                                     MultiFab& evaluation_state, MultiFab& restore_state,
                                     Body&& body) const {
+    if (provider_slot.empty())
+      throw std::invalid_argument("Program field solve requires an exact provider slot");
+    require_active_field_evaluation_level_(point);
     const auto restore = [&]() {
       const SolveReport restored = consume_field_outcome_(
           solve_fields_from_state_at(point, provider_slot, block, restore_state));

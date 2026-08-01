@@ -3,7 +3,10 @@
 This test deliberately does not run inside one long-lived ``mpiexec`` job.  It starts a two-rank
 capture process, lets that MPI world terminate, and then starts an independent one-rank restart
 process.  That is the only integration shape that proves a persisted checkpoint can cross rank
-topologies rather than merely rebuilding ownership inside the original communicator.
+topologies rather than merely rebuilding ownership inside the original communicator.  The probe
+also requires non-empty native tagging hysteresis to agree across both source ranks and survive the
+two-to-one rematerialization byte-for-byte. A separate two-rank capture injects a one-byte source
+disagreement and must fail collectively before creating any file.
 """
 
 from __future__ import annotations
@@ -167,6 +170,9 @@ def test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one(
     strict = tmp_path / "rank-change-strict.npz"
     evidence = tmp_path / "rank-change-evidence.npz"
     rematerialized = tmp_path / "rank-change-rematerialized.npz"
+    divergent_directory = tmp_path / "divergent-publication"
+    divergent_directory.mkdir()
+    divergent = divergent_directory / "rank-change-divergent.npz"
 
     capture_relaxed = _run_probe(
         launcher,
@@ -209,3 +215,16 @@ def test_amr_checkpoint_restart_rematerializes_two_ranks_onto_one(
         environment=environment,
     )
     assert "PASS bit_identical=True refuses AMR two-to-one restart atomically" in restart_strict
+
+    capture_divergent = _run_probe(
+        launcher,
+        ranks=2,
+        mode="capture-divergent",
+        checkpoint=divergent,
+        environment=environment,
+    )
+    assert (
+        "PASS divergent source tagging payload refuses collective publication atomically"
+        in capture_divergent
+    )
+    assert not divergent.exists() and not tuple(divergent_directory.iterdir())

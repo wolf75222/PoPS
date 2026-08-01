@@ -12,7 +12,7 @@ from pops.descriptors_report import CapabilitySet, RequirementSet
 from pops.descriptors import Availability
 from pops.mesh._descriptor import MeshDescriptor
 from pops.mesh._layout_plan_contracts import NormalizedGeometry
-from pops.amr import IgnoreAMRCriteria, PatchLayout
+from pops.amr import AMRRegrid, IgnoreAMRCriteria, PatchLayout
 
 
 _LAYOUT_REPORT_SCHEMA_VERSION = 1
@@ -458,6 +458,8 @@ class AMR(MeshDescriptor):
         return self._clustering
 
     def _validate_authorities(self) -> None:
+        if type(self.regrid) is not AMRRegrid:
+            raise TypeError("AMR.regrid must be an exact AMRRegrid authority")
         authorities = {
             "hierarchy": self.hierarchy, "tagging": self.tagging,
             "regrid": self.regrid, "transfer": self.transfer,

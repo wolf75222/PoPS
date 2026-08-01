@@ -164,6 +164,13 @@ class ExecutionServicesFixture
       pops::MultiFab&) const {
     return solved_field_outcome_("qualified-state-at");
   }
+  pops::SolveReport program_execution_solve_fields_from_state_at_(
+      const pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::string& provider_slot, int block, pops::MultiFab& state) const {
+    pops::SolveOutcome outcome =
+        program_execution_field_solve_from_state_at_outcome_(point, provider_slot, block, state);
+    return outcome.consume(pops::SolveConsumption::kAccept);
+  }
   pops::SolveOutcome program_execution_solve_named_field_from_state_outcome_(
       const std::string&, int, pops::MultiFab&) const {
     return solved_field_outcome_("named-state");
@@ -569,7 +576,8 @@ void expect_shared_install_and_field_services(Context& context) {
 
   pops::MultiFab state;
   const std::vector<const pops::MultiFab*> states{&state};
-  const pops::runtime::multiblock::BoundaryEvaluationPoint point{};
+  pops::runtime::multiblock::BoundaryEvaluationPoint point{};
+  point.level = context.level();
   auto accept = [](pops::SolveOutcome outcome) {
     return outcome.consume(pops::SolveConsumption::kAccept);
   };
@@ -594,6 +602,19 @@ void expect_shared_install_and_field_services(Context& context) {
             std::vector<std::string>(
                 {"default", "default-state", "qualified-state-at", "named-state", "default-blocks",
                  "named-blocks", "generated-blocks", "qualified-state-at", "qualified-state-at"}));
+
+  auto mismatched_point = point;
+  ++mismatched_point.level;
+  const int calls_before_level_mismatch = context.field_solve_dispatch_count();
+  EXPECT_THROW((void)context.solve_fields_from_state_at(mismatched_point, "field", 0, state),
+               std::invalid_argument);
+  bool evaluation_body_called = false;
+  EXPECT_THROW(context.evaluate_with_field_state_at(mismatched_point, "field", 0, state, state,
+                                                    [&]() { evaluation_body_called = true; }),
+               std::invalid_argument);
+  EXPECT_FALSE(evaluation_body_called);
+  EXPECT_EQ(context.field_solve_dispatch_count(), calls_before_level_mismatch)
+      << "a mismatched fine/coarse point must fail before provider dispatch";
 
   const int calls_before_invalid_provider = context.field_solve_dispatch_count();
   EXPECT_THROW((void)context.solve_fields_from_state_at(point, "", 0, state),

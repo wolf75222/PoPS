@@ -266,6 +266,19 @@ class CornerPolicy:
                 "resolver": None if self.resolver is None else self.resolver.canonical_identity()}
 
 
+class InterfaceTraceOperation(str, Enum):
+    """Native operation required to project one endpoint state onto its face trace.
+
+    ``CELL_AVERAGE`` is the only operation currently executable by the type-erased
+    multi-block scheduler.  Higher-order reconstructions retain their exact
+    ``RECONSTRUCTED_FACE`` requirement and fail closed before native installation;
+    they are never silently replaced by cell averages.
+    """
+
+    CELL_AVERAGE = "cell_average"
+    RECONSTRUCTED_FACE = "reconstructed_face"
+
+
 @dataclass(frozen=True, slots=True)
 class InterfaceSide:
     boundary: BoundaryHandle
@@ -273,6 +286,9 @@ class InterfaceSide:
     discretization: Handle
     orientation: BoundaryOrientation
     projection: Handle
+    trace_provider: str
+    trace_operation: InterfaceTraceOperation
+    required_depth: int
 
     def __post_init__(self) -> None:
         if not isinstance(self.boundary, BoundaryHandle):
@@ -284,14 +300,24 @@ class InterfaceSide:
             raise ValueError("InterfaceSide orientation does not authenticate its BoundaryHandle")
         _handle(self.projection, where="InterfaceSide.projection",
                 kinds=frozenset(("interface_projection",)))
+        if not isinstance(self.trace_provider, str) or not self.trace_provider:
+            raise TypeError("InterfaceSide.trace_provider must be a non-empty provider identity")
+        if not isinstance(self.trace_operation, InterfaceTraceOperation):
+            raise TypeError(
+                "InterfaceSide.trace_operation must be an InterfaceTraceOperation")
+        if isinstance(self.required_depth, bool) or not isinstance(
+                self.required_depth, int) or self.required_depth < 1:
+            raise TypeError("InterfaceSide.required_depth must be an integer >= 1")
 
     def canonical_identity(self) -> dict[str, Any]:
         return {"boundary": self.boundary.canonical_identity(),
                 "layout": self.layout.canonical_identity(),
                 "discretization": self.discretization.canonical_identity(),
                 "orientation": self.orientation.canonical_identity(),
-                "projection": self.projection.canonical_identity()}
-
+                "projection": self.projection.canonical_identity(),
+                "trace_provider": self.trace_provider,
+                "trace_operation": self.trace_operation.value,
+                "required_depth": self.required_depth}
 
 class TangentialOrientation(str, Enum):
     """Orientation of right-face samples in the canonical left-face order."""
@@ -476,5 +502,5 @@ __all__ = [
     "CornerConstraint", "CornerMode", "CornerPolicy", "GhostCoverageManifest",
     "GhostDepthCapability", "GhostDepthRequirement", "GhostRegion", "GhostStencilManifest",
     "InterfaceAffineMapping", "InterfacePermutation", "InterfaceSide",
-    "MultiBlockInterface", "TangentialOrientation",
+    "InterfaceTraceOperation", "MultiBlockInterface", "TangentialOrientation",
 ]

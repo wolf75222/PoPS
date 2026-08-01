@@ -136,7 +136,8 @@ inline RuntimeEnvironmentReport runtime_environment_report() {
   report.kokkos_stream = native_stream_identity();
   report.kokkos_stream_synchronous = native_stream_is_synchronous();
   if (report.kokkos_initialized) {
-    report.kokkos_concurrency = Kokkos::DefaultExecutionSpace::concurrency();
+    const Kokkos::DefaultExecutionSpace execution_space{};
+    report.kokkos_concurrency = execution_space.concurrency();
   }
   if (report.kokkos_initialized_by_pops) {
     report.kokkos_ownership = "pops-owned-lazy";

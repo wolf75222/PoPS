@@ -322,18 +322,23 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format advertises "
                        "its exact supported modes",
                        kLayoutRouteTokensCsv, "runtime", "host|mpi", mpi, gpu),
-      capability_route("checkpoint:accepted_state_v5", "available",
-                       "single-file strict accepted-state checkpoint; MPI_COMM_WORLD uses one "
-                       "rank-0 publication with collective capture and consensus",
-                       kLayoutRouteTokensCsv, "runtime", "host|mpi", mpi, gpu),
+      capability_route("checkpoint:uniform_accepted_state_v5", "available",
+                       "single-file strict accepted-state checkpoint", "uniform", "runtime",
+                       "host|mpi", mpi, gpu),
+      capability_route(
+          "checkpoint:amr_accepted_state_v7", "available",
+          "strict accepted-state checkpoint includes the runtime-owned AMR tagging "
+          "payload and accepted shared-interface flux audit; MPI_COMM_WORLD uses one rank-0 "
+          "publication with collective capture and consensus",
+          "amr", "runtime", "host|mpi", mpi, gpu),
       capability_route("checkpoint:parallel_hdf5", "unavailable",
                        "parallel HDF5 checkpoint is not a native checkpoint route",
                        kLayoutRouteTokensCsv, "none", "mpi", mpi, gpu,
                        "restartable checkpoint encoded as parallel HDF5",
-                       "strict accepted-state v5 NPZ checkpoint",
+                       "strict accepted-state NPZ checkpoint (uniform v5, AMR v7)",
                        "use RuntimeInstance.checkpoint() or the typed Checkpoint consumer"),
       capability_route("checkpoint:amr_dynamic_regrid", status_from_bool(caps.supports_amr),
-                       "strict v5 accepted-state restart; non-Dense history replay keeps rank "
+                       "strict v7 accepted-state restart; non-Dense history replay keeps rank "
                        "count",
                        "amr", "runtime", "host", mpi, gpu),
   };

@@ -411,6 +411,20 @@ TEST(test_amr_history_ring, RegisterStoreReadRotate) {
       << "the conservative per-level count reaches full depth together";
 }
 
+TEST(test_amr_history_ring, PendingHistoryIsReadableButRejectedAtAcceptedRegridBoundary) {
+  AmrRuntime rt = make_two_block(32, 1.0, 1.0);
+  detail::AmrHistoryOps::register_history(rt, 0, "R", 1);
+  for (int level = 0; level < rt.nlev(); ++level)
+    detail::AmrHistoryOps::store_history(rt, "R", level, rt.level_state(0, level), Real(0.01));
+
+  EXPECT_NO_THROW((void)detail::AmrHistoryOps::global(rt, "R", 0, false));
+  EXPECT_THROW(rt.require_restart_regrid_supported(), std::runtime_error)
+      << "accepted restart/regrid boundaries must reject a pending logical sample";
+
+  detail::AmrHistoryOps::rotate_histories(rt);
+  EXPECT_NO_THROW(rt.require_restart_regrid_supported());
+}
+
 TEST(test_amr_history_ring, SharedProgramServiceInterpolatesEveryActiveAmrLevel) {
   constexpr int n = 8;
   AmrSystemConfig cfg;
@@ -652,6 +666,9 @@ TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
   detail::AmrHistoryOps::register_history(rt, 0, "R", 1);
   for (int k = 0; k < rt.nlev(); ++k)
     detail::AmrHistoryOps::store_history(rt, "R", k, rt.level_state(0, k), Real(0.01));
+  // A topology change is an accepted-state boundary. Publish the pending per-level writes as one
+  // logical sample before entering the deliberately strict regrid quiescence gate.
+  detail::AmrHistoryOps::rotate_histories(rt);
   // The coarse slot (level 0) is stable across a regrid -- snapshot it to prove it is untouched.
   const std::vector<double> coarse_before = detail::AmrHistoryOps::global(rt, "R", 0, false);
   const std::size_t nfine = static_cast<std::size_t>(rt.block_level_state(0, 1).size());
