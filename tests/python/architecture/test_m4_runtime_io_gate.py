@@ -156,6 +156,7 @@ def test_m4_closed_gate_lists_every_exact_native_build_target():
         "test_native_loader_param_overflow",
         "test_platform_manifest",
         "test_program_context_contract",
+        "test_program_runtime",
     )
     assert runner._required_ctest_targets(data["check"]) == expected
 
