@@ -31,31 +31,79 @@ def _canonical_name(value: Any, *, where: str) -> str:
 class BalanceLedger:
     """Identity joining one Program-authored discrete balance to one consumer.
 
-    The ledger does not contain values. :meth:`Program.record_balance` writes the five reduced
-    scalars into the current native step-attempt mailbox, while
+    The ledger does not contain values. :meth:`Program.record_balance` writes the explicitly
+    authored reduced scalars into the current native step-attempt mailbox. A ledger may delegate
+    ``reflux`` and/or ``projection`` to exact native operators for one typed component role, while
     :class:`pops.diagnostics.Balance` selects the same identity after that attempt has advanced
     successfully.
     """
 
     name: str
+    role: Any = None
+    component: int | None = None
+    automatic_terms: tuple[str, ...] = ()
     identity: Identity = field(init=False)
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         name = _canonical_name(self.name, where="BalanceLedger.name")
+        role = None
+        if self.role is not None:
+            from pops.physics.roles import native_role_token
+
+            try:
+                role = native_role_token(self.role)
+            except TypeError as exc:
+                raise TypeError(
+                    "BalanceLedger.role must be a typed pops.physics.roles.ComponentRole"
+                ) from exc
+        if not isinstance(self.automatic_terms, tuple):
+            raise TypeError("BalanceLedger.automatic_terms must be a tuple")
+        automatic_terms = tuple(sorted(set(self.automatic_terms)))
+        if len(automatic_terms) != len(self.automatic_terms):
+            raise ValueError("BalanceLedger.automatic_terms must be unique")
+        unsupported = set(automatic_terms).difference({"reflux", "projection"})
+        if unsupported:
+            raise ValueError(
+                "BalanceLedger automatic native producers currently support only "
+                "reflux and projection; got %s" % sorted(unsupported)
+            )
+        component = self.component
+        if automatic_terms and component is None:
+            component = 0
+        if component is not None and (type(component) is not int or component < 0):
+            raise TypeError("BalanceLedger.component must be a non-negative int or None")
         object.__setattr__(self, "name", name)
+        object.__setattr__(self, "component", component)
+        object.__setattr__(self, "automatic_terms", automatic_terms)
+        payload: dict[str, Any] = {"schema_version": 1, "name": name}
+        if role is not None:
+            payload["role"] = role
+        if component is not None:
+            payload["component"] = component
+        if automatic_terms:
+            payload["automatic_terms"] = list(automatic_terms)
         object.__setattr__(
             self,
             "identity",
-            make_identity("balance-ledger", {"schema_version": 1, "name": name}),
+            make_identity("balance-ledger", payload),
         )
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        data = {
             "schema_version": 1,
             "name": self.name,
             "identity": self.identity.to_data(),
         }
+        if self.role is not None:
+            from pops.physics.roles import native_role_token
+
+            data["role"] = native_role_token(self.role)
+        if self.component is not None:
+            data["component"] = self.component
+        if self.automatic_terms:
+            data["automatic_terms"] = list(self.automatic_terms)
+        return data
 
     def route_identity(self, block: Any) -> Identity:
         from pops.problem.handles import BlockHandle

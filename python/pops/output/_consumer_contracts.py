@@ -343,6 +343,9 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
         expected = {"name", "reduction", "transform", "metric_weighted"}
         if reduction == "accepted_balance":
             expected.add("balance_route")
+            if "automatic_terms" in operation:
+                expected.add("automatic_terms")
+                expected.add("balance_component")
         if set(operation) != expected:
             raise TypeError("%s has an unknown schema" % where)
         name = _text(operation["name"], "%s.name" % where)
@@ -373,6 +376,27 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
                     "accepted balance route must use the version-1 balance-ledger-route identity"
                 )
             row["balance_route"] = route.token
+            automatic_terms = operation.get("automatic_terms", ())
+            if not isinstance(automatic_terms, (tuple, list)):
+                raise TypeError("%s.automatic_terms must be a sequence" % where)
+            automatic_terms = tuple(automatic_terms)
+            if automatic_terms != tuple(sorted(set(automatic_terms))):
+                raise ValueError(
+                    "%s.automatic_terms must be sorted and unique" % where
+                )
+            unsupported = set(automatic_terms).difference({"reflux", "projection"})
+            if unsupported:
+                raise ValueError(
+                    "%s.automatic_terms names an unavailable native producer" % where
+                )
+            if automatic_terms:
+                row["automatic_terms"] = list(automatic_terms)
+                component = operation["balance_component"]
+                if type(component) is not int or component < 0:
+                    raise TypeError(
+                        "%s.balance_component must be a non-negative int" % where
+                    )
+                row["balance_component"] = component
         normalized.append(row)
     if len({row["name"] for row in normalized}) != len(normalized):
         raise ValueError("DiagnosticQuantity execution operation names must be unique")
@@ -383,8 +407,6 @@ def _diagnostic_execution(value: Any) -> Mapping[str, Any]:
         raise ValueError(
             "accepted balance evidence must be the sole diagnostic execution operation"
         )
-    if has_accepted_balance and role is not None:
-        raise ValueError("accepted balance evidence cannot select one component role")
     conservation = value["conservation"]
     normalized_conservation = None
     if conservation is not None:

@@ -293,6 +293,45 @@ def test_balance_consumer_resolves_one_exact_native_ledger_route():
     assert contract.identity.domain == "balance-due-contract"
 
 
+def test_balance_consumer_retains_native_term_selector_in_due_contract():
+    case, block, state = _case()
+    clock = Clock("macro", owner=case.owner_path)
+    schedule = every(4, clock=clock)
+    ledger = BalanceLedger(
+        "mass-native", automatic_terms=("projection", "reflux")
+    )
+    graph = ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(),
+            schedule=schedule,
+            fields=(state,),
+            diagnostics=(Balance(ledger, block=block),),
+            target="state/native-balance",
+        ),
+    ))
+    case.consumers(graph)
+    pops.validate(case)
+    subjects = case.layout_subjects()
+    layout = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)),
+        owner=case.owner_path.canonical(),
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
+        handle_resolver=case.resolve,
+    )
+
+    resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
+    quantity, = resolved.nodes[0].diagnostic_quantities
+    operation, = quantity.execution["operations"]
+    route = ledger.route_identity(case.resolve(block))
+    contract = BalanceDueContract.from_consumer_graph(resolved)
+
+    assert operation["automatic_terms"] == ("projection", "reflux")
+    assert operation["balance_component"] == 0
+    assert contract.route(route.token).automatic_terms == ("projection", "reflux")
+
+
 def test_balance_consumer_refuses_a_schedule_that_can_fire_at_start():
     case, block, state = _case()
     clock = Clock("macro", owner=case.owner_path)

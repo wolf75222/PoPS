@@ -468,6 +468,23 @@ struct FluxRegister {
     device_fence();
     all_reduce_sum_inplace(buf.data(), buf.size(), communicator);
   }
+  /// Sum the already-gathered sparse correction by conservative component.
+  ///
+  /// RefluxStorage is pinned host storage shared with device kernels. The fence makes the gathered
+  /// register host-readable; every communicator rank then traverses the same compact global order,
+  /// so this adds no second collective and produces the exact state increment applied below.
+  [[nodiscard]] std::vector<Real> component_sums(Real cell_measure) const {
+    if (!std::isfinite(static_cast<double>(cell_measure)) || cell_measure <= Real(0))
+      throw std::invalid_argument(
+          "FluxRegister component sum requires a finite positive cell measure");
+    device_fence();
+    std::vector<Real> result(static_cast<std::size_t>(nc), Real(0));
+    const std::size_t components = static_cast<std::size_t>(nc);
+    for (std::size_t offset = 0; offset < buf.size(); offset += components)
+      for (std::size_t component = 0; component < components; ++component)
+        result[component] += cell_measure * buf[offset + component];
+    return result;
+  }
   [[nodiscard]] std::size_t lookup_capacity() const noexcept { return cell_lookup.capacity(); }
   [[nodiscard]] std::size_t covered_cell_count() const noexcept { return cell_lookup.size(); }
 
