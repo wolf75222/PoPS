@@ -805,6 +805,10 @@ restart exhaustives. Son gate natif rouvre le dernier VTU accepte, ne conserve q
 feuilles AMR, calcule les normes ponderees par le volume face a la solution exacte transportee et
 impose une erreur L2 relative inferieure ou egale a `0.10`. Il authentifie aussi les contributions
 de flux de chaque niveau et l'ordre `reflux`, puis `average_down`, pour chaque relation parent/enfant.
+Une hierarchie raffinee preexistante ne suffit pas : le gate lit les compteurs publics
+`regrid_count` et `topology_epoch`, exige un remplacement topologique termine avant le checkpoint et
+pendant chaque continuation, puis verifie leur restauration exacte. Il refuse aussi la publication si
+`simulation.amr.explain_checkpoint()` signale une violation du contrat de restart strict.
 L'etude `15_openmp_convergence.py` reste la preuve separee de raffinement conjoint MUSCL/SSPRK2 :
 elle exige la decroissance de L1, L2 et Linf sur les grilles 32², 64², 128² et 256² et publie les
 ordres observes plutot que de supposer un ordre effectif constant pres des extrema limites.
