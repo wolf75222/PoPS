@@ -4,7 +4,7 @@
 ``_amr_system_equation`` (add_equation + named-aux), ``_amr_system_io`` (private accepted-state
 codec and restore transaction), ``_amr_system_program`` (compiled time-Program install / params / transaction)
 and ``_amr_system_install`` (the ``pops.bind`` install seam + field-solver / aux helpers)
-mixins; this module composes them and keeps the constructor plus native block/coupling glue.
+mixins; this module composes them and keeps the constructor plus coupling glue.
 """
 
 from __future__ import annotations
@@ -15,19 +15,12 @@ from pops._bootstrap import AmrSystemConfig, _AmrSystem
 from pops.runtime import _threading
 from pops.runtime._lifecycle import (
     FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL,
+    RETIRED_NATIVE_PASSTHROUGH as _RETIRED_NATIVE_PASSTHROUGH,
     freeze_error as _freeze_error,
     guard_assembling as _guard_assembling,
     _LifecycleMixin,
 )
 from pops.runtime._numeric import native_real
-from pops.runtime._engine_descriptors import Spatial, Explicit
-from pops.runtime.defaults import (
-    NEWTON_DEFAULT_ABS_TOL,
-    NEWTON_DEFAULT_DAMPING,
-    NEWTON_DEFAULT_FD_EPS,
-    NEWTON_DEFAULT_MAX_ITERS,
-    NEWTON_DEFAULT_REL_TOL,
-)
 from pops.runtime._amr_system_equation import _AmrSystemEquation
 from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._amr_system_io import _AmrSystemIO
@@ -294,94 +287,6 @@ class AmrSystem(
         """
         return self._s.coarse_total_boxes()
 
-    def add_block(self, name: Any, model: Any, spatial: Any = None, time: Any = None) -> Any:
-        """Installs an evolved block composed of NATIVE BRICKS on the shared AMR hierarchy.
-
-        Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Case`` assembly
-        resolved with ``pops.resolve(case, layout=...)``, compiled with ``pops.compile(plan)`` and
-        wired by ``pops.bind`` (which calls this internally); ``add_block`` stays private.
-
-        Refined counterpart of System.add_block. Every block count uses the same AmrRuntime engine;
-        subsequent blocks are co-located on the shared hierarchy and contribute to the summed
-        system-Poisson right-hand side.
-        In multi-block the name indexes set_density(name) / mass(name) / density(name). The arguments
-        are marshaled to the C++ facade (AmrSystem::add_block), which validates the block against the model.
-        For a compiled DSL model (.so) or a dispatch on the model type, use add_equation.
-
-        @param name unique name of the block.
-        @param model private ``ModelSpec`` engine value composed from native bricks.
-        @param spatial private engine adapter lowered from ``pops.numerics.FiniteVolume(...)``
-            (default minmod + rusanov + conservative). The native seam accepts limiter tokens
-            none / minmod / vanleer / weno5, Riemann fluxes rusanov / hll / hllc / roe, and
-            conservative / primitive variables. This low-level WENO5 stencil route is not an AMR
-            availability guarantee: a resolved Case also requires an owner-qualified coarse/fine
-            provider certified for order 5 and ghost depth 3. The native catalogue contains that
-            provider and resolves it from the reconstruction requirements; no lower-order
-            coarse/fine fallback is permitted.
-        @param time private engine policy. Public authoring uses an explicit ``pops.Program`` or a
-            ``pops.lib.time`` factory. The installed typed Program is the sole time authority.
-            Until the AMR target provides a typed local implicit primitive, non-empty partial masks,
-            non-default Newton controls, and Newton diagnostics fail closed. The spatial runtime
-            never stores them or manufactures an implicit step/report.
-        spatial.positivity_floor > 0 (ADC-259) floors the Density-role face states AND the
-        coarse-fine fine ghost means to >= floor on the AMR transport (Zhang-Shu, parity with the
-        uniform System). Guarantee = face / ghost-state Density positivity only (order-1 fallback),
-        NOT updated-mean nor pressure positivity. A model without a Density role rejects it at the
-        first step. The COMPILED .so path carries it too now (ADC-322): a loader regenerated against
-        the current headers marshals the floor (add_equation on a CompiledModel, add_native_block).
-        """
-        _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
-        spatial = spatial if spatial is not None else Spatial()
-        time = time if time is not None else Explicit()
-        # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
-        # C/F fine ghost means). Threaded to AmrSystem::add_block below; the compiled .so path carries
-        # it too (ADC-322, regenerated loader). The C++ side rejects it on a model without a Density role.
-        spatial_options: dict[str, bool | float] = {
-            "wave_speed_cache": bool(getattr(spatial, "wave_speed_cache", False)),
-        }
-        if getattr(spatial, "weno_epsilon", None) is not None:
-            spatial_options["weno_epsilon"] = native_real(
-                spatial.weno_epsilon, where="AmrSystem.add_block.weno_epsilon"
-            )
-        # Forward the complete authoring request to the native contract. Cadence remains meaningful
-        # to Program/CFL normalization; unsupported partial masks and non-default Newton requests
-        # fail closed there instead of becoming inert spatial-runtime state.
-        self._s.add_block(
-            name,
-            model,
-            spatial.limiter,
-            spatial.flux,
-            spatial.recon,
-            time.kind,
-            getattr(time, "substeps", 1),
-            getattr(time, "stride", 1),
-            getattr(time, "implicit_vars", []),
-            getattr(time, "implicit_roles", []),
-            getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
-            native_real(
-                getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
-                where="AmrSystem.add_block.newton_rel_tol",
-            ),
-            native_real(
-                getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
-                where="AmrSystem.add_block.newton_abs_tol",
-            ),
-            native_real(
-                getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
-                where="AmrSystem.add_block.newton_fd_eps",
-            ),
-            native_real(
-                getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
-                where="AmrSystem.add_block.newton_damping",
-            ),
-            getattr(time, "newton_diagnostics", False),
-            native_real(
-                getattr(spatial, "positivity_floor", 0.0),
-                where="AmrSystem.add_block.positivity_floor",
-            ),
-            **spatial_options,
-        )
-
     def field(self, name: Any) -> Any:
         """Return the solved potential of a NAMED elliptic field as a ``(ny, nx)`` array.
 
@@ -496,6 +401,11 @@ class AmrSystem(
         return build_program_report(self)
 
     def __getattr__(self, attr: Any) -> Any:
+        if attr in _RETIRED_NATIVE_PASSTHROUGH:
+            raise AttributeError(
+                "AmrSystem.%s is not an authoring route; declare the block with "
+                "pops.Case.block(...)" % attr
+            )
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
         # passthrough (install_program / ...) with the bind-vocabulary
         # RuntimeError, so the bypass is closed even under a prebuilt .so whose C++ setters are not yet
