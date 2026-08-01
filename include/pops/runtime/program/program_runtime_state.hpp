@@ -969,6 +969,94 @@ struct ProgramRuntimeState {
     return result;
   }
 
+  /// Resolve one public Balance route against exact native operator coordinates.
+  ///
+  /// Explicit Program records remain authoritative for every term not listed in @p automatic_terms.
+  /// Reflux and projection may instead be selected from the attempt-local native mailbox. The
+  /// selector is complete and owner-qualified: one runtime block, one conservative component and
+  /// the full active contiguous hierarchy. A selected producer must have published every expected
+  /// coordinate; missing evidence and duplicate Program/native authority fail instead of becoming
+  /// zero or reusing a stale value.
+  std::map<std::string, Real> selected_accepted_balance_terms(
+      const std::string& route, int runtime_block, int component, const std::vector<int>& levels,
+      const std::vector<std::string>& automatic_terms, const std::string& runtime) const {
+    static constexpr std::array<const char*, 5> kTerms{"storage_change", "outward_boundary_flux",
+                                                       "sources", "reflux", "projection"};
+    require_balance_route(route, runtime + "::_selected_accepted_balance_terms");
+    if (runtime_block < 0 || component < 0)
+      throw std::invalid_argument(
+          runtime + "::_selected_accepted_balance_terms requires non-negative coordinates");
+    if (levels.empty() || levels.front() < 0 ||
+        std::adjacent_find(levels.begin(), levels.end(),
+                           [](int left, int right) { return right != left + 1; }) != levels.end())
+      throw std::invalid_argument(
+          runtime + "::_selected_accepted_balance_terms requires a non-empty contiguous hierarchy");
+    if (!std::is_sorted(automatic_terms.begin(), automatic_terms.end()) ||
+        std::adjacent_find(automatic_terms.begin(), automatic_terms.end()) != automatic_terms.end())
+      throw std::invalid_argument(
+          runtime + "::_selected_accepted_balance_terms requires sorted unique automatic terms");
+    for (const std::string& term : automatic_terms)
+      if (term != "reflux" && term != "projection")
+        throw std::invalid_argument(
+            runtime + "::_selected_accepted_balance_terms has no native producer for '" + term +
+            "'");
+
+    std::map<std::string, Real> result;
+    if (step_balance_terms_.empty() && balance_step_completed_ && !balance_program_was_due_) {
+      for (const char* term : kTerms)
+        result.emplace(term, Real(0));
+      return result;
+    }
+    for (const char* term_value : kTerms) {
+      const std::string term = term_value;
+      const bool automatic =
+          std::binary_search(automatic_terms.begin(), automatic_terms.end(), term);
+      const std::string record = "pops.balance-term.v1:" + route + ":" + term;
+      const auto authored = step_balance_terms_.find(record);
+      if (!automatic) {
+        if (authored == step_balance_terms_.end())
+          throw std::runtime_error(
+              runtime +
+              "::_selected_accepted_balance_terms: current native attempt omitted term '" + term +
+              "'; Program.record_balance must publish every non-automatic term");
+        if (!std::isfinite(static_cast<double>(authored->second)))
+          throw std::runtime_error(
+              runtime +
+              "::_selected_accepted_balance_terms: current native attempt produced "
+              "non-finite term '" +
+              term + "'");
+        result.emplace(term, authored->second);
+        continue;
+      }
+      if (authored != step_balance_terms_.end())
+        throw std::runtime_error(runtime + "::_selected_accepted_balance_terms: term '" + term +
+                                 "' has both Program and native producer authority");
+
+      Real value = Real(0);
+      const std::size_t expected = term == "reflux" ? levels.size() - 1 : levels.size();
+      for (std::size_t index = 0; index < expected; ++index) {
+        const AutomaticBalanceKey key{runtime_block, levels[index], component, term};
+        const auto found = automatic_balance_terms_.find(key);
+        if (found == automatic_balance_terms_.end())
+          throw std::runtime_error(
+              runtime + "::_selected_accepted_balance_terms: native producer omitted term '" +
+              term + "' at level " + std::to_string(levels[index]));
+        if (!std::isfinite(static_cast<double>(found->second)))
+          throw std::runtime_error(
+              runtime +
+              "::_selected_accepted_balance_terms: native producer returned non-finite "
+              "term '" +
+              term + "'");
+        value += found->second;
+      }
+      if (!std::isfinite(static_cast<double>(value)))
+        throw std::runtime_error(
+            runtime + "::_selected_accepted_balance_terms: native term accumulation overflowed");
+      result.emplace(term, value);
+    }
+    return result;
+  }
+
   void begin_balance_due_window(int accepted_macro_step, const std::string& runtime) {
     if (balance_due_window_active_)
       throw std::logic_error(runtime + " balance due window is already active");
