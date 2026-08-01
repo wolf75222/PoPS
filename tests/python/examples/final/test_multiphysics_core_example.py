@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -36,7 +37,10 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
 
     assert completed.returncode == 0, completed.stderr
     assert "PoPS final multiphysics acceptance:" in completed.stdout
+    assert "missing mapping refusal: missing mapping provider" in completed.stdout
     assert "bit-identical restart: step 2" in completed.stdout
+    refused = output / "refused_missing_mapping"
+    assert not refused.exists() or not any(path.is_file() for path in refused.rglob("*"))
 
     from pops.output import HDF5, ParaView
 
@@ -98,6 +102,48 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
             "electrons.electrons", "ions.ions"]
         assert "runtime_consumer_graph" in stored
         assert "field_provider_slots" in stored
+
+
+def test_missing_mapping_provider_refuses_before_plan_or_publication(tmp_path) -> None:
+    example = _load_example()
+    refused = tmp_path / "refused_missing_mapping"
+
+    reason = example.require_missing_mapping_provider_refusal(
+        cells=8, publication_root=refused,
+    )
+
+    assert "missing mapping provider" in reason
+    assert not refused.exists() or not any(path.is_file() for path in refused.rglob("*"))
+
+
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    (
+        ("bind_identity", "pops.bind.v1::changed"),
+        ("layout_plan_identity", "pops.layout-plan.v1::changed"),
+        ("layout_identities", ("pops.handle.v1::changed",)),
+    ),
+)
+def test_restart_snapshot_refuses_bind_or_layout_identity_drift(field, changed) -> None:
+    example = _load_example()
+    snapshot = example.RuntimeSnapshot(
+        time=0.0,
+        macro_step=0,
+        states={"electrons": np.zeros((3, 1, 1))},
+        fields={"electrostatic": np.zeros((1, 1))},
+        histories={"electrons.electrons": (np.zeros((3, 1, 1)),)},
+        bind_identity="pops.bind.v1::accepted",
+        layout_plan_identity="pops.layout-plan.v1::accepted",
+        layout_identities=("pops.handle.v1::accepted",),
+        program_hash="program",
+        consumer_graph_identity="consumer-graph",
+        consumer_cursors={},
+    )
+
+    with pytest.raises(RuntimeError, match=field):
+        example._require_same_snapshot(
+            snapshot, replace(snapshot, **{field: changed}), where="strict restart",
+        )
 
 
 def test_program_has_exact_field_context_and_transactional_implicit_join() -> None:
