@@ -174,10 +174,6 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
   if (!level_boxes[0].empty() || !level_owner_ranks[0].empty())
     throw std::runtime_error(
         "AmrRuntime::rebuild_hierarchy : level zero is owned by the resolved base layout");
-  std::optional<RegridPhysicalGhostSupport> physical_support;
-  if (n_levels > 1)
-    physical_support = regrid_physical_ghost_support_();
-
   auto checked_refine_domain = [](const Box2D& domain, int ratio) {
     if (ratio != kAmrRefRatio)
       throw std::runtime_error(
@@ -233,6 +229,7 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
     }
     target_boxes[index] = BoxArray(std::move(boxes));
     target_mappings[index] = DistributionMapping(level_owner_ranks[index]);
+    const auto physical_support = regrid_physical_ghost_support_(level - 1);
     validate_fine_layout_proper_nesting(target_boxes[index], target_boxes[index - 1], parent_domain,
                                         ratio, regrid_margin_,
                                         RegridPeriodicity{base_per_.x, base_per_.y},

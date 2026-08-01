@@ -7,10 +7,15 @@ import pytest
 
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.mesh.boundaries import BlockInterfaceSide, ConservativeInterface
+from pops.mesh.boundaries import (
+    BlockInterfaceSide,
+    ConservativeInterface,
+    InterfaceTraceOperation,
+)
 from pops.mesh.boundaries.composition import compose_shared_interfaces
+from pops.mesh.boundaries.interface_authoring import _trace_projection_contract
 from pops.model import OwnerPath
-from pops.numerics import DiscretizationPlan
+from pops.numerics import DiscretizationPlan, reconstruction
 from pops.problem.handles import BlockHandle, StateHandle
 
 
@@ -145,3 +150,36 @@ def test_endpoint_boundary_must_belong_to_the_owning_block_frame():
         resolve=lambda handle: handle, frame=owned_frame, block=left_block)
     with pytest.raises(ValueError, match="does not belong"):
         ConservativeInterface.resolve_for_numerics(InterfaceLike(), context)
+
+
+@pytest.mark.parametrize(
+    ("selected", "provider", "operation", "depth"),
+    (
+        (
+            reconstruction.FirstOrder(),
+            "limiter.none",
+            InterfaceTraceOperation.CELL_AVERAGE,
+            1,
+        ),
+        (
+            reconstruction.MUSCL(),
+            "limiter.minmod",
+            InterfaceTraceOperation.RECONSTRUCTED_FACE,
+            2,
+        ),
+        (
+            reconstruction.WENO5(),
+            "limiter.weno5",
+            InterfaceTraceOperation.RECONSTRUCTED_FACE,
+            3,
+        ),
+    ),
+)
+def test_interface_trace_contract_is_derived_from_reconstruction(
+        selected, provider, operation, depth):
+    spatial = SimpleNamespace(
+        reconstruction=selected, ghost_depth=selected.options["ghost_depth"])
+    block = SimpleNamespace(
+        numerics=SimpleNamespace(primary_spatial=lambda: spatial))
+
+    assert _trace_projection_contract(block) == (provider, operation, depth)
