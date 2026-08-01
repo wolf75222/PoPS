@@ -39,7 +39,7 @@ def test_m4_manifest_is_a_closed_exact_matrix():
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
     assert data["deferred"] == []
-    assert len(data["check"]) == 52
+    assert len(data["check"]) == 53
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -523,6 +523,10 @@ def test_m4_gate_keeps_real_tamper_and_capacity_refusals():
         r"^test_native_loader_param_overflow\.Runs$",
         r"^test_amr_native_loader\.RefusesComponentBuiltForAnotherNativeAbi$",
         r"^PlatformManifest\.UnknownCapabilityRefusesBeforeKernel$",
+        (
+            "tests/python/unit/codegen/test_component_packages.py::"
+            "test_fixed_binary_bytes_are_authenticated_before_package_use"
+        ),
     } <= refusals
     assert (
         "tests/python/unit/codegen/test_component_manifest_v2.py::"

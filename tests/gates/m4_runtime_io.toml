@@ -374,6 +374,14 @@ test_regex = "^test_amr_native_loader\\.RefusesComponentBuiltForAnotherNativeAbi
 
 [[check]]
 issue = "ADC-687"
+requirement = "tamper_capability_abi"
+polarity = "refusal"
+kind = "pytest"
+target = "tamper_capability_abi"
+nodeid = "tests/python/unit/codegen/test_component_packages.py::test_fixed_binary_bytes_are_authenticated_before_package_use"
+
+[[check]]
+issue = "ADC-687"
 requirement = "legacy_stepper_retirement"
 polarity = "positive"
 kind = "pytest"

@@ -2,7 +2,7 @@
 
 The current status is **CLOSED AND CI-EXECUTED**. The ledger in
 `tests/gates/m4_runtime_io.toml` records exact executable evidence for
-ADC-679 through ADC-687. It contains exactly 52 executable checks and
+ADC-679 through ADC-687. It contains exactly 53 executable checks and
 `deferred = []`. Closure is accepted only for a commit whose required MPI job
 successfully executes the complete installed gate; source audit alone is not
 the acceptance evidence.
