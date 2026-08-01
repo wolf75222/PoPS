@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
+#include <pops/physics/bricks/elliptic.hpp>
+#include <pops/physics/bricks/source.hpp>
+#include <pops/physics/composition/composite.hpp>
 
 #include <cstdint>
 #include <limits>
@@ -88,6 +91,40 @@ struct RepairCandidate {
     return pops::RecoveryMethodResult<1>::candidate(value);
   }
 };
+
+struct GuardedScalarHyperbolic {
+  using State = pops::StateVec<1>;
+  using Prim = pops::StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+
+  POPS_HD State flux(const State& value, const Aux&, int) const { return value; }
+  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(1); }
+  POPS_HD Prim to_primitive(const State& value) const { return value; }
+  POPS_HD State to_conservative(const Prim& value) const { return value; }
+  POPS_HD bool recovery_admissible(const Prim& value, int* failing_component) const {
+    if (!(value[0] > Real(0))) {
+      if (failing_component != nullptr)
+        *failing_component = 0;
+      return false;
+    }
+    if (failing_component != nullptr)
+      *failing_component = -1;
+    return true;
+  }
+  static pops::VariableSet conservative_vars() {
+    return {pops::VariableKind::Conservative, {"q"}, 1, {pops::VariableRole::Scalar}};
+  }
+  static pops::VariableSet primitive_vars() {
+    return {pops::VariableKind::Primitive, {"q"}, 1, {pops::VariableRole::Scalar}};
+  }
+};
+
+using GuardedScalarModel =
+    pops::CompositeModel<GuardedScalarHyperbolic, pops::NoSource, pops::ChargeDensity>;
+
+static_assert(pops::HyperbolicPhysicalModel<GuardedScalarHyperbolic>);
+static_assert(pops::HasRecoveryAdmissibility<GuardedScalarModel>);
 
 TEST(PreparedVariableRecovery, ordered_chain_uses_common_prepared_solver) {
   const auto methods = pops::recovery_methods(
@@ -235,6 +272,27 @@ TEST(PreparedVariableRecovery, malformed_and_repair_candidates_fail_closed) {
   EXPECT_EQ(repair.status, pops::RecoveryStatus::kInvalidContract);
   EXPECT_EQ(repair.cause, pops::RecoveryCause::kRepairPublicationForbidden);
   EXPECT_FALSE(repair.publication_permitted());
+}
+
+TEST(PreparedVariableRecovery, model_declared_admissibility_blocks_publication) {
+  const GuardedScalarModel model{};
+  const auto plan = pops::prepare_model_variable_recovery(model);
+  EXPECT_EQ(plan.method_kind(0), pops::RecoveryMethodKind::kClosedForm);
+
+  const Real negative[1] = {Real(-1)};
+  const Real negative_guess[1] = {Real(2)};
+  const auto rejected = pops::recover_prepared_variable(plan, negative, negative_guess);
+  EXPECT_EQ(rejected.status, pops::RecoveryStatus::kExhausted);
+  EXPECT_EQ(rejected.cause, pops::RecoveryCause::kInadmissibleCandidate);
+  EXPECT_EQ(rejected.failing_component, 0);
+  EXPECT_FALSE(rejected.publication_permitted());
+
+  const Real positive[1] = {Real(3)};
+  const Real positive_guess[1] = {Real(1)};
+  const auto recovered = pops::recover_prepared_variable(plan, positive, positive_guess);
+  ASSERT_TRUE(recovered.publication_permitted());
+  EXPECT_EQ(recovered.failing_component, -1);
+  EXPECT_EQ(recovered.value[0], Real(3));
 }
 
 }  // namespace
