@@ -26,9 +26,10 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 31
+    assert len(data["check"]) == 33
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
+        "ADC-682",
         "ADC-749",
         "ADC-750",
         "ADC-752",
@@ -38,6 +39,30 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
         "ADC-756",
     ]
     assert runner.main(["--check-only"]) == 0
+
+
+def test_adc757_slice_executes_qualified_flux_provider_pack_proofs():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    assert [
+        row for row in data["check"] if row["requirement"] == "qualified_flux_provider_pack"
+    ] == [
+        {
+            "requirement": "qualified_flux_provider_pack",
+            "polarity": "positive",
+            "target": "test_flux_interfaces",
+            "test_regex": "^test_flux_interfaces\\."
+            "generated_provider_requirements_own_native_slot_reads$",
+        },
+        {
+            "requirement": "qualified_flux_provider_pack",
+            "polarity": "refusal",
+            "kind": "pytest",
+            "path": "tests/python/unit/codegen/test_compiler_model_provider.py",
+            "test": "test_field_dependent_flux_without_provider_fails_before_native_source",
+        },
+    ]
 
 
 def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
@@ -108,7 +133,12 @@ def test_adc757_slice_executes_exact_python_ir_and_restart_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors
-    assert [row for row in data["check"] if row.get("kind") == "pytest"] == [
+    assert [
+        row
+        for row in data["check"]
+        if row.get("kind") == "pytest"
+        and row["requirement"] == "python_ir_generated_abi_and_restart_parity"
+    ] == [
         {
             "requirement": "python_ir_generated_abi_and_restart_parity",
             "polarity": "positive",

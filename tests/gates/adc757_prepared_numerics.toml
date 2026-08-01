@@ -1,7 +1,7 @@
 schema_version = 2
 gate = "adc757-prepared-numerics-slice"
 issue = "ADC-757"
-evidence_from = ["ADC-749", "ADC-750", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
+evidence_from = ["ADC-682", "ADC-749", "ADC-750", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
 deferred = [
   "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
   "remaining_legacy_recovery_and_boundary_authority_deletion",
@@ -101,6 +101,19 @@ kind = "mpi_ctest"
 target = "test_mpi_flux_failure_collective"
 test_regex = "^test_mpi_flux_failure_collective_np2$"
 nproc = 2
+
+[[check]]
+requirement = "qualified_flux_provider_pack"
+polarity = "positive"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.generated_provider_requirements_own_native_slot_reads$"
+
+[[check]]
+requirement = "qualified_flux_provider_pack"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_compiler_model_provider.py"
+test = "test_field_dependent_flux_without_provider_fails_before_native_source"
 
 [[check]]
 requirement = "capability_driven_riemann"

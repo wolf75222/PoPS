@@ -22,6 +22,7 @@ EXPECTED_REQUIREMENTS = {
     "transactional_recovery_publication",
     "allocation_aware_cell_hot_path",
     "prepared_boundary_publication",
+    "qualified_flux_provider_pack",
     "capability_driven_riemann",
     "mpi_collective_execution",
     "typed_flux_recovery_consumption",
@@ -151,6 +152,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     if data.get("issue") != "ADC-757":
         errors.append("issue must be exactly ADC-757")
     expected_evidence = [
+        "ADC-682",
         "ADC-749",
         "ADC-750",
         "ADC-752",
