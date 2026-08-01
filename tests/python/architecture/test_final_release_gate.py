@@ -1,7 +1,9 @@
 """Source-only contract checks for the final release gate (ADC-695)."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import zipfile
@@ -189,6 +191,80 @@ def test_release_evidence_authenticates_the_exact_retained_wheel(tmp_path):
     gates["official_build"]["evidence"]["wheel"]["size"] += 1
     with pytest.raises(preflight.PreflightError, match="size drifted"):
         preflight._wheel_evidence(tmp_path, gates, release)
+
+
+def _write_public_api_evidence(tmp_path: Path) -> tuple[Path, dict, object]:
+    package = tmp_path / "site-packages" / "pops"
+    wheel_sha256 = "a" * 64
+    typed_sha256 = "b" * 64
+    public_sha256 = "c" * 64
+    metadata_sha256 = "d" * 64
+    payload = {
+        "schema_version": preflight.PUBLIC_API_EVIDENCE_SCHEMA_VERSION,
+        "producer": {
+            "script": "scripts/prove_public_api_parity.py",
+            "sha256": hashlib.sha256(
+                (SCRIPTS / "prove_public_api_parity.py").read_bytes()
+            ).hexdigest(),
+        },
+        "wheel_path": str(tmp_path / "pops.whl"),
+        "wheel_sha256": wheel_sha256,
+        "distribution": {
+            "name": "PoPS",
+            "version": "1.0.0",
+            "metadata_sha256": metadata_sha256,
+        },
+        "typed_payload_files": 3,
+        "typed_payload_sha256": typed_sha256,
+        "public_api_sha256": public_sha256,
+        "public_names": ["Model", "Program", "Case"],
+        "pure_authoring": True,
+        "qualified_handles": True,
+        "py_typed": True,
+        "installed": True,
+        "installed_distribution": {
+            "name": "PoPS",
+            "version": "1.0.0",
+            "metadata_sha256": metadata_sha256,
+        },
+        "installed_package": str(package),
+        "installed_typed_payload_sha256": typed_sha256,
+        "installed_public_api_sha256": public_sha256,
+    }
+    path = tmp_path / "public-api-evidence.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    release_evidence = {
+        "runtime": {"pops_file": str(package / "__init__.py")},
+        "gates": {
+            "official_build": {
+                "evidence": {"wheel": {"sha256": wheel_sha256}},
+            },
+        },
+    }
+    release = type("ReleaseContract", (), {"PACKAGE_VERSION": "1.0.0"})
+    return path, release_evidence, release
+
+
+def test_release_preflight_binds_installed_public_api_to_wheel_and_runtime(tmp_path):
+    evidence, release_evidence, release = _write_public_api_evidence(tmp_path)
+
+    preflight._public_api_evidence(evidence, release_evidence, release)
+
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    payload["wheel_sha256"] = "e" * 64
+    evidence.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(preflight.PreflightError, match="another wheel"):
+        preflight._public_api_evidence(evidence, release_evidence, release)
+
+
+def test_release_preflight_rejects_public_api_proven_on_another_install(tmp_path):
+    evidence, release_evidence, release = _write_public_api_evidence(tmp_path)
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    payload["installed_package"] = str(tmp_path / "other" / "pops")
+    evidence.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(preflight.PreflightError, match="authenticated installed runtime"):
+        preflight._public_api_evidence(evidence, release_evidence, release)
 
 
 def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate():

@@ -85,6 +85,7 @@ depends_on = [
   "python/pops/problem/problem.py",
   "python/pops/time/_program/api.py",
   "scripts/prove_public_api_parity.py",
+  "scripts/release_preflight.py",
   ".github/workflows/release.yml",
   "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
   "examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py",
