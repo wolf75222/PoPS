@@ -277,10 +277,6 @@ class TaggerProvider:
 
     def require_tagging_graph(self, graph: Any) -> None:
         capability = _tagger_capability(self.component)
-        if capability["persistent_hysteresis"] is not NATIVE_TAGGING_PROGRAM_ABI[
-                "persistent_hysteresis"]:
-            raise NotImplementedError(
-                "AMR Tagger persistent_hysteresis is not implemented by the native adapter")
         registrations = getattr(graph, "registrations", None)
         authoring = getattr(graph, "graph", None)
         if not isinstance(registrations, tuple) or authoring is None:
@@ -324,8 +320,8 @@ class TaggerProvider:
             require_stencils(authoring.coarsen)
         if authoring.hysteresis.min_cycles != 0:
             raise NotImplementedError(
-                "AMR hysteresis min_cycles requires native persistent tagging state; "
-                "it is never accepted then ignored")
+                "external AMR Tagger persistent_hysteresis is not implemented by "
+                "the component adapter")
 
     def lower_amr_provider(
         self, context: AMRProviderLoweringContext,
@@ -560,8 +556,7 @@ class _TaggerRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
                     "maximum_stencil_terms"] \
                 or capability.get("non_finite_policy") != NATIVE_TAGGING_PROGRAM_ABI[
                     "non_finite_policy"] \
-                or capability.get("persistent_hysteresis") is not NATIVE_TAGGING_PROGRAM_ABI[
-                    "persistent_hysteresis"] \
+                or type(capability.get("persistent_hysteresis")) is not bool \
                 or execution_mode not in NATIVE_TAGGING_PROGRAM_ABI["execution_modes"] \
                 or collective_scope not in NATIVE_TAGGING_PROGRAM_ABI["collective_scopes"] \
                 or collective_scope != "none" \

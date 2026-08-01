@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -91,6 +92,37 @@ std::optional<HierarchyPolicy> decode_hierarchy_policy(
   if (authority.policy_id == "pops.field-hierarchy.composite")
     return HierarchyPolicy::Composite;
   return std::nullopt;
+}
+
+bool fully_refines_every_level(const AmrFieldSolverBuildRequest& request) {
+  if (request.hierarchy.nlev() < 2)
+    return false;
+  int parent_refinement = 1;
+  for (int level = 0; level + 1 < request.hierarchy.nlev(); ++level) {
+    const int ratio =
+        request.hierarchy.refinement_ratios.at(static_cast<std::size_t>(level));
+    if (ratio <= 0)
+      return false;
+    const Geometry parent_geometry = request.geometry.refine(parent_refinement);
+    const BoxArray& children = request.hierarchy.ba.at(static_cast<std::size_t>(level + 1));
+    std::uint64_t covered_cells = 0;
+    for (int patch = 0; patch < children.size(); ++patch) {
+      const Box2D footprint = children[patch].coarsen(ratio);
+      if (footprint.refine(ratio) != children[patch] ||
+          !parent_geometry.domain.contains(footprint))
+        return false;
+      for (int previous = 0; previous < patch; ++previous)
+        if (!footprint.intersect(children[previous].coarsen(ratio)).empty())
+          return false;
+      covered_cells += static_cast<std::uint64_t>(footprint.num_cells());
+    }
+    if (covered_cells != static_cast<std::uint64_t>(parent_geometry.domain.num_cells()))
+      return false;
+    if (parent_refinement > std::numeric_limits<int>::max() / ratio)
+      return false;
+    parent_refinement *= ratio;
+  }
+  return true;
 }
 
 class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
@@ -184,6 +216,14 @@ class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
     for (auto& solver : level_solvers_)
       solver->set_boundary_context(context);
   }
+  void set_boundary_context_for_level(int level,
+                                      const FieldBoundaryExecutionContext& context) override {
+    if (fac_) {
+      fac_->set_boundary_context_for_level(level, context);
+      return;
+    }
+    level_solvers_.at(static_cast<std::size_t>(level))->set_boundary_context(context);
+  }
   SolveReport solve() override {
     if (fac_) {
       if (plan_.has_boundary_kernel && plan_.boundary_kernel.observes_iteration) {
@@ -238,9 +278,11 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
     return {
         "pops.amr.field-solver.geometric-mg.active-region@1",
         "pops.amr.field-solver.geometric-mg.composite-hierarchy@1",
+        "pops.amr.field-solver.geometric-mg.composite-fully-refined-level-qualified-boundary@1",
         "pops.amr.field-solver.geometric-mg.distributed-coarse@1",
         "pops.amr.field-solver.geometric-mg.dynamic-boundary@1",
         "pops.amr.field-solver.geometric-mg.exact-preparation@1",
+        "pops.amr.field-solver.geometric-mg.level-qualified-linear-boundary@1",
         "pops.amr.field-solver.geometric-mg.level-local-hierarchy@1",
         "pops.amr.field-solver.geometric-mg.nonlinear-boundary@1",
         "pops.amr.field-solver.geometric-mg.reaction@1",
@@ -292,10 +334,30 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
         (!request.replicated_coarse || static_cast<bool>(request.active)))
       return PreparedProviderSupport::reject(
           14, "composite hierarchy cannot represent this coarse distribution or active region");
-    if (level_local && request.hierarchy.nlev() > 1 &&
-        (request.plan.has_boundary_kernel || request.plan.has_newton))
+    if (composite && request.hierarchy.nlev() > 1 && request.plan.has_boundary_kernel) {
+      bool fully_refined = false;
+      try {
+        fully_refined = fully_refines_every_level(request);
+      } catch (...) {
+        return PreparedProviderSupport::reject(
+            18, "composite hierarchy coverage could not be validated for dynamic boundaries");
+      }
+      if (!fully_refined)
+        return PreparedProviderSupport::reject(
+            16,
+            "partially refined FAC has no level-qualified homogeneous/JVP boundary correction "
+            "operator");
+    }
+    if (composite && request.plan.has_boundary_kernel &&
+        request.plan.boundary_kernel.observes_iteration && !request.plan.has_newton)
       return PreparedProviderSupport::reject(
-          15, "multi-level local hierarchy cannot represent dynamic or nonlinear boundaries");
+          17, "iterate-dependent composite boundary requires an explicit nonlinear solve plan");
+    if (level_local && request.hierarchy.nlev() > 1 &&
+        (request.plan.has_newton ||
+         (request.plan.has_boundary_kernel && request.plan.boundary_kernel.observes_iteration)))
+      return PreparedProviderSupport::reject(
+          15,
+          "multi-level local hierarchy cannot represent an iterate-dependent nonlinear boundary");
     return PreparedProviderSupport::accept();
   }
   [[nodiscard]] std::string expected_prepared_contract(
