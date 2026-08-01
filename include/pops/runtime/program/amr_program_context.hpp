@@ -1278,6 +1278,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     AttemptSnapshot& saved = attempt_snapshot_;
     capture_engine_attempt_snapshot_(saved, borrows_facade_snapshot);
     import_program_accepted_state_();
+    // ADC-756 foundation: an authenticated cell-local checkpoint must never fall through to the
+    // existing hierarchy-global driver. The future prepared Kokkos partition executor will consume
+    // this same authority; until then, fail before the Program body or any published clock mutates.
+    temporal_partition_.require_global_execution_route();
     capture_program_attempt_snapshot_(saved);
     conservative_ledger_.begin();
     try {
@@ -1382,6 +1386,16 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   void validate_program_accepted_state_(const AmrProgramAcceptedState& state) const {
+    validate_cell_temporal_partition_state(state.temporal_partition);
+    if (state.temporal_partition.kind == TemporalPartitionKind::CellLocal) {
+      if (state.temporal_partition.topology_epoch != eng_->topology_epoch())
+        throw std::runtime_error(
+            "AMR Program cell-local temporal partition targets another topology epoch");
+      for (const CellTemporalPartitionRecord& cell : state.temporal_partition.cells)
+        if (cell.level >= nlev())
+          throw std::runtime_error(
+              "AMR Program cell-local temporal partition targets an inactive level");
+    }
     if (state.level_clocks.size() != static_cast<std::size_t>(nlev()))
       throw std::runtime_error(
           "AMR Program accepted state does not match the restored hierarchy level count");
@@ -1507,6 +1521,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     const std::int64_t accepted_step =
         level_clocks_.empty() ? macro_step() : level_clocks_.front().macro_step;
     state.logical_clock_ticks = clock_schedule_.accepted_ticks(accepted_step);
+    state.temporal_partition = temporal_partition_.checkpoint();
     state.tagging_hysteresis_state = eng_->checkpoint_tagging_state();
     state.history_owners = history_owners_;
     state.history_states = history_state_ids_;
@@ -1561,6 +1576,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     const std::int64_t accepted_step =
         level_clocks_.empty() ? macro_step() : level_clocks_.front().macro_step;
     clock_schedule_.restore_accepted_ticks(state.logical_clock_ticks, accepted_step);
+    temporal_partition_.restore(std::move(state.temporal_partition));
     history_owners_ = std::move(state.history_owners);
     history_state_ids_ = std::move(state.history_states);
     history_space_ids_ = std::move(state.history_spaces);
@@ -1705,6 +1721,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     std::uint64_t engine_topology_generation = 0;
     std::vector<std::uint8_t> program_accepted_state;
     std::uint64_t program_accepted_state_revision = 0;
+    CellTemporalPartitionAcceptedState temporal_partition;
     std::set<FluxKey> active_flux;
     std::map<FluxKey, EdgeFlux> flux;
     std::map<FluxKey, std::vector<FluxContribution>> flux_contributions;
@@ -1928,6 +1945,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       throw std::logic_error(
           "AMR Program accepted state changed while capturing an attempt snapshot");
     snapshot.program_accepted_state_revision = accepted_revision;
+    snapshot.temporal_partition = temporal_partition_.checkpoint();
 
     copy_set_in_place_(snapshot.active_flux, active_flux_ledger_);
     for (auto entry = snapshot.flux.begin(); entry != snapshot.flux.end();) {
@@ -2047,6 +2065,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     current_window_ = snapshot.window;
     current_sync_clock_ = snapshot.sync_clock;
     current_level_dt_ = snapshot.level_dt;
+    temporal_partition_.rollback();
+    temporal_partition_.restore(snapshot.temporal_partition);
   }
 
   template <class Body>
@@ -3275,8 +3295,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       const HistoryRegistration& registration) const {
     return pops::detail::AmrHistoryOps::initialized(*eng_, registration.name);
   }
-  double program_execution_history_slot_dt_storage_(
-      const HistoryRegistration& registration, int lag) const {
+  double program_execution_history_slot_dt_storage_(const HistoryRegistration& registration,
+                                                    int lag) const {
     return pops::detail::AmrHistoryOps::slot_dt(*eng_, registration.name, lag);
   }
   void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
@@ -3534,6 +3554,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   mutable bool restart_regrid_prepared_ = false;
   mutable int automatic_regrid_macro_step_ = -1;
   mutable std::vector<amr::ClockStamp> level_clocks_;
+  mutable BatchedCellTemporalPartition temporal_partition_;
   mutable std::uint64_t accepted_state_revision_ = 0;
   mutable std::uint64_t operator_topology_revision_counter_ = 0;
   mutable std::uint64_t observed_operator_topology_epoch_ =

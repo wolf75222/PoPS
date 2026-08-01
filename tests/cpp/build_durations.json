@@ -6,7 +6,8 @@
       "test_amr_program_diffusion",
       "test_amr_program_positivity_floor",
       "test_flux_failure_loader_transaction",
-      "test_interface_flux_fragment_ledger"
+      "test_interface_flux_fragment_ledger",
+      "test_temporal_partition_restart"
     ],
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next cold-CI timing refresh",
     "measured_refresh": {
@@ -16,7 +17,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 187,
+    "target_count": 188,
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor"
   },
   "test_adaptive_multirate": 2.0,
@@ -192,6 +193,7 @@
   "test_step_attempt_rejected_header_only": 2.0,
   "test_structured_solver_diagnostics": 2.0,
   "test_sync_residence": 2.0,
+  "test_temporal_partition_restart": 15.0,
   "test_system_abstraction": 2.0,
   "test_system_coupler": 2.0,
   "test_system_hardening": 2.0,

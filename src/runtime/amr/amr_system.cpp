@@ -3332,6 +3332,15 @@ void AmrSystem::restore_checkpoint_accepted_state(const std::vector<std::uint8_t
   runtime::amr::PersistentTaggingState tagging_candidate;
   if (has_program) {
     const auto accepted = runtime::program::deserialize_amr_program_accepted_state(state);
+    if (accepted.temporal_partition.kind == runtime::program::TemporalPartitionKind::CellLocal) {
+      if (accepted.temporal_partition.topology_epoch != p_->runtime->topology_epoch())
+        throw std::runtime_error(
+            "AMR checkpoint cell-local temporal partition targets another topology epoch");
+      for (const auto& cell : accepted.temporal_partition.cells)
+        if (cell.level < 0 || cell.level >= p_->runtime->nlev())
+          throw std::runtime_error(
+              "AMR checkpoint cell-local temporal partition targets an inactive level");
+    }
     tagging_candidate =
         p_->runtime->prepare_checkpoint_tagging_state(accepted.tagging_hysteresis_state);
   } else {
@@ -3438,6 +3447,13 @@ std::vector<std::vector<std::string>> AmrSystem::program_clock_manifest() const 
   for (const auto& [identity, tick] : state.logical_clock_ticks)
     rows.push_back({"logical", identity, std::to_string(tick)});
   return rows;
+}
+std::vector<std::vector<std::string>> AmrSystem::program_temporal_partition_manifest() const {
+  if (p_->program_accepted_state_.empty())
+    return {};
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state(p_->program_accepted_state_);
+  return runtime::program::BatchedCellTemporalPartition(state.temporal_partition).manifest();
 }
 std::vector<std::vector<std::string>> AmrSystem::program_flux_ledger_manifest() const {
   std::vector<std::vector<std::string>> rows;

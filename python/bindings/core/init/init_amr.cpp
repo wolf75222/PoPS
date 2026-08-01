@@ -839,6 +839,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
           py::arg("payload"), py::arg("names"), py::arg("depths"), py::arg("ncomps"))
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
+      .def("program_temporal_partition_manifest", &AmrSystem::program_temporal_partition_manifest)
       .def("program_flux_ledger_manifest", &AmrSystem::program_flux_ledger_manifest)
       .def("program_interface_flux_ledger_manifest",
            &AmrSystem::program_interface_flux_ledger_manifest)
