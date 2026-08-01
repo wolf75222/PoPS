@@ -461,7 +461,8 @@ POPS_HD constexpr auto prepare_model_variable_recovery(const Model& model) {
   if constexpr (HasPrimitiveVars<Model>) {
     const auto methods = recovery_methods(ClosedFormModelRecoveryMethod<Model>{model});
     if constexpr (HasRecoveryAdmissibility<Model>) {
-      return prepare_variable_recovery<N>(DeclaredModelRecoveryAdmissibility<Model>{model}, methods);
+      return prepare_variable_recovery<N>(DeclaredModelRecoveryAdmissibility<Model>{model},
+                                          methods);
     } else {
       return prepare_variable_recovery<N>(FiniteModelRecoveryAdmissibility<N>{}, methods);
     }

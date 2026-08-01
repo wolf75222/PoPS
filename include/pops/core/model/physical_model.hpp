@@ -180,8 +180,7 @@ concept HasPrimitiveVars =
 /// constraint failed; implementations set it to -1 on success.
 template <class M>
 concept HasRecoveryAdmissibility =
-    HasPrimitiveVars<M> &&
-    requires(const M m, const typename M::Prim p, int* failing_component) {
+    HasPrimitiveVars<M> && requires(const M m, const typename M::Prim p, int* failing_component) {
       { m.recovery_admissible(p, failing_component) } -> std::same_as<bool>;
     };
 
