@@ -123,7 +123,8 @@ def test_recursive_ir_exposes_field_coupled_jacvec_to_the_amr_capability_gate():
         for node in recursive
     )
     context = AMRProgramSupportContext(
-        refined_hierarchy=True,
+        hierarchy_level_count=2,
+        frozen_hierarchy=True,
         shared_block_interfaces=False,
         field_routes_validated=True,
     )

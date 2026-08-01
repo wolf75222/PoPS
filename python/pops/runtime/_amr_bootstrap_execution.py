@@ -1,7 +1,7 @@
 """Strict BootstrapPlan execution with one receipt required per authored action."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -85,7 +85,12 @@ class NativeAMRBootstrapConsumer:
     """Consumer for the native coarse-only AmrSystem bootstrap seam."""
 
     def __init__(
-        self, engine: Any, plan: Any, initial_values: Any, field_routes: Any = None,
+        self,
+        engine: Any,
+        plan: Any,
+        initial_values: Any,
+        field_routes: Any = None,
+        on_level_materialized: Callable[[], None] | None = None,
     ) -> None:
         self._engine = engine
         self._plan = plan
@@ -94,6 +99,9 @@ class NativeAMRBootstrapConsumer:
             for subject_id, block, value, space, centering, method, source in initial_values
         }
         self._field_routes = dict(field_routes or {})
+        if on_level_materialized is not None and not callable(on_level_materialized):
+            raise TypeError("native bootstrap level-materialized hook must be callable")
+        self._on_level_materialized = on_level_materialized
         if any(
             not isinstance(name, str) or not name
             or not isinstance(route, str) or not route
@@ -220,6 +228,11 @@ class NativeAMRBootstrapConsumer:
             boxes = tuple(row for row in self._engine.patch_boxes() if row[0] == action.level)
             if not boxes:
                 raise ValueError("native bootstrap created a level without tag-derived patches")
+            if self._on_level_materialized is not None:
+                # The next transition's proper-nesting proof may touch this level's shared physical
+                # face. Install its exact prepared interface route immediately, while the outer
+                # bootstrap transaction can still roll the complete engine back on failure.
+                self._on_level_materialized()
             return self._receipt(
                 action, operation=operation, level=action.level, patch_boxes=boxes
             )
@@ -336,10 +349,21 @@ class NativeAMRBootstrapConsumer:
 
 
 def execute_native_bootstrap(
-    engine: Any, plan: Any, initial_values: Any, field_routes: Any = None,
+    engine: Any,
+    plan: Any,
+    initial_values: Any,
+    field_routes: Any = None,
+    on_level_materialized: Callable[[], None] | None = None,
 ) -> BootstrapExecution:
     return execute_bootstrap(
-        plan, NativeAMRBootstrapConsumer(engine, plan, initial_values, field_routes)
+        plan,
+        NativeAMRBootstrapConsumer(
+            engine,
+            plan,
+            initial_values,
+            field_routes,
+            on_level_materialized,
+        ),
     )
 
 
