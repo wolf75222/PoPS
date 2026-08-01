@@ -650,7 +650,7 @@ class ProgramExecutionServices {
     OperatorEvaluationSnapshot snapshot =
         provider_().program_execution_operator_evaluation_snapshot_(authority, topology, resources,
                                                                     revision);
-    active_operator_snapshot_revision_ = revision;
+    active_operator_snapshot_ = snapshot;
     return snapshot;
   }
 
@@ -662,10 +662,15 @@ class ProgramExecutionServices {
                                                        OperatorFingerprint topology,
                                                        OperatorFingerprint resources,
                                                        std::uint64_t revision) const {
-    const std::uint64_t probe_revision =
-        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
-    return provider_().program_execution_operator_evaluation_snapshot_(authority, topology,
-                                                                       resources, probe_revision);
+    const bool active =
+        active_operator_snapshot_ && revision == active_operator_snapshot_->revision;
+    OperatorEvaluationSnapshot probe = provider_().program_execution_operator_evaluation_snapshot_(
+        authority, topology, resources, active ? revision : UINT64_C(0));
+    if (!active || probe != *active_operator_snapshot_) {
+      invalidate_active_operator_snapshot_();
+      probe.revision = 0;
+    }
+    return probe;
   }
 
   /// Apply the topology-qualified scalar Laplacian.
@@ -1600,9 +1605,7 @@ class ProgramExecutionServices {
     return slot.field;
   }
 
-  void invalidate_active_operator_snapshot_() const noexcept {
-    active_operator_snapshot_revision_ = 0;
-  }
+  void invalidate_active_operator_snapshot_() const noexcept { active_operator_snapshot_.reset(); }
   void require_lane_or_prepared_laplacian_() const {
     if (provider_().program_execution_is_polar_geometry_())
       throw std::logic_error(
@@ -1816,7 +1819,7 @@ class ProgramExecutionServices {
       std::make_shared<ProgramScratchRegistry>();
   mutable std::map<std::string, HistoryBinding> history_bindings_;
   mutable std::uint64_t operator_snapshot_revision_ = 0;
-  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never a minted revision
+  mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
 };
 
 /// Compile-time association between a public runtime facade and its topology/storage provider.

@@ -74,6 +74,7 @@ class ExecutionServicesFixture
     return program_runtime_state_.diagnostic(name, "ExecutionServicesFixture");
   }
   double logical_dt() const { return logical_dt_; }
+  void set_untracked_logical_dt(double value) { logical_dt_ = value; }
   void fail_next_logical_apply() { fail_logical_apply_ = true; }
   int rhs_group_identity() const { return rhs_group_identity_; }
   const std::vector<int>& rhs_group_program_blocks() const { return rhs_group_program_blocks_; }
@@ -854,6 +855,20 @@ void expect_shared_operator_snapshot_services(Context& context, std::uint64_t to
   EXPECT_EQ(reminted_parent.revision, 3u);
   EXPECT_DOUBLE_EQ(std::bit_cast<double>(reminted_parent.dt_bits), 0.4);
   EXPECT_EQ(context.operator_topology_count(), 3);
+
+  context.set_untracked_logical_dt(0.3);
+  const auto stale_after_provider_clock_change = context.probe_operator_evaluation(
+      authority, reminted_parent.topology, resources, reminted_parent.revision);
+  EXPECT_EQ(stale_after_provider_clock_change.revision, 0u);
+  EXPECT_FALSE(stale_after_provider_clock_change.valid())
+      << "a provider clock transition must invalidate the complete shared capability";
+  context.set_untracked_logical_dt(0.4);
+  EXPECT_EQ(context
+                .probe_operator_evaluation(authority, reminted_parent.topology, resources,
+                                           reminted_parent.revision)
+                .revision,
+            0u)
+      << "restoring matching scalar coordinates must not resurrect an invalidated capability";
 }
 
 template <class Context>
