@@ -191,6 +191,54 @@ def _artifact_file(root: Path, relative: Any, digest: Any, *, label: str) -> Non
         raise PreflightError("release evidence %s hash drifted" % label)
 
 
+def _wheel_lane_contract(path: Path, archive: zipfile.ZipFile, contract: Any) -> None:
+    """Require one native wheel whose filename and WHEEL tags match the promised lane."""
+
+    lanes = contract.SUPPORTED_MATRIX["wheels"]
+    if len(lanes) != 1:
+        raise PreflightError("release contract must promise exactly one wheel lane")
+    lane = lanes[0]
+    if set(lane) != {"os", "arch", "python", "backend"}:
+        raise PreflightError("promised wheel lane is malformed")
+    if lane["os"] != "macos" or lane["arch"] != "arm64" \
+            or lane["backend"] != "Kokkos Serial":
+        raise PreflightError("promised wheel lane has no release tag verifier")
+
+    if path.suffix != ".whl":
+        raise PreflightError("release artifact is not a wheel")
+    parts = path.name[:-4].split("-")
+    if len(parts) != 5:
+        raise PreflightError("release wheel filename must not contain a build tag")
+    distribution, version, python_tag, abi_tag, platform_tag = parts
+    expected_python = lane["python"]
+    if distribution.lower().replace("_", "-") != "pops" \
+            or version != contract.PACKAGE_VERSION:
+        raise PreflightError("release wheel filename name/version disagrees with the contract")
+    if python_tag != expected_python or abi_tag != expected_python:
+        raise PreflightError("release wheel Python/ABI tags disagree with the promised lane")
+    if re.fullmatch(r"macosx_\d+_\d+_arm64", platform_tag) is None:
+        raise PreflightError("release wheel platform tag disagrees with the promised lane")
+
+    dist_info = "%s-%s.dist-info" % (distribution, version)
+    wheel_names = [name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")]
+    if wheel_names != [dist_info + "/WHEEL"]:
+        raise PreflightError("release wheel has no unique lane-bound WHEEL record")
+    try:
+        wheel_metadata = archive.read(wheel_names[0]).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PreflightError("release wheel WHEEL record is not UTF-8") from exc
+    fields: dict[str, list[str]] = {}
+    for line in wheel_metadata.splitlines():
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            fields.setdefault(key, []).append(value)
+    expected_tag = "%s-%s-%s" % (python_tag, abi_tag, platform_tag)
+    if fields.get("Wheel-Version") != ["1.0"] \
+            or fields.get("Root-Is-Purelib") != ["false"] \
+            or fields.get("Tag") != [expected_tag]:
+        raise PreflightError("release WHEEL metadata disagrees with the promised native lane")
+
+
 def _checkpoint_tree(path: Path) -> str:
     if path.is_file():
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -220,6 +268,7 @@ def _wheel_evidence(directory: Path, gates: dict[str, Any], contract: Any) -> No
         raise PreflightError("official build wheel size drifted")
     try:
         with zipfile.ZipFile(path) as archive:
+            _wheel_lane_contract(path, archive, contract)
             metadata_names = [name for name in archive.namelist()
                               if name.endswith(".dist-info/METADATA")]
             if len(metadata_names) != 1:

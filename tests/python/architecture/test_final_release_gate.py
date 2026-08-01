@@ -32,6 +32,48 @@ installed = _load("_installed_wheel_proof_test", SCRIPTS / "prove_installed_whee
 example_runner = _load("_installed_example_test", SCRIPTS / "run_installed_example.py")
 
 
+def _release_contract(version: str = "0.3.0"):
+    return type(
+        "ReleaseContract",
+        (),
+        {
+            "PACKAGE_VERSION": version,
+            "SUPPORTED_MATRIX": {
+                "wheels": (
+                    {
+                        "os": "macos",
+                        "arch": "arm64",
+                        "python": "cp312",
+                        "backend": "Kokkos Serial",
+                    },
+                ),
+            },
+        },
+    )
+
+
+def _write_release_wheel(
+    path: Path,
+    *,
+    version: str = "0.3.0",
+    tag: str = "cp312-cp312-macosx_11_0_arm64",
+    purelib: str = "false",
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            f"pops-{version}.dist-info/METADATA",
+            f"Metadata-Version: 2.3\nName: PoPS\nVersion: {version}\n",
+        )
+        archive.writestr(
+            f"pops-{version}.dist-info/WHEEL",
+            "Wheel-Version: 1.0\n"
+            "Generator: ADC-688 test\n"
+            f"Root-Is-Purelib: {purelib}\n"
+            f"Tag: {tag}\n",
+        )
+
+
 def _write_final_source_tree(root: Path) -> None:
     specification = root / contract.FINAL_SPECIFICATION
     specification.parent.mkdir(parents=True)
@@ -242,12 +284,7 @@ def test_artifact_reopen_requires_and_records_npz(tmp_path):
 
 def test_release_evidence_authenticates_the_exact_retained_wheel(tmp_path):
     wheel = tmp_path / "wheels" / "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
-    wheel.parent.mkdir()
-    with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr(
-            "pops-0.3.0.dist-info/METADATA",
-            "Metadata-Version: 2.3\nName: PoPS\nVersion: 0.3.0\n",
-        )
+    _write_release_wheel(wheel)
     gates = {
         "official_build": {
             "evidence": {
@@ -259,12 +296,68 @@ def test_release_evidence_authenticates_the_exact_retained_wheel(tmp_path):
             },
         },
     }
-    release = type("ReleaseContract", (), {"PACKAGE_VERSION": "0.3.0"})
+    release = _release_contract()
 
     preflight._wheel_evidence(tmp_path, gates, release)
     gates["official_build"]["evidence"]["wheel"]["size"] += 1
     with pytest.raises(preflight.PreflightError, match="size drifted"):
         preflight._wheel_evidence(tmp_path, gates, release)
+
+
+@pytest.mark.parametrize(
+    ("filename", "tag", "purelib", "message"),
+    (
+        (
+            "pops-0.3.0-cp311-cp311-macosx_11_0_arm64.whl",
+            "cp311-cp311-macosx_11_0_arm64",
+            "false",
+            "Python/ABI tags",
+        ),
+        (
+            "pops-0.3.0-cp312-cp312-macosx_11_0_universal2.whl",
+            "cp312-cp312-macosx_11_0_universal2",
+            "false",
+            "platform tag",
+        ),
+        (
+            "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl",
+            "cp311-cp311-macosx_11_0_arm64",
+            "false",
+            "WHEEL metadata",
+        ),
+        (
+            "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl",
+            "cp312-cp312-macosx_11_0_arm64",
+            "true",
+            "WHEEL metadata",
+        ),
+        (
+            "pops-0.3.0-1-cp312-cp312-macosx_11_0_arm64.whl",
+            "cp312-cp312-macosx_11_0_arm64",
+            "false",
+            "build tag",
+        ),
+    ),
+)
+def test_release_evidence_refuses_wheel_lane_drift(
+    tmp_path, filename, tag, purelib, message,
+):
+    wheel = tmp_path / "wheels" / filename
+    _write_release_wheel(wheel, tag=tag, purelib=purelib)
+    gates = {
+        "official_build": {
+            "evidence": {
+                "wheel": {
+                    "path": str(wheel.relative_to(tmp_path)),
+                    "sha256": gate._sha256(wheel),
+                    "size": wheel.stat().st_size,
+                },
+            },
+        },
+    }
+
+    with pytest.raises(preflight.PreflightError, match=message):
+        preflight._wheel_evidence(tmp_path, gates, _release_contract())
 
 
 def test_installed_wheel_proof_requires_exact_native_member_and_direct_url(tmp_path):
