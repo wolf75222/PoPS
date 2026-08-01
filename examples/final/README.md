@@ -12,7 +12,8 @@ restart and the SSPRK2 factory run must preserve that complete transactional sta
 [`EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py`](EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py)
 extends the same public lifecycle with an explicit additive IMEX tableau, typed field solves,
 two-level subcycled AMR, conservative transfers, globally reported AMR lowering coverage, an
-executed rejected-attempt rollback proof and accepted-state consumers. Its matching contract note is
+executed rejected-attempt rollback proof, persistent tagging hysteresis and accepted-state consumers.
+Its matching contract note is
 [`docs/design/final-advection-imex-amr.md`](../../docs/design/final-advection-imex-amr.md).
 
 [`EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py`](EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py)

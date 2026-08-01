@@ -98,6 +98,7 @@ IMEX_CN_HEUN = AdditiveRungeKuttaTableau(
     implicit_c=(Fraction(0), Fraction(1)),
     name="cn-heun-imex",
 )
+HYSTERESIS_MIN_CYCLES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +149,7 @@ class IMEXRuntimeSnapshot:
     regrid_count: int
     topology_epoch: int
     program_hash: str
+    program_accepted_state: bytes
     program_transaction_state: str
     consumer_graph_identity: str
     consumer_cursors: dict[str, Any]
@@ -500,9 +502,13 @@ def build_layout(core: IMEXAMRAuthoring) -> Any:
             Coarsen(value < core.case.value(core.coarsen_value)),
             Buffer(cells=2),
         ),
-        # Equality is explicit. A non-zero temporal dwell requires a checkpointed per-cell tagging
-        # state provider; this example does not pretend that an in-memory counter is restart-safe.
-        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        # Keep one full tagging cycle between opposite decisions. The native Program accepted-state
+        # image owns this sparse, topology-independent history, so rejection and strict restart
+        # restore the same hysteresis authority instead of resetting an in-memory Python counter.
+        hysteresis=Hysteresis(
+            min_cycles=HYSTERESIS_MIN_CYCLES,
+            equality=EqualityPolicy.HOLD,
+        ),
         conflict_policy=ConflictPolicy.REFINE_WINS,
     )
     transfer = AMRTransfer()
@@ -640,6 +646,9 @@ def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
     }
     if any(count <= 0 for count in field_level_counts.values()):
         raise RuntimeError("IMEX acceptance installed an empty diagnostic-field hierarchy")
+    program_accepted_state = bytes(simulation.program_accepted_state())
+    if not program_accepted_state:
+        raise RuntimeError("IMEX acceptance installed no canonical Program accepted-state image")
     regrid = simulation.amr.explain_regrid()
     return IMEXRuntimeSnapshot(
         time=float(simulation.time()),
@@ -669,6 +678,7 @@ def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
         regrid_count=int(regrid.regrid_count),
         topology_epoch=int(regrid.topology_epoch),
         program_hash=str(simulation.installed_program_hash()),
+        program_accepted_state=program_accepted_state,
         program_transaction_state=_program_transaction_state(simulation),
         consumer_graph_identity=simulation.consumer_graph.identity.token,
         consumer_cursors=simulation.consumer_cursors.to_data(),
@@ -757,6 +767,10 @@ def _require_same_snapshot(
         "regrid_count": (left.regrid_count, right.regrid_count),
         "topology_epoch": (left.topology_epoch, right.topology_epoch),
         "program_hash": (left.program_hash, right.program_hash),
+        "program_accepted_state": (
+            left.program_accepted_state,
+            right.program_accepted_state,
+        ),
         "program_transaction_state": (
             left.program_transaction_state,
             right.program_transaction_state,
@@ -1065,6 +1079,8 @@ def main(argv: list[str] | None = None) -> None:
             rejected.before, rejected.after,
         ),
         "program_hash": preset.program_hash,
+        "program_accepted_state_bytes": len(preset.program_accepted_state),
+        "tagging_hysteresis_min_cycles": HYSTERESIS_MIN_CYCLES,
         "regrid_count": evidence.accepted.regrid_count,
         "regrid_count_after_continuation": evidence.restarted.regrid_count,
         "runtime_steps": evidence.accepted.macro_step,
