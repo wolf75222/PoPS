@@ -11,6 +11,7 @@ fallback formats are refused.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import hashlib
 from typing import Any, TypeVar, cast
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _VERSION
@@ -323,22 +324,39 @@ def _capture_v3(owner, sim, prepared):
         "AMR rank-local owner maps",
         value={"dmaps": [list(row) for row in prepared.local_dmaps]},
     )
+    rank_dmaps = []
     for row in rank_rows:
-        rank = int(row["rank"])
         metadata = row["value"]
         if not isinstance(metadata, dict) or set(metadata) != {"dmaps"}:
             raise RuntimeError("checkpoint AMR rank-local metadata has an invalid schema")
         dmaps = metadata["dmaps"]
         if not isinstance(dmaps, list) or len(dmaps) != prepared.levels:
             raise ValueError("checkpoint AMR rank-local owner maps have an invalid level count")
-        out["program_accepted_state_rank_%d" % rank] = np.frombuffer(
-            program_states[rank], dtype=np.uint8
-        ).copy()
-        for level, ranks in enumerate(dmaps):
+        normalized_dmaps = []
+        for ranks in dmaps:
             if not isinstance(ranks, list) or any(
                 isinstance(value, bool) or not isinstance(value, int) for value in ranks
             ):
                 raise TypeError("checkpoint AMR rank-local owner map must contain integers")
+            normalized_dmaps.append(tuple(ranks))
+        rank_dmaps.append(tuple(normalized_dmaps))
+    if any(dmaps != rank_dmaps[0] for dmaps in rank_dmaps[1:]):
+        raise ValueError("checkpoint AMR owner maps disagree across source ranks")
+    if prepared.local_program_state:
+        rematerialize = getattr(sim, "rematerialize_program_accepted_state", None)
+        if not callable(rematerialize):
+            raise TypeError(
+                "checkpoint AMR engine lacks accepted-state consensus validation"
+            )
+        # Re-materializing onto the unchanged ownership is a non-mutating validation pass. It
+        # authenticates every rank-independent accepted field, including persistent tagging,
+        # before any rank may seal or publish a checkpoint.
+        rematerialize(program_states, rank_dmaps[0], rank_dmaps[0])
+    for rank, dmaps in enumerate(rank_dmaps):
+        out["program_accepted_state_rank_%d" % rank] = np.frombuffer(
+            program_states[rank], dtype=np.uint8
+        ).copy()
+        for level, ranks in enumerate(dmaps):
             out["dmap_rank_%d_level_%d" % (rank, level)] = np.asarray(ranks, dtype=np.int64)
     if prepared.multi:
         for name in prepared.names:
@@ -423,7 +441,7 @@ def prepare_v3(
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
 ):
-    """Validate an accepted-state v5 AMR payload without mutating the native engine.
+    """Validate an accepted-state v7 AMR payload without mutating the native engine.
 
     This is the all-rank preflight boundary used before ``begin_restart_transaction``.
     """
@@ -540,7 +558,7 @@ def prepare_v3(
             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks)
         )
     nlev = checkpoint_levels
-    # Program-hash guard: an accepted-state v5 checkpoint refuses a different compiled Program.
+    # Program-hash guard: an accepted-state v7 checkpoint refuses a different compiled Program.
     chk_hash = str(d["program_hash"])
     cur_hash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
     if chk_hash != cur_hash:
@@ -757,6 +775,13 @@ def _restart_topology_image(sim):
     return restart_topology_image(sim)
 
 
+def _restart_accepted_contract_identity(sim):
+    from pops.identity import make_identity
+    from pops.runtime._amr_checkpoint_contract import contract_for
+
+    return make_identity("restart-accepted-contract", contract_for(sim)).token
+
+
 def _restart_collective_phase(
     owner: Any,
     phase: str,
@@ -785,6 +810,62 @@ def _restart_collective_phase(
     if any(row["value"] != rows[0]["value"] for row in rows[1:]):
         raise RuntimeError("AMR RegridOnRestart ranks returned divergent %s evidence" % phase)
     return cast(_RestartPhaseT, value)
+
+
+def _restart_history_identity(owner, sim, *, phase):
+    """Hash every dense accepted history slot into one phase-local consensus witness.
+
+    RegridOnRestart is a cold path, so this deliberately favors an exact all-rank proof over hot-path
+    cost. Each slot digest is closed by a checkpoint-communicator consensus before the next
+    collective starts; one rank can therefore never accept a rank-local history remap silently.
+    The witness is intentionally not compared across phases: a different hierarchy changes the
+    dense level-domain encoding and legitimately interpolates newly refined cells. Accepted-solution
+    conservation is proved separately from native composite component integrals.
+    """
+    plan = _restart_collective_phase(
+        owner,
+        "%s history plan" % phase,
+        lambda: [
+            {
+                "name": str(name),
+                "depth": int(sim.history_depth(name)),
+                "ncomp": int(sim.history_ncomp(name)),
+                "initialized": bool(sim.history_initialized(name)),
+                "fill_count": int(sim.history_fill_count(name)),
+            }
+            for name in sim.history_names()
+        ],
+    )
+
+    def slot_image(name, slot):
+        import numpy as np
+
+        values = np.asarray(sim.history_global(name, slot), dtype=np.dtype("<f8")).ravel()
+        return {
+            "slot": slot,
+            "size": int(values.size),
+            "dt": float(sim.history_slot_dt(name, slot)).hex(),
+            "sha256": hashlib.sha256(values.tobytes(order="C")).hexdigest(),
+        }
+
+    rows = []
+    for history in plan:
+        row = dict(history)
+        row["slots"] = [
+            _restart_collective_phase(
+                owner,
+                "%s history %s slot %d" % (phase, history["name"], slot),
+                lambda name=history["name"], slot=slot: slot_image(name, slot),
+            )
+            for slot in range(history["depth"])
+        ]
+        rows.append(row)
+    from pops.identity import make_identity
+
+    return make_identity(
+        "restart-history-image",
+        {"schema_version": 1, "histories": rows},
+    ).token
 
 
 def _restart_composite_integrals(owner, sim, *, phase):
@@ -945,7 +1026,7 @@ def apply_v3(owner, sim, prepared):
     # (7) Replay is allowed to mutate Program clocks/ring publications and regrid counters while it
     # reconstructs policy-omitted dense values. Replace those temporary values with the checkpoint's
     # exact accepted semantic state before exposing the runtime again.
-    sim.restore_program_accepted_state(program_state)
+    sim.restore_checkpoint_accepted_state(program_state)
     from pops.runtime._amr_checkpoint_contract import validate_restored_contract
 
     sim.restore_checkpoint_counters(prepared.regrid_count, prepared.topology_epoch)
@@ -974,6 +1055,14 @@ def apply_v3(owner, sim, prepared):
             "recorded topology image",
             lambda: _restart_topology_image(sim),
         )
+        before_contract_identity = _restart_collective_phase(
+            owner,
+            "recorded accepted-contract identity",
+            lambda: _restart_accepted_contract_identity(sim),
+        )
+        before_history_identity = _restart_history_identity(
+            owner, sim, phase="recorded hierarchy"
+        )
         before_integrals = _restart_composite_integrals(owner, sim, phase="recorded hierarchy")
         _restart_collective_phase(
             owner,
@@ -990,9 +1079,17 @@ def apply_v3(owner, sim, prepared):
             "transformed topology image",
             lambda: _restart_topology_image(sim),
         )
+        after_contract_identity = _restart_collective_phase(
+            owner,
+            "transformed accepted-contract identity",
+            lambda: _restart_accepted_contract_identity(sim),
+        )
+        after_history_identity = _restart_history_identity(
+            owner, sim, phase="transformed hierarchy"
+        )
         after_integrals = _restart_composite_integrals(owner, sim, phase="transformed hierarchy")
         receipt = {
-            "schema_version": 1,
+            "schema_version": 2,
             "policy_identity": prepared.hierarchy_identity,
             "changed": (
                 before_topology["topology_identity"] != after_topology["topology_identity"]
@@ -1001,6 +1098,10 @@ def apply_v3(owner, sim, prepared):
             "accepted_macro_step": macro_step,
             "before": before_topology,
             "after": after_topology,
+            "accepted_contract_identity_before": before_contract_identity,
+            "accepted_contract_identity_after": after_contract_identity,
+            "history_consensus_identity_before": before_history_identity,
+            "history_consensus_identity_after": after_history_identity,
             "composite_integrals_before": before_integrals,
             "composite_integrals_after": after_integrals,
         }
@@ -1139,7 +1240,7 @@ def _preflight_histories_v3(sim, d, current_ranks):
 
 
 def _restore_histories_v3(sim, d, cur_ranks):
-    """Restore accepted-state v5 rings and replay only policy-omitted slots on a stable hierarchy.
+    """Restore accepted-state v7 rings and replay only policy-omitted slots on a stable hierarchy.
 
     Capture resolves any selective ring whose replay window contains a scheduled regrid, cold slot,
     or non-default whole-Program cadence to explicit dense safety storage. Therefore this function
