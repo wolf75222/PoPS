@@ -412,7 +412,7 @@ For a Python-authored model, finite primitive recovery can be strengthened with 
 constraints after declaring the primitive layout:
 
 ```python
-rho, u, v, p = model.primitive_vars(rho=rho, u=u, v=v, p=pressure)
+# after model.primitive_state(rho, u, v, p, conservative=(...))
 model.recovery_admissibility(rho=rho > 0, p=p > 0)
 ```
 
