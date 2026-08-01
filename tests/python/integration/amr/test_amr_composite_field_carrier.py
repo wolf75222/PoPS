@@ -213,7 +213,12 @@ def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
         artifact,
         resources={"execution_context": artifact_execution_context(artifact)},
     )
-    report = pops.run(simulation, t_end=2.0 * _DT, max_steps=2)
+    report = pops.run(
+        simulation,
+        t_end=2.0 * _DT,
+        max_steps=2,
+        output_dir=tmp_path / "run-output",
+    )
 
     assert report.accepted_steps == 2
     assert simulation.n_levels() == 2
