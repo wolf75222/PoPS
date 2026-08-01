@@ -259,9 +259,11 @@ corner, which stays coherent on both sides of zero (negative ghosts). With a rat
 level therefore has a mesh $dx_f = dx_c / 2$ at unchanged physical domain.
 
 The multi-block co-locates N species on a shared hierarchy (same `BoxArray`, same
-`DistributionMapping`, same $dx, dy$ per level); the multi-block supports `regrid_every > 0` (the union-tag regrid rebuilds the
-hierarchy from all blocks' tags; `regrid_every == 0` keeps it frozen). Conservation is guaranteed per block via reflux and average_down, described
-below.
+`DistributionMapping`, same $dx, dy$ per level); the multi-block supports `regrid_every > 0`.
+`AmrProgramContext` compares the accepted macro-step with that prepared interval, then calls the
+immediate spatial `AmrRuntime::regrid()` primitive when due; `AmrRuntime` does not decide cadence.
+The union-tag regrid rebuilds the hierarchy from all blocks' tags, while `regrid_every == 0` keeps it
+frozen. Conservation is guaranteed per block via reflux and average_down, described below.
 
 ## AMR coarse-fine stencil (reflux)
 
