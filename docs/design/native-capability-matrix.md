@@ -178,9 +178,12 @@ Explicit unsupported rows include:
   tagger/clustering regrid, history/flux topology is rebound, composite conservation is checked, and
   a global transform receipt derives a distinct run identity. Persistent tagging state is restored
   and rolled back with the accepted image, then advanced exactly once by a successful transform.
-  Serial shared-interface groups are rematerialized in the same transaction and execute
-  conservatively after rollback or commit. Uniform, multi-layout, elliptic-field, distributed
-  dynamic shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
+  Depth-preserving shared-interface groups are rematerialized in the same transaction in serial and
+  under unchanged `MPI_COMM_WORLD`, and execute conservatively after rollback or commit. The MPI
+  acceptance proof covers one refined transition, a rank-local post-transform fault, exact
+  all-rank rollback, retry with one receipt identity and post-restart interface execution. Uniform,
+  multi-layout, elliptic-field, active-depth-change, unsupported non-finest replacements at depth
+  greater than two, and bootstrap-staggered/cache cases remain explicit refusals;
   `bit_identical=True` is incompatible with the policy.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.

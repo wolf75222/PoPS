@@ -1591,10 +1591,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         (interface_flux_ledger_ &&
          (interface_flux_ledger_->in_transaction() || !interface_flux_ledger_->empty())))
       throw std::logic_error("AMR RegridOnRestart requires a clean accepted Program boundary");
-    if (!interface_flux_group_rates_.empty() && n_ranks() > 1)
-      throw std::runtime_error(
-          "AMR RegridOnRestart supports shared-interface flux groups only in serial until "
-          "distributed dynamic interface rematerialization is authenticated");
   }
 
   /// Validate every rank-local prerequisite before the Python collective transaction lets peers

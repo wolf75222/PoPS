@@ -28,11 +28,23 @@ try:
 
     import pops
     from pops import _pops
-    from pops._native_collectives import allgather_value, barrier, broadcast_value
+    from pops._native_collectives import (
+        allgather_value,
+        barrier,
+        broadcast_bytes,
+        broadcast_value,
+    )
     from tests.python.integration.amr.test_amr_regrid_on_restart import (
         DT,
         NSTEPS,
         _resolved,
+    )
+    from tests.python.integration.runtime.test_shared_interface_runtime import (
+        _assert_same_shared_interface_image,
+        _resolve_shared_interface_amr,
+        _shared_interface_accepted_image,
+        _shared_interface_amr_authoring,
+        _flux_source_component,
     )
 except Exception as exc:  # noqa: BLE001 -- optional outside the required MPI lane
     require_mpi_or_skip("RegridOnRestart MPI runtime import failed: %s" % exc)
@@ -74,6 +86,118 @@ def _shared_temporary_directory() -> Iterator[Path]:
 def _bind(artifact):
     context = pops.ExecutionContext.mpi_world(artifact)
     return pops.bind(artifact, resources={"execution_context": context})
+
+
+def _collective_flux_component(root: Path):
+    """Compile one exact component binary, then reconstruct it on every rank."""
+
+    source = None
+    publication = None
+    if int(_COMM.rank) == 0:
+        try:
+            source = _flux_source_component(root)
+        except Exception as exc:  # noqa: BLE001 -- propagate rank-0 publication failure
+            publication = (False, "%s: %s" % (type(exc).__name__, exc))
+        else:
+            publication = (True, "")
+    publication = broadcast_value(_COMM, publication, root=0)
+    if not publication[0]:
+        raise RuntimeError("shared-interface source publication failed: " + publication[1])
+
+    source_error = ""
+    if int(_COMM.rank) != 0:
+        try:
+            from pops import interfaces
+            from pops.external import load
+
+            source = load(root / "shared-average.pops.json").require(
+                "average", interface=interfaces.NumericalFlux
+            )()
+        except Exception as exc:  # noqa: BLE001 -- collect peer authentication failures
+            source_error = "%s: %s" % (type(exc).__name__, exc)
+    source_errors = allgather_value(_COMM, source_error)
+    if any(source_errors):
+        raise RuntimeError(
+            "shared-interface source authentication failed: "
+            + "; ".join(
+                "rank %d: %s" % (rank, error)
+                for rank, error in enumerate(source_errors)
+                if error
+            )
+        )
+    if source is None:
+        raise RuntimeError("shared-interface source component was not materialized")
+
+    compiled = None
+    compilation = None
+    binary = b""
+    if int(_COMM.rank) == 0:
+        from pops.external import compile_component
+
+        try:
+            compiled = compile_component(
+                source,
+                include=str(Path(__file__).resolve().parents[4] / "include"),
+            )
+        except Exception as exc:  # noqa: BLE001 -- propagate rank-0 compiler failure
+            compilation = {
+                "ok": False,
+                "error": "%s: %s" % (type(exc).__name__, exc),
+            }
+        else:
+            compilation = {
+                "ok": True,
+                "error": "",
+                "platform": compiled.platform_manifest.to_data(),
+                "entry_symbols": dict(compiled.entry_symbols),
+                "suffix": compiled.suffix,
+            }
+            binary = compiled.binary
+
+    compilation = broadcast_value(_COMM, compilation, root=0)
+    if not compilation["ok"]:
+        raise RuntimeError("shared-interface component compilation failed: " + compilation["error"])
+    binary = broadcast_bytes(_COMM, binary, root=0)
+
+    from pops._platform_contracts import PlatformManifest
+    from pops.external import CompiledComponentArtifact, ComponentRuntimeContract
+    from pops.external.packages import _binary_identity
+
+    result = None
+    reconstruction_error = ""
+    try:
+        result = CompiledComponentArtifact(
+            component_id=source.component_manifest.component_id,
+            component_manifest=source.component_manifest.manifest_digest,
+            runtime_contract=ComponentRuntimeContract.from_manifest(source.component_manifest),
+            interface=source.component_type.interface,
+            platform_manifest=PlatformManifest.from_data(compilation["platform"]),
+            entry_symbols=compilation["entry_symbols"],
+            binary_identity=_binary_identity(binary),
+            binary=binary,
+            source_package=source.package_identity,
+            fixed_signature=False,
+            suffix=compilation["suffix"],
+        )
+        result.verify()
+    except Exception as exc:  # noqa: BLE001 -- collect peer reconstruction failures
+        reconstruction_error = "%s: %s" % (type(exc).__name__, exc)
+    reconstruction_errors = allgather_value(_COMM, reconstruction_error)
+    if any(reconstruction_errors):
+        raise RuntimeError(
+            "shared-interface artifact reconstruction failed: "
+            + "; ".join(
+                "rank %d: %s" % (rank, error)
+                for rank, error in enumerate(reconstruction_errors)
+                if error
+            )
+        )
+    if result is None:
+        raise RuntimeError("shared-interface compiled component was not reconstructed")
+    artifact_identities = allgather_value(_COMM, result.artifact_identity.token)
+    if len(set(artifact_identities)) != 1:
+        raise RuntimeError("shared-interface component identity differs across MPI ranks")
+    return result
 
 
 def _accepted_image(runtime):
@@ -257,8 +381,215 @@ def test_regrid_on_restart_mpi_collective_rollback_and_lineage() -> None:
         )
 
 
+def test_regrid_on_restart_mpi_shared_interface_collective_rollback_and_retry() -> None:
+    """Cross the exact RegridOnRestart + refined shared-interface MPI seam."""
+
+    _require_world()
+    if int(_COMM.rank) == 0:
+        print("== RegridOnRestart two-rank refined shared-interface transaction ==", flush=True)
+
+    with _shared_temporary_directory() as root:
+        component = _collective_flux_component(root / "component-shared")
+        authoring = _shared_interface_amr_authoring(
+            root / "authoring",
+            component=component,
+        )
+        from pops.amr import PatchLayout
+
+        resolved = _resolve_shared_interface_amr(
+            authoring,
+            max_levels=2,
+            patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=4),
+        )
+        artifact = compile_resolved_plan_once(
+            _COMM,
+            resolved,
+            route="regrid-on-restart-shared-interface-mpi",
+            compile_artifact=pops.compile,
+        )
+        interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+        initial_values = {
+            authoring.core.tracer_state: authoring.left_initial,
+            authoring.right_state: authoring.right_initial,
+        }
+
+        source = authoring.example._bind_artifact(
+            artifact,
+            initial_values=initial_values,
+            params=authoring.params,
+        )
+        initial_integral = source.integral("tracer") + source.integral("right")
+        source_report = pops.run(
+            source,
+            t_end=1.0e-3,
+            max_steps=1,
+            console=False,
+            output_dir=root / "source-output",
+        )
+        source_counts = tuple(
+            source._executor._s._interface_evaluation_count(interface.qualified_id, level)
+            for level in range(2)
+        )
+        chk(
+            source_report.accepted_steps == 1
+            and source.n_levels() == 2
+            and source_counts == (2, 4),
+            "the source executes the two-level shared interface before checkpoint",
+        )
+        checkpoint_integral = source.integral("tracer") + source.integral("right")
+        chk(
+            np.isclose(checkpoint_integral, initial_integral, rtol=0.0, atol=2.0e-13),
+            "the source shared-interface step is conservative",
+        )
+        checkpoint = source.checkpoint(root / "accepted-shared-interface")
+
+        restarted = authoring.example._bind_artifact(
+            artifact,
+            initial_values=initial_values,
+            params=authoring.params,
+        )
+        priming_report = pops.run(
+            restarted,
+            t_end=1.0e-3,
+            max_steps=1,
+            console=False,
+            output_dir=root / "candidate-output",
+        )
+        chk(priming_report.accepted_steps == 1, "the restart candidate owns an accepted image")
+        rollback_image = _shared_interface_accepted_image(restarted)
+
+        from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
+
+        original_conservation_check = checkpoint_codec._require_restart_conservation
+        transformed_boxes = None
+
+        def fail_after_native_regrid(before, after):
+            nonlocal transformed_boxes
+            del before, after
+            transformed_boxes = tuple(
+                tuple(int(value) for value in row) for row in restarted.patch_boxes()
+            )
+            if int(_COMM.rank) == 1:
+                raise RuntimeError(
+                    "injected rank-local shared-interface restart validation failure"
+                )
+
+        checkpoint_codec._require_restart_conservation = fail_after_native_regrid
+        caught = False
+        caught_message = ""
+        try:
+            restarted.restart(checkpoint)
+        except RuntimeError as error:
+            caught = True
+            caught_message = str(error)
+        finally:
+            checkpoint_codec._require_restart_conservation = original_conservation_check
+
+        chk(
+            all(allgather_value(_COMM, caught))
+            and all(
+                "injected rank-local shared-interface restart validation failure" in message
+                for message in allgather_value(_COMM, caught_message)
+            ),
+            "one post-regrid rank-local fault fails every rank coherently",
+        )
+        transformed_rows = allgather_value(_COMM, transformed_boxes)
+        chk(
+            transformed_boxes is not None
+            and len(set(transformed_rows)) == 1
+            and transformed_boxes != rollback_image["boxes"],
+            "the rejected attempt crossed one rank-consensus structural transform",
+        )
+        rollback_ok = True
+        try:
+            _assert_same_shared_interface_image(restarted, rollback_image)
+        except AssertionError:
+            rollback_ok = False
+        chk(
+            all(allgather_value(_COMM, rollback_ok)),
+            "the failed shared-interface restart restores every accepted rank image exactly",
+        )
+
+        restart_identity = restarted.restart(checkpoint)
+        continuation_identity = restarted.last_run_identity
+        receipt = restarted._executor.last_restart_regrid_receipt()
+        chk(
+            receipt is not None
+            and receipt["changed"] is True
+            and tuple(restarted.patch_boxes()) == transformed_boxes,
+            "retry commits the same transformed hierarchy",
+        )
+        collective_identity = (
+            restart_identity.token,
+            continuation_identity.token,
+            json.dumps(
+                receipt,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ),
+        )
+        chk(
+            len(set(allgather_value(_COMM, collective_identity))) == 1,
+            "restart identity, continuation identity and topology receipt agree on every rank",
+        )
+        restarted_integral = restarted.integral("tracer") + restarted.integral("right")
+        chk(
+            np.allclose(
+                [row["value"] for row in receipt["composite_integrals_after"]],
+                [row["value"] for row in receipt["composite_integrals_before"]],
+                rtol=2.0e-12,
+                atol=2.0e-13,
+            )
+            and np.isclose(
+                restarted_integral,
+                checkpoint_integral,
+                rtol=2.0e-12,
+                atol=2.0e-13,
+            ),
+            "the committed shared-interface transform is conservative",
+        )
+
+        counts_before = tuple(
+            restarted._executor._s._interface_evaluation_count(interface.qualified_id, level)
+            for level in range(2)
+        )
+        continued = pops.run(
+            restarted,
+            t_end=float(restarted.time()) + 1.0e-3,
+            max_steps=1,
+            console=False,
+        )
+        counts_after = tuple(
+            restarted._executor._s._interface_evaluation_count(interface.qualified_id, level)
+            for level in range(2)
+        )
+        count_delta = tuple(
+            after - before
+            for before, after in zip(counts_before, counts_after, strict=True)
+        )
+        collective_count_delta = allgather_value(_COMM, count_delta)
+        chk(
+            continued.accepted_steps == 1
+            and count_delta == (2, 4)
+            and len(set(collective_count_delta)) == 1,
+            "the retried hierarchy resumes the rematerialized shared interface on every rank",
+        )
+        continued_integral = restarted.integral("tracer") + restarted.integral("right")
+        chk(
+            np.isclose(
+                continued_integral,
+                checkpoint_integral,
+                rtol=0.0,
+                atol=2.0e-13,
+            ),
+            "the post-restart shared-interface continuation remains conservative",
+        )
+
+
 def _run_all() -> int:
     test_regrid_on_restart_mpi_collective_rollback_and_lineage()
+    test_regrid_on_restart_mpi_shared_interface_collective_rollback_and_retry()
     if int(_COMM.rank) == 0:
         print(
             "\n%s test_amr_regrid_on_restart_mpi (%d check failures)"

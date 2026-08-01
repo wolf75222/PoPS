@@ -26,7 +26,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 40
+    assert len(data["check"]) == 41
 
 
 def test_m3_gate_pins_three_level_subcycled_reflux_proof():
@@ -253,6 +253,30 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
         ),
         "nproc": 2,
     } in checks
+    assert {
+        "issue": "ADC-678",
+        "requirement": "restart_hierarchy_policy",
+        "polarity": "positive",
+        "kind": "mpi_python",
+        "target": "restart_hierarchy_policy",
+        "nodeid": (
+            "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::"
+            "test_regrid_on_restart_mpi_shared_interface_collective_rollback_and_retry"
+        ),
+        "nproc": 2,
+    } in checks
+    restart_mpi_source = (
+        ROOT / "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py"
+    ).read_text(encoding="utf-8")
+    assert "fail_after_native_regrid" in restart_mpi_source
+    assert "all(allgather_value(_COMM, rollback_ok))" in restart_mpi_source
+    assert "len(set(allgather_value(_COMM, collective_identity))) == 1" in restart_mpi_source
+    assert "count_delta == (2, 4)" in restart_mpi_source
+    program_context = (
+        ROOT / "include/pops/runtime/program/amr_program_context.hpp"
+    ).read_text(encoding="utf-8")
+    assert "AMR RegridOnRestart requires a clean accepted Program boundary" in program_context
+    assert "supports shared-interface flux groups only in serial" not in program_context
     assert {
         "issue": "ADC-678",
         "requirement": "accepted_state",
