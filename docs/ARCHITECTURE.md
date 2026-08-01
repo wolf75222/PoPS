@@ -549,6 +549,15 @@ de l'artefact. Un run qui échoue lève une exception ; il ne retourne jamais un
 Strang and Lie composition are Program macros (`pops.lib.time.strang` / `lie`). They lower explicit
 sub-flows into the same IR rather than selecting a native `System` stepper branch.
 
+`ProgramContext` and `AmrProgramContext` consume the same `ProgramExecutionServices` authority for
+topology-independent generated operations. In particular, persistent RHS/state/scalar scratch is
+one shared resource service keyed by IR value, sub-slot and active level. Providers expose only the
+authenticated resource identity (topology epoch, process-local materialization generation and
+level); the shared service owns validation, invalidation, exact-layout allocation, zero-on-reuse and
+profiling for both Uniform and AMR execution. Prepared operator capabilities are likewise retained
+as complete evaluation snapshots: a probe re-authenticates the provider clock and topology against
+the exact active snapshot, so a provider transition cannot leave a stale nonzero revision usable.
+
 ### Adaptive runtime execution
 
 On the adaptive hierarchy, `AmrSystem::step`

@@ -519,42 +519,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->solve_fields_from_blocks_in_place_(field, workspace.system_stages);
   }
 
-  struct ScratchKey {
-    ScratchKind kind = ScratchKind::Rhs;
-    std::int64_t value_id = -1;
-    int subslot = -1;
-
-    friend bool operator<(const ScratchKey& lhs, const ScratchKey& rhs) noexcept {
-      if (lhs.kind != rhs.kind)
-        return lhs.kind < rhs.kind;
-      if (lhs.value_id != rhs.value_id)
-        return lhs.value_id < rhs.value_id;
-      return lhs.subslot < rhs.subslot;
-    }
-  };
-
-  struct ScratchRegistry {
-    std::map<ScratchKey, MultiFab> fields;
-  };
-
-  MultiFab& program_scratch_for_(ScratchKind kind, std::int64_t value_id, int subslot,
-                                 const MultiFab& prototype, int n_comp, int n_ghost) const {
-    if (value_id < 0 || subslot < 0)
-      throw std::invalid_argument(
-          "Program persistent scratch requires non-negative IR value and sub-slot identities");
-    if (!scratch_registry_)
-      throw std::logic_error("Program persistent scratch registry is unavailable");
-    const ScratchKey key{kind, value_id, subslot};
-    auto [entry, inserted] = scratch_registry_->fields.try_emplace(key);
-    MultiFab& field = entry->second;
-    if (inserted || !field_layout_matches_(field, prototype, n_comp, n_ghost)) {
-      field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
-      count_scratch(field);
-    }
-    field.set_val(Real(0));
-    return field;
-  }
-
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
@@ -781,8 +745,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const HistoryRegistration& registration) const {
     return sys_->history_initialized(registration.name);
   }
-  double program_execution_history_slot_dt_storage_(
-      const HistoryRegistration& registration, int lag) const {
+  double program_execution_history_slot_dt_storage_(const HistoryRegistration& registration,
+                                                    int lag) const {
     return sys_->history_slot_dt(registration.name, lag);
   }
   void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
@@ -869,15 +833,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_phase_span_ = rollback.phase_span;
     logical_physical_time_offset_ = rollback.physical_time_offset;
   }
-  SolveReport program_execution_solve_fields_from_state_at_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
-      int block, MultiFab& state) const {
-    return consume_field_outcome_(solve_fields_from_state_at(point, provider_slot, block, state));
-  }
-  MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
-                                       const MultiFab& prototype, int n_comp, int n_ghost) const {
-    return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
-  }
   void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
   ProgramRuntimeState& program_execution_runtime_state_() const {
     return sys_->program_runtime_state_();
@@ -885,18 +840,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {static_cast<Real>(sys_->time()), sys_->macro_step(), -1};
   }
-  void program_execution_set_field_timepoint_(const std::string& field,
-                                              const FieldLogicalTimePoint& point) const {
-    sys_->set_field_logical_timepoint(field, point);
-  }
-  void program_execution_set_field_parameters_(const std::string& field,
-                                               const std::vector<double>& parameters) const {
-    sys_->set_field_boundary_parameters(field, parameters);
-  }
-  void program_execution_set_field_kernel_(const std::string& field,
-                                           const CompiledFieldBoundaryKernel& kernel) const {
-    sys_->set_field_boundary_kernel(field, kernel);
-  }
+  System& program_execution_field_facade_() const { return *sys_; }
   mutable double current_dt_ = 0.0;
   mutable amr::Rational logical_phase_begin_{0, 1};
   mutable amr::Rational logical_phase_span_{1, 1};
@@ -905,7 +849,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   mutable std::shared_ptr<FieldSolveWorkspaceRegistry> field_solve_workspace_registry_ =
       std::make_shared<FieldSolveWorkspaceRegistry>();
-  mutable std::shared_ptr<ScratchRegistry> scratch_registry_ = std::make_shared<ScratchRegistry>();
   System* sys_;
 };
 
