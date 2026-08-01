@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
+from email import policy
+from email.parser import BytesParser
 import hashlib
 import importlib.metadata
 import json
@@ -18,7 +20,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PACKAGE = ROOT / "python" / "pops"
-PROOF_SCHEMA_VERSION = 2
+PROOF_SCHEMA_VERSION = 3
 TYPED_PAYLOAD_SUFFIXES = (".py", ".pyi")
 PUBLIC_ROOT = (
     "Model",
@@ -149,6 +151,7 @@ public = list(pops.__all__)
 snapshot = {
     "public": public,
     "symbols": {name: _symbol(name) for name in public},
+    "package_version": pops.__version__,
     "case_is_explicit_type": True,
     "qualified_handles": True,
     "pure_authoring": True,
@@ -209,6 +212,38 @@ def _wheel_manifest(archive: zipfile.ZipFile) -> dict[str, str]:
     if not required.issubset(manifest):
         raise PublicApiParityError("release wheel lacks its root API or typing payload")
     return manifest
+
+
+def _distribution_identity(payload: bytes, *, label: str) -> dict[str, str]:
+    try:
+        metadata = BytesParser(policy=policy.default).parsebytes(payload)
+    except (TypeError, ValueError) as exc:
+        raise PublicApiParityError("%s distribution METADATA is unreadable" % label) from exc
+    name = metadata.get("Name")
+    version = metadata.get("Version")
+    if not isinstance(name, str) or not name.strip() \
+            or not isinstance(version, str) or not version.strip():
+        raise PublicApiParityError(
+            "%s distribution METADATA has no exact Name/Version" % label)
+    normalized = name.strip().lower().replace("_", "-").replace(".", "-")
+    if normalized != "pops":
+        raise PublicApiParityError("%s distribution name is not PoPS" % label)
+    return {
+        "name": name.strip(),
+        "version": version.strip(),
+        "metadata_sha256": _sha256_bytes(payload),
+    }
+
+
+def _wheel_distribution_identity(archive: zipfile.ZipFile) -> dict[str, str]:
+    names = [info.filename for info in archive.infolist() if not info.is_dir()]
+    if len(names) != len(set(names)):
+        raise PublicApiParityError("release wheel contains duplicate members")
+    metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
+    if len(metadata_names) != 1:
+        raise PublicApiParityError("release wheel has no unique distribution METADATA")
+    return _distribution_identity(
+        archive.read(metadata_names[0]), label="wheel")
 
 
 def _safe_extract(archive: zipfile.ZipFile, destination: Path) -> None:
@@ -274,7 +309,7 @@ def _require_manifest_parity(
     )
 
 
-def _installed_package_from_distribution() -> Path:
+def _installed_package_from_distribution() -> tuple[Path, dict[str, str]]:
     try:
         distribution = importlib.metadata.distribution("PoPS")
     except importlib.metadata.PackageNotFoundError as exc:
@@ -282,6 +317,18 @@ def _installed_package_from_distribution() -> Path:
     files = distribution.files
     if files is None:
         raise PublicApiParityError("the installed PoPS distribution has no file inventory")
+    metadata_files = [
+        row
+        for row in files
+        if PurePosixPath(str(row)).as_posix().endswith(".dist-info/METADATA")
+    ]
+    if len(metadata_files) != 1:
+        raise PublicApiParityError(
+            "the installed PoPS distribution has no unique METADATA")
+    metadata_path = Path(distribution.locate_file(metadata_files[0])).resolve()
+    if not metadata_path.is_file():
+        raise PublicApiParityError("the installed PoPS distribution METADATA is absent")
+    identity = _distribution_identity(metadata_path.read_bytes(), label="installed")
     package_initializers = [
         row for row in files if PurePosixPath(str(row)).as_posix() == "pops/__init__.py"
     ]
@@ -294,7 +341,7 @@ def _installed_package_from_distribution() -> Path:
     try:
         package.relative_to(ROOT)
     except ValueError:
-        return package
+        return package, identity
     raise PublicApiParityError(
         "the installed-package proof resolved inside the source checkout: %s" % package)
 
@@ -303,6 +350,7 @@ def build_proof(
     wheel: Path,
     *,
     installed_package: Path | None = None,
+    installed_distribution: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Compare one exact wheel archive with the current source checkout."""
     retained = wheel.expanduser().resolve()
@@ -310,6 +358,9 @@ def build_proof(
         raise PublicApiParityError("release artifact is not one readable wheel")
     source_manifest = _typed_manifest(SOURCE_PACKAGE, label="source")
     installed = None if installed_package is None else installed_package.expanduser().resolve()
+    if installed_distribution is not None and installed is None:
+        raise PublicApiParityError(
+            "installed distribution identity requires an installed package")
     if installed is not None:
         try:
             installed.relative_to(ROOT)
@@ -322,6 +373,7 @@ def build_proof(
         with tempfile.TemporaryDirectory(prefix="pops-public-api-") as temporary:
             extracted = Path(temporary)
             with zipfile.ZipFile(retained) as archive:
+                wheel_distribution = _wheel_distribution_identity(archive)
                 wheel_manifest = _wheel_manifest(archive)
                 _require_manifest_parity(
                     source_manifest, wheel_manifest, label="wheel")
@@ -337,14 +389,29 @@ def build_proof(
         raise PublicApiParityError("release wheel is unreadable: %s" % exc) from exc
     if wheel_snapshot != source_snapshot:
         raise PublicApiParityError("wheel and source public API snapshots differ")
+    if source_snapshot.get("package_version") != wheel_distribution["version"]:
+        raise PublicApiParityError(
+            "source public API version differs from wheel distribution METADATA")
     if installed is not None and installed_snapshot != source_snapshot:
         raise PublicApiParityError("installed and source public API snapshots differ")
+    if installed_distribution is not None:
+        exact_installed_distribution = dict(installed_distribution)
+        if set(exact_installed_distribution) != {"name", "version", "metadata_sha256"}:
+            raise PublicApiParityError("installed distribution identity is malformed")
+        if exact_installed_distribution != wheel_distribution:
+            raise PublicApiParityError(
+                "installed distribution identity differs from wheel METADATA")
     if tuple(source_snapshot["public"]) != PUBLIC_ROOT:
         raise PublicApiParityError("public API snapshot differs from the final root contract")
     proof = {
         "schema_version": PROOF_SCHEMA_VERSION,
+        "producer": {
+            "script": "scripts/prove_public_api_parity.py",
+            "sha256": _sha256(Path(__file__).resolve()),
+        },
         "wheel_path": str(retained),
         "wheel_sha256": _sha256(retained),
+        "distribution": wheel_distribution,
         "typed_payload_files": len(source_manifest),
         "typed_payload_sha256": _canonical_sha256(source_manifest),
         "public_api_sha256": _canonical_sha256(source_snapshot),
@@ -353,6 +420,9 @@ def build_proof(
         "qualified_handles": source_snapshot["qualified_handles"],
         "py_typed": source_snapshot["py_typed"],
         "installed": installed is not None,
+        "installed_distribution": (
+            None if installed_distribution is None else dict(installed_distribution)
+        ),
     }
     if installed is not None:
         proof.update({
@@ -394,8 +464,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--evidence", type=Path)
     args = parser.parse_args(argv)
     try:
-        installed = _installed_package_from_distribution() if args.installed else None
-        proof = build_proof(args.wheel, installed_package=installed)
+        if args.installed:
+            installed, installed_distribution = _installed_package_from_distribution()
+        else:
+            installed, installed_distribution = None, None
+        proof = build_proof(
+            args.wheel,
+            installed_package=installed,
+            installed_distribution=installed_distribution,
+        )
         if args.evidence is not None:
             _write_evidence(args.evidence, proof)
     except (PublicApiParityError, OSError, ValueError) as exc:

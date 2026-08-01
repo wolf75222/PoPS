@@ -29,6 +29,12 @@ def _load():
 
 proof = _load()
 
+_METADATA = "Metadata-Version: 2.3\nName: PoPS\nVersion: 1.0.0\n"
+
+
+def _distribution_identity() -> dict[str, str]:
+    return proof._distribution_identity(_METADATA.encode("utf-8"), label="test")
+
 
 def _synthetic_wheel(path: Path, *, omit: str | None = None) -> None:
     with zipfile.ZipFile(path, "w") as archive:
@@ -41,7 +47,7 @@ def _synthetic_wheel(path: Path, *, omit: str | None = None) -> None:
             archive.write(source, "pops/" + relative)
         archive.writestr(
             "pops-1.0.0.dist-info/METADATA",
-            "Metadata-Version: 2.3\nName: PoPS\nVersion: 1.0.0\n",
+            _METADATA,
         )
 
 
@@ -60,11 +66,13 @@ def _installed_distribution(root: Path) -> Path:
     distribution = package.parent / "pops-1.0.0.dist-info"
     distribution.mkdir()
     (distribution / "METADATA").write_text(
-        "Metadata-Version: 2.3\nName: PoPS\nVersion: 1.0.0\n",
+        _METADATA,
         encoding="utf-8",
     )
     (distribution / "RECORD").write_text(
-        "pops/__init__.py,,\n",
+        "pops/__init__.py,,\n"
+        "pops-1.0.0.dist-info/METADATA,,\n"
+        "pops-1.0.0.dist-info/RECORD,,\n",
         encoding="utf-8",
     )
     return package
@@ -75,15 +83,22 @@ def test_exact_wheel_and_source_share_public_api_typing_and_lazy_authoring(tmp_p
     _synthetic_wheel(wheel)
     installed = _installed_package(tmp_path)
 
-    evidence = proof.build_proof(wheel, installed_package=installed)
+    evidence = proof.build_proof(
+        wheel,
+        installed_package=installed,
+        installed_distribution=_distribution_identity(),
+    )
 
-    assert evidence["schema_version"] == 2
+    assert evidence["schema_version"] == 3
+    assert evidence["producer"]["script"] == "scripts/prove_public_api_parity.py"
+    assert evidence["distribution"] == _distribution_identity()
     assert evidence["public_names"] == list(proof.PUBLIC_ROOT)
     assert evidence["pure_authoring"] is True
     assert evidence["qualified_handles"] is True
     assert evidence["py_typed"] is True
     assert evidence["typed_payload_files"] > 100
     assert evidence["installed"] is True
+    assert evidence["installed_distribution"] == evidence["distribution"]
     assert evidence["installed_package"] == str(installed.resolve())
     assert evidence["installed_typed_payload_sha256"] == evidence["typed_payload_sha256"]
     assert evidence["installed_public_api_sha256"] == evidence["public_api_sha256"]
@@ -111,6 +126,20 @@ def test_installed_proof_rejects_payload_drift_and_source_checkout_alias(tmp_pat
         proof.build_proof(wheel, installed_package=installed)
     with pytest.raises(proof.PublicApiParityError, match="inside the source checkout"):
         proof.build_proof(wheel, installed_package=proof.SOURCE_PACKAGE)
+
+
+def test_installed_proof_rejects_distribution_identity_drift(tmp_path):
+    wheel = tmp_path / "pops-1.0.0-py3-none-any.whl"
+    _synthetic_wheel(wheel)
+    installed = _installed_package(tmp_path)
+    drifted = {**_distribution_identity(), "version": "1.0.1"}
+
+    with pytest.raises(proof.PublicApiParityError, match="distribution identity"):
+        proof.build_proof(
+            wheel,
+            installed_package=installed,
+            installed_distribution=drifted,
+        )
 
 
 def test_installed_cli_resolves_distribution_after_install_without_checkout_shadowing(
@@ -145,6 +174,8 @@ def test_installed_cli_resolves_distribution_after_install_without_checkout_shad
     assert completed.returncode == 0, completed.stdout
     payload = json.loads(evidence.read_text(encoding="utf-8"))
     assert payload["installed"] is True
+    assert payload["distribution"] == _distribution_identity()
+    assert payload["installed_distribution"] == payload["distribution"]
     assert payload["installed_package"] == str(installed.resolve())
     assert payload["installed_typed_payload_sha256"] == payload["typed_payload_sha256"]
     assert payload["installed_public_api_sha256"] == payload["public_api_sha256"]
@@ -160,6 +191,7 @@ def test_release_workflow_blocks_publication_on_source_wheel_api_parity():
     assert '--wheel "${wheels[0]}"' in validate
     assert "--installed" in validate
     assert 'pops-final-evidence-public-api.json' in validate
+    assert '--public-api-evidence "$public_api_evidence"' in validate
     assert validate.index("scripts/run_final_gate.py") < validate.index(
         "scripts/prove_public_api_parity.py")
     assert validate.index("scripts/prove_public_api_parity.py") < validate.index(
