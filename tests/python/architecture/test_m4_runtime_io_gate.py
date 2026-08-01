@@ -647,7 +647,7 @@ def test_m4_gate_pins_complete_program_only_dispatch_and_fallback_fences():
     documentation = (
         ROOT / "docs/design/m4-conformance-gate.md"
     ).read_text(encoding="utf-8")
-    assert "current status is **CLOSED AND CI-EXECUTED**" in documentation
+    assert "evidence ledger is **SOURCE-CLOSED AND REQUIRED BY CI**" in documentation
     assert "four serial proofs" in documentation
 
 
