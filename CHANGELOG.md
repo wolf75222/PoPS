@@ -36,6 +36,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved
   rational stage weight, geometry and duration before publishing the image; rejected restart or
   Program attempts leave the previous accepted report byte-exact.
+- The final release gate now proves an external source component against the exact installed wheel:
+  its isolated AOT lane clears the checkout-owned `POPS_INCLUDE`, requires the wheel-owned signed
+  header tree and native Kokkos extension, compiles/installs/loads the component, and retains one
+  exact no-skip/no-xfail JUnit result whose node ID and command are reauthenticated by preflight.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
   `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one

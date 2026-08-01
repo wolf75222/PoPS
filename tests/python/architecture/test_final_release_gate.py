@@ -1,6 +1,7 @@
 """Source-only contract checks for the final release gate (ADC-695)."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import json
@@ -178,6 +179,110 @@ def test_final_gate_pins_one_conda_environment_and_native_headers(
     assert "POPS_REQUIRE_NATIVE_TESTS=1" in command
     assert command[-3:] == ["python", "-c", "import pops"]
     assert "bash" not in command
+
+
+def test_installed_component_lane_clears_checkout_headers(monkeypatch, tmp_path):
+    executable = tmp_path / "conda"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    monkeypatch.setenv("POPS_CONDA_EXE", str(executable))
+    command = gate._conda_command(
+        [
+            "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1",
+            "python",
+            "-m",
+            "pytest",
+            contract.INSTALLED_COMPONENT_PACKAGE_NODEID,
+        ],
+        pops_include=None,
+    )
+
+    assert [
+        argument for argument in command if argument.startswith("POPS_INCLUDE=")
+    ] == ["POPS_INCLUDE="]
+    assert "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1" in command
+    assert str((ROOT / "include").resolve()) not in command
+
+
+def test_installed_component_node_is_real_and_rejects_mock_native_routes():
+    relative, node = contract.INSTALLED_COMPONENT_PACKAGE_NODEID.split("::", 1)
+    source = (ROOT / relative).read_text(encoding="utf-8")
+    assert "def %s(" % node in source
+    helper = source.split("def _require_installed_component_package_proof()", 1)[1].split(
+        "\ndef ", 1
+    )[0]
+    assert "Path(_pops.__file__).resolve()" in helper
+    assert "importlib.machinery.EXTENSION_SUFFIXES" in helper
+    assert "_pops.__has_kokkos__ is True" in helper
+    assert '["schema_version"] == 1' in helper
+    test_body = source.split("def %s(" % node, 1)[1].split("\ndef ", 1)[0]
+    assert test_body.index("_require_installed_component_package_proof()") \
+        < test_body.index("compile_component(component)")
+
+
+def test_preflight_authenticates_exact_installed_component_lane(tmp_path):
+    report = tmp_path / "reports" / "installed-component-package.xml"
+    report.parent.mkdir()
+    report.write_text(
+        '<testsuite tests="1"><testcase name="installed-component"/></testsuite>',
+        encoding="utf-8",
+    )
+    lane = {
+        "path": str(report),
+        "sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+        "tests": 1,
+        "failures": 0,
+        "skips_or_xfails": 0,
+    }
+    argv = [
+        "/proof/conda",
+        "run",
+        "--no-capture-output",
+        "-n",
+        "pops",
+        "/usr/bin/env",
+        "PYTHONPATH=",
+        "PYTHONNOUSERSITE=1",
+        "POPS_REQUIRE_NATIVE_TESTS=1",
+        "POPS_INCLUDE=",
+        "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-s",
+        contract.INSTALLED_COMPONENT_PACKAGE_NODEID,
+        "--junitxml",
+        str(report),
+    ]
+    row = {
+        "commands": [{"argv": argv}],
+        "evidence": {
+            "installed_component_package": {
+                "nodeid": contract.INSTALLED_COMPONENT_PACKAGE_NODEID,
+                "headers": "installed-wheel",
+                "lane": lane,
+            },
+        },
+    }
+    preflight._installed_component_package_evidence(tmp_path, row)
+
+    source_headers = copy.deepcopy(row)
+    source_headers["commands"][0]["argv"][
+        source_headers["commands"][0]["argv"].index("POPS_INCLUDE=")
+    ] = "POPS_INCLUDE=/checkout/include"
+    with pytest.raises(preflight.PreflightError, match="wheel-owned headers"):
+        preflight._installed_component_package_evidence(tmp_path, source_headers)
+
+    skipped = copy.deepcopy(row)
+    skipped["evidence"]["installed_component_package"]["lane"]["skips_or_xfails"] = 1
+    with pytest.raises(preflight.PreflightError, match="not all-pass"):
+        preflight._installed_component_package_evidence(tmp_path, skipped)
+
+    duplicate = copy.deepcopy(row)
+    duplicate["commands"].append(copy.deepcopy(duplicate["commands"][0]))
+    with pytest.raises(preflight.PreflightError, match="exactly once"):
+        preflight._installed_component_package_evidence(tmp_path, duplicate)
 
 
 def test_final_gate_honours_explicit_conda_executable(monkeypatch, tmp_path):

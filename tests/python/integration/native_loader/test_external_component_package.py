@@ -1,8 +1,10 @@
 """Collected native package test: compile, audit, install, load and call the real ABI consumer."""
 from __future__ import annotations
 
-import json
+import importlib.machinery
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -36,6 +38,27 @@ from pops.time import every, on_start
 
 ROOT = Path(__file__).resolve().parents[4]
 EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
+
+
+def _require_installed_component_package_proof() -> None:
+    if os.environ.get("POPS_PROVE_INSTALLED_COMPONENT_PACKAGE") != "1":
+        return
+    package_root = Path(pops.__file__).resolve().parent
+    wheel_include = (package_root / "include").resolve()
+    assert wheel_include.is_dir()
+    assert (wheel_include / "pops_headers.manifest").is_file()
+    assert Path(pops_include()).resolve() == wheel_include
+
+    from pops import _pops
+
+    native_path = Path(_pops.__file__).resolve()
+    assert native_path.parent == package_root
+    assert any(
+        native_path.name.endswith(suffix)
+        for suffix in importlib.machinery.EXTENSION_SUFFIXES
+    )
+    assert _pops.__has_kokkos__ is True
+    assert _pops.__native_loader_contract__["schema_version"] == 1
 
 
 def _manifest(*, generic: bool = True, device: str = "cpu") -> ComponentManifest:
@@ -352,6 +375,7 @@ int main(int argc, char** argv) {
 
 
 def test_source_component_executes_through_generic_native_loader_and_flux_consumer(tmp_path):
+    _require_installed_component_package_proof()
     manifest = _manifest()
     source = _source(manifest)
     (tmp_path / "average.cpp").write_bytes(source)
