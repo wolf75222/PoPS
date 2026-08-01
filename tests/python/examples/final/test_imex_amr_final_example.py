@@ -60,6 +60,8 @@ def test_example_runs_and_every_scientific_format_reopens(tmp_path: Path) -> Non
     assert report["topology_epoch"] >= 0
     assert report["regrid_count_after_continuation"] >= report["regrid_count"]
     assert report["topology_epoch_after_continuation"] >= report["topology_epoch"]
+    assert report["program_accepted_state_bytes"] > 0
+    assert report["tagging_hysteresis_min_cycles"] == 2
     assert report["flux_ledger_levels"] == [0, 1]
     assert report["synchronization_phases"] == ["reflux", "average_down"]
     assert report["runtime_steps"] == 1
@@ -137,6 +139,14 @@ def test_resolved_amr_lowering_report_covers_every_executed_authority() -> None:
         for row in amr_rows
         for target in row.targets
     )
+    hysteresis_row, = (
+        row for row in amr_rows
+        if row.source.startswith("amr-tagging-hysteresis:")
+    )
+    assert (
+        "amr-runtime-program-accepted-state:tagging_hysteresis_state"
+        in hysteresis_row.targets
+    )
 
     tagging = resolved.bootstrap_plan.tagging.inspect()["graph"]
     assert tagging["refine"]["node_type"] == "any_of"
@@ -147,7 +157,7 @@ def test_resolved_amr_lowering_report_covers_every_executed_authority() -> None:
     assert tagging["hysteresis"] == {
         "schema_version": 1,
         "hysteresis_type": "min_cycles",
-        "min_cycles": 0,
+        "min_cycles": 2,
         "equality": "hold",
     }
     assert tagging["conflict_policy"] == "refine_wins"
@@ -164,6 +174,17 @@ def test_normative_example_uses_only_the_final_root_lifecycle() -> None:
     assert "pops.run(simulation," in source
     assert ".run(**" not in source
     assert "BindInputs" not in source
+    assert "simulation.program_accepted_state()" in source
+    for forbidden in (
+        "ProgramContext",
+        "AmrProgramContext",
+        "SystemStepper",
+        "_executor",
+        "_begin_step_transaction",
+        "_commit_step_transaction",
+        "_rollback_step_transaction",
+    ):
+        assert forbidden not in source
     assert source.count("case.program(") == 1
     assert source.count("case.consumers(") == 1
 

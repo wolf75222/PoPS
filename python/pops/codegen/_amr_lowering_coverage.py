@@ -36,6 +36,10 @@ def amr_lowering_coverage(
     execution_identity = make_identity("amr-execution", execution.to_data()).token
     tagging = bootstrap.tagging
     tagging_target = "amr-runtime-tagging:%s" % tagging.qualified_id
+    hysteresis_targets = ["%s:hysteresis" % tagging_target]
+    if tagging.graph.hysteresis.min_cycles > 0:
+        hysteresis_targets.append(
+            "amr-runtime-program-accepted-state:tagging_hysteresis_state")
 
     rows = [
         LoweringCoverageRow(
@@ -56,7 +60,7 @@ def amr_lowering_coverage(
         LoweringCoverageRow(
             source="amr-tagging-hysteresis:%s" % tagging.qualified_id,
             disposition="lowered",
-            targets=("%s:hysteresis" % tagging_target,),
+            targets=tuple(hysteresis_targets),
         ),
         LoweringCoverageRow(
             source="amr-tagging-conflict-policy:%s" % tagging.qualified_id,
