@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Release codesign now preserves an existing valid ad-hoc signature and refuses publication when
+  post-install signing changes the retained wheel's native bytes, so the published wheel and the
+  runtime exercised by conformance and final examples are byte-identical.
 - Strict AMR checkpoint payload v7 now persists the accepted shared-interface flux audit together
   with Program clocks, histories, tagging state, conservative ledger and synchronization report.
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved
