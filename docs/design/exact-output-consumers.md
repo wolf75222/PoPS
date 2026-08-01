@@ -53,6 +53,28 @@ ScientificOutput(
 )
 ```
 
+When the native runtime owns an AMR reflux correction and/or an authored projection, the ledger can
+delegate those exact terms instead of requiring zero placeholders. `component` is the exact
+conservative index shared by the explicit Program sums and native evidence (it defaults to zero for
+a scalar state); the optional typed role is checked against that index at bind:
+
+```python
+from pops.physics.roles import Density
+
+mass = BalanceLedger(
+    "mass",
+    role=Density(),
+    component=0,
+    automatic_terms=("projection", "reflux"),
+)
+program.record_balance(
+    mass,
+    storage_change=storage_increment,
+    outward_boundary_flux=boundary_flux_increment,
+    sources=source_increment,
+)
+```
+
 Le fournisseur possède l'extension. Une cible comme `solution/tracer.vtu` est refusée dès
 l'authoring, avant le bind ; elle empêcherait le changement de format et entrerait en collision au
 deuxième échantillon. Chaque pas accepté dû publie immédiatement un fichier distinct sous le chemin
@@ -451,15 +473,20 @@ schedule and transaction. Its reductions are completed on the simulation thread 
 the post-commit worker receives only immutable arrays and scalar payloads, never the native mailbox
 or communicator facade.
 
-Each argument to `record_balance` is a signed, time-integrated native Program sum/dot reduction,
-or scalar arithmetic composed only from such reductions and exact literals.
+Each non-automatic argument to `record_balance` is a signed, time-integrated native Program sum/dot
+reduction, or scalar arithmetic composed only from such reductions and exact literals. When any
+term is delegated to a native producer, every explicit term must instead be composed from
+component-qualified `sum` reductions for the ledger's exact `component`; an all-state dot product
+cannot be reconciled with one component's reflux/projection evidence.
 The reported residual is `storage_change + outward_boundary_flux - sources - reflux - projection`.
 The native attempt mailbox accumulates repeated cadence/substep invocations, rejects missing or
 non-finite terms, and is cleared before the next attempt. The consumer reads it only while the
 outer accepted-step transaction still retains the pre-step image. Python therefore packages the
 five returned scalars and residual but never traverses arrays, invents a zero term, or reuses a
-previous step. A rejected attempt or failed consumer publication restores the mailbox with the
-rest of the native transaction.
+previous step. Selected automatic terms are resolved by exact runtime block, active hierarchy level
+and conservative component. A missing coordinate, a non-finite value, or simultaneous Program and
+native authority for one term fails the accepted transaction. A rejected attempt or failed consumer
+publication restores both mailboxes with the rest of the native transaction.
 
 The `pops.balance-term` namespace is reserved. Ordinary `Program.record_scalar(...)` authoring and
 the Python runtime diagnostic binding both reject it; generated `record_balance` code reaches a
@@ -476,8 +503,9 @@ by an OR of their exact accepted-step periods. `Always` and `when(True)` are per
 The compiler traces the complete reduction/scalar chain rather than scheduling only the terminal
 records. If a value is also consumed by an ordinary Program diagnostic or another non-balance
 operation, that shared producer remains unconditional so cadence fusion cannot change unrelated
-semantics. A `Balance` consumer with no matching five-term `Program.record_balance` producer fails
-before native code generation. Program stride/substeps use one attempt-local outer accepted-step
+semantics. A `Balance` consumer with no complete matching `Program.record_balance` producer for all
+non-automatic terms fails before native code generation. Program stride/substeps use one
+attempt-local outer accepted-step
 target, so every substep of one due public step sees the same decision and accumulates into the same
 attempt mailbox. The cadence is authored once as part of the Program identity, for example
 `program.cadence(substeps=2, stride=3)`, then authenticated and installed before runtime freeze on
@@ -498,22 +526,22 @@ balance reductions are not yet skipped. This fallback can add work but cannot su
 evidence. A zero-step run has no accepted native occurrence: its coincident start/end moment cannot
 publish an accepted-step consumer, including `Balance`.
 
-This public route still consumes explicit evidence: a Program that cannot produce every actual term
-cannot declare `Balance`. Native operator instrumentation is deliberately kept in a separate,
-qualified attempt-local mailbox until a resolved quantity selector can prove which
-`BalanceLedger` route owns each block/level/component contribution. Generated code publishes the OR
-of the exact due route decisions before the first Program operator; the marker is monotone for the
-attempt, disabled during replay, and reset at attempt entry. Consequently off-cadence steps do not
-pay for automatic operator reductions.
+The selected public route now consumes signed AMR reflux corrections and before/after projection
+deltas from the separate qualified attempt mailbox. Uniform Cartesian projection uses the
+authenticated cell measure and embedded-boundary mask; AMR projection excludes covered coarse cells
+and performs one component-vector collective per participating level. A reflux selection requires
+an adaptive hierarchy and expects one contribution for every active parent/fine interface;
+projection expects one for every selected active level. Generated code publishes the OR of the exact
+due route decisions before the first Program operator; the marker is monotone for the attempt,
+disabled during replay, and reset at attempt entry. Consequently off-cadence steps do not pay for
+automatic operator reductions.
 
-That private mailbox currently captures the signed AMR reflux correction and the before/after
-projection delta. Uniform Cartesian projection uses the authenticated cell measure and embedded
-boundary mask; AMR projection excludes covered coarse cells and performs one component-vector
-collective per participating level. Polar projection stays absent because no exact per-cell polar
-volume provider exists on this path. Automatic physical-boundary flux and source evidence are also
-not yet producers. None of these private values is read by `accepted_balance_terms()`, so this
-instrumentation does not silently complete an authored five-term balance or widen the public
-contract.
+The capability remains deliberately bounded. Polar projection is rejected because no exact
+per-cell polar volume provider exists on this path. Automatic physical-boundary flux and source
+evidence are not yet producers and therefore remain explicit `Program.record_balance` arguments.
+The native selector never substitutes a missing automatic value with zero (except the exact reflux
+identity for a hierarchy with no coarse/fine interface), and the legacy all-explicit ledger route
+retains its original identity and behavior.
 
 Checkpoint remains a separate restart effect. These consumers do not define a checkpoint schema or
 reader and do not call the scientific-output manifest a restart identity. The checkpoint provider

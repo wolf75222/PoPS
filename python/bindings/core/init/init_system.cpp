@@ -355,6 +355,9 @@ void bind_system_program(py::class_<System>& cls) {
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &System::program_diagnostics)
       .def("_accepted_balance_terms", &System::accepted_balance_terms, py::arg("route"))
+      .def("_selected_accepted_balance_terms", &System::selected_accepted_balance_terms,
+           py::arg("route"), py::arg("block"), py::arg("component"), py::arg("levels"),
+           py::arg("automatic_terms"))
       .def("_consume_step_projections", &System::consume_step_projections)
       // ADC-542: the native collective reduction over a named block the diagnostics driver drives to
       // fire a declared typed measure (Norm / Integral / MinMax) each cadence tick, and the sink the

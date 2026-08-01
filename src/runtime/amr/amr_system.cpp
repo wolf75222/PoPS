@@ -3579,6 +3579,28 @@ std::map<std::string, double> AmrSystem::accepted_balance_terms(const std::strin
         "transaction");
   return p_->program_.accepted_balance_terms(route, "AmrSystem");
 }
+std::map<std::string, double> AmrSystem::selected_accepted_balance_terms(
+    const std::string& route, const std::string& block, int component,
+    const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const {
+  if (!p_->external_step_transaction_active_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "AmrSystem::_selected_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::_selected_accepted_balance_terms requires an installed AMR runtime");
+  const std::size_t runtime_block = p_->block_index_or_throw(block);
+  if (component < 0 || component >= p_->runtime->block_n_vars(runtime_block))
+    throw std::out_of_range(
+        "AmrSystem::_selected_accepted_balance_terms component is out of range");
+  if (levels.empty() || std::any_of(levels.begin(), levels.end(), [&](int level) {
+        return level < 0 || level >= p_->runtime->nlev();
+      }))
+    throw std::out_of_range(
+        "AmrSystem::_selected_accepted_balance_terms level is out of active hierarchy range");
+  return p_->program_.selected_accepted_balance_terms(
+      route, static_cast<int>(runtime_block), component, levels, automatic_terms, "AmrSystem");
+}
 void AmrSystem::begin_step_projection_report() {
   p_->program_.begin_step_projection_report();
 }

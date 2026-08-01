@@ -40,8 +40,12 @@ def test_automatic_balance_mailbox_is_attempt_local_and_not_a_route_fallback() -
         "std::map<std::string, Real> accepted_balance_terms(",
         "void begin_balance_due_window(",
     )
-    assert "step_balance_terms_" in accepted
-    assert "automatic_balance_terms_" not in accepted
+    explicit_only = accepted.split(
+        "std::map<std::string, Real> selected_accepted_balance_terms(", 1
+    )[0]
+    assert "step_balance_terms_" in explicit_only
+    assert "automatic_balance_terms_" not in explicit_only
+    assert "automatic_balance_terms_" in accepted
 
     uniform = UNIFORM_IMPL.read_text()
     adaptive = AMR_IMPL.read_text()

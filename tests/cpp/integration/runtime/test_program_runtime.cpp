@@ -164,6 +164,37 @@ TEST(ProgramRuntime, AutomaticBalanceDueMarkerIsAttemptLocalMonotoneAndReplaySaf
   EXPECT_FALSE(state.automatic_balance_capture_due());
 }
 
+TEST(ProgramRuntime, SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence) {
+  runtime::program::ProgramRuntimeState state;
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '5');
+  state.begin_step_projection_report();
+  state.run_balance_due_window(0, "test", [&] {
+    state.note_automatic_balance_capture_due(true, "test");
+    state.record_balance_term(route, "storage_change", 1.0, "test");
+    state.record_balance_term(route, "outward_boundary_flux", 2.0, "test");
+    state.record_balance_term(route, "sources", 3.0, "test");
+    state.record_automatic_balance_term(2, 0, 1, "projection", 0.25, "test");
+    state.record_automatic_balance_term(2, 1, 1, "projection", 0.75, "test");
+    state.record_automatic_balance_term(2, 0, 1, "reflux", 0.5, "test");
+  });
+  state.complete_balance_step(true);
+
+  const auto selected =
+      state.selected_accepted_balance_terms(route, 2, 1, {0, 1}, {"projection", "reflux"}, "test");
+  EXPECT_EQ(selected.at("storage_change"), 1.0);
+  EXPECT_EQ(selected.at("outward_boundary_flux"), 2.0);
+  EXPECT_EQ(selected.at("sources"), 3.0);
+  EXPECT_EQ(selected.at("projection"), 1.0);
+  EXPECT_EQ(selected.at("reflux"), 0.5);
+
+  EXPECT_THROW((void)state.selected_accepted_balance_terms(route, 2, 1, {0, 1, 2},
+                                                           {"projection", "reflux"}, "test"),
+               std::runtime_error);
+  EXPECT_THROW((void)state.selected_accepted_balance_terms(route, 2, 1, {0, 2},
+                                                           {"projection", "reflux"}, "test"),
+               std::invalid_argument);
+}
+
 TEST(ProgramRuntime, SelectiveReplayCompilesBalanceOffAndRestoresTheGuard) {
   runtime::program::ProgramRuntimeState state;
   const std::string contract = "pops.balance-due-contract.v1:sha256:" + std::string(64, '3');

@@ -51,6 +51,7 @@ class BalanceDueRoute:
 
     route: Identity
     consumers: tuple[BalanceDueConsumer, ...]
+    automatic_terms: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -75,12 +76,21 @@ class BalanceDueRoute:
         if len(identities) != len(set(identities)):
             raise ValueError("BalanceDueRoute contains a duplicate consumer")
         object.__setattr__(self, "consumers", consumers)
+        if not isinstance(self.automatic_terms, tuple):
+            raise TypeError("BalanceDueRoute.automatic_terms must be a tuple")
+        if self.automatic_terms != tuple(sorted(set(self.automatic_terms))):
+            raise ValueError("BalanceDueRoute.automatic_terms must be sorted and unique")
+        if set(self.automatic_terms).difference({"reflux", "projection"}):
+            raise ValueError("BalanceDueRoute names an unavailable automatic balance producer")
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        data = {
             "route": self.route.to_data(),
             "consumers": [value.to_data() for value in self.consumers],
         }
+        if self.automatic_terms:
+            data["automatic_terms"] = list(self.automatic_terms)
+        return data
 
     def accepted_step_periods(self) -> tuple[int, ...]:
         """Return exact native periods, conservatively using period one when unprovable.
@@ -161,7 +171,9 @@ class BalanceDueContract:
             raise TypeError(
                 "BalanceDueContract requires an exact resolved ConsumerGraph or None"
             )
-        by_route: dict[str, tuple[Identity, list[BalanceDueConsumer]]] = {}
+        by_route: dict[
+            str, tuple[Identity, list[BalanceDueConsumer], tuple[str, ...]]
+        ] = {}
         for manifest in graph.nodes:
             for quantity in manifest.diagnostic_quantities:
                 for operation in quantity.execution["operations"]:
@@ -173,15 +185,22 @@ class BalanceDueContract:
                         "balance-ledger-route",
                         where="accepted balance operation route",
                     )
-                    existing = by_route.setdefault(route.token, (route, []))
+                    automatic_terms = tuple(operation.get("automatic_terms", ()))
+                    existing = by_route.setdefault(
+                        route.token, (route, [], automatic_terms)
+                    )
+                    if existing[2] != automatic_terms:
+                        raise ValueError(
+                            "one balance route cannot select different automatic producers"
+                        )
                     existing[1].append(
                         BalanceDueConsumer(manifest.identity, manifest.schedule)
                     )
         return cls(
             graph.identity,
             tuple(
-                BalanceDueRoute(route, tuple(consumers))
-                for route, consumers in by_route.values()
+                BalanceDueRoute(route, tuple(consumers), automatic_terms)
+                for route, consumers, automatic_terms in by_route.values()
             ),
         )
 

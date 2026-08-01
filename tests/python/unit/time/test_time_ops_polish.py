@@ -59,7 +59,7 @@ def t():
     return time
 
 
-def _balance_due_contract(route, *schedules):
+def _balance_due_contract(route, *schedules, automatic_terms=()):
     return BalanceDueContract(
         make_identity("consumer-graph", {"test": "balance-due"}),
         (
@@ -72,6 +72,7 @@ def _balance_due_contract(route, *schedules):
                     )
                     for index, schedule in enumerate(schedules)
                 ),
+                automatic_terms,
             ),
         ),
     )
@@ -376,6 +377,65 @@ def test_record_balance_emits_exact_five_term_native_attempt_mailbox(t):
     assert "2147483648" not in unreachable_source
     assert "ctx.balance_consumer_is_due(" not in unreachable_source
     assert "ctx.note_automatic_balance_capture_due(" not in unreachable_source
+
+
+def test_record_balance_delegates_selected_native_terms_without_placeholders(t):
+    from pops.diagnostics import BalanceLedger
+
+    P = t.Program("native-balance-terms")
+    U = typed_state(P, "blk")
+    total = P.sum(U)
+    ledger = BalanceLedger(
+        "mass-native", automatic_terms=("projection", "reflux")
+    )
+    records = P.record_balance(
+        ledger,
+        storage_change=total,
+        outward_boundary_flux=total * 2.0,
+        sources=total * 3.0,
+    )
+    route = ledger.route_identity(U.block)
+    assert tuple(record.attrs["term"] for record in records) == (
+        "storage_change",
+        "outward_boundary_flux",
+        "sources",
+    )
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value("balance_next", U, at=endpoint.point))
+    contract = _balance_due_contract(
+        route,
+        every(2, clock=P.clock),
+        automatic_terms=("projection", "reflux"),
+    )
+    source = emit_cpp_program(P, balance_due_contract=contract)
+    assert source.count("ctx.record_balance_term(") == 3
+    assert source.count("ctx.note_automatic_balance_capture_due(") == 1
+
+    P_bad = t.Program("duplicate-native-balance-term")
+    U_bad = typed_state(P_bad, "blk")
+    total_bad = P_bad.sum(U_bad)
+    with pytest.raises(ValueError, match="owned by.*native automatic producer"):
+        P_bad.record_balance(
+            ledger,
+            storage_change=total_bad,
+            outward_boundary_flux=total_bad,
+            sources=total_bad,
+            projection=total_bad,
+        )
+
+    component_ledger = BalanceLedger(
+        "component-one",
+        component=1,
+        automatic_terms=("projection",),
+    )
+    with pytest.raises(ValueError, match="selects components.*component 1"):
+        P_bad.record_balance(
+            component_ledger,
+            storage_change=total_bad,
+            outward_boundary_flux=total_bad,
+            sources=total_bad,
+            reflux=total_bad,
+        )
 
 
 def test_balance_due_contract_unions_consumers_and_ignores_static_false(t):

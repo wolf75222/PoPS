@@ -79,7 +79,11 @@ def test_projection_delta_is_captured_only_when_due_and_stays_qualified() -> Non
         "std::map<std::string, Real> accepted_balance_terms(",
         "void begin_balance_due_window(",
     )
-    assert "automatic_balance_terms_" not in accepted
+    explicit_only = accepted.split(
+        "std::map<std::string, Real> selected_accepted_balance_terms(", 1
+    )[0]
+    assert "automatic_balance_terms_" not in explicit_only
+    assert "automatic_balance_terms_" in accepted
 
 
 def test_uniform_projection_evidence_uses_exact_available_measure() -> None:
