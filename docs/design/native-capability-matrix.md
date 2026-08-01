@@ -184,10 +184,12 @@ Supported native routes include:
   artifact creation until their adapter contract owns the same persistent-state route. MPI capture
   validates the rank-independent accepted-state image on every producer before sealing or
   publication; disagreement fails collectively and cannot leave a partial checkpoint.
+- The prepared limiter registry exposes native `Minmod`, `VanLeer`, `MC`, and `Superbee` MUSCL
+  policies. Each is a stateless `POPS_HD` compile-time provider with formal order 2 and exactly two
+  ghost layers; Uniform, AMR, MPI and supported device targets consume the same route identity.
 
 Explicit unsupported rows include:
 
-- `limiter:mc` and `limiter:superbee`: catalogued descriptors with no native C++ symbol.
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v5 or AMR

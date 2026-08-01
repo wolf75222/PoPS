@@ -276,6 +276,8 @@ LIMITER_NONE = _REGISTRY["limiter"]["none"]
 LIMITER_MINMOD = _REGISTRY["limiter"]["minmod"]
 LIMITER_VANLEER = _REGISTRY["limiter"]["vanleer"]
 LIMITER_WENO5 = _REGISTRY["limiter"]["weno5"]
+LIMITER_MC = _REGISTRY["limiter"]["mc"]
+LIMITER_SUPERBEE = _REGISTRY["limiter"]["superbee"]
 
 RECON_CONSERVATIVE = _REGISTRY["recon"]["conservative"]
 RECON_PRIMITIVE = _REGISTRY["recon"]["primitive"]

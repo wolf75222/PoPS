@@ -100,11 +100,15 @@ TEST(test_dispatch_tags, limiter_n_ghost_widths) {
   EXPECT_EQ(limiter_n_ghost("minmod"), 2) << "n_ghost(minmod) == 2";
   EXPECT_EQ(limiter_n_ghost("vanleer"), 2) << "n_ghost(vanleer) == 2";
   EXPECT_EQ(limiter_n_ghost("weno5"), 3) << "n_ghost(weno5) == 3";
+  EXPECT_EQ(limiter_n_ghost("mc"), 2) << "n_ghost(mc) == 2";
+  EXPECT_EQ(limiter_n_ghost("superbee"), 2) << "n_ghost(superbee) == 2";
   EXPECT_THROW((void)limiter_n_ghost("bogus"), std::runtime_error)
       << "an unknown limiter must never select a fallback halo";
   // variante compile-time (utilisee par les static_assert de non-derive de block_builder.hpp).
   static_assert(limiter_n_ghost_ct("none") == 1, "ct none");
   static_assert(limiter_n_ghost_ct("weno5") == 3, "ct weno5");
+  static_assert(limiter_n_ghost_ct("mc") == 2, "ct mc");
+  static_assert(limiter_n_ghost_ct("superbee") == 2, "ct superbee");
   static_assert(limiter_n_ghost_ct("bogus") == -1, "ct inconnu == -1");
 }
 
@@ -113,6 +117,10 @@ TEST(test_dispatch_tags, klimiters_kriemanns_tables) {
       << "kLimiters[0]";
   EXPECT_TRUE(std::string(kLimiters[3].name) == "weno5" && kLimiters[3].n_ghost == 3)
       << "kLimiters[3]";
+  EXPECT_TRUE(std::string(kLimiters[4].name) == "mc" && kLimiters[4].n_ghost == 2)
+      << "kLimiters[4]";
+  EXPECT_TRUE(std::string(kLimiters[5].name) == "superbee" && kLimiters[5].n_ghost == 2)
+      << "kLimiters[5]";
   EXPECT_TRUE(std::string(kRiemanns[0].name) == "rusanov" && kRiemanns[0].polar_ok)
       << "kRiemanns[0] rusanov polar_ok";
   EXPECT_TRUE(std::string(kRiemanns[1].name) == "hll" && kRiemanns[1].needs_wave_speeds &&

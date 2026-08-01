@@ -8,8 +8,10 @@
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/primitives/face_flux.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace pops;
 
@@ -79,6 +81,10 @@ struct PrimitiveTestModel {
 };
 
 static_assert(SlopeReconstruction<WideSlopePolicy>);
+static_assert(ReconstructionPolicy<MC>);
+static_assert(ReconstructionPolicy<Superbee>);
+static_assert(MC::formal_order == 2 && MC::n_ghost == 2);
+static_assert(Superbee::formal_order == 2 && Superbee::n_ghost == 2);
 static_assert(!StencilReconstruction<WideSlopePolicy>);
 static_assert(StencilReconstruction<ExternalFourSamplePolicy>);
 static_assert(ReconstructionPolicy<ExternalFourSamplePolicy>);
@@ -102,6 +108,57 @@ TEST(test_weno_convergence, preserves_constants) {
 TEST(test_weno_convergence, reconstruction_protocol_is_independent_of_storage_radius) {
   const auto policy = configured_reconstruction<WideSlopePolicy>();
   EXPECT_EQ(policy.limited_slope(Real(2), Real(4)), Real(3));
+}
+
+TEST(test_muscl_limiters, mc_and_superbee_match_reference_formulas) {
+  const MC mc{};
+  const Superbee superbee{};
+
+  EXPECT_EQ(mc.limited_slope(Real(1), Real(3)), Real(2));
+  EXPECT_EQ(mc.limited_slope(Real(2), Real(4)), Real(3));
+  EXPECT_EQ(mc.limited_slope(Real(3), Real(1)), Real(2));
+  EXPECT_EQ(superbee.limited_slope(Real(1), Real(3)), Real(2));
+  EXPECT_EQ(superbee.limited_slope(Real(2), Real(4)), Real(4));
+  EXPECT_EQ(superbee.limited_slope(Real(3), Real(1)), Real(2));
+}
+
+TEST(test_muscl_limiters, zero_opposite_sign_symmetry_and_homogeneity) {
+  const MC mc{};
+  const Superbee superbee{};
+  for (const auto limiter : {0, 1}) {
+    const auto slope = [&](Real a, Real b) {
+      return limiter == 0 ? mc.limited_slope(a, b) : superbee.limited_slope(a, b);
+    };
+    EXPECT_EQ(slope(Real(0), Real(4)), Real(0));
+    EXPECT_EQ(slope(Real(4), Real(0)), Real(0));
+    EXPECT_EQ(slope(Real(-2), Real(3)), Real(0));
+    EXPECT_EQ(slope(Real(2), Real(-3)), Real(0));
+    EXPECT_EQ(slope(Real(-2), Real(-4)), -slope(Real(2), Real(4)));
+    EXPECT_EQ(slope(Real(6), Real(12)), Real(3) * slope(Real(2), Real(4)));
+  }
+}
+
+TEST(test_muscl_limiters, sweby_tvd_bounds_and_finite_extremes) {
+  const MC mc{};
+  const Superbee superbee{};
+  for (const Real backward : {Real(0.25), Real(1), Real(2), Real(8)}) {
+    for (const Real forward : {Real(0.5), Real(1), Real(4), Real(16)}) {
+      const Real tvd_bound = Real(2) * std::min(backward, forward);
+      for (const Real slope :
+           {mc.limited_slope(backward, forward), superbee.limited_slope(backward, forward)}) {
+        EXPECT_GE(slope, Real(0));
+        EXPECT_LE(slope, tvd_bound);
+      }
+    }
+  }
+
+  const Real maximum = std::numeric_limits<Real>::max();
+  EXPECT_TRUE(std::isfinite(mc.limited_slope(maximum, maximum)));
+  EXPECT_TRUE(std::isfinite(superbee.limited_slope(maximum, maximum)));
+  EXPECT_EQ(mc.limited_slope(maximum, maximum), maximum);
+  EXPECT_EQ(superbee.limited_slope(maximum, maximum), maximum);
+  EXPECT_EQ(mc.limited_slope(-maximum, -maximum), -maximum);
+  EXPECT_EQ(superbee.limited_slope(-maximum, -maximum), -maximum);
 }
 
 TEST(test_weno_convergence, external_sampled_policy_controls_offsets_and_orientation) {

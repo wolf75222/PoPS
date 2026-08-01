@@ -1,7 +1,7 @@
 #pragma once
 
 #include <pops/core/foundation/cold.hpp>          // POPS_COLD_FN
-#include <pops/numerics/fv/reconstruction.hpp>    // NoSlope / Minmod / VanLeer / Weno5
+#include <pops/numerics/fv/reconstruction.hpp>    // Prepared reconstruction policies
 #include <pops/runtime/config/dispatch_tags.hpp>  // throw_registry_dispatch_mismatch
 #include <pops/runtime/config/route_ids.hpp>      // LimiterRouteId, route_token, kLimiterRoutes
 
@@ -40,7 +40,9 @@ namespace pops {
   X(kNone, NoSlope)              \
   X(kMinmod, Minmod)             \
   X(kVanLeer, VanLeer)           \
-  X(kWeno5, Weno5)
+  X(kWeno5, Weno5)               \
+  X(kMc, MC)                     \
+  X(kSuperbee, Superbee)
 
 namespace detail {
 constexpr int kLimiterXMacroCount = 0

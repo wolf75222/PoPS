@@ -424,7 +424,7 @@ void assemble_rhs_eb_with_metrics(const Model& model, const MultiFab& U, const M
 /// above. No flux crosses an active/inactive face. This API accepts any device-callable level set and
 /// contains no shape-specific transport branch.
 ///
-/// @tparam Limiter        reconstruction (NoSlope / Minmod / VanLeer / Weno5), like the Cartesian operator.
+/// @tparam Limiter        prepared reconstruction policy, like the Cartesian operator.
 /// @tparam NumericalFlux  flux policy (RusanovFlux by default).
 /// @param  ls             POPS_HD callable level set (e.g. detail::DiscDomain): ls < 0 inside.
 /// @param  kappa_min      volume fraction floor (small-cell clamp), default kEbKappaMin.

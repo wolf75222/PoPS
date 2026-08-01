@@ -384,8 +384,8 @@ function weno5z(vm2, vm1, v0, vp1, vp2):        # face entre v0 et vp1
 
 **Code.** Pointwise `Limiter` policies in
 [`include/pops/numerics/fv/reconstruction.hpp`](../include/pops/numerics/fv/reconstruction.hpp): `NoSlope`
-(`n_ghost = 1`, `operator()` returns `Real(0)`), `Minmod` and `VanLeer` (`n_ghost = 2`, `operator()(a,b)`
-returns the limited slope, absolute value coded by hand to stay device-safe without `<cmath>`), `Weno5`
+(`n_ghost = 1`, piecewise-constant face value), `Minmod`, `VanLeer`, `MC` and `Superbee`
+(`n_ghost = 2`, `limited_slope(a,b)` returns the limited slope with device-safe scalar arithmetic), `Weno5`
 (`n_ghost = 3`, a tag whose `operator()` is a no-op that just satisfies the `Limiter` concept). The
 order-5 reconstruction lives in the free function `weno5z(vm2, vm1, v0, vp1, vp2)` of the same header:
 it returns the value at the face between `v0` and `vp1`, and for the opposite face one passes it the
@@ -401,6 +401,10 @@ before any face flux; the value-only wrappers remain low-level compatibility hel
 step stays bounded by the CFL of section 1, `dt <= C dx / max|lambda|`. Limits and pitfalls:
 - `Minmod` is strictly TVD but falls back to local order 1 at extrema (it erases smooth peaks);
   for the Diocotron growth modes one prefers `VanLeer`, less dissipative at extrema.
+- `MC` uses $\operatorname{minmod}((a+b)/2,2a,2b)$ and is a less diffusive TVD compromise;
+  `Superbee` uses $\operatorname{maxmod}(\operatorname{minmod}(2a,b),
+  \operatorname{minmod}(a,2b))$ and is the most compressive builtin MUSCL limiter. Their
+  implementations avoid overflowing intermediate doubled slopes for finite inputs.
 - `weno5z` is smooth (no branch on the sign: the $\beta_k$ and $\tau_5$ are squares so
   always $\ge 0$, and only $|\beta_0-\beta_2|$ goes through a ternary), which makes it fully
   device-callable; the floor `eps = 1e-40` avoids division by zero on a constant stencil.
@@ -411,7 +415,8 @@ step stays bounded by the CFL of section 1, `dt <= C dx / max|lambda|`. Limits a
 **Validation.** `test_weno_convergence` (the face reconstruction of a smooth function reaches order 5),
 `test_primitive_recon` (conserved <-> primitive conversions and their use in the reconstruction),
 `test_spatial_discretisation` (the reconstruction x numerical flux pair is a named type, exercised end
-to end).
+to end), and `test_weno_convergence` (MC/Superbee reference formulas, symmetry, homogeneity, TVD
+bounds and finite extreme inputs in addition to WENO convergence).
 
 
 ---

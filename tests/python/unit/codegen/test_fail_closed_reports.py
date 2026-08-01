@@ -70,6 +70,15 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert weno.layout == "uniform|amr"
     assert "ratio-2 2D AMR" in weno.limitation
     assert "order-5" in weno.limitation
+    for feature in ("limiter:mc", "limiter:superbee"):
+        limiter = routes[feature]
+        assert limiter.status == "available"
+        assert limiter.backend == "production"
+        assert limiter.layout == "uniform|amr"
+        assert "formal_order=2" in limiter.limitation
+        assert "ghost_depth=2" in limiter.limitation
+        assert limiter.available_route == ""
+        assert limiter.alternative == ""
     amr_implicit = routes["amr:source_implicit_program"]
     assert amr_implicit.status == "unavailable"
     assert "no temporal fallback" in amr_implicit.limitation

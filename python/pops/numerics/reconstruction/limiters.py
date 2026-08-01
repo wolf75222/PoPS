@@ -55,8 +55,20 @@ def VanLeer() -> Any:
     return _native_reconstruction_descriptor(LIMITER_VANLEER, category="limiter")
 
 
-limiters = SimpleNamespace(Minmod=Minmod, VanLeer=VanLeer)
+def MC() -> Any:
+    from pops.runtime.routes import LIMITER_MC
+
+    return _native_reconstruction_descriptor(LIMITER_MC, category="limiter")
+
+
+def Superbee() -> Any:
+    from pops.runtime.routes import LIMITER_SUPERBEE
+
+    return _native_reconstruction_descriptor(LIMITER_SUPERBEE, category="limiter")
+
+
+limiters = SimpleNamespace(Minmod=Minmod, VanLeer=VanLeer, MC=MC, Superbee=Superbee)
 
 # Spec 5: expose the limiters at module scope.
 
-__all__ = ["limiters", "Minmod", "VanLeer"]
+__all__ = ["limiters", "Minmod", "VanLeer", "MC", "Superbee"]

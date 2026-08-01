@@ -789,6 +789,9 @@ inline int block_n_ghost(const std::string& lim) {
   static_assert(limiter_n_ghost_ct("vanleer") == VanLeer::n_ghost,
                 "kLimiters[vanleer].n_ghost drifted");
   static_assert(limiter_n_ghost_ct("weno5") == Weno5::n_ghost, "kLimiters[weno5].n_ghost drifted");
+  static_assert(limiter_n_ghost_ct("mc") == MC::n_ghost, "kLimiters[mc].n_ghost drifted");
+  static_assert(limiter_n_ghost_ct("superbee") == Superbee::n_ghost,
+                "kLimiters[superbee].n_ghost drifted");
   return limiter_n_ghost(lim);
 }
 

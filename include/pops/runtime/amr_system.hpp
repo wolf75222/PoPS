@@ -269,8 +269,9 @@ class AmrSystem {
   /// @param name    block name: INDEXES the block (set_density(name), mass(name), density(name)). In
   ///                multi-block the name must be unique; mono-block an empty name targets the single block.
   /// @param model   composition of bricks (transport/source/elliptic + parameters)
-  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 = WENO5-Z, 3 ghosts;
-  ///                native low-level stencil route). The resolved Case route derives its
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" | "mc" | "superbee"
+  ///                (weno5 = WENO5-Z, 3 ghosts; native low-level stencil route). The resolved
+  ///                Case route derives its
   ///                coarse/fine order and halo requirements from this spatial descriptor and
   ///                selects the minimum sufficient conservative provider.
   /// @param riemann "rusanov" | "hll" (generic signed-wave, requires model.wave_speeds) | "hllc"
