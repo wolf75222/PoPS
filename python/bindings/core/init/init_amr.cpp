@@ -336,6 +336,10 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("identity"), py::arg("level") = 0)
       .def("_discard_interface_flux_components", &AmrSystem::discard_interface_flux_components,
            "Roll back one failed post-block interface authority transaction.")
+      .def("_interface_flux_installation_checkpoint",
+           &AmrSystem::interface_flux_installation_checkpoint)
+      .def("_rollback_interface_flux_installations",
+           &AmrSystem::rollback_interface_flux_installations, py::arg("accepted_size"))
       // Private production-package seam. Parameters are fixed before AMR closures are built.
       .def("_install_native_block", &AmrSystem::add_native_block, py::arg("name"),
            py::arg("so_path"), py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
@@ -821,6 +825,8 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
       .def("program_flux_ledger_manifest", &AmrSystem::program_flux_ledger_manifest)
+      .def("program_interface_flux_ledger_manifest",
+           &AmrSystem::program_interface_flux_ledger_manifest)
       .def("program_sync_manifest", &AmrSystem::program_sync_manifest)
       // ADC-631: True on the multi-block AmrRuntime engine (a compiled Program forces it even for ONE
       // block), False on the single-block coupler. The v3 checkpoint routes per-block vs mono state I/O

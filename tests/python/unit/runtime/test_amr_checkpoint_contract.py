@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pops.identity import make_identity
 from pops._generated_release_contract import (
     AMR_CHECKPOINT_PAYLOAD_VERSION,
     UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
@@ -52,8 +53,14 @@ class _Sim:
     def n_levels(self):
         return self.active_levels
 
+    def n_blocks(self):
+        return 2
+
     def configured_n_levels(self):
         return self.configured_levels
+
+    def checkpoint_topology_epoch(self):
+        return 7
 
     def checkpoint_temporal_relations(self):
         return [[0, 1, 2, 1, "integral_only"], [1, 2, 3, 1, "integral_only"]]
@@ -114,6 +121,40 @@ class _Sim:
             ]
         ]
 
+    def program_interface_flux_ledger_manifest(self):
+        return [
+            [
+                "shared.face",
+                "7",
+                "0",
+                "1",
+                "0",
+                "4",
+                "1",
+                "2",
+                "0.4",
+                "program.group.node.42",
+                "0",
+                "4",
+                "0",
+                "1",
+                "0.3",
+                "0",
+                "4",
+                "1",
+                "1",
+                "0.5",
+                "coarse_outward",
+                "0",
+                "1",
+                "1",
+                "2",
+                "0.125",
+                "0.2",
+                "resolved",
+            ]
+        ]
+
     def program_sync_manifest(self):
         return [
             ["0", "1", "0", "reflux", "4", "1", "1"],
@@ -135,11 +176,19 @@ def _payload(sim=None):
 
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
     contract = contract_for(_Sim())
-    assert contract["schema_version"] == 3
+    assert contract["schema_version"] == 4
     assert contract["guarantee"] == "bit_identical_accepted_state"
     assert contract["ledger"]["accepted_entries"] == 1
     assert contract["ledger"]["transaction_depth"] == 0
     assert contract["ledger"]["entries"][0][8:10] == ["1", "2"]
+    assert contract["interface_ledger"]["accepted_entries"] == 1
+    assert contract["interface_ledger"]["transaction_depth"] == 0
+    assert contract["interface_ledger"]["entries"][0][0:4] == [
+        "shared.face",
+        "7",
+        "0",
+        "1",
+    ]
     assert contract["level_relations"] == [
         {
             "parent": 0,
@@ -186,14 +235,21 @@ def test_preflight_refuses_any_static_provenance_mismatch(mutation):
 
 
 @pytest.mark.parametrize(
-    "section", ["history_qualifications", "clocks", "ledger", "synchronization"]
+    "section",
+    [
+        "history_qualifications",
+        "clocks",
+        "ledger",
+        "interface_ledger",
+        "synchronization",
+    ],
 )
 def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section):
     payload = _payload()
     data = json.loads(str(payload["amr_accepted_contract"]))
     if section == "history_qualifications":
         data[section][0][1] = "program.block.1"
-    elif section == "ledger":
+    elif section in {"ledger", "interface_ledger"}:
         data[section]["accepted_entries"] += 1
     else:
         data[section].append(["tampered"])
@@ -201,6 +257,21 @@ def test_dynamic_contract_is_checked_after_the_opaque_state_is_restored(section)
     preflight_contract(_Sim(), payload)
     with pytest.raises(ValueError, match="restored AMR accepted-state image differs"):
         validate_restored_contract(_Sim(), payload)
+
+
+@pytest.mark.parametrize("live_epoch, levels, blocks", [(8, 3, 2), (7, 1, 2), (7, 3, 1)])
+def test_restored_interface_audit_must_match_the_live_hierarchy(live_epoch, levels, blocks):
+    class _ChangedHierarchy(_Sim):
+        active_levels = levels
+
+        def checkpoint_topology_epoch(self):
+            return live_epoch
+
+        def n_blocks(self):
+            return blocks
+
+    with pytest.raises(ValueError, match="interface-flux audit is outside the live hierarchy"):
+        validate_restored_contract(_ChangedHierarchy(), _payload(_ChangedHierarchy()))
 
 
 def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
@@ -231,6 +302,9 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
         def program_flux_ledger_manifest(self):
             return []
 
+        def program_interface_flux_ledger_manifest(self):
+            return []
+
         def program_sync_manifest(self):
             return []
 
@@ -239,8 +313,10 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
     payload["t"] = np.array(0.4)
     payload["macro_step"] = np.array(4)
     after = restart_topology_image(sim)
+    recorded_contract = json.loads(str(payload["amr_accepted_contract"]))
+    transformed_contract = contract_for(sim)
     receipt = {
-        "schema_version": 1,
+        "schema_version": 2,
         "policy_identity": "pops.restart-hierarchy.v1:sha256:" + "0" * 64,
         # The policy executed and advanced its audit counters, but the structural hierarchy
         # identity did not change.
@@ -249,11 +325,45 @@ def test_regridded_contract_authenticates_transformed_topology_and_level_axes():
         "accepted_macro_step": 4,
         "before": {**after, "topology_epoch": 7, "regrid_count": 4},
         "after": after,
+        "accepted_contract_identity_before": make_identity(
+            "restart-accepted-contract", recorded_contract
+        ).token,
+        "accepted_contract_identity_after": make_identity(
+            "restart-accepted-contract", transformed_contract
+        ).token,
+        # Distinct phase-local witnesses are valid: interpolation onto a changed hierarchy is not
+        # required to preserve the dense buffer bit for bit.
+        "history_consensus_identity_before": make_identity(
+            "restart-history-image", {"phase": "before"}
+        ).token,
+        "history_consensus_identity_after": make_identity(
+            "restart-history-image", {"phase": "after"}
+        ).token,
         "composite_integrals_before": [],
         "composite_integrals_after": [],
     }
 
+    assert (
+        receipt["history_consensus_identity_before"]
+        != receipt["history_consensus_identity_after"]
+    )
+    # Phase-local all-rank consensus is the contract: interpolation may legitimately change the
+    # dense history image while conserved solution components are checked independently.
     assert validate_regridded_contract(sim, payload, receipt) is None
+    receipt["accepted_contract_identity_after"] = receipt["accepted_contract_identity_before"]
+    with pytest.raises(ValueError, match="accepted-contract audit identity"):
+        validate_regridded_contract(sim, payload, receipt)
+    receipt["accepted_contract_identity_after"] = make_identity(
+        "restart-accepted-contract", transformed_contract
+    ).token
+    receipt["history_consensus_identity_after"] = make_identity(
+        "restart-history-image", {"phase": "after"}, schema_version=2
+    ).token
+    with pytest.raises(ValueError, match="wrong domain or schema version"):
+        validate_regridded_contract(sim, payload, receipt)
+    receipt["history_consensus_identity_after"] = make_identity(
+        "restart-history-image", {"phase": "after"}
+    ).token
     receipt["after"] = {**after, "topology_epoch": 9}
     with pytest.raises(ValueError, match="receipt differs"):
         validate_regridded_contract(sim, payload, receipt)

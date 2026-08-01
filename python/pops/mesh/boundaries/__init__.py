@@ -21,7 +21,8 @@ from .ghost_plan_types import (
     BoundaryLinearizationContribution, BoundaryResidualContribution, CornerCondition,
     CornerConstraint, CornerMode, CornerPolicy, GhostCoverageManifest, GhostDepthCapability,
     GhostDepthRequirement, GhostRegion, GhostStencilManifest, InterfaceAffineMapping,
-    InterfacePermutation, InterfaceSide, MultiBlockInterface, TangentialOrientation)
+    InterfacePermutation, InterfaceSide, InterfaceTraceOperation, MultiBlockInterface,
+    TangentialOrientation)
 from .component_binding import BoundaryComponentBinding
 from .interface_authoring import BlockInterfaceSide, ConservativeInterface
 from .ports import (
@@ -131,6 +132,7 @@ __all__ = [
     "CornerPolicy", "GhostCoverageManifest", "GhostDepthCapability", "GhostDepthRequirement",
     "GhostProducer", "GhostProducerPlan", "GhostProducerRegistry", "GhostProduction",
     "GhostRegion", "GhostStencilManifest", "InterfaceAffineMapping", "InterfaceGhost",
-    "InterfacePermutation", "InterfaceSide", "MultiBlockInterface", "NumericalClosure",
+    "InterfacePermutation", "InterfaceSide", "InterfaceTraceOperation", "MultiBlockInterface",
+    "NumericalClosure",
     "PeriodicGhost", "PhysicalGhost", "SameLevelHaloMPI", "TangentialOrientation",
 ]

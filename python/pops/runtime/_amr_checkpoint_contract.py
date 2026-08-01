@@ -8,13 +8,14 @@ import json
 from pops.identity import make_identity
 
 
-_SCHEMA = 3
+_SCHEMA = 4
 _GUARANTEE = "bit_identical_accepted_state"
 _CONTRACT_KEYS = {
     "schema_version",
     "guarantee",
     "program_state",
     "ledger",
+    "interface_ledger",
     "clocks",
     "synchronization",
     "history_qualifications",
@@ -77,6 +78,7 @@ def contract_for(sim):
             }
         )
     flux_ledger = _rows(sim.program_flux_ledger_manifest())
+    interface_flux_ledger = _rows(sim.program_interface_flux_ledger_manifest())
     return {
         "schema_version": _SCHEMA,
         "guarantee": _GUARANTEE,
@@ -85,6 +87,11 @@ def contract_for(sim):
             "accepted_entries": len(flux_ledger),
             "transaction_depth": 0,
             "entries": flux_ledger,
+        },
+        "interface_ledger": {
+            "accepted_entries": len(interface_flux_ledger),
+            "transaction_depth": 0,
+            "entries": interface_flux_ledger,
         },
         "clocks": _rows(sim.program_clock_manifest()),
         "synchronization": _rows(sim.program_sync_manifest()),
@@ -146,6 +153,33 @@ def preflight_contract(sim, payload):
     return state.tobytes(), regrid_count, topology_epoch
 
 
+def _validate_interface_ledger_against_live_hierarchy(sim, contract):
+    epoch = int(sim.checkpoint_topology_epoch())
+    levels = int(sim.n_levels())
+    blocks = int(sim.n_blocks())
+    for row in contract["interface_ledger"]["entries"]:
+        if len(row) != 28:
+            raise ValueError(
+                "restart: restored AMR interface-flux audit has an invalid native row"
+            )
+        coarse_level, fine_level = int(row[2]), int(row[3])
+        left_block, right_block = int(row[21]), int(row[22])
+        if (
+            int(row[1]) != epoch
+            or coarse_level < 0
+            or fine_level != coarse_level + 1
+            or fine_level >= levels
+            or left_block < 0
+            or right_block < 0
+            or left_block >= blocks
+            or right_block >= blocks
+            or row[27] != "resolved"
+        ):
+            raise ValueError(
+                "restart: restored AMR interface-flux audit is outside the live hierarchy"
+            )
+
+
 def validate_restored_contract(sim, payload):
     """Validate the dynamic contract after the opaque Program image is installed transactionally."""
     contract = _decode_contract(payload)
@@ -156,6 +190,7 @@ def validate_restored_contract(sim, payload):
             "restart: restored AMR accepted-state image differs from its authenticated contract "
             "(mismatched sections: %r)" % mismatched
         )
+    _validate_interface_ledger_against_live_hierarchy(sim, current)
 
 
 def validate_regridded_contract(sim, payload, receipt):
@@ -168,12 +203,16 @@ def validate_regridded_contract(sim, payload, receipt):
         "accepted_macro_step",
         "before",
         "after",
+        "accepted_contract_identity_before",
+        "accepted_contract_identity_after",
+        "history_consensus_identity_before",
+        "history_consensus_identity_after",
         "composite_integrals_before",
         "composite_integrals_after",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         raise TypeError("restart: RegridOnRestart receipt has an invalid exact schema")
-    if receipt["schema_version"] != 1 or type(receipt["changed"]) is not bool:
+    if receipt["schema_version"] != 2 or type(receipt["changed"]) is not bool:
         raise ValueError("restart: RegridOnRestart receipt version or changed flag is invalid")
     accepted_time = float(payload["t"])
     accepted_step = int(payload["macro_step"])
@@ -206,12 +245,44 @@ def validate_regridded_contract(sim, payload, receipt):
     if receipt["changed"] is not changed:
         raise ValueError("restart: RegridOnRestart receipt has an inconsistent changed flag")
 
+    from pops.identity import Identity, make_identity
+
+    recorded = _decode_contract(payload)
     transformed = contract_for(sim)
-    expected_program_state = _decode_contract(payload)["program_state"]
+    expected_before_identity = make_identity("restart-accepted-contract", recorded).token
+    expected_after_identity = make_identity("restart-accepted-contract", transformed).token
+    if (
+        receipt["accepted_contract_identity_before"] != expected_before_identity
+        or receipt["accepted_contract_identity_after"] != expected_after_identity
+    ):
+        raise ValueError(
+            "restart: RegridOnRestart accepted-contract audit identity differs from "
+            "the recorded or transformed Program image"
+        )
+    # These are phase-local all-rank witnesses, not a bitwise-continuity assertion across a
+    # topology change.  A scientific regrid changes the dense level-domain encoding and
+    # interpolates newly refined cells, so equality before/after would be the wrong invariant.
+    # Conservation of the accepted solution is checked independently below from the composite
+    # per-block component integrals.
+    for key in (
+        "history_consensus_identity_before",
+        "history_consensus_identity_after",
+    ):
+        identity = Identity.from_token(receipt[key])
+        if identity.domain != "restart-history-image" or identity.schema_version != 1:
+            raise ValueError(
+                "restart: RegridOnRestart phase-local history consensus identity has the "
+                "wrong domain or schema version"
+            )
+    expected_program_state = recorded["program_state"]
     if transformed["program_state"] != expected_program_state:
         raise ValueError("restart: RegridOnRestart changed the installed Program authority")
     if transformed["ledger"]["transaction_depth"] != 0:
         raise ValueError("restart: RegridOnRestart left a conservative ledger transaction active")
+    if transformed["interface_ledger"]["transaction_depth"] != 0:
+        raise ValueError(
+            "restart: RegridOnRestart left an interface-flux ledger transaction active"
+        )
 
     level_clocks = [row for row in transformed["clocks"] if row and row[0] == "level"]
     if len(level_clocks) != levels:
@@ -232,9 +303,14 @@ def validate_regridded_contract(sim, payload, receipt):
             raise ValueError(
                 "restart: RegridOnRestart did not requalify a history over all active levels"
             )
-    if transformed["ledger"]["accepted_entries"] or transformed["synchronization"]:
+    if (
+        transformed["ledger"]["accepted_entries"]
+        or transformed["interface_ledger"]["accepted_entries"]
+        or transformed["synchronization"]
+    ):
         raise ValueError(
-            "restart: RegridOnRestart exposed pre-transform flux or synchronization reports"
+            "restart: RegridOnRestart exposed pre-transform flux/interface or "
+            "synchronization reports"
         )
 
 

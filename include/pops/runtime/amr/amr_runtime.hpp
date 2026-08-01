@@ -124,8 +124,6 @@ struct AmrFieldSolveConfig {
   std::shared_ptr<std::vector<Real>> boundary_parameters = std::make_shared<std::vector<Real>>();
   std::vector<std::string> boundary_state_blocks;
   std::vector<int> boundary_state_components;
-  std::vector<const MultiFab*> boundary_state_buffers;
-  std::vector<FieldDistribution> boundary_state_distributions;
   FieldBoundaryExecutionContext boundary_context{};
   bool has_reaction = false;
   Real reaction = Real(0);
@@ -235,6 +233,17 @@ class AmrPreparedFieldSolver {
   virtual MultiFab& rhs_level(int level) = 0;
   virtual MultiFab& phi_level(int level) = 0;
   virtual void set_boundary_context(const FieldBoundaryExecutionContext& context) = 0;
+  /// Install one context whose dependency buffers and logical point belong to exactly @p level.
+  /// Existing one-level providers retain their source contract through set_boundary_context().
+  /// A multilevel provider must opt in explicitly; the core never reuses a coarse dependency on a
+  /// fine solve.
+  virtual void set_boundary_context_for_level(int level,
+                                              const FieldBoundaryExecutionContext& context) {
+    if (level != 0 || level_count() != 1)
+      throw std::invalid_argument(
+          "AMR field provider has no level-qualified boundary-context route");
+    set_boundary_context(context);
+  }
   [[nodiscard]] virtual const SolveReport& last_solve_report() const noexcept = 0;
 
  protected:
@@ -2733,7 +2742,8 @@ class AmrRuntime {
 
   /// Install one prepared interface route on an AMR level.  The current AMR engine owns one shared
   /// layout per level, but the same scheduler contract used by Uniform still proves orientation,
-  /// permutation and equal face discretisation before the route becomes executable.
+  /// permutation and equal face discretisation before the route becomes executable. A later
+  /// topology replacement rematerializes the route from this authenticated declaration.
   void install_level_interface_flux(
       int k, runtime::multiblock::AxisAlignedInterface route,
       const PopsExecutionContextV1& execution,
@@ -2741,9 +2751,6 @@ class AmrRuntime {
     if (k < 0 || k >= nlev_ || route.level != k || route.left_block >= blocks_.size() ||
         route.right_block >= blocks_.size())
       throw std::out_of_range("AmrRuntime interface level/block index is out of range");
-    if (regrid_every_ != 0)
-      throw std::invalid_argument(
-          "AmrRuntime interface v1 requires a frozen hierarchy (regrid_every=0)");
     const std::size_t left = route.left_block;
     const std::size_t right = route.right_block;
     if (!blocks_[left].level_rhs_without_prepared_interfaces ||
@@ -2761,6 +2768,12 @@ class AmrRuntime {
 
   /// Discard every shared-interface route after a failed pre-bind transaction.
   void discard_interface_fluxes() { interface_scheduler_.clear(); }
+
+  std::size_t interface_flux_installation_checkpoint() const { return interface_scheduler_.size(); }
+
+  void rollback_interface_flux_installations(std::size_t accepted_size) {
+    interface_scheduler_.rollback_installations(accepted_size);
+  }
 
   /// Bind the detached qualified Handle routes to the exact per-level native storages.  The tables
   /// are authenticated by Python before hierarchy construction; no block/field name is parsed here.
@@ -3088,21 +3101,20 @@ class AmrRuntime {
   /// transaction. The scheduler still applies the one shared flux to both blocks with opposite
   /// signs. Local flux-materialising residuals must already have omitted the prepared face. The
   /// Program resolves each current fragment's exact contribution weight from both consumer states
-  /// before the outer transaction may commit. This route remains restricted to a frozen two-level
-  /// serial hierarchy.
+  /// before the outer transaction may commit. Every materialized level must have its own
+  /// authenticated prepared route; distributed publication uses the scheduler's exact
+  /// MPI_COMM_WORLD collective plan and fragment identity.
   void publish_level_interface_flux_fragments(
       int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
       const std::vector<int>& requested_blocks, const std::vector<MultiFab*>& requested_states,
       const std::vector<MultiFab*>& requested_rhs,
       runtime::multiblock::InterfaceFluxFragmentPublication& publication) {
-    if (n_ranks() != 1)
-      throw std::runtime_error(
-          "AMR interface-flux fragment publication is not yet available on multiple MPI ranks");
-    if (nlev_ != 2 || k < 0 || k >= nlev_ || point.level != k || requested_blocks.empty() ||
+    if (nlev_ < 2 || publication.active_level_count != nlev_ || k < 0 || k >= nlev_ ||
+        point.level != k || requested_blocks.empty() ||
         requested_blocks.size() != requested_states.size() ||
         requested_blocks.size() != requested_rhs.size())
       throw std::invalid_argument(
-          "AMR interface-flux fragment publication requires one valid fixed two-level group");
+          "AMR interface-flux fragment publication requires one valid refined active-level group");
     std::vector<MultiFab*> states(blocks_.size(), nullptr);
     std::vector<MultiFab*> rhs(blocks_.size(), nullptr);
     for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
@@ -3122,11 +3134,11 @@ class AmrRuntime {
   std::size_t interface_evaluation_count(const std::string& identity, int level) const {
     return interface_scheduler_.evaluation_count(identity, level);
   }
-  void require_complete_fixed_two_level_interfaces() const {
-    if (nlev_ != 2)
+  void require_complete_active_level_interfaces() const {
+    if (nlev_ < 1)
       throw std::logic_error(
-          "fixed two-level interface registry validation requires exactly two levels");
-    interface_scheduler_.require_complete_fixed_two_level_registry();
+          "active interface registry validation requires a materialized hierarchy");
+    interface_scheduler_.require_complete_active_level_registry(nlev_);
   }
   bool has_level_interfaces(int level) const { return interface_scheduler_.has_interfaces(level); }
   /// R <- -div F(U) only (NO default source) for block @p b on level @p k (SourceFreeModel path). Same
@@ -3256,9 +3268,21 @@ class AmrRuntime {
   /// Fail before a restart-triggered topology mutation when accepted state contains bootstrap-only
   /// staggered carriers or transfer caches whose topology-change semantics are not yet sealed.
   void require_restart_regrid_supported() const {
-    if (!bootstrap_staggered_fields_.empty() || !bootstrap_caches_.empty())
-      throw std::runtime_error(
-          "AMR RegridOnRestart does not yet support bootstrap staggered fields or caches");
+    // This is the only nested native collective in the restart preflight. Enter it before any
+    // rank-local refusal so the outer Python checkpoint consensus can close every later failure
+    // without leaving a peer inside MPI.
+    interface_scheduler_.require_runtime_rematerialization_ready(nlev_);
+    std::exception_ptr local_failure;
+    try {
+      if (!bootstrap_staggered_fields_.empty() || !bootstrap_caches_.empty())
+        throw std::runtime_error(
+            "AMR RegridOnRestart does not yet support bootstrap staggered fields or caches");
+      require_complete_history_materialization_("AmrRuntime::require_restart_regrid_supported");
+    } catch (...) {
+      local_failure = std::current_exception();
+    }
+    finish_collective_materialization_validation_(local_failure,
+                                                  "AmrRuntime::require_restart_regrid_supported");
   }
 
   /// ADC-616: Berger-Rigoutsos clustering params (min_efficiency in (0,1], sizes > 0, min <= max).
@@ -3344,7 +3368,8 @@ class AmrRuntime {
     if (provider_slot.empty() || plan.plan_identity.empty() || plan.provider_identity.empty() ||
         plan.output_owner_identity.empty() || plan.output_block.empty() ||
         plan.output_key.empty() || plan.providers.empty() || plan.topology_provider_kind.empty() ||
-        plan.topology_provenance.empty() || plan.topology_digest.empty())
+        plan.topology_provenance.empty() || plan.topology_digest.empty() ||
+        plan.boundary_state_blocks.size() != plan.boundary_state_components.size())
       throw std::runtime_error("AmrRuntime: incomplete qualified field provider plan");
     for (const auto& provider : plan.providers)
       if (provider.identity.empty() || provider.owner_block.empty() ||
@@ -3395,10 +3420,10 @@ class AmrRuntime {
     field.plan.boundary_context.point = point;
     if (!field.plan.has_boundary_kernel || !field.plan.boundary_kernel.observes_iteration)
       field.plan.boundary_context.point.iteration = 0;
-    if (field.plan.has_boundary_kernel) {
-      if (field.solver)
-        field.solver->set_boundary_context(field.plan.boundary_context);
-    }
+    // A multilevel context is materialized immediately before solve, when every level's dependency
+    // storage is known. Do not replace it here with the unqualified authoring baseline.
+    if (field.plan.has_boundary_kernel && field.solver && field.solver->level_count() == 1)
+      field.solver->set_boundary_context(field.plan.boundary_context);
   }
 
   void set_field_boundary_parameters(const std::string& provider_slot,
@@ -3412,10 +3437,9 @@ class AmrRuntime {
     *plan.boundary_parameters = parameters;
     plan.boundary_context.parameters = plan.boundary_parameters.get();
     plan.boundary_context.parameter_count = static_cast<int>(parameters.size());
-    if (plan.has_boundary_kernel) {
-      if (found->second.solver)
-        found->second.solver->set_boundary_context(plan.boundary_context);
-    }
+    if (plan.has_boundary_kernel && found->second.solver &&
+        found->second.solver->level_count() == 1)
+      found->second.solver->set_boundary_context(plan.boundary_context);
   }
 
   void set_field_boundary_dependencies(const std::string& provider_slot,
@@ -3424,6 +3448,9 @@ class AmrRuntime {
     auto found = named_fields_.find(provider_slot);
     if (found == named_fields_.end())
       throw std::runtime_error("AmrRuntime: unknown field boundary-dependency slot");
+    if (state_blocks.size() != state_components.size())
+      throw std::invalid_argument(
+          "AmrRuntime: field boundary dependencies require one component per state block");
     found->second.plan.boundary_state_blocks = state_blocks;
     found->second.plan.boundary_state_components = state_components;
     invalidate_named_field_solver(found->second);
@@ -3831,31 +3858,55 @@ class AmrRuntime {
           (has_gradient && (nf.gx_comp >= aux_ncomp_ || nf.gy_comp >= aux_ncomp_)))
         throw std::runtime_error(
             "AmrRuntime: named elliptic field output components exceed the aux channel width");
-      nf.plan.boundary_state_buffers.clear();
-      nf.plan.boundary_state_distributions.clear();
-      for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
-        const int block = block_index(nf.plan.boundary_state_blocks[index]);
-        if (block < 0)
-          throw std::runtime_error("AmrRuntime: boundary state dependency names unknown block");
-        const MultiFab& state = (*blocks_[static_cast<std::size_t>(block)].levels)[0].U;
-        if (nf.plan.boundary_state_components[index] < 0 ||
-            nf.plan.boundary_state_components[index] >= state.ncomp())
-          throw std::runtime_error("AmrRuntime: boundary state component is out of range");
-        nf.plan.boundary_state_buffers.push_back(&state);
-        nf.plan.boundary_state_distributions.push_back(
-            replicated_coarse_ ? FieldDistribution::Replicated : FieldDistribution::Distributed);
-      }
-      nf.plan.boundary_context.states =
-          nf.plan.boundary_state_buffers.empty() ? nullptr : nf.plan.boundary_state_buffers.data();
-      nf.plan.boundary_context.state_distributions =
-          nf.plan.boundary_state_distributions.empty()
-              ? nullptr
-              : nf.plan.boundary_state_distributions.data();
-      nf.plan.boundary_context.state_count =
-          static_cast<int>(nf.plan.boundary_state_buffers.size());
       ensure_named_elliptic(nf);
-      if (nf.plan.has_boundary_kernel)
-        nf.solver->set_boundary_context(nf.plan.boundary_context);
+      if (nf.plan.boundary_state_blocks.size() != nf.plan.boundary_state_components.size())
+        throw std::runtime_error(
+            "AmrRuntime: field boundary dependency blocks and components differ in size");
+      // These carriers outlive the provider solve below. Every hierarchy provider receives only the
+      // state buffers and distribution belonging to its exact AMR level; a composite provider owns
+      // one context per level instead of retaining a coarse pointer and reusing it on refined work.
+      const int boundary_levels = nf.solver->level_count();
+      if (boundary_levels < 1)
+        throw std::runtime_error(
+            "AmrRuntime: field boundary provider has no materialized hierarchy level");
+      std::vector<std::vector<const MultiFab*>> boundary_state_buffers(
+          static_cast<std::size_t>(boundary_levels));
+      std::vector<std::vector<FieldDistribution>> boundary_state_distributions(
+          static_cast<std::size_t>(boundary_levels));
+      if (nf.plan.has_boundary_kernel) {
+        for (int level = 0; level < boundary_levels; ++level) {
+          if (level < 0 || level >= nlev_)
+            throw std::runtime_error(
+                "AmrRuntime: field boundary context level is outside the active hierarchy");
+          auto& buffers = boundary_state_buffers[static_cast<std::size_t>(level)];
+          auto& distributions = boundary_state_distributions[static_cast<std::size_t>(level)];
+          buffers.reserve(nf.plan.boundary_state_blocks.size());
+          distributions.reserve(nf.plan.boundary_state_blocks.size());
+          for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
+            const int block = block_index(nf.plan.boundary_state_blocks[index]);
+            if (block < 0)
+              throw std::runtime_error("AmrRuntime: boundary state dependency names unknown block");
+            const auto& levels = *blocks_[static_cast<std::size_t>(block)].levels;
+            if (static_cast<std::size_t>(level) >= levels.size())
+              throw std::runtime_error(
+                  "AmrRuntime: boundary state dependency has no requested AMR level");
+            const MultiFab& state = levels[static_cast<std::size_t>(level)].U;
+            if (nf.plan.boundary_state_components[index] < 0 ||
+                nf.plan.boundary_state_components[index] >= state.ncomp())
+              throw std::runtime_error("AmrRuntime: boundary state component is out of range");
+            buffers.push_back(&state);
+            distributions.push_back(level == 0 && replicated_coarse_
+                                        ? FieldDistribution::Replicated
+                                        : FieldDistribution::Distributed);
+          }
+          FieldBoundaryExecutionContext context = nf.plan.boundary_context;
+          context.point.level = level;
+          context.states = buffers.empty() ? nullptr : buffers.data();
+          context.state_distributions = distributions.empty() ? nullptr : distributions.data();
+          context.state_count = static_cast<int>(buffers.size());
+          nf.solver->set_boundary_context_for_level(level, context);
+        }
+      }
       prepare_named_field_providers(nf);
       prepare_named_rhs_scratch_(nf);
       // The provider registry has already resolved the complete block-qualified route.  Assembly
@@ -4184,6 +4235,7 @@ class AmrRuntime {
     if (bootstrap_pending_)
       throw std::runtime_error("AmrRuntime::begin_bootstrap_plan already has a transaction");
     capture_step_snapshot(bootstrap_snapshot_);
+    bootstrap_interface_registry_size_ = interface_scheduler_.size();
     bootstrap_pending_ = true;
   }
 
@@ -4216,7 +4268,7 @@ class AmrRuntime {
     TagBox grown = grow_regrid_tags(tag_union(parts), regrid_grow_, pdom,
                                     RegridPeriodicity{base_per_.x, base_per_.y});
     const BoxArray* parents = pk > 0 ? &hierarchy_.ba[pk] : nullptr;
-    const auto physical_support = regrid_physical_ghost_support_();
+    const auto physical_support = regrid_physical_ghost_support_(pk);
     auto [fb, dmap] = regrid_compute_fine_layout_with_provider(
         std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, *clustering_provider_,
         *hierarchy_.load_balance, world_communicator_view(), refinement_ratio, parents,
@@ -4252,7 +4304,8 @@ class AmrRuntime {
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[level].aux = &aux_[level];
     invalidate_named_field_topology();
-    record_topology_replacement_();
+    record_topology_replacement_(
+        runtime::multiblock::InterfaceRematerializationAuthority::BindBootstrap);
     if (!static_aux_.empty()) {
       // The hierarchy may grow after bind-time aux publication.  A newly bootstrapped level must
       // therefore receive every static named aux before any following bootstrap materializer or
@@ -4285,72 +4338,22 @@ class AmrRuntime {
       if (!cache.valid || cache.materialized_level != nlev_ - 1)
         throw std::runtime_error("AmrRuntime::commit_bootstrap_level has a stale cache '" +
                                  subject + "'");
-    for (const auto& [name, ring] : hist_rings_) {
-      const auto owner = hist_block_owner_.find(name);
-      const auto depth = hist_depth_.find(name);
-      const auto initialized = hist_init_.find(name);
-      const auto fill_counts = hist_fill_count_.find(name);
-      const auto pending = hist_store_pending_.find(name);
-      const auto slot_dt = hist_slot_dt_.find(name);
-      bool invalid_layout =
-          owner == hist_block_owner_.end() || owner->second >= blocks_.size() ||
-          depth == hist_depth_.end() || depth->second < 2 ||
-          ring.size() != static_cast<std::size_t>(depth->second) ||
-          initialized == hist_init_.end() || fill_counts == hist_fill_count_.end() ||
-          pending == hist_store_pending_.end() || slot_dt == hist_slot_dt_.end() ||
-          initialized->second.size() != static_cast<std::size_t>(nlev_) ||
-          fill_counts->second.size() != static_cast<std::size_t>(nlev_) ||
-          pending->second.size() != static_cast<std::size_t>(nlev_) ||
-          slot_dt->second.size() != ring.size();
-      if (!invalid_layout) {
-        int ncomp = -1;
-        for (const auto& slot : ring) {
-          if (slot.size() != static_cast<std::size_t>(nlev_)) {
-            invalid_layout = true;
-            continue;
-          }
-          if (ncomp < 0)
-            ncomp = slot.front().ncomp();
-          invalid_layout = invalid_layout || ncomp < 1;
-          for (int level = 0; level < nlev_; ++level) {
-            const MultiFab& value = slot[static_cast<std::size_t>(level)];
-            invalid_layout =
-                invalid_layout || value.ncomp() != ncomp || value.n_grow() != 1 ||
-                value.box_array().boxes() !=
-                    hierarchy_.ba[static_cast<std::size_t>(level)].boxes() ||
-                value.dmap().ranks() != hierarchy_.dm[static_cast<std::size_t>(level)].ranks();
-          }
-        }
-        invalid_layout =
-            invalid_layout ||
-            std::any_of(slot_dt->second.begin(), slot_dt->second.end(),
-                        [](Real value) { return !std::isfinite(value) || value < Real(0); });
-      }
-      if (invalid_layout)
-        throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +
-                                 "' has incomplete level materialization");
-      bool invalid_fill = false;
-      for (int level = 0; level < nlev_; ++level) {
-        const auto index = static_cast<std::size_t>(level);
-        const int fill = fill_counts->second[index];
-        // A history declared by the installed Program is legitimately cold at t=0. Accept exactly
-        // the coherent (initialized=false, fill=0, pending=false) image; any warm level must carry a
-        // positive bounded fill count. The first Program store performs the normal cold broadcast.
-        invalid_fill = invalid_fill || fill < 0 || fill > static_cast<int>(ring.size()) ||
-                       pending->second[index] != 0 ||
-                       (initialized->second[index] != 0) != (fill > 0);
-      }
-      if (invalid_fill)
-        throw std::runtime_error("AmrRuntime::commit_bootstrap_level history '" + name +
-                                 "' contains inconsistent initialization/fill metadata");
-    }
+    // Bootstrap already owns a rank-coherent outer transaction; keep this final check local because
+    // the preceding pending/cache refusals are local as well. Introducing a collective only here
+    // would strand peers when one of those earlier conditions differs.
+    require_complete_history_materialization_("AmrRuntime::commit_bootstrap_level");
+    bootstrap_interface_registry_size_ = 0;
     bootstrap_pending_ = false;
   }
 
   void rollback_bootstrap_level() {
     if (!bootstrap_pending_)
       throw std::runtime_error("AmrRuntime::rollback_bootstrap_level : no pending transaction");
+    // Fine routes are installed incrementally so the next bootstrap transition can authenticate
+    // proper nesting on its parent. They remain provisional until the whole bootstrap commits.
+    interface_scheduler_.rollback_installations(bootstrap_interface_registry_size_);
     restore_step_snapshot(bootstrap_snapshot_);
+    bootstrap_interface_registry_size_ = 0;
     bootstrap_pending_ = false;
   }
 
@@ -4392,21 +4395,37 @@ class AmrRuntime {
     return parts;
   }
 
-  std::optional<RegridPhysicalGhostSupport> regrid_physical_ghost_support_() const {
+  std::optional<RegridPhysicalGhostSupport> regrid_physical_ghost_support_(int level) const {
     if (base_per_.x && base_per_.y)
       return std::nullopt;
+    if (level < 0 || level >= max_levels())
+      throw std::out_of_range(
+          "AMR regrid physical ghost support exceeds the resolved hierarchy capacity");
     int shared_depth = std::numeric_limits<int>::max();
     bool all_depths_supported = true;
-    for (const AmrRuntimeBlock& block : blocks_) {
+    for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
+      const AmrRuntimeBlock& block = blocks_[block_index];
       if (block.boundary_plan) {
         if (!same_periodicity(block.boundary_plan->periodicity(), base_per_))
           throw std::runtime_error(
               "AMR regrid prepared boundary topology disagrees with the hierarchy");
-        if ((!base_per_.x &&
-             (block.boundary_plan->omits_face(0, -1) || block.boundary_plan->omits_face(0, 1))) ||
-            (!base_per_.y &&
-             (block.boundary_plan->omits_face(1, -1) || block.boundary_plan->omits_face(1, 1))))
-          throw std::runtime_error("AMR regrid boundary authority omits a physical domain face");
+        const auto interface_owns = [&](int axis, int side) {
+          using runtime::multiblock::InterfaceAxis;
+          using runtime::multiblock::InterfaceSide;
+          return interface_scheduler_.owns_face(
+              block_index, level, axis == 0 ? InterfaceAxis::X : InterfaceAxis::Y,
+              side < 0 ? InterfaceSide::Low : InterfaceSide::High);
+        };
+        for (int axis = 0; axis < 2; ++axis) {
+          if ((axis == 0 ? base_per_.x : base_per_.y))
+            continue;
+          for (const int side : {-1, 1})
+            if (block.boundary_plan->omits_face(axis, side)) {
+              if (!interface_owns(axis, side))
+                throw std::runtime_error(
+                    "AMR regrid boundary omission has no authenticated shared-interface owner");
+            }
+        }
         if (!block.boundary_plan->fills_all_allocated_physical_ghosts()) {
           all_depths_supported = false;
           shared_depth = std::min(shared_depth, block.boundary_plan->required_depth());
@@ -4602,7 +4621,7 @@ class AmrRuntime {
 
         const BoxArray* parents =
             parent_level > 0 ? &hierarchy_.ba[static_cast<std::size_t>(parent_level)] : nullptr;
-        const auto physical_support = regrid_physical_ghost_support_();
+        const auto physical_support = regrid_physical_ghost_support_(parent_level);
         auto [boxes, distribution] = regrid_compute_fine_layout_with_provider(
             std::move(grown), parent_domain, parent_level, regrid_margin_, replicated_coarse_,
             *clustering_provider_, *hierarchy_.load_balance, world_communicator_view(),
@@ -4670,6 +4689,7 @@ class AmrRuntime {
             throw std::runtime_error("AmrRuntime::regrid produced non-shared block layouts");
       }
 
+      require_complete_history_materialization_collective_("AmrRuntime::regrid");
       ++regrid_count_;
       if (profiler_ != nullptr) {
         profiler_->count("regrid");
@@ -5177,6 +5197,110 @@ class AmrRuntime {
   // ADC-631 multistep history rings: each owner-qualified name authenticates its block carrier,
   // [slot][level] values, depth, per-level stored-once flag and per-slot dt. Data-only (MockImpl-
   // safe); all logic in detail::AmrHistoryOps (amr_history.hpp), a friend taking the engine by ref.
+  static void finish_collective_materialization_validation_(const std::exception_ptr& local_failure,
+                                                            const char* where) {
+    const bool collective_world = comm_active() && n_ranks() > 1;
+    const long failure_count =
+        collective_world ? all_reduce_sum(local_failure ? 1L : 0L) : (local_failure ? 1L : 0L);
+    if (failure_count == 0)
+      return;
+    if (local_failure)
+      std::rethrow_exception(local_failure);
+    throw std::runtime_error(std::string(where) + " failed on another MPI rank");
+  }
+
+  void require_complete_history_materialization_collective_(const char* where) const {
+    std::exception_ptr local_failure;
+    try {
+      require_complete_history_materialization_(where);
+    } catch (...) {
+      local_failure = std::current_exception();
+    }
+    finish_collective_materialization_validation_(local_failure, where);
+  }
+
+  // Validate only the owner-qualified ring/storage shape. This deliberately accepts the
+  // in-step image produced by store_history(), where initialized=true, fill=0 and pending=true
+  // until rotate_histories() publishes the logical sample. Read-only diagnostics such as
+  // history_global() need this structural contract, not an accepted-state quiescence gate.
+  void require_complete_history_structure_(const char* where) const {
+    const std::size_t registry_size = hist_rings_.size();
+    if (hist_depth_.size() != registry_size || hist_block_owner_.size() != registry_size ||
+        hist_init_.size() != registry_size || hist_fill_count_.size() != registry_size ||
+        hist_store_pending_.size() != registry_size || hist_slot_dt_.size() != registry_size)
+      throw std::runtime_error(std::string(where) +
+                               " has an incomplete owner-qualified history registry");
+    for (const auto& [name, ring] : hist_rings_) {
+      const auto owner = hist_block_owner_.find(name);
+      const auto depth = hist_depth_.find(name);
+      const auto initialized = hist_init_.find(name);
+      const auto fill_counts = hist_fill_count_.find(name);
+      const auto pending = hist_store_pending_.find(name);
+      const auto slot_dt = hist_slot_dt_.find(name);
+      bool invalid_layout =
+          owner == hist_block_owner_.end() || owner->second >= blocks_.size() ||
+          depth == hist_depth_.end() || depth->second < 2 ||
+          ring.size() != static_cast<std::size_t>(depth->second) ||
+          initialized == hist_init_.end() || fill_counts == hist_fill_count_.end() ||
+          pending == hist_store_pending_.end() || slot_dt == hist_slot_dt_.end() ||
+          initialized->second.size() != static_cast<std::size_t>(nlev_) ||
+          fill_counts->second.size() != static_cast<std::size_t>(nlev_) ||
+          pending->second.size() != static_cast<std::size_t>(nlev_) ||
+          slot_dt->second.size() != ring.size();
+      if (!invalid_layout) {
+        int ncomp = -1;
+        for (const auto& slot : ring) {
+          if (slot.size() != static_cast<std::size_t>(nlev_)) {
+            invalid_layout = true;
+            continue;
+          }
+          if (ncomp < 0)
+            ncomp = slot.front().ncomp();
+          invalid_layout = invalid_layout || ncomp < 1;
+          for (int level = 0; level < nlev_; ++level) {
+            const MultiFab& value = slot[static_cast<std::size_t>(level)];
+            invalid_layout =
+                invalid_layout || value.ncomp() != ncomp || value.n_grow() != 1 ||
+                value.box_array().boxes() !=
+                    hierarchy_.ba[static_cast<std::size_t>(level)].boxes() ||
+                value.dmap().ranks() != hierarchy_.dm[static_cast<std::size_t>(level)].ranks();
+          }
+        }
+        invalid_layout =
+            invalid_layout ||
+            std::any_of(slot_dt->second.begin(), slot_dt->second.end(),
+                        [](Real value) { return !std::isfinite(value) || value < Real(0); });
+      }
+      if (invalid_layout)
+        throw std::runtime_error(std::string(where) + " history '" + name +
+                                 "' has incomplete level materialization");
+    }
+  }
+
+  // Accepted restart/regrid/bootstrap boundaries additionally require a quiescent logical image:
+  // no level may retain a pending store, and initialization must agree with the accepted fill
+  // count. Keep this stricter than the structural read contract above.
+  void require_complete_history_materialization_(const char* where) const {
+    require_complete_history_structure_(where);
+    for (const auto& [name, ring] : hist_rings_) {
+      const auto& initialized = hist_init_.at(name);
+      const auto& fill_counts = hist_fill_count_.at(name);
+      const auto& pending = hist_store_pending_.at(name);
+      bool invalid_fill = false;
+      for (int level = 0; level < nlev_; ++level) {
+        const auto index = static_cast<std::size_t>(level);
+        const int fill = fill_counts[index];
+        // A Program history may be cold only as the coherent
+        // (initialized=false, fill=0, pending=false) image.
+        invalid_fill = invalid_fill || fill < 0 || fill > static_cast<int>(ring.size()) ||
+                       pending[index] != 0 || (initialized[index] != 0) != (fill > 0);
+      }
+      if (invalid_fill)
+        throw std::runtime_error(std::string(where) + " history '" + name +
+                                 "' contains inconsistent initialization/fill metadata");
+    }
+  }
+
   friend struct detail::AmrHistoryOps;
   std::map<std::string, std::vector<std::vector<MultiFab>>> hist_rings_;
   std::map<std::string, int> hist_depth_;
@@ -5784,6 +5908,7 @@ class AmrRuntime {
   std::map<std::string, BootstrapCacheState> bootstrap_caches_;
   StepSnapshot bootstrap_snapshot_;
   StepSnapshot regrid_snapshot_;
+  std::size_t bootstrap_interface_registry_size_ = 0;
   bool bootstrap_pending_ = false;
   int step_rollback_scope_depth_ = 0;
   // Externally supplied static aux fields: canonical B_z and model-named components -> coarse
@@ -5974,7 +6099,10 @@ class AmrRuntime {
                                                                generation);
   }
 
-  void rematerialize_persistent_topology_resources_(std::uint64_t generation) {
+  void rematerialize_persistent_topology_resources_(
+      std::uint64_t generation,
+      runtime::multiblock::InterfaceRematerializationAuthority interface_authority =
+          runtime::multiblock::InterfaceRematerializationAuthority::RuntimeTopology) {
     if (field_solve_transaction_active_)
       throw std::logic_error("AMR topology cannot change during a field-solve transaction");
     auto temporal_candidate = make_temporal_parent_workspaces_(generation);
@@ -6020,9 +6148,18 @@ class AmrRuntime {
           *block.levels, dom_, base_per_, generation, world_communicator_view()));
     }
     auto tagging_candidate = make_tagging_execution_plan_(tagging_program_, generation);
+    auto interface_candidate = interface_scheduler_.rematerialized(
+        nlev_,
+        [this](std::size_t block, int level) -> MultiFab& {
+          if (block >= blocks_.size() || level < 0 || level >= nlev_)
+            throw std::out_of_range("AMR interface rematerialization block/level is out of range");
+          return (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+        },
+        [this](int level) { return level_geom(level); }, interface_authority);
     temporal_parent_workspaces_.swap(temporal_candidate);
     aux_publication_workspaces_.swap(aux_candidate);
     tagging_execution_plan_ = std::move(tagging_candidate);
+    interface_scheduler_.swap(interface_candidate);
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
       blocks_[block].fill_patch_plan = std::move(fill_patch_candidate[block]);
       blocks_[block].coarse_fine_spatial_workspaces =
@@ -6034,8 +6171,11 @@ class AmrRuntime {
     topology_materialization_generation_ = generation;
   }
 
-  void record_topology_replacement_() {
-    rematerialize_persistent_topology_resources_(next_topology_materialization_generation_());
+  void record_topology_replacement_(
+      runtime::multiblock::InterfaceRematerializationAuthority interface_authority =
+          runtime::multiblock::InterfaceRematerializationAuthority::RuntimeTopology) {
+    rematerialize_persistent_topology_resources_(next_topology_materialization_generation_(),
+                                                 interface_authority);
     ++topology_epoch_;
   }
   // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): non-owning pointer to the AmrSystem-owned

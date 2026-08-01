@@ -8,6 +8,7 @@ import sys
 
 import numpy as np
 import pops
+import pytest
 
 from pops import interfaces
 from pops.external import build_source_package_manifest, compile_component, load
@@ -19,7 +20,8 @@ from pops.mesh.boundaries import (
 from pops.model import ComponentManifest
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
-from pops.time import FixedDt, StagePoint, TimePoint
+from pops.output import Checkpoint, ConsumerGraph, RegridOnRestart
+from pops.time import FixedDt, StagePoint, TimePoint, every
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -160,6 +162,64 @@ def _program(left_state, right_state, rate):
     return program
 
 
+def _ssprk2_program(left_state, right_state, rate):
+    program = pops.Program("shared_interface_ssprk2")
+    left = program.state(left_state)
+    right = program.state(right_state)
+    stage_0 = StagePoint("shared_stage_0", {"main": TimePoint(program.clock, 0)})
+    left_k0 = program.value("left_k0", rate(left.n), at=stage_0)
+    right_k0 = program.value("right_k0", rate(right.n), at=stage_0)
+    stage_1 = StagePoint("shared_stage_1", {"main": TimePoint(program.clock, 1)})
+    left_stage = program.value(
+        "left_stage", left.n + program.dt * left_k0, at=stage_1)
+    right_stage = program.value(
+        "right_stage", right.n + program.dt * right_k0, at=stage_1)
+    left_k1 = program.value("left_k1", rate(left_stage), at=stage_1)
+    right_k1 = program.value("right_k1", rate(right_stage), at=stage_1)
+    left_next = program.value(
+        "left_next",
+        left.n + 0.5 * program.dt * left_k0 + 0.5 * program.dt * left_k1,
+        at=left.next.point,
+    )
+    right_next = program.value(
+        "right_next",
+        right.n + 0.5 * program.dt * right_k0 + 0.5 * program.dt * right_k1,
+        at=right.next.point,
+    )
+    program.commit(left.next, left_next)
+    program.commit(right.next, right_next)
+    program.step_strategy(FixedDt(1.0e-3))
+    return program
+
+
+def _shared_interface_accepted_image(runtime):
+    native = runtime._executor._s
+    levels = int(runtime.n_levels())
+    return {
+        "time": float(runtime.time()),
+        "step": int(runtime.macro_step()),
+        "boxes": tuple(tuple(int(value) for value in row) for row in runtime.patch_boxes()),
+        "regrid_count": int(native.checkpoint_regrid_count()),
+        "topology_epoch": int(native.checkpoint_topology_epoch()),
+        "program_state": bytes(native.program_accepted_state()),
+        "states": tuple(
+            np.asarray(runtime.block_level_state_global(block, level), dtype=np.float64).copy()
+            for block in ("tracer", "right")
+            for level in range(levels)
+        ),
+    }
+
+
+def _assert_same_shared_interface_image(runtime, expected):
+    actual = _shared_interface_accepted_image(runtime)
+    assert {key: value for key, value in actual.items() if key != "states"} == {
+        key: value for key, value in expected.items() if key != "states"
+    }
+    assert len(actual["states"]) == len(expected["states"])
+    for current, recorded in zip(actual["states"], expected["states"], strict=True):
+        np.testing.assert_array_equal(current, recorded)
+
+
 def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     example = _load_example()
     core = example.build_authoring(output_root=tmp_path / "unused")
@@ -215,6 +275,11 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         endpoint_interfaces[1].canonical_identity()
     interface = endpoint_interfaces[0]
     assert interface.left.boundary.owner_path != interface.right.boundary.owner_path
+    assert interface.left.trace_provider == "limiter.none"
+    assert interface.right.trace_provider == "limiter.none"
+    assert interface.left.trace_operation.value == "cell_average"
+    assert interface.right.trace_operation.value == "cell_average"
+    assert interface.left.required_depth == interface.right.required_depth == 1
     for resolved_block, authored_block in zip(
             resolved.blocks, (core.tracer, right), strict=True):
         expected = core.case.resolve(core.inlet_x_param, block=authored_block)
@@ -230,7 +295,7 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         for block in (core.tracer, right)
         for handle, value in (
             (core.velocity_x_param, 1.0),
-            (core.velocity_y_param, 0.25),
+            (core.velocity_y_param, 1.0e-12),
             (core.inlet_x_param, 0.0),
             (core.inlet_y_param, 0.0),
         )
@@ -270,4 +335,355 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     np.testing.assert_allclose(
         right_values[0, 1:-1, 0], 2.992,
         rtol=0.0, atol=1.0e-14,
+    )
+
+
+def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
+    from pops.amr import (
+        AMRClockRelation,
+        AMRExecution,
+        AMRHierarchy,
+        AMRRegrid,
+        AMRTagging,
+        AMRTransfer,
+        Buffer,
+        ConflictPolicy,
+        EqualityPolicy,
+        Hysteresis,
+        Tag,
+    )
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Inflow, Outflow
+    from pops.initial import InitialCondition
+    from pops.layouts import AMR
+    from pops.lib.amr import StateTransfer
+    from pops.lib.initial import BindArray
+    from pops.math import ValueExpr
+    from pops.projection import ConservativeCellAverage
+
+    example = _load_example()
+    core = example.build_authoring(output_root=tmp_path / "unused")
+    right = core.case.block("right", model=core.model)
+    right_state = right[core.state]
+    finite_volume = FiniteVolume(
+        flux=core.flux,
+        variables=variables.Conservative(core.state),
+        reconstruction=reconstruction.FirstOrder(),
+        riemann=riemann.ScalarUpwind(velocity=core.velocity),
+    )
+    boundaries = core.frame.boundaries
+
+    def numerics(state):
+        plan = DiscretizationPlan()
+        plan.rates.add(core.rate, finite_volume)
+        plan.boundaries.add(TransportBoundarySet({
+            boundaries.x_min: Inflow(state=state, value=core.inlet_x_value),
+            boundaries.x_max: Outflow(state=state),
+            boundaries.y_min: Inflow(state=state, value=core.inlet_y_value),
+            boundaries.y_max: Outflow(state=state),
+        }))
+        return plan
+
+    left_numerics = numerics(core.tracer_state)
+    right_numerics = numerics(right_state)
+    component = _flux_component(tmp_path)
+    ConservativeInterface(
+        "tracer_to_right",
+        left=BlockInterfaceSide(core.tracer_state, boundaries.x_max),
+        right=BlockInterfaceSide(right_state, boundaries.x_min),
+        numerical_flux=component,
+        permutation=(0,),
+        right_normal_translation=1.0,
+    ).attach(left_numerics, right_numerics)
+    core.case.numerics(left_numerics, block=core.tracer)
+    core.case.numerics(right_numerics, block=right)
+    core.case.initials.add(InitialCondition(
+        state=core.tracer_state,
+        value=BindArray(),
+        projection=ConservativeCellAverage(),
+    ))
+    core.case.initials.add(InitialCondition(
+        state=right_state,
+        value=BindArray(),
+        projection=ConservativeCellAverage(),
+    ))
+    program = _ssprk2_program(core.tracer_state, right_state, core.rate)
+    core.case.program(program)
+    core.case.consumers(
+        ConsumerGraph.from_consumers(
+            (
+                Checkpoint(
+                    schedule=every(10_000, clock=program.clock),
+                    target="unused/shared-interface-restart",
+                    hierarchy=RegridOnRestart(),
+                ),
+            )
+        )
+    )
+
+    transfer = AMRTransfer()
+    transfer.state(core.tracer_state, StateTransfer())
+    transfer.state(right_state, StateTransfer())
+    tagging = AMRTagging(
+        rules=(
+            Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
+            Tag(ValueExpr(right_state) > core.case.value(core.refine_threshold)),
+            Buffer(cells=1),
+        ),
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+    )
+    resolved = pops.resolve(
+        pops.validate(core.case),
+        layout=AMR(
+            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
+            hierarchy=AMRHierarchy(max_levels=3, ratios=(2, 2)),
+            tagging=tagging,
+            regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
+            transfer=transfer,
+            execution=AMRExecution.subcycled((
+                AMRClockRelation(0, 1, 2),
+                AMRClockRelation(1, 2, 2),
+            )),
+        ),
+        components=(component,),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    artifact = pops.compile(resolved)
+    left_initial = np.zeros((1, 8, 8), dtype=np.float64)
+    right_initial = np.zeros((1, 8, 8), dtype=np.float64)
+    # The first public refined route requires an already matched fine interface: refine one
+    # full-height coarse-cell band on both mapped faces while keeping the domain interior coarse.
+    # One-sided tag propagation across a BlockInterface is a separate capability and must not be
+    # implied by this proof.
+    left_initial[0, :, -1:] = 1.0
+    # Keep the two traces distinct: the shared component must publish its average flux to both
+    # consumers.  Equal traces would let a one-sided publication pass by coincidence.
+    right_initial[0, :, :1] = 3.0
+    params = {
+        core.case.resolve(handle, block=block): value
+        for block in (core.tracer, right)
+        for handle, value in (
+            (core.velocity_x_param, 1.0),
+            (core.velocity_y_param, 1.0e-12),
+            (core.inlet_x_param, 0.0),
+            (core.inlet_y_param, 0.0),
+        )
+    }
+    params.update({
+        core.case.resolve(core.refine_threshold): 0.10,
+        core.case.resolve(core.coarsen_threshold): 0.04,
+    })
+    interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+    # Dynamic shared interfaces cannot create a missing route after bind: the complete configured
+    # prefix must already be materialized by the authenticated bootstrap transaction.
+    with pytest.raises(
+        NotImplementedError, match="complete configured prefix materialized at bind"
+    ):
+        example._bind_artifact(
+            artifact,
+            initial_values={
+                core.tracer_state: np.zeros_like(left_initial),
+                right_state: np.zeros_like(right_initial),
+            },
+            params=params,
+        )
+
+    # A shared hierarchy does not imply that one endpoint's boundary tags are mirrored to its peer.
+    # With only the left x-high band tagged, the materialized L1 layout cannot tile the right x-low
+    # face.  The incremental finalizer must reject that incomplete pair before bind freezes.
+    with pytest.raises(ValueError, match="does not tile its declared physical face"):
+        example._bind_artifact(
+            artifact,
+            initial_values={
+                core.tracer_state: left_initial,
+                right_state: np.zeros_like(right_initial),
+            },
+            params=params,
+        )
+
+    runtime = example._bind_artifact(
+        artifact,
+        initial_values={
+            core.tracer_state: left_initial,
+            right_state: right_initial,
+        },
+        params=params,
+    )
+
+    assert runtime.n_levels() == 3
+    fine_boxes = tuple(row for row in runtime.patch_boxes() if int(row[0]) == 1)
+    assert fine_boxes
+    assert any(
+        int(row[1]) == 0 and int(row[2]) == 0 and int(row[4]) == 15
+        for row in fine_boxes
+    )
+    assert any(
+        int(row[3]) == 15 and int(row[2]) == 0 and int(row[4]) == 15
+        for row in fine_boxes
+    )
+    assert not any(int(row[1]) <= 7 <= int(row[3]) for row in fine_boxes)
+    initial_left = runtime.integral("tracer")
+    initial_right = runtime.integral("right")
+    initial_integral = initial_left + initial_right
+
+    pops.run(runtime, t_end=1.0e-3, max_steps=1)
+
+    refined_authority = runtime._executor._interface_authorities[interface.qualified_id]
+    assert refined_authority["levels"] == (0, 1, 2)
+    assert len(refined_authority["declaration_identity"]) == 64
+    assert runtime._executor._s._interface_evaluation_count(
+        interface.qualified_id, 0) == 2
+    assert runtime._executor._s._interface_evaluation_count(
+        interface.qualified_id, 1) == 4
+    assert runtime._executor._s._interface_evaluation_count(
+        interface.qualified_id, 2) == 8
+    final_left = runtime.integral("tracer")
+    final_right = runtime.integral("right")
+    lost_by_left = initial_left - final_left
+    gained_by_right = final_right - initial_right
+    assert lost_by_left > 0.0
+    assert gained_by_right > 0.0
+    np.testing.assert_allclose(gained_by_right, lost_by_left, rtol=0.0, atol=2.0e-13)
+    final_integral = final_left + final_right
+    np.testing.assert_allclose(final_integral, initial_integral, rtol=0.0, atol=2.0e-13)
+
+    # The three-level route above proves arbitrary-depth execution. Use the independently compiled
+    # two-level route for the restart transaction: replacing its only fine transition is the exact
+    # dynamic topology capability currently authenticated by the interface scheduler.
+    restart_resolved = pops.resolve(
+        pops.validate(core.case),
+        layout=AMR(
+            grid=CartesianGrid(frame=core.frame, cells=(8, 8)),
+            hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+            tagging=tagging,
+            regrid=AMRRegrid(schedule=every(100, clock=program.clock)),
+            transfer=transfer,
+            execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+        ),
+        components=(component,),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    restart_artifact = pops.compile(restart_resolved)
+    restart_interface = restart_resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+    restart_source = example._bind_artifact(
+        restart_artifact,
+        initial_values={
+            core.tracer_state: left_initial,
+            right_state: right_initial,
+        },
+        params=params,
+    )
+    assert restart_source.n_levels() == 2
+    restart_initial_integral = restart_source.integral("tracer") + restart_source.integral("right")
+    source_report = pops.run(
+        restart_source,
+        t_end=1.0e-3,
+        max_steps=1,
+        console=False,
+        output_dir=tmp_path / "restart-source-output",
+    )
+    assert source_report.accepted_steps == 1
+    assert restart_source._executor._s._interface_evaluation_count(
+        restart_interface.qualified_id, 0) == 2
+    assert restart_source._executor._s._interface_evaluation_count(
+        restart_interface.qualified_id, 1) == 4
+    checkpoint_time = float(restart_source.time())
+    checkpoint_step = int(restart_source.macro_step())
+    checkpoint_integral = (
+        restart_source.integral("tracer") + restart_source.integral("right")
+    )
+    np.testing.assert_allclose(
+        checkpoint_integral,
+        restart_initial_integral,
+        rtol=0.0,
+        atol=2.0e-13,
+    )
+    checkpoint = restart_source.checkpoint(tmp_path / "accepted-shared-interface")
+
+    # RegridOnRestart must enter the serial native tag/cluster/regrid boundary; a deliberately
+    # rejected post-transform validation must restore the fresh runtime exactly before the same
+    # restart is retried and committed.
+    restarted = example._bind_artifact(
+        restart_artifact,
+        initial_values={
+            core.tracer_state: left_initial,
+            right_state: right_initial,
+        },
+        params=params,
+    )
+    priming_report = pops.run(
+        restarted,
+        t_end=1.0e-3,
+        max_steps=1,
+        console=False,
+        output_dir=tmp_path / "restart-candidate-output",
+    )
+    assert priming_report.accepted_steps == 1
+    rollback_image = _shared_interface_accepted_image(restarted)
+    from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
+
+    original_conservation_check = checkpoint_codec._require_restart_conservation
+    transformed_images = []
+
+    def fail_after_native_regrid(before, after):
+        del before, after
+        transformed_images.append(_shared_interface_accepted_image(restarted))
+        raise RuntimeError("injected shared-interface restart validation failure")
+
+    monkeypatch.setattr(
+        checkpoint_codec,
+        "_require_restart_conservation",
+        fail_after_native_regrid,
+    )
+    with pytest.raises(RuntimeError, match="injected shared-interface restart validation failure"):
+        restarted.restart(checkpoint)
+    assert transformed_images
+    assert transformed_images[0]["boxes"] != rollback_image["boxes"]
+    _assert_same_shared_interface_image(restarted, rollback_image)
+
+    monkeypatch.setattr(
+        checkpoint_codec,
+        "_require_restart_conservation",
+        original_conservation_check,
+    )
+    restarted.restart(checkpoint)
+    receipt = restarted._executor.last_restart_regrid_receipt()
+    assert receipt is not None
+    assert receipt["changed"] is True
+    assert float(restarted.time()) == checkpoint_time
+    assert int(restarted.macro_step()) == checkpoint_step
+    assert tuple(restarted.patch_boxes()) == tuple(transformed_images[0]["boxes"])
+    np.testing.assert_allclose(
+        [row["value"] for row in receipt["composite_integrals_after"]],
+        [row["value"] for row in receipt["composite_integrals_before"]],
+        rtol=2.0e-12,
+        atol=2.0e-13,
+    )
+    restarted_integral = restarted.integral("tracer") + restarted.integral("right")
+    np.testing.assert_allclose(
+        restarted_integral,
+        checkpoint_integral,
+        rtol=2.0e-12,
+        atol=2.0e-13,
+    )
+
+    counts_before_continuation = tuple(
+        restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
+        for level in range(2)
+    )
+    pops.run(restarted, t_end=2.0e-3, max_steps=1, console=False)
+    counts_after_continuation = tuple(
+        restarted._executor._s._interface_evaluation_count(restart_interface.qualified_id, level)
+        for level in range(2)
+    )
+    assert tuple(
+        after - before
+        for before, after in zip(counts_before_continuation, counts_after_continuation, strict=True)
+    ) == (2, 4)
+    np.testing.assert_allclose(
+        restarted.integral("tracer") + restarted.integral("right"),
+        checkpoint_integral,
+        rtol=0.0,
+        atol=2.0e-13,
     )

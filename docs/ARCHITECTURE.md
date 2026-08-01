@@ -400,9 +400,24 @@ remain Boolean/hashable identities and a vector state cannot be sampled without 
 An iterate-dependent law installs its exact symbolic JVP and requires an explicit nonlinear solver,
 and a device-invalid denominator is reduced to one rank-consistent witness before the solve can
 publish. Uniform state/field dependencies and single-level AMR state dependencies are prepared
-outside the iteration; multilevel AMR state providers and AMR field-to-field providers are rejected
-until a per-level materialization contract exists. No route falls through to a Python callback or a
-per-cell registry lookup.
+outside the iteration. A linear dynamic boundary on a level-local AMR named-field solve receives one
+exact `FieldLogicalTimePoint.level` and state-provider storage materialized from that level before
+the solve. A composite hierarchy that fully refines every parent level carries every level context
+but executes the exact finest-level uniform operator; its linear residual and nonlinear/JVP route
+therefore receive only the finest time point, dependencies, and distribution. A partially refined
+CompositeFAC hierarchy remains an explicit refusal: its coarse/fine correction would need a
+level-qualified homogeneous/JVP boundary operator, and reusing the inhomogeneous primal closure would
+be mathematically wrong. Iterate-dependent level-local multilevel boundaries and AMR field-to-field
+providers remain explicit refusals. No route falls through to a Python callback or a per-cell
+registry lookup.
+For field-coupled finite-difference JVPs, the exact boundary evaluation level must also equal the
+active Program resource level before the perturbed field solve or the frozen-field restoration is
+allowed to dispatch. A fine-level caller therefore cannot forge a coarse point and reuse level 0.
+This identity guard does not create a fine-level tangent-field solve. Supporting a boundary JVP that
+reads solved fields requires a provider contract that materializes the field tangent from the state
+direction on every participating level, couples those tangents across CompositeFAC when requested,
+and restores the frozen primal field transactionally. Reusing the primal field pointer would omit
+the derivative of the field solve and is therefore not a valid fallback.
 Linear and nonlinear field routes both retain the accepted warm start until their `SolveReport` is
 consumed; an invalid boundary evaluation or iteration limit restores that value and cannot update the
 published aux channel.
@@ -439,7 +454,7 @@ positive-definiteness are mutually exclusive. Consequently CG requires the globa
 when `nullspace=None`, and the complement-SPD certificate for `ConstantNullspace`; PoPS never swaps
 methods or upgrades a certificate from stencil metadata.
 
-Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v6
+Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v7
 reader preflights topology, ownership maps, state, aux, potentials, provider slots and history rings,
 then authenticates the runtime-owned tagging hysteresis before publishing the accepted Program image.
 It restores the hierarchy through the final clock update inside one native accepted-state transaction.
@@ -458,14 +473,26 @@ default non-bit-identical route may rematerialize ownership only when every pers
 Dense; source ranks must agree on the runtime-owned tagging payload and rank-count rematerialization
 preserves it exactly. Native `SymbolicTagger` therefore accepts non-zero temporal hysteresis.
 External Tagger components still refuse non-zero hysteresis until their adapter owns that persistent
-route. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity; the
-builtin `pops.restart.accepted-state-v5` provider first restores and validates the recorded AMR v6
-accepted hierarchy, state, histories, counters, clock, and tagging payload, then requests one
-artifact-owned scientific regrid at that accepted coordinate. It verifies composite conservation,
-publishes a rank-consensus before/after topology receipt and derives a new continuation run identity.
-The bounded route requires one AMR layout, unchanged MPI cardinality and no elliptic provider,
-shared-interface flux group, or bootstrap staggered cache. PoPS never silently changes patch geometry
-under `RestoreRecordedHierarchy()`.
+route. `RegridOnRestart()` has a distinct `accepted_state_after_regrid` guarantee and identity. The
+builtin accepted-state-v5 provider first restores and validates the AMR v7 accepted hierarchy,
+state, histories, counters, clock and accepted shared-interface flux audit, then requests one
+artifact-owned scientific regrid at that accepted coordinate. Each interface fragment retains its
+topology epoch, exact clock window, rational Program weight, face measure and local duration; strict
+restart rejects an incomplete or stale fragment before publishing the accepted image. It verifies
+composite conservation, publishes a rank-consensus before/after
+topology receipt and derives a new continuation run identity. The restored tagging hysteresis enters
+that same transaction: a failed transform restores its exact accepted bytes, while a successful
+transform advances one tagging cycle and publishes the transformed image. The bounded route requires
+one AMR layout and unchanged MPI cardinality. Serial and exact-`MPI_COMM_WORLD` shared-interface
+flux groups participate in the same topology rematerialization, all-rank identity consensus,
+conservation check, rollback and retry. Rank-changing dynamic interface rematerialization, elliptic
+providers and bootstrap staggered caches remain refused. The phase-local history consensus
+fingerprints materialize each dense ring slot collectively; they prove exact all-rank agreement on
+each hierarchy, not bitwise equality across a topology-changing interpolation. Conservation is the
+separate native before/after invariant on every accepted solution component. This is a cold-restart
+audit cost, not a hot-step operation, and scales with the total active level-domain cells times
+retained history depth. PoPS never silently changes patch geometry under
+`RestoreRecordedHierarchy()`.
 
 The transport of a block, in turn, reads this aux. The spatial primitive does `fill_ghosts` then
 `assemble_rhs` (limited reconstruction then numerical flux -> $R = -\mathrm{div} F + S$).
