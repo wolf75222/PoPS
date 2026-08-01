@@ -87,17 +87,28 @@ def _write_final_source_tree(root: Path) -> None:
             + "\nif __name__ == \"__main__\":\n    pass\n",
             encoding="utf-8",
         )
-    for example, nodeid in zip(
-        contract.FINAL_EXAMPLES,
+    test_sources = {}
+    for ledger in (
         contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS,
-        strict=True,
+        contract.FINAL_EXAMPLE_QUALIFICATION_TESTS,
     ):
-        relative, function_name = nodeid.split("::", 1)
+        for example, nodeid in zip(contract.FINAL_EXAMPLES, ledger, strict=True):
+            relative, function_name = nodeid.split("::", 1)
+            entry = test_sources.setdefault(relative, [example.name, []])
+            assert entry[0] == example.name
+            entry[1].append(function_name)
+    for relative, (example_name, function_names) in test_sources.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            "EXAMPLE = %r\n\ndef %s():\n    pass\n"
-            % (example.name, function_name),
+            "EXAMPLE = %r\n\n%s\n"
+            % (
+                example_name,
+                "\n\n".join(
+                    "def %s():\n    pass" % function_name
+                    for function_name in function_names
+                ),
+            ),
             encoding="utf-8",
         )
 
@@ -184,7 +195,7 @@ def test_required_junit_lane_rejects_skips_xfails_failures_and_empty_reports(tmp
 
 def test_required_junit_lane_authenticates_exact_final_example_tests(tmp_path):
     cases = []
-    for nodeid in contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS:
+    for nodeid in contract.FINAL_EXAMPLE_REQUIRED_TESTS:
         relative, function_name = nodeid.split("::", 1)
         classname = str(Path(relative).with_suffix("")).replace("/", ".")
         cases.append(
@@ -198,8 +209,8 @@ def test_required_junit_lane_authenticates_exact_final_example_tests(tmp_path):
     )
 
     assert gate._require_junit_nodeids(
-        report, contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS
-    ) == list(contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS)
+        report, contract.FINAL_EXAMPLE_REQUIRED_TESTS
+    ) == list(contract.FINAL_EXAMPLE_REQUIRED_TESTS)
 
     report.write_text(
         '<testsuite tests="%d">%s</testsuite>'
@@ -208,13 +219,13 @@ def test_required_junit_lane_authenticates_exact_final_example_tests(tmp_path):
     )
     with pytest.raises(gate.FinalGateError, match="appears 0 times"):
         gate._require_junit_nodeids(
-            report, contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS
+            report, contract.FINAL_EXAMPLE_REQUIRED_TESTS
         )
 
 
 def test_release_preflight_requires_the_exact_final_example_test_ledger():
     evidence = {
-        "final_example_nodeids": list(contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS),
+        "final_example_nodeids": list(contract.FINAL_EXAMPLE_REQUIRED_TESTS),
     }
 
     preflight._final_example_test_evidence(evidence)

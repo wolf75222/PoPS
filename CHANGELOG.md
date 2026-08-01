@@ -18,9 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
-- Final release evidence now authenticates one exact mandatory Pytest node for each normative
-  example inside the all-pass installed-wheel JUnit lane. Missing, renamed, skipped, xfailed, mocked,
-  duplicated, or unattested example proofs fail before release publication.
+- Final release evidence now authenticates one exact runtime acceptance and one exact qualification
+  Pytest node for each normative example inside the all-pass installed-wheel JUnit lane. Missing,
+  renamed, skipped, xfailed, mocked, duplicated, or unattested example proofs fail before release
+  publication.
 - Canonical authoring now keeps one explicit projection/construction route: use
   `pops.physics.Model.lower()` for advanced Module inspection and
   `MomentModel.build()` for recorded moment specifications. The duplicate facade aliases were

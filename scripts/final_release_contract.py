@@ -21,14 +21,28 @@ FINAL_EXAMPLES = (
     Path("examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py"),
 )
 FINAL_EXAMPLE_ACCEPTANCE_TESTS = (
-    "tests/python/examples/final/test_scalar_advection_final_example.py"
-    "::test_supported_authoring_core_is_genuine_and_inert",
+    "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py"
+    "::test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart",
     "tests/python/examples/final/test_multiphysics_core_example.py"
     "::test_example_script_runs_outputs_and_restart_without_mock_or_fallback",
     "tests/python/examples/final/test_imex_amr_final_example.py"
     "::test_example_runs_and_every_scientific_format_reopens",
     "tests/python/examples/final/test_hyqmom15_final_example.py"
     "::test_hyqmom15_example_runs_outputs_and_restarts_bit_identically",
+)
+FINAL_EXAMPLE_QUALIFICATION_TESTS = (
+    "tests/python/examples/final/test_scalar_advection_final_example.py"
+    "::test_target_has_one_authority_per_concern_and_no_legacy_path",
+    "tests/python/examples/final/test_multiphysics_core_example.py"
+    "::test_program_has_exact_field_context_and_transactional_implicit_join",
+    "tests/python/examples/final/test_imex_amr_final_example.py"
+    "::test_resolved_amr_lowering_report_covers_every_executed_authority",
+    "tests/python/unit/moments/test_hyqmom15_final_contract.py"
+    "::test_particle_number_diagnostic_integrates_m00_and_rejects_drift",
+)
+FINAL_EXAMPLE_REQUIRED_TESTS = (
+    *FINAL_EXAMPLE_ACCEPTANCE_TESTS,
+    *FINAL_EXAMPLE_QUALIFICATION_TESTS,
 )
 REQUIRED_PROOF_MARKERS = (
     "HDF5:",
@@ -353,94 +367,104 @@ def source_contract_errors(root: Path) -> list[str]:
             errors.append(
                 "%s imports transitional/internal authoring names %s" % (relative, forbidden)
             )
-    if len(FINAL_EXAMPLE_ACCEPTANCE_TESTS) != len(FINAL_EXAMPLES):
-        errors.append("final examples and exact acceptance tests must have one-to-one coverage")
-    for example, nodeid in zip(
-        FINAL_EXAMPLES, FINAL_EXAMPLE_ACCEPTANCE_TESTS, strict=False
-    ):
-        relative, separator, function_name = nodeid.partition("::")
-        if not separator or not relative or not function_name:
-            errors.append("invalid final-example acceptance nodeid %r" % nodeid)
-            continue
-        test_path = root / relative
-        if not test_path.is_file():
-            errors.append("missing final-example acceptance test: %s" % nodeid)
-            continue
-        source = test_path.read_text(encoding="utf-8")
-        try:
-            tree = ast.parse(source, filename=str(test_path))
-        except SyntaxError as exc:
-            errors.append("cannot parse final-example acceptance test %s: %s" % (nodeid, exc))
-            continue
-        functions = [
-            node
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == function_name
-        ]
-        if len(functions) != 1:
+    ledgers = (
+        ("acceptance", FINAL_EXAMPLE_ACCEPTANCE_TESTS),
+        ("qualification", FINAL_EXAMPLE_QUALIFICATION_TESTS),
+    )
+    for proof_kind, ledger in ledgers:
+        if len(ledger) != len(FINAL_EXAMPLES):
             errors.append(
-                "final-example acceptance nodeid must resolve exactly once: %s" % nodeid
+                "final examples and exact %s tests must have one-to-one coverage"
+                % proof_kind
             )
-            continue
-        function = functions[0]
-        fixture_names = {
-            argument.arg
-            for argument in (
-                *function.args.posonlyargs,
-                *function.args.args,
-                *function.args.kwonlyargs,
-            )
-        }
-        if fixture_names & {"mock", "mocker", "monkeypatch", "patch"}:
-            errors.append("%s uses a mock fixture" % nodeid)
-        forbidden_calls = []
-        forbidden_imports = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and (
-                node.module or ""
-            ).startswith(("unittest.mock", "pytest_mock")):
-                forbidden_imports.append(node.module or "")
-            elif isinstance(node, ast.Import) and any(
-                alias.name.startswith(("unittest.mock", "pytest_mock"))
-                for alias in node.names
-            ):
-                forbidden_imports.extend(alias.name for alias in node.names)
-        for node in ast.walk(function):
-            if not isinstance(node, ast.Call):
+        for example, nodeid in zip(FINAL_EXAMPLES, ledger, strict=False):
+            relative, separator, function_name = nodeid.partition("::")
+            if not separator or not relative or not function_name:
+                errors.append("invalid final-example %s nodeid %r" % (proof_kind, nodeid))
                 continue
-            call = node.func
-            parts = []
-            while isinstance(call, ast.Attribute):
-                parts.append(call.attr)
-                call = call.value
-            if isinstance(call, ast.Name):
-                parts.append(call.id)
-            name = ".".join(reversed(parts))
-            if name in {
-                "patch",
-                "pytest.importorskip",
-                "pytest.skip",
-                "pytest.xfail",
-            } or name.startswith(("mock.", "mocker.", "unittest.mock.")):
-                forbidden_calls.append(name)
-        decorators = []
-        for decorator in function.decorator_list:
-            text = ast.unparse(decorator)
-            if "skip" in text or "xfail" in text:
-                decorators.append(text)
-        if forbidden_calls or forbidden_imports or decorators:
-            errors.append(
-                "%s is optional: %s"
-                % (
-                    nodeid,
-                    sorted(
-                        set((*forbidden_calls, *forbidden_imports, *decorators))
-                    ),
+            test_path = root / relative
+            if not test_path.is_file():
+                errors.append("missing final-example %s test: %s" % (proof_kind, nodeid))
+                continue
+            source = test_path.read_text(encoding="utf-8")
+            try:
+                tree = ast.parse(source, filename=str(test_path))
+            except SyntaxError as exc:
+                errors.append(
+                    "cannot parse final-example %s test %s: %s"
+                    % (proof_kind, nodeid, exc)
                 )
-            )
-        if example.name not in source:
-            errors.append("%s is not bound to %s" % (nodeid, example))
+                continue
+            functions = [
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == function_name
+            ]
+            if len(functions) != 1:
+                errors.append(
+                    "final-example %s nodeid must resolve exactly once: %s"
+                    % (proof_kind, nodeid)
+                )
+                continue
+            function = functions[0]
+            fixture_names = {
+                argument.arg
+                for argument in (
+                    *function.args.posonlyargs,
+                    *function.args.args,
+                    *function.args.kwonlyargs,
+                )
+            }
+            if fixture_names & {"mock", "mocker", "monkeypatch", "patch"}:
+                errors.append("%s uses a mock fixture" % nodeid)
+            forbidden_calls = []
+            forbidden_imports = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (
+                    node.module or ""
+                ).startswith(("unittest.mock", "pytest_mock")):
+                    forbidden_imports.append(node.module or "")
+                elif isinstance(node, ast.Import) and any(
+                    alias.name.startswith(("unittest.mock", "pytest_mock"))
+                    for alias in node.names
+                ):
+                    forbidden_imports.extend(alias.name for alias in node.names)
+            for node in ast.walk(function):
+                if not isinstance(node, ast.Call):
+                    continue
+                call = node.func
+                parts = []
+                while isinstance(call, ast.Attribute):
+                    parts.append(call.attr)
+                    call = call.value
+                if isinstance(call, ast.Name):
+                    parts.append(call.id)
+                name = ".".join(reversed(parts))
+                if name in {
+                    "patch",
+                    "pytest.importorskip",
+                    "pytest.skip",
+                    "pytest.xfail",
+                } or name.startswith(("mock.", "mocker.", "unittest.mock.")):
+                    forbidden_calls.append(name)
+            decorators = []
+            for decorator in function.decorator_list:
+                text = ast.unparse(decorator)
+                if "skip" in text or "xfail" in text:
+                    decorators.append(text)
+            if forbidden_calls or forbidden_imports or decorators:
+                errors.append(
+                    "%s is optional: %s"
+                    % (
+                        nodeid,
+                        sorted(
+                            set((*forbidden_calls, *forbidden_imports, *decorators))
+                        ),
+                    )
+                )
+            if example.name not in source:
+                errors.append("%s is not bound to %s" % (nodeid, example))
     return errors
 
 

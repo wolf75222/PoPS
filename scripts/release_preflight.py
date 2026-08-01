@@ -20,8 +20,8 @@ from typing import Any
 import zipfile
 
 from final_release_contract import (
-    FINAL_EXAMPLE_ACCEPTANCE_TESTS,
     FINAL_EXAMPLES,
+    FINAL_EXAMPLE_REQUIRED_TESTS,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
@@ -33,7 +33,7 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 8
+EVIDENCE_SCHEMA_VERSION = 9
 
 
 class PreflightError(RuntimeError):
@@ -490,7 +490,7 @@ def _examples_evidence(
 def _final_example_test_evidence(evidence: dict[str, Any]) -> None:
     """Require the exact reviewed tests from the authenticated Python lane."""
 
-    if evidence.get("final_example_nodeids") != list(FINAL_EXAMPLE_ACCEPTANCE_TESTS):
+    if evidence.get("final_example_nodeids") != list(FINAL_EXAMPLE_REQUIRED_TESTS):
         raise PreflightError("release evidence final-example test ledger drifted")
 
 

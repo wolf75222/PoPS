@@ -27,8 +27,8 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 from final_release_contract import (
-    FINAL_EXAMPLE_ACCEPTANCE_TESTS,
     FINAL_EXAMPLES,
+    FINAL_EXAMPLE_REQUIRED_TESTS,
     FINAL_SPECIFICATION,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
@@ -39,7 +39,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 8
+EVIDENCE_SCHEMA_VERSION = 9
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -593,7 +593,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "required_lane": _junit_summary(python_junit),
             "selection": PYTHON_REQUIRED_SELECTION,
             "final_example_nodeids": _require_junit_nodeids(
-                python_junit, FINAL_EXAMPLE_ACCEPTANCE_TESTS
+                python_junit, FINAL_EXAMPLE_REQUIRED_TESTS
             ),
         }
         signed_runtime_sha256 = _signed_runtime_sha256(
