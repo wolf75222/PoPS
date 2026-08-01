@@ -28,8 +28,12 @@ property of this graph and tableau, not a repeated `order=2` option.
 
 Every fallible public solve returns an unreadable `SolveOutcome`. The example consumes every field solve with
 `RejectAttempt()`. A failed solve therefore raises the typed native rejection signal before a field,
-state, diagnostic or output can read a partial result. Local affine elimination remains a value
-operation because it has no iterative outcome to classify.
+state, diagnostic or output can read a partial result. The executable acceptance also compiles a
+separate negative case whose explicitly widened parameter domain makes the second IMEX diagonal
+system exactly singular. It compares state, solved fields, hierarchy topology, Program
+cache/history/clock/ledger registries and consumer cursors before and after the rejected attempt,
+then requires that its output directory contain no file. The normal physical case retains the
+strictly positive relaxation-rate domain.
 
 `Model.field_operator(...)` declares the physical equation and its RHS providers. The sole callable
 time-Program authority is the `FieldHandle` returned by `Case.field(operator, discretization)`: both
@@ -64,11 +68,16 @@ The adaptive layout owns:
 - conservative state prolongation, restriction, coarse/fine fill and time interpolation;
 - elliptic recomputation after regrid instead of interpolating a stale solved field.
 
+Resolution adds each hierarchy, regrid, tagging predicate, hysteresis/conflict policy, transfer
+entry, bootstrap authority and subcycling relation to the global `LoweringCoverageReport`. Every row
+names a concrete runtime target; the report is therefore a machine-readable lowering gate rather
+than an `inspect()` narrative inferred after compilation.
+
 The acceptance target intentionally requests a regrid on every accepted macro-step. The first
 snapshot may still expose zero completed regrids: cadence is a due condition, not proof that a
 non-empty tag set rebuilt the hierarchy. `simulation.amr.explain_regrid()` publishes the native
 `regrid_count` and `topology_epoch`; after the continuation step the example requires both values to
-have increased, and requires the uninterrupted and restarted instances to report identical values.
+remain monotone, and requires the uninterrupted and restarted instances to report identical values.
 `regrid_count` advances only after the native regrid completes, while `topology_epoch` identifies
 the installed hierarchy topology. A scheduled or no-op regrid is therefore never accepted as
 completed runtime evidence.
@@ -108,7 +117,8 @@ qualified conservative state and solved-field route, patch topology, Program/con
 consumer cursors bit-for-bit. The snapshot also carries the live completed-regrid count and topology
 epoch, so checkpoint restore, uninterrupted/restarted continuation and manual/factory parity must
 preserve exactly the same AMR generation evidence. It then advances the uninterrupted and restarted
-instances once more, requires a real counter/epoch increase, verifies the accepted multi-level flux
+instances once more, requires monotone counter/epoch evidence, verifies the accepted multi-level flux
 ledger plus reflux-then-average-down trace, and repeats the complete comparison before exercising the
-preset parity run. A printed success therefore follows real I/O, a completed regrid, restart,
-continuation and manual/factory checks; it is not a demonstration placeholder.
+preset parity run. A printed success therefore follows a real rejected-attempt rollback, real I/O,
+an executed regrid cadence window, restart, continuation and manual/factory checks; it is not a
+demonstration placeholder.
