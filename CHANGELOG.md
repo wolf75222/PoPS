@@ -29,7 +29,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - The final HyQMOM15 executable now checks realizability and the conserved `M00`
   particle number for rejected, accepted, restored, and continued runtime snapshots. Its JSON
   evidence reports the measured integral and maximum relative drift against the documented
-  `1e-10` acceptance threshold.
+  `1e-10` acceptance threshold. It now authors the six fifth-order relations through a public
+  `@closure(4)` value and authenticates that every typed provisional store belongs to the rejected
+  Program transaction, without adding a HyQMOM-specific native route.
 - The final scalar-advection acceptance now authenticates the public AMR regrid counters and strict
   checkpoint capability. A pre-existing refined patch layout is no longer sufficient: the accepted
   run and both continuation paths must complete the same topology-changing regrid windows, and

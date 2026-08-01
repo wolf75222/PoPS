@@ -33,6 +33,8 @@ def test_hyqmom15_example_runs_outputs_and_restarts_bit_identically(tmp_path) ->
     report_line = next(
         line for line in completed.stdout.splitlines() if line.startswith("report: "))
     report = json.loads(report_line.removeprefix("report: "))
+    from pops.time import ALL_PROVISIONAL_STORES
+
     assert report["finite"] is True
     assert report["realizable"] is True
     assert report["n_moments"] == 15
@@ -47,6 +49,9 @@ def test_hyqmom15_example_runs_outputs_and_restarts_bit_identically(tmp_path) ->
     assert report["nonrealizable_rollback"] is True
     assert "hyqmom15_realizability_density" in report["rejection_reason"]
     assert report["runtime_steps"] == 2
+    assert report["rollback_stores"] == [
+        store.value for store in ALL_PROVISIONAL_STORES
+    ]
 
     from pops.output import HDF5, ParaView
 

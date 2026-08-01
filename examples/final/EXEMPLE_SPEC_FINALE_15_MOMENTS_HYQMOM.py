@@ -31,7 +31,7 @@ from pops.layouts import Uniform
 from pops.lib.models.moments import HyQMOM15
 from pops.math import laplacian
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.moments import RealizabilityProjection
+from pops.moments import RealizabilityProjection, closure
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
@@ -42,6 +42,7 @@ from pops.params import ConstParam
 from pops.solvers import DenseLU
 from pops.solvers.elliptic import GeometricMG
 from pops.time import (
+    ALL_PROVISIONAL_STORES,
     AdaptiveCFL,
     Dense,
     LocalLinear,
@@ -55,6 +56,44 @@ from pops.time import (
 DEFAULT_CELLS = 8
 DEFAULT_T_END = 1.0e-5
 PARTICLE_NUMBER_RELATIVE_TOLERANCE = 1.0e-10
+
+
+@closure(4)
+def user_hyqmom15_closure(standardized: Any) -> dict[str, Any]:
+    """Close the six fifth-order moments through the public local algebra contract."""
+
+    s03 = standardized["S03"]
+    s04 = standardized["S04"]
+    s11 = standardized["S11"]
+    s12 = standardized["S12"]
+    s13 = standardized["S13"]
+    s21 = standardized["S21"]
+    s22 = standardized["S22"]
+    s30 = standardized["S30"]
+    s31 = standardized["S31"]
+    s40 = standardized["S40"]
+    return {
+        "S50": 0.5 * s30 * (5.0 * s40 - 3.0 * s30 * s30 - 1.0),
+        "S41": (
+            -0.25 * s30 * (8.0 * s40 - 9.0 * s30 * s30 - 4.0) * s11
+            + 0.25 * (10.0 * s40 - 15.0 * s30 * s30 - 6.0) * s21
+            + 2.0 * s30 * s31
+        ),
+        "S32": (
+            0.5 * (2.0 * s40 - 3.0 * s30 * s30) * s12
+            + 0.5 * (3.0 * s22 - 1.0) * s30
+        ),
+        "S23": (
+            0.5 * (2.0 * s04 - 3.0 * s03 * s03) * s21
+            + 0.5 * (3.0 * s22 - 1.0) * s03
+        ),
+        "S14": (
+            -0.25 * s03 * (8.0 * s04 - 9.0 * s03 * s03 - 4.0) * s11
+            + 0.25 * (10.0 * s04 - 15.0 * s03 * s03 - 6.0) * s12
+            + 2.0 * s03 * s13
+        ),
+        "S05": 0.5 * s03 * (5.0 * s04 - 3.0 * s03 * s03 - 1.0),
+    }
 
 
 def _native_output_mode() -> ParallelMode:
@@ -94,6 +133,7 @@ class HyQMOM15Authoring:
     """All exact declarations retained across the public lifecycle."""
 
     model: Any
+    closure: Any
     case: Any
     state: Any
     state_instance: Any
@@ -117,6 +157,7 @@ class RuntimeSnapshot:
     fields: dict[str, np.ndarray]
     histories: dict[str, tuple[np.ndarray, ...]]
     program_hash: str
+    transaction_stores: tuple[str, ...]
     consumer_graph_identity: str
     consumer_cursors: dict[str, Any]
 
@@ -232,6 +273,7 @@ def build_authoring(
         "unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0),
     ).frame(Cartesian2D())
     model = HyQMOM15.vlasov_lorentz(
+        closure=user_hyqmom15_closure,
         q_over_m=ConstParam("q_over_m", -1.0),
         omega_c=ConstParam("omega_c", 0.5),
         projection=realizability,
@@ -307,6 +349,7 @@ def build_authoring(
     )))
     return HyQMOM15Authoring(
         model=model,
+        closure=user_hyqmom15_closure,
         case=case,
         state=state,
         state_instance=state_instance,
@@ -416,6 +459,16 @@ def compile_final_case(
 
 
 def _snapshot(simulation: Any) -> RuntimeSnapshot:
+    program_report = simulation.program_report()
+    if not program_report.installed:
+        raise RuntimeError("HyQMOM15 runtime has no installed Program report")
+    transaction_stores = tuple(program_report.step_transaction.get("stores", ()))
+    expected_stores = tuple(store.value for store in ALL_PROVISIONAL_STORES)
+    if transaction_stores != expected_stores:
+        raise RuntimeError(
+            "HyQMOM15 transaction does not own every provisional store: %r"
+            % (transaction_stores,)
+        )
     fields = {
         slot: np.asarray(simulation.field_potential_global(slot), dtype=np.float64).copy()
         for slot in simulation.field_provider_slots()
@@ -434,6 +487,7 @@ def _snapshot(simulation: Any) -> RuntimeSnapshot:
         fields=fields,
         histories=histories,
         program_hash=str(simulation.installed_program_hash()),
+        transaction_stores=transaction_stores,
         consumer_graph_identity=simulation.consumer_graph.identity.token,
         consumer_cursors=simulation.consumer_cursors.to_data(),
     )
@@ -441,7 +495,8 @@ def _snapshot(simulation: Any) -> RuntimeSnapshot:
 
 def _require_same_snapshot(left: RuntimeSnapshot, right: RuntimeSnapshot, *, where: str) -> bool:
     for name in (
-        "time", "macro_step", "program_hash", "consumer_graph_identity", "consumer_cursors",
+        "time", "macro_step", "program_hash", "transaction_stores",
+        "consumer_graph_identity", "consumer_cursors",
     ):
         if getattr(left, name) != getattr(right, name):
             raise RuntimeError("%s changed %s across restart" % (where, name))
@@ -627,6 +682,7 @@ def main(argv: list[str] | None = None) -> None:
         "particle_number_relative_tolerance": PARTICLE_NUMBER_RELATIVE_TOLERANCE,
         "runtime_steps": evidence.restarted.macro_step,
         "runtime_time": evidence.restarted.time,
+        "rollback_stores": list(evidence.restarted.transaction_stores),
         "rejection_reason": evidence.rejection_reason,
         "nonrealizable_rollback": rollback,
         "scheduled_checkpoint": str(evidence.scheduled_checkpoint_path),
