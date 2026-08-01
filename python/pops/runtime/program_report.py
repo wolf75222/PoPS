@@ -126,8 +126,12 @@ def _params(sim: Any) -> Any:
     block_map = list(_call(sim, "program_block_map", []) or [])
     prog_blocks = list(range(len(block_map))) if block_map else [0]
     for prog_block in prog_blocks:
-        rp = _call(sim, "program_params", None, prog_block)
-        count = getattr(rp, "count", None) if rp is not None else None
+        count = _call(sim, "program_param_count", None, prog_block)
+        if count is None:
+            # Compatibility for report-only authorities used by downstream integrations.  Native
+            # System and AmrSystem expose program_param_count directly, without publishing values.
+            rp = _call(sim, "program_params", None, prog_block)
+            count = getattr(rp, "count", None) if rp is not None else None
         rows.append({"program_block": prog_block, "count": count, "limit": limit})
     return rows
 

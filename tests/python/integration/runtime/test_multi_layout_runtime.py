@@ -470,6 +470,14 @@ def test_uniform_amr_and_multi_layout_share_complete_runtime_instance_contract(
         assert len(instance["layout_plan"]["layouts"]) == expected_layout_counts[label]
         assert program["installed"] is True
         assert program["program_hash"] == runtime.installed_program_hash()
+        assert len(program["block_map"]) == len(runtime.block_names())
+        assert tuple(sorted(program["block_map"])) == tuple(
+            range(len(runtime.block_names()))
+        )
+        assert all(
+            type(row["count"]) is int and 0 <= row["count"] <= row["limit"]
+            for row in program["params"]
+        )
         assert inspection["program"]["installed"] == program["installed"]
         assert inspection["program"]["hash"] == program["program_hash"]
         for name in (
