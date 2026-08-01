@@ -286,7 +286,11 @@ TEST(PreparedVariableRecovery, model_declared_admissibility_blocks_publication) 
   EXPECT_EQ(rejected.cause, pops::RecoveryCause::kInadmissibleCandidate);
   EXPECT_EQ(rejected.failing_component, 0);
   EXPECT_FALSE(rejected.publication_permitted());
+}
 
+TEST(PreparedVariableRecovery, model_declared_admissibility_permits_valid_candidate) {
+  const GuardedScalarModel model{};
+  const auto plan = pops::prepare_model_variable_recovery(model);
   const Real positive[1] = {Real(3)};
   const Real positive_guess[1] = {Real(1)};
   const auto recovered = pops::recover_prepared_variable(plan, positive, positive_guess);

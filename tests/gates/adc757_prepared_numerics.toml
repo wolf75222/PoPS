@@ -52,6 +52,18 @@ target = "test_variable_recovery_chain"
 test_regex = "^PreparedVariableRecovery\\.malformed_and_repair_candidates_fail_closed$"
 
 [[check]]
+requirement = "model_declared_admissibility"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.model_declared_admissibility_permits_valid_candidate$"
+
+[[check]]
+requirement = "model_declared_admissibility"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.model_declared_admissibility_blocks_publication$"
+
+[[check]]
 requirement = "allocation_aware_cell_hot_path"
 polarity = "positive"
 target = "test_prepared_numerics_gate"
@@ -108,6 +120,18 @@ requirement = "capability_driven_riemann"
 polarity = "refusal"
 target = "test_flux_interfaces"
 test_regex = "^test_flux_interfaces\\.roe_rejects_nonfinite_dissipation_with_a_typed_cause$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiters\\.mc_and_superbee_match_reference_formulas$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "refusal"
+target = "test_dispatch_tags"
+test_regex = "^test_dispatch_tags\\.validate_limiter_accepts_and_rejects$"
 
 [[check]]
 requirement = "typed_flux_recovery_consumption"

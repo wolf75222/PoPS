@@ -25,6 +25,8 @@ EXPECTED_REQUIREMENTS = {
     "mpi_collective_execution",
     "typed_flux_recovery_consumption",
     "runtime_recovery_consumer_publication",
+    "model_declared_admissibility",
+    "prepared_limiter_provider",
 }
 EXPECTED_DEFERRED = (
     "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
