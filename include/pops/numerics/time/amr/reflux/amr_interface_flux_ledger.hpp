@@ -132,6 +132,49 @@ inline double interface_flux_fragment_scale(const InterfaceFluxFragmentKey& key,
          measure.substep_duration;
 }
 
+/// Validate the complete topology, clock, geometry and duration identity shared by live
+/// accumulation and accepted-state restart.  Accepted-state readers additionally require a resolved
+/// Program stage weight; live ledgers may carry the unresolved placeholder until contribution
+/// algebra closes the outer attempt.
+inline void validate_interface_flux_fragment(const InterfaceFluxFragmentKey& key,
+                                             const InterfaceFluxFragmentMeasure& measure,
+                                             std::uint64_t topology_epoch) {
+  if (key.topology_epoch != topology_epoch)
+    throw std::invalid_argument("AMR interface-flux fragment uses a stale topology epoch");
+  if (key.interface_identity.empty() || key.stage_identity.empty() || key.coarse_level < 0 ||
+      key.fine_level != key.coarse_level + 1 || key.left_block == key.right_block)
+    throw std::invalid_argument("AMR interface-flux fragment is not fully qualified");
+  if (key.clock.level != key.coarse_level && key.clock.level != key.fine_level)
+    throw std::invalid_argument("AMR interface-flux clock is outside its coarse/fine level pair");
+  switch (key.orientation) {
+    case InterfaceFluxOrientation::CoarseOutward:
+    case InterfaceFluxOrientation::FineOutward:
+      break;
+    default:
+      throw std::invalid_argument("invalid AMR interface-flux orientation");
+  }
+  if (key.interval.begin.level != key.clock.level || key.interval.end.level != key.clock.level ||
+      key.interval.begin.macro_step != key.clock.macro_step ||
+      key.interval.end.macro_step != key.clock.macro_step ||
+      !(key.interval.begin.phase < key.interval.end.phase) ||
+      key.clock.phase < key.interval.begin.phase || key.interval.end.phase < key.clock.phase)
+    throw std::invalid_argument("AMR interface-flux clock is outside its exact temporal interval");
+  const double begin_time = key.interval.begin.physical_time;
+  const double end_time = key.interval.end.physical_time;
+  const double reconstructed_duration = end_time - begin_time;
+  const double timestamp_scale =
+      std::max({1.0, std::abs(begin_time), std::abs(end_time), std::abs(measure.substep_duration)});
+  const double timestamp_tolerance = 8.0 * std::numeric_limits<double>::epsilon() * timestamp_scale;
+  if (!std::isfinite(key.clock.physical_time) || !std::isfinite(begin_time) ||
+      !std::isfinite(end_time) || !(end_time > begin_time) ||
+      key.clock.physical_time < begin_time || key.clock.physical_time > end_time ||
+      !(measure.face_measure > 0.0) || !std::isfinite(measure.face_measure) ||
+      !(measure.substep_duration > 0.0) || !std::isfinite(measure.substep_duration) ||
+      std::abs(reconstructed_duration - measure.substep_duration) > timestamp_tolerance)
+    throw std::invalid_argument(
+        "AMR interface-flux fragment requires consistent finite positive geometry/time");
+}
+
 /// Transactional store for refined multi-block interface fluxes.  Pending
 /// fragments are invisible to aggregate() until the outer transaction commits;
 /// rollback therefore cannot publish a rejected stage.  The ledger is bound to
@@ -244,42 +287,7 @@ class TransactionalInterfaceFluxLedger {
 
   void validate_(const InterfaceFluxFragmentKey& key,
                  const InterfaceFluxFragmentMeasure& measure) const {
-    if (key.topology_epoch != topology_epoch_)
-      throw std::invalid_argument("AMR interface-flux fragment uses a stale topology epoch");
-    if (key.interface_identity.empty() || key.stage_identity.empty() || key.coarse_level < 0 ||
-        key.fine_level != key.coarse_level + 1 || key.left_block == key.right_block)
-      throw std::invalid_argument("AMR interface-flux fragment is not fully qualified");
-    if (key.clock.level != key.coarse_level && key.clock.level != key.fine_level)
-      throw std::invalid_argument("AMR interface-flux clock is outside its coarse/fine level pair");
-    switch (key.orientation) {
-      case InterfaceFluxOrientation::CoarseOutward:
-      case InterfaceFluxOrientation::FineOutward:
-        break;
-      default:
-        throw std::invalid_argument("invalid AMR interface-flux orientation");
-    }
-    if (key.interval.begin.level != key.clock.level || key.interval.end.level != key.clock.level ||
-        key.interval.begin.macro_step != key.clock.macro_step ||
-        key.interval.end.macro_step != key.clock.macro_step ||
-        !(key.interval.begin.phase < key.interval.end.phase) ||
-        key.clock.phase < key.interval.begin.phase || key.interval.end.phase < key.clock.phase)
-      throw std::invalid_argument(
-          "AMR interface-flux clock is outside its exact temporal interval");
-    const double begin_time = key.interval.begin.physical_time;
-    const double end_time = key.interval.end.physical_time;
-    const double reconstructed_duration = end_time - begin_time;
-    const double timestamp_scale = std::max(
-        {1.0, std::abs(begin_time), std::abs(end_time), std::abs(measure.substep_duration)});
-    const double timestamp_tolerance =
-        8.0 * std::numeric_limits<double>::epsilon() * timestamp_scale;
-    if (!std::isfinite(key.clock.physical_time) || !std::isfinite(begin_time) ||
-        !std::isfinite(end_time) || !(end_time > begin_time) ||
-        key.clock.physical_time < begin_time || key.clock.physical_time > end_time ||
-        !(measure.face_measure > 0.0) || !std::isfinite(measure.face_measure) ||
-        !(measure.substep_duration > 0.0) || !std::isfinite(measure.substep_duration) ||
-        std::abs(reconstructed_duration - measure.substep_duration) > timestamp_tolerance)
-      throw std::invalid_argument(
-          "AMR interface-flux fragment requires consistent finite positive geometry/time");
+    validate_interface_flux_fragment(key, measure, topology_epoch_);
   }
 
   std::uint64_t topology_epoch_;

@@ -497,31 +497,58 @@ class CompositeFacPoisson {
   void set_boundary_kernel(const CompiledFieldBoundaryKernel& kernel,
                            const FieldBoundaryExecutionContext& context = {}) {
     kernel.validate();
+    if (boundary_context_levels_.size() != static_cast<std::size_t>(n_levels_))
+      throw std::logic_error(
+          "CompositeFacPoisson boundary contexts were not materialized with the hierarchy");
     boundary_kernel_ = kernel;
-    boundary_context_ = context;
-    boundary_context_.failure = &boundary_failure_;
+    for (int level = 0; level < n_levels_; ++level) {
+      auto& level_context = boundary_context_levels_[static_cast<std::size_t>(level)];
+      level_context = context;
+      level_context.point.level = level;
+      level_context.failure = &boundary_failure_;
+    }
+    boundary_context_ = boundary_context_levels_.front();
     has_boundary_kernel_ = true;
-    mg_.set_boundary_kernel(boundary_kernel_, boundary_context_);
+    mg_.set_boundary_kernel(boundary_kernel_, boundary_context_levels_.front());
     if (fully_refined_solver_)
-      fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_);
+      fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_levels_.back());
   }
 
+  /// Backward-compatible context broadcast for direct numerics callers whose dependencies are
+  /// level-independent. Runtime-backed AMR solves use set_boundary_context_for_level() so state and
+  /// field pointers are never reused across hierarchy layouts.
   void set_boundary_context(const FieldBoundaryExecutionContext& context) {
     if (!has_boundary_kernel_)
       throw std::runtime_error("CompositeFacPoisson boundary context has no installed kernel");
-    boundary_context_ = context;
-    boundary_context_.failure = &boundary_failure_;
+    for (int level = 0; level < n_levels_; ++level)
+      set_boundary_context_for_level(level, context);
+  }
+
+  void set_boundary_context_for_level(int level, const FieldBoundaryExecutionContext& context) {
+    if (!has_boundary_kernel_)
+      throw std::runtime_error("CompositeFacPoisson boundary context has no installed kernel");
+    if (level < 0 || level >= n_levels_)
+      throw std::out_of_range("CompositeFacPoisson boundary context level is out of range");
+    auto& level_context = boundary_context_levels_.at(static_cast<std::size_t>(level));
+    level_context = context;
+    level_context.point.level = level;
+    level_context.failure = &boundary_failure_;
     if (!boundary_kernel_.observes_iteration)
-      boundary_context_.point.iteration = 0;
-    mg_.set_boundary_context(boundary_context_);
-    if (fully_refined_solver_)
-      fully_refined_solver_->set_boundary_context(boundary_context_);
+      level_context.point.iteration = 0;
+    if (level == 0) {
+      boundary_context_ = level_context;
+      mg_.set_boundary_context(level_context);
+    }
+    if (fully_refined_solver_ && level + 1 == n_levels_)
+      fully_refined_solver_->set_boundary_context(level_context);
   }
 
   void set_field_nonlinear_options(const FieldNewtonOptions& options) {
     validate_field_newton_options(options);
     field_nonlinear_options_ = options;
     has_field_nonlinear_options_ = true;
+    if (fully_refined_solver_)
+      fully_refined_solver_->prepare_boundary_newton(options);
   }
 
   const SolveReport& last_solve_report() const { return last_solve_report_; }
@@ -533,10 +560,10 @@ class CompositeFacPoisson {
     if (has_boundary_kernel_ && boundary_kernel_.observes_iteration) {
       if (!has_field_nonlinear_options_)
         throw std::runtime_error(
-            "iterate-dependent composite field boundary requires a nonlinear FAS outer plan");
+            "iterate-dependent composite field boundary requires a nonlinear/JVP solve plan");
       last_solve_report_ = solve_boundary_fas(field_nonlinear_options_);
       if (!last_solve_report_.solved())
-        throw std::runtime_error(std::string("field FAS solve failed: ") +
+        throw std::runtime_error(std::string("field nonlinear solve failed: ") +
                                  last_solve_report_.status_name());
       return last_residual_;
     }
@@ -571,6 +598,13 @@ class CompositeFacPoisson {
 
     last_solve_report_ = {};
     diagnostics_.clear();
+    if (has_boundary_kernel_ && !fully_refined_solver_)
+      throw std::runtime_error(
+          "CompositeFacPoisson dynamic boundary requires a fully refined hierarchy; "
+          "coarse/fine FAC corrections have no level-qualified homogeneous/JVP boundary operator");
+    if (has_boundary_kernel_ && boundary_kernel_.observes_iteration)
+      throw std::runtime_error(
+          "CompositeFacPoisson iterate-dependent boundary requires solve_boundary_fas");
     if (fully_refined_solver_)
       return solve_fully_refined_hierarchy_(max_iters, rel_tol, abs_tol);
     const bool fallible_linear_boundary =
@@ -731,12 +765,6 @@ class CompositeFacPoisson {
       phi_probe_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
     }
     boundary_probe_snapshot_ = MultiFab(ba_c_, dm_c_, 1, boundary_view_c_.n_grow());
-    phi_published_snapshot_.clear();
-    phi_published_snapshot_.reserve(static_cast<std::size_t>(n_levels_));
-    for (int level = 0; level < n_levels_; ++level) {
-      MultiFab& phi = phi_level(level);
-      phi_published_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
-    }
   }
 
   Real exact_zero_composite_residual_(bool general) {
@@ -832,56 +860,38 @@ class CompositeFacPoisson {
  public:
   Real last_residual() const { return last_residual_; }
 
-  /// Nonlinear full-approximation outer loop for iterate-dependent physical closures.  The FAC
-  /// hierarchy is the nonlinear preconditioner/correction engine; only a converged hierarchy is
-  /// published.  Every failed evaluation, iteration limit or exception restores the immutable
-  /// pre-solve snapshots on all levels.
+  /// Nonlinear/JVP route for a hierarchy that is exactly the uniform finest grid. A partially
+  /// refined FAC hierarchy stays fail-closed until its correction operator can homogenize and
+  /// differentiate the physical closure independently at every coarse/fine level.
   SolveReport solve_boundary_fas(const FieldNewtonOptions& nonlinear) {
     if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration)
       return SolveReport::capability_failure();
     validate_field_newton_options(nonlinear);
-    for (int level = 0; level < n_levels_; ++level) {
-      MultiFab& phi = phi_level(level);
-      copy_all_cells_(phi_published_snapshot_[static_cast<std::size_t>(level)], phi);
-    }
-    auto restore = [&]() {
-      for (int level = 0; level < n_levels_; ++level)
-        copy_all_cells_(phi_level(level), phi_published_snapshot_[static_cast<std::size_t>(level)]);
-    };
-
-    SolveReport report;
-    Real base = Real(1);
-    try {
-      for (int iteration = 0; iteration < nonlinear.max_iterations; ++iteration) {
-        boundary_context_.point.iteration = iteration;
-        mg_.set_boundary_context(boundary_context_);
-        boundary_failure_.reset();
-        const Real residual =
-            solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol, options_.abs_tol);
-        const bool failed = boundary_failure_.synchronize_across_ranks();
-        if (failed || !std::isfinite(static_cast<double>(residual))) {
-          report.iters = iteration + 1;
-          report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-          restore();
-          return report;
-        }
-        if (iteration == 0)
-          base = residual > Real(0) ? residual : Real(1);
-        report.iters = iteration + 1;
-        report.rel_residual = residual / base;
-        last_residual_ = residual;
-        if (residual <= nonlinear.tolerance * base) {
-          report.mark_solved();
-          return report;
-        }
+    if (fully_refined_solver_) {
+      const int finest = n_levels_ - 1;
+      GeometricMG& solver = *fully_refined_solver_;
+      if (has_eps_) {
+        if (has_eps_y_)
+          solver.set_epsilon_anisotropic(eps_level(finest), eps_y_level(finest));
+        else
+          solver.set_epsilon(eps_level(finest));
       }
-    } catch (...) {
-      restore();
-      throw;
+      if (has_cross_)
+        solver.set_cross_terms(a_xy_level(finest), a_yx_level(finest));
+      solver.set_boundary_context(boundary_context_levels_.back());
+      copy0_(solver.rhs(), rhs_level(finest));
+      copy0_(solver.phi(), phi_level(finest));
+      last_solve_report_ = solver.solve_boundary_newton(nonlinear);
+      last_residual_ = last_solve_report_.solved() ? solver.current_residual()
+                                                   : std::numeric_limits<Real>::infinity();
+      record_residual(last_solve_report_.iters, last_residual_);
+      if (last_solve_report_.solved()) {
+        copy0_(phi_level(finest), solver.phi());
+        cascade_avgdown_();
+      }
+      return last_solve_report_;
     }
-    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
-    restore();
-    return report;
+    return SolveReport::capability_failure();
   }
 
  private:
@@ -1135,10 +1145,10 @@ class CompositeFacPoisson {
   bool has_boundary_kernel_ = false;
   CompiledFieldBoundaryKernel boundary_kernel_{};
   FieldBoundaryExecutionContext boundary_context_{};
+  std::vector<FieldBoundaryExecutionContext> boundary_context_levels_;
   FieldBoundaryFailure boundary_failure_{};
   std::vector<MultiFab> phi_probe_snapshot_;  ///< persistent full-state snapshots for exact R(0)
   MultiFab boundary_probe_snapshot_;          ///< persistent generated-boundary view snapshot
-  std::vector<MultiFab> phi_published_snapshot_;  ///< persistent rollback state for boundary FAS
   bool has_field_nonlinear_options_ = false;
   FieldNewtonOptions field_nonlinear_options_{};
   SolveReport last_solve_report_{};
