@@ -160,6 +160,15 @@ inline runtime::multiblock::InterfaceSide interface_side(const std::string& side
   throw std::invalid_argument("native shared interface side must be lower or upper");
 }
 
+inline runtime::multiblock::InterfaceTraceOperation interface_trace_operation(
+    const std::string& operation) {
+  if (operation == "cell_average")
+    return runtime::multiblock::InterfaceTraceOperation::CellAverage;
+  if (operation == "reconstructed_face")
+    return runtime::multiblock::InterfaceTraceOperation::ReconstructedFace;
+  throw std::invalid_argument("native shared interface trace operation is not canonical");
+}
+
 inline runtime::multiblock::AxisAlignedInterface interface_route_from_python(
     const py::dict& row, std::size_t left_block, std::size_t right_block, int level) {
   const py::dict handle = py::cast<py::dict>(row["handle"]);
@@ -191,6 +200,18 @@ inline runtime::multiblock::AxisAlignedInterface interface_route_from_python(
   route.tangential_orientation = orientation;
   route.right_component_for_left =
       py::cast<std::vector<int>>(permutation["right_component_for_left"]);
+  const py::dict left_projection = py::cast<py::dict>(left["projection"]);
+  const py::dict right_projection = py::cast<py::dict>(right["projection"]);
+  route.left_trace_projection_identity = py::cast<std::string>(left_projection["qualified_id"]);
+  route.right_trace_projection_identity = py::cast<std::string>(right_projection["qualified_id"]);
+  route.left_trace_provider_identity = py::cast<std::string>(left["trace_provider"]);
+  route.right_trace_provider_identity = py::cast<std::string>(right["trace_provider"]);
+  route.left_trace_operation =
+      interface_trace_operation(py::cast<std::string>(left["trace_operation"]));
+  route.right_trace_operation =
+      interface_trace_operation(py::cast<std::string>(right["trace_operation"]));
+  route.left_trace_required_depth = py::cast<int>(left["required_depth"]);
+  route.right_trace_required_depth = py::cast<int>(right["required_depth"]);
   route.affine_mapping_identity = py::cast<std::string>(mapping_handle["qualified_id"]);
   route.right_normal_translation =
       static_cast<Real>(py::cast<double>(mapping["right_normal_translation"]));

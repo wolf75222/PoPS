@@ -7,9 +7,11 @@ that exact accepted image, then execute one real native tag/cluster/regrid pass 
 time and macro-step.
 
 The compiled Program is AB2, so the accepted image includes a real multistep history and lagged
-conservative-flux authority. The test also injects a failure after the native topology mutation.
-The restart transaction must restore the fresh runtime bit-for-bit before a second, successful
-restart can rebind that history, publish its weaker continuation identity, and advance one step.
+conservative-flux authority. Its native tagger also carries a non-empty minimum-cycle hysteresis
+window. The test injects a failure after the native topology/tagging mutation. The restart
+transaction must restore the fresh runtime bit-for-bit before a second, successful restart can
+rebind that history, advance the persistent tagging cycle exactly once, publish its weaker
+continuation identity, and advance one step.
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ ROOT = Path(__file__).resolve().parents[4]
 N = 16
 DT = 1.0e-2
 NSTEPS = 14
+HYSTERESIS_CYCLES = 4
 
 pytestmark = [
     pytest.mark.compiler,
@@ -136,7 +139,7 @@ def _resolved(native_cxx=None):
                 Tag(ValueExpr(block_state) > case.value(threshold)),
                 Buffer(cells=1),
             ),
-            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            hysteresis=Hysteresis(HYSTERESIS_CYCLES, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),
         # Bootstrap creates the initial fine layout, but no ordinary regrid fires in this test.
@@ -228,6 +231,52 @@ def _assert_same_accepted_image(runtime, expected):
             np.testing.assert_array_equal(current, recorded)
 
 
+def _accepted_tagging_hysteresis(payload):
+    """Extract the canonical persistent-tagging image from accepted Program state."""
+    encoded = bytes(payload)
+    cursor = 0
+
+    def read_size():
+        nonlocal cursor
+        assert cursor + 8 <= len(encoded), "accepted-state payload ends before a size field"
+        value = int.from_bytes(encoded[cursor : cursor + 8], "little")
+        cursor += 8
+        return value
+
+    assert encoded[:8] == b"POPSAST4"
+    cursor = 8
+    level_count = read_size()
+    cursor += level_count * 40
+    assert cursor <= len(encoded), "accepted-state level clocks are truncated"
+    logical_clock_count = read_size()
+    for _ in range(logical_clock_count):
+        name_size = read_size()
+        cursor += name_size + 8
+        assert cursor <= len(encoded), "accepted-state logical clocks are truncated"
+    tagging_size = read_size()
+    assert cursor + tagging_size <= len(encoded), "accepted-state tagging image is truncated"
+    return encoded[cursor : cursor + tagging_size]
+
+
+def _tagging_hysteresis_summary(encoded):
+    """Return and authenticate (min_cycles, cycle, active_entries)."""
+    assert encoded[:8] == b"POPSHYS1"
+    assert len(encoded) >= 36
+    minimum_cycles = int.from_bytes(encoded[8:12], "little")
+    cycle = int.from_bytes(encoded[12:20], "little")
+    identity_size = int.from_bytes(encoded[20:28], "little")
+    count_offset = 28 + identity_size
+    assert count_offset + 8 <= len(encoded), "tagging provider identity is truncated"
+    active_entries = int.from_bytes(encoded[count_offset : count_offset + 8], "little")
+    record_size = 3 * 4 + 8 + 1
+    assert count_offset + 8 + active_entries * record_size == len(encoded)
+    return minimum_cycles, cycle, active_entries
+
+
+def _runtime_tagging_hysteresis(runtime):
+    return _accepted_tagging_hysteresis(runtime._executor._s.program_accepted_state())
+
+
 def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     native_cxx,
     isolated_native_cache,
@@ -253,18 +302,26 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     source_time = float(source.time())
     source_step = int(source.macro_step())
     source_run_identity = source.last_run_identity
+    source_hysteresis = _runtime_tagging_hysteresis(source)
+    source_min_cycles, source_cycle, source_entries = _tagging_hysteresis_summary(source_hysteresis)
+    assert source_min_cycles == HYSTERESIS_CYCLES
+    assert source_cycle > 0
+    assert source_entries > 0
     checkpoint = source.checkpoint(tmp_path / "moving-profile")
 
     restarted = _bind(artifact)
     rollback_image = _accepted_image(restarted)
+    rollback_hysteresis = _runtime_tagging_hysteresis(restarted)
     from pops.runtime import _amr_checkpoint_v3 as checkpoint_codec
 
     original_conservation_check = checkpoint_codec._require_restart_conservation
     transformed_boxes = []
+    transformed_hysteresis = []
 
     def fail_after_native_regrid(before, after):
         del before, after
         transformed_boxes.append(tuple(restarted.patch_boxes()))
+        transformed_hysteresis.append(_runtime_tagging_hysteresis(restarted))
         raise RuntimeError("injected post-regrid validation failure")
 
     monkeypatch.setattr(
@@ -275,7 +332,16 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     with pytest.raises(RuntimeError, match="injected post-regrid validation failure"):
         restarted.restart(checkpoint)
     assert transformed_boxes and transformed_boxes[0] != rollback_image["boxes"]
+    assert transformed_hysteresis
+    transformed_min_cycles, transformed_cycle, transformed_entries = _tagging_hysteresis_summary(
+        transformed_hysteresis[0]
+    )
+    assert transformed_min_cycles == HYSTERESIS_CYCLES
+    assert transformed_cycle == source_cycle + 1
+    assert transformed_entries > 0
+    assert transformed_hysteresis[0] != source_hysteresis
     _assert_same_accepted_image(restarted, rollback_image)
+    assert _runtime_tagging_hysteresis(restarted) == rollback_hysteresis
     assert restarted._executor.last_restart_regrid_receipt() is None
 
     monkeypatch.setattr(
@@ -294,6 +360,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert restart_identity == restarted.last_restart_identity
     assert restarted.last_run_identity.domain == "run"
     assert restarted.last_run_identity != source_run_identity
+    assert _runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]
     assert tuple(restarted.history_names()) == tuple(source.history_names())
     assert all(
         np.all(np.isfinite(np.asarray(restarted.history_global(name, slot))))
@@ -324,6 +391,7 @@ def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(
     assert float(restarted.time()) == pytest.approx(source_time + DT)
     assert restarted._executor.last_run_manifest.continuation_identity == continuation_identity
     assert continued.run_identity != source_run_identity
+    assert _runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]
     assert all(
         np.all(np.isfinite(np.asarray(restarted.history_global(name, slot))))
         for name in restarted.history_names()

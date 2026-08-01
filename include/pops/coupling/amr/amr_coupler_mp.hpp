@@ -691,7 +691,7 @@ class AmrCouplerMP {
   // AMR ACCEPTED-STATE CHECKPOINT / RESTART. The mono-block coupler carries the FULL conservative
   // state per level (all components) plus phi (multigrid warm-start), and can impose a saved fine
   // hierarchy instead of reclustering tags. Local accessors preserve native patch ownership; their
-  // explicit global counterparts perform the MPI gather used by the strict v5 checkpoint provider.
+  // explicit global counterparts perform the MPI gather used by the strict AMR v7 checkpoint provider.
   // ----------------------------------------------------------------------------------------------
 
   // Reads the FULL conservative state (all components) of level @p k into a flat

@@ -21,6 +21,7 @@ struct FieldLogicalTimePoint {
   int clock_slot = 0;
   int partition_slot = 0;
   int stage_slot = 0;
+  int level = 0;
   int step = 0;
   int substep = 0;
   int iteration = 0;

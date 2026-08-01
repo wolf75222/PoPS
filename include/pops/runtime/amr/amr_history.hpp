@@ -296,35 +296,122 @@ struct AmrHistoryOps {
   // ownership-distributed level slices; replicated level 0 is already global on every rank.
   static std::vector<double> global(const AmrRuntime& eng, const std::string& name, int slot,
                                     bool gather) {
-    auto it = eng.hist_rings_.find(name);
-    if (it == eng.hist_rings_.end())
-      throw std::runtime_error("AmrRuntime::history_global: unknown history '" + name + "'");
-    const std::vector<std::vector<MultiFab>>& ring = it->second;
-    if (slot < 0 || slot >= static_cast<int>(ring.size()))
-      throw std::runtime_error("AmrRuntime::history_global: slot=" + std::to_string(slot) +
-                               " out of range for history '" + name + "'");
-    const int nc = ring[static_cast<std::size_t>(slot)][0].ncomp();
+    const std::vector<std::vector<MultiFab>>* ring = nullptr;
+    std::exception_ptr structural_failure;
+    try {
+      eng.require_complete_history_structure_("AmrRuntime::history_global");
+      const auto it = eng.hist_rings_.find(name);
+      if (it == eng.hist_rings_.end())
+        throw std::runtime_error("AmrRuntime::history_global: unknown history '" + name + "'");
+      if (slot < 0 || slot >= static_cast<int>(it->second.size()))
+        throw std::runtime_error("AmrRuntime::history_global: slot=" + std::to_string(slot) +
+                                 " out of range for history '" + name + "'");
+      ring = &it->second;
+    } catch (...) {
+      structural_failure = std::current_exception();
+    }
+    if (gather)
+      AmrRuntime::finish_collective_materialization_validation_(
+          structural_failure, "AmrRuntime::history_global structural preflight");
+    else if (structural_failure)
+      std::rethrow_exception(structural_failure);
+
+    const auto& selected = (*ring)[static_cast<std::size_t>(slot)];
+    const int nc = selected.front().ncomp();
+    std::vector<std::size_t> offsets;
+    std::vector<std::size_t> level_sizes;
+    std::string layout_identity;
     std::vector<double> out;
+    std::exception_ptr allocation_failure;
+    try {
+      offsets.reserve(static_cast<std::size_t>(eng.nlev_));
+      level_sizes.reserve(static_cast<std::size_t>(eng.nlev_));
+      std::size_t total = 0;
+      for (int level = 0; level < eng.nlev_; ++level) {
+        const Box2D domain = amr_level_index_domain(eng.dom_, level);
+        const std::size_t nx = static_cast<std::size_t>(domain.nx());
+        const std::size_t ny = static_cast<std::size_t>(domain.ny());
+        if (nx != 0 && ny > std::numeric_limits<std::size_t>::max() / nx)
+          throw std::overflow_error("AmrRuntime::history_global level-cell count overflow");
+        const std::size_t cells = nx * ny;
+        if (cells > std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(nc))
+          throw std::overflow_error("AmrRuntime::history_global component size overflow");
+        const std::size_t level_size = static_cast<std::size_t>(nc) * cells;
+        if (level_size > std::numeric_limits<std::size_t>::max() - total)
+          throw std::overflow_error("AmrRuntime::history_global total size overflow");
+        offsets.push_back(total);
+        level_sizes.push_back(level_size);
+        total += level_size;
+      }
+      out.assign(total, 0.0);
+      const auto append_scalar = [&layout_identity]<class Value>(const Value& value) {
+        static_assert(std::is_trivially_copyable_v<Value>);
+        layout_identity.append(reinterpret_cast<const char*>(&value), sizeof(Value));
+      };
+      const auto append_text = [&layout_identity, &append_scalar](std::string_view value) {
+        append_scalar(static_cast<std::uint64_t>(value.size()));
+        layout_identity.append(value.data(), value.size());
+      };
+      append_text("pops.amr.history-global-layout.v1");
+      append_text(name);
+      append_scalar(slot);
+      append_scalar(eng.nlev_);
+      append_scalar(nc);
+      append_scalar(static_cast<std::uint8_t>(eng.replicated_coarse_));
+      for (int level = 0; level < eng.nlev_; ++level) {
+        const auto index = static_cast<std::size_t>(level);
+        const Box2D domain = amr_level_index_domain(eng.dom_, level);
+        append_scalar(level);
+        append_scalar(domain.lo[0]);
+        append_scalar(domain.lo[1]);
+        append_scalar(domain.hi[0]);
+        append_scalar(domain.hi[1]);
+        append_scalar(level_sizes[index]);
+        const auto& boxes = eng.hierarchy_.ba[index].boxes();
+        const auto& owners = eng.hierarchy_.dm[index].ranks();
+        append_scalar(static_cast<std::uint64_t>(boxes.size()));
+        for (const Box2D& box : boxes) {
+          append_scalar(box.lo[0]);
+          append_scalar(box.lo[1]);
+          append_scalar(box.hi[0]);
+          append_scalar(box.hi[1]);
+        }
+        append_scalar(static_cast<std::uint64_t>(owners.size()));
+        for (const int owner : owners)
+          append_scalar(owner);
+      }
+    } catch (...) {
+      allocation_failure = std::current_exception();
+    }
+    if (gather)
+      AmrRuntime::finish_collective_materialization_validation_(
+          allocation_failure, "AmrRuntime::history_global allocation preflight");
+    else if (allocation_failure)
+      std::rethrow_exception(allocation_failure);
+    if (gather && !all_ranks_agree_exact_ordered_byte_pairs(
+                      {{"pops.amr.history-global-layout", layout_identity}}))
+      throw std::runtime_error(
+          "AmrRuntime::history_global layout/count identity differs across MPI ranks");
+
     device_fence();
     for (int k = 0; k < eng.nlev_; ++k) {
-      const MultiFab& S = ring[static_cast<std::size_t>(slot)][static_cast<std::size_t>(k)];
+      const MultiFab& S = selected[static_cast<std::size_t>(k)];
       const Box2D domain = amr_level_index_domain(eng.dom_, k);
       const std::size_t nx = static_cast<std::size_t>(domain.nx());
       const std::size_t cells = nx * static_cast<std::size_t>(domain.ny());
-      std::vector<double> lvl(static_cast<std::size_t>(nc) * cells, 0.0);
+      double* const level_values = out.data() + offsets[static_cast<std::size_t>(k)];
       for (int li = 0; li < S.local_size(); ++li) {
         const ConstArray4 a = S.fab(li).const_array();
         const Box2D v = S.box(li);
         for (int j = v.lo[1]; j <= v.hi[1]; ++j)
           for (int i = v.lo[0]; i <= v.hi[0]; ++i)
             for (int c = 0; c < nc; ++c)
-              lvl[static_cast<std::size_t>(c) * cells +
-                  static_cast<std::size_t>(j - domain.lo[1]) * nx +
-                  static_cast<std::size_t>(i - domain.lo[0])] = a(i, j, c);
+              level_values[static_cast<std::size_t>(c) * cells +
+                           static_cast<std::size_t>(j - domain.lo[1]) * nx +
+                           static_cast<std::size_t>(i - domain.lo[0])] = a(i, j, c);
       }
       if (gather && (k > 0 || !eng.replicated_coarse_))
-        all_reduce_sum_inplace(lvl.data(), lvl.size());
-      out.insert(out.end(), lvl.begin(), lvl.end());
+        all_reduce_sum_inplace(level_values, level_sizes[static_cast<std::size_t>(k)]);
     }
     return out;
   }

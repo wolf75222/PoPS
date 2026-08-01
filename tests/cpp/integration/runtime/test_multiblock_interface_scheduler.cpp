@@ -8,6 +8,7 @@
 #include <pops/runtime/system/system_block_store.hpp>
 
 #include "amr_transfer_test_authority.hpp"
+#include "amr_tagging_test_authority.hpp"
 
 #include <array>
 #include <cstdint>
@@ -100,6 +101,17 @@ PopsExecutionContextV1 mpi_world_interface_execution() {
 }
 #endif
 
+void authenticate_cell_average_trace(AxisAlignedInterface& route) {
+  route.left_trace_projection_identity = route.identity + ".left-trace";
+  route.right_trace_projection_identity = route.identity + ".right-trace";
+  route.left_trace_provider_identity = "limiter.none";
+  route.right_trace_provider_identity = "limiter.none";
+  route.left_trace_operation = InterfaceTraceOperation::CellAverage;
+  route.right_trace_operation = InterfaceTraceOperation::CellAverage;
+  route.left_trace_required_depth = 1;
+  route.right_trace_required_depth = 1;
+}
+
 AxisAlignedInterface heterogeneous_route() {
   AxisAlignedInterface route;
   route.identity = "left-right.shared_flux";
@@ -115,6 +127,7 @@ AxisAlignedInterface heterogeneous_route() {
   route.affine_mapping_identity = "reverse-y-on-coincident-face";
   route.right_tangential_scale = Real(-1);
   route.right_tangential_offset = Real(3);
+  authenticate_cell_average_trace(route);
   return route;
 }
 
@@ -133,7 +146,89 @@ AxisAlignedInterface aligned_x_route(std::string identity) {
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
+  authenticate_cell_average_trace(route);
   return route;
+}
+
+template <std::size_t ConfiguredLevels>
+AmrRuntime make_dynamic_interface_runtime(int cells, int active_levels,
+                                          std::array<int, ConfiguredLevels>& evaluator_calls) {
+  static_assert(ConfiguredLevels > 0);
+  if (active_levels < 1 || active_levels > static_cast<int>(ConfiguredLevels))
+    throw std::invalid_argument(
+        "dynamic interface test requires one active configured-level prefix");
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = cells;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 1;
+  params.poisson.bc = BCRec{};
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, active_levels);
+  int cumulative_refinement = 1;
+  for (int level = 1; level < active_levels; ++level) {
+    cumulative_refinement *= kAmrRefRatio;
+    layout.ba[static_cast<std::size_t>(level)] =
+        BoxArray(std::vector<Box2D>{layout.geom.domain.refine(cumulative_refinement)});
+    layout.dm[static_cast<std::size_t>(level)] =
+        layout.load_balance->distribute(layout.ba[static_cast<std::size_t>(level)], n_ranks());
+  }
+
+  std::vector<AmrRuntimeBlock> blocks;
+  for (const char* name : {"left", "right"}) {
+    AmrRuntimeBlock block = detail::dispatch_amr_block(
+        scalar_model(), "none", "rusanov", layout, name,
+        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1);
+    block.state_identity = std::string("test://dynamic-interface/block/") + name + "/state/U";
+    const auto omit_local_interface = [](MultiFab&, const MultiFab&, const Geometry&, MultiFab& fx,
+                                         MultiFab& fy, MultiFab& rhs) {
+      fx.set_val(Real(0));
+      fy.set_val(Real(0));
+      rhs.set_val(Real(0));
+    };
+    block.level_flux_capture = omit_local_interface;
+    block.level_flux_capture_neg_div = omit_local_interface;
+    block.level_rhs_without_prepared_interfaces = [](const BoundaryEvaluationPoint&, MultiFab&,
+                                                     const MultiFab&, const Geometry&,
+                                                     MultiFab& rhs) { rhs.set_val(Real(0)); };
+    block.level_neg_div_flux_without_prepared_interfaces =
+        block.level_rhs_without_prepared_interfaces;
+    blocks.push_back(std::move(block));
+  }
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
+  std::vector<int> refinement_ratios;
+  std::vector<amr::ParentChildClockRelation> relations;
+  refinement_ratios.reserve(ConfiguredLevels - 1);
+  relations.reserve(ConfiguredLevels - 1);
+  for (std::size_t parent = 0; parent + 1 < ConfiguredLevels; ++parent) {
+    refinement_ratios.push_back(kAmrRefRatio);
+    relations.emplace_back(static_cast<int>(parent), static_cast<int>(parent + 1),
+                           amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly);
+  }
+  if (active_levels < static_cast<int>(ConfiguredLevels))
+    runtime.configure_hierarchy_capacity(std::move(refinement_ratios), std::move(relations));
+  else
+    runtime.set_parent_child_temporal_relations(std::move(relations));
+  runtime.set_regrid(/*every=*/1, /*grow=*/0, /*margin=*/0);
+
+  for (int level = 0; level < active_levels; ++level) {
+    AxisAlignedInterface route = aligned_x_route("amr.dynamic.shared-flux");
+    route.level = level;
+    route.affine_mapping_identity = "periodic-x-translation";
+    route.right_normal_translation = Real(1);
+    runtime.install_level_interface_flux(
+        level, route, serial_interface_execution(),
+        [&evaluator_calls, level](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+          ++evaluator_calls[static_cast<std::size_t>(level)];
+          for (int face = 0; face < batch.face_count; ++face)
+            batch.shared_flux[face] = Real(level + face + 1);
+        });
+  }
+  if (active_levels > 1)
+    runtime.require_complete_active_level_interfaces();
+  return runtime;
 }
 
 }  // namespace
@@ -295,6 +390,7 @@ TEST(test_multiblock_interface_scheduler,
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
+  authenticate_cell_average_trace(route);
   const Geometry left_geometry{left_state.box_array().bounding_box(), Real(0), Real(2), Real(0),
                                Real(6)};
   const Geometry right_geometry{right_state.box_array().bounding_box(), Real(2), Real(5), Real(0),
@@ -312,6 +408,11 @@ TEST(test_multiblock_interface_scheduler,
                         batch.shared_flux[face] = Real(face + 2);
                       }
                     });
+  EXPECT_TRUE(scheduler.owns_face(0, 0, InterfaceAxis::X, InterfaceSide::High));
+  EXPECT_TRUE(scheduler.owns_face(1, 0, InterfaceAxis::X, InterfaceSide::Low));
+  EXPECT_FALSE(scheduler.owns_face(0, 0, InterfaceAxis::X, InterfaceSide::Low));
+  EXPECT_FALSE(scheduler.owns_face(0, 0, InterfaceAxis::Y, InterfaceSide::High));
+  EXPECT_FALSE(scheduler.owns_face(0, 1, InterfaceAxis::X, InterfaceSide::High));
   const BoundaryEvaluationPoint point{"clock.multibox", 1, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
   std::vector<MultiFab*> states{&left_state, &right_state};
   std::vector<MultiFab*> rhs{&left_rhs, &right_rhs};
@@ -320,6 +421,131 @@ TEST(test_multiblock_interface_scheduler,
   EXPECT_EQ(calls, 1);
   for (int face = 0; face < 6; ++face)
     EXPECT_EQ(get_cell(left_rhs, 3, face, 0) + get_cell(right_rhs, 10, 7 + face, 0), Real(0));
+  scheduler.clear();
+  EXPECT_FALSE(scheduler.owns_face(0, 0, InterfaceAxis::X, InterfaceSide::High));
+}
+
+TEST(test_multiblock_interface_scheduler,
+     RematerializationRejectsPartialFaceWithoutMutatingAcceptedRegistry) {
+  ensure_runtime();
+  const Box2D domain{{0, 0}, {3, 3}};
+  const Geometry geometry{domain, Real(0), Real(1), Real(0), Real(1)};
+  MultiFab left_state = make_field(domain, 1);
+  MultiFab right_state = make_field(domain, 1);
+  left_state.set_val(Real(1));
+  right_state.set_val(Real(2));
+
+  AxisAlignedInterface route = aligned_x_route("dynamic.partial-face.shared-flux");
+  route.affine_mapping_identity = "periodic-x-translation";
+  route.right_normal_translation = Real(1);
+  InterfaceFluxScheduler scheduler;
+  int evaluator_calls = 0;
+  scheduler.install(route, left_state, geometry, right_state, geometry,
+                    serial_interface_execution(),
+                    [&](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+                      ++evaluator_calls;
+                      for (int face = 0; face < batch.face_count; ++face)
+                        batch.shared_flux[face] = Real(face + 1);
+                    });
+
+  MultiFab partial_left = make_field(Box2D{{1, 1}, {2, 2}}, 1);
+  MultiFab partial_right = make_field(Box2D{{1, 1}, {2, 2}}, 1);
+  EXPECT_THROW(scheduler.rematerialized(
+                   1,
+                   [&](std::size_t block, int level) -> MultiFab& {
+                     EXPECT_EQ(level, 0);
+                     return block == 0 ? partial_left : partial_right;
+                   },
+                   [&](int level) {
+                     EXPECT_EQ(level, 0);
+                     return geometry;
+                   }),
+               std::invalid_argument);
+
+  MultiFab left_rhs(left_state.box_array(), left_state.dmap(), 1, 0);
+  MultiFab right_rhs(right_state.box_array(), right_state.dmap(), 1, 0);
+  const BoundaryEvaluationPoint point{
+      "clock.rematerialization-rollback", 1, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  scheduler.apply(point, {&left_state, &right_state}, {&left_rhs, &right_rhs});
+  EXPECT_EQ(evaluator_calls, 1)
+      << "a rejected detached candidate must not mutate the accepted registry";
+  for (int j = domain.lo[1]; j <= domain.hi[1]; ++j)
+    EXPECT_EQ(get_cell(left_rhs, domain.hi[0], j, 0) + get_cell(right_rhs, domain.lo[0], j, 0),
+              Real(0));
+}
+
+TEST(test_multiblock_interface_scheduler,
+     RematerializationPreservesIncrementalFineRouteInstallationDuringBindBootstrap) {
+  ensure_runtime();
+  std::array<int, 2> evaluator_calls{0, 0};
+  AmrRuntime runtime = make_dynamic_interface_runtime(4, 1, evaluator_calls);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(-1)}, {1, 0, Real(-1)}},
+                                         "test::interface-bind-bootstrap@1");
+  runtime.begin_bootstrap_plan();
+  ASSERT_TRUE(runtime.bootstrap_next_level(kAmrRefRatio));
+  ASSERT_EQ(runtime.nlev(), 2);
+  runtime.commit_bootstrap_level();
+
+  AxisAlignedInterface fine_route = aligned_x_route("amr.dynamic.shared-flux");
+  fine_route.level = 1;
+  fine_route.affine_mapping_identity = "periodic-x-translation";
+  fine_route.right_normal_translation = Real(1);
+  runtime.install_level_interface_flux(
+      1, fine_route, serial_interface_execution(),
+      [&evaluator_calls](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+        ++evaluator_calls[1];
+        for (int face = 0; face < batch.face_count; ++face)
+          batch.shared_flux[face] = Real(face + 1);
+      });
+  runtime.require_complete_active_level_interfaces();
+
+  MultiFab& left = runtime.level_state(0, 1);
+  MultiFab& right = runtime.level_state(1, 1);
+  MultiFab left_rhs(left.box_array(), left.dmap(), 1, 0);
+  MultiFab right_rhs(right.box_array(), right.dmap(), 1, 0);
+  const BoundaryEvaluationPoint point{
+      "clock.interface-bind-bootstrap", 0, 1, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  runtime.level_rhs_with_interfaces(1, point, {&left, &right}, {&left_rhs, &right_rhs});
+  EXPECT_EQ(evaluator_calls[1], 1);
+}
+
+TEST(test_multiblock_interface_scheduler,
+     BootstrapRollbackRemovesProvisionalFineRoutesAndRestoresTheAcceptedPrefix) {
+  ensure_runtime();
+  std::array<int, 2> evaluator_calls{0, 0};
+  AmrRuntime runtime = make_dynamic_interface_runtime(4, 1, evaluator_calls);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(-1)}, {1, 0, Real(-1)}},
+                                         "test::interface-bind-bootstrap-rollback@1");
+  runtime.begin_bootstrap_plan();
+  ASSERT_TRUE(runtime.bootstrap_next_level(kAmrRefRatio));
+
+  AxisAlignedInterface fine_route = aligned_x_route("amr.dynamic.shared-flux");
+  fine_route.level = 1;
+  fine_route.affine_mapping_identity = "periodic-x-translation";
+  fine_route.right_normal_translation = Real(1);
+  runtime.install_level_interface_flux(
+      1, fine_route, serial_interface_execution(),
+      [&evaluator_calls](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+        ++evaluator_calls[1];
+        for (int face = 0; face < batch.face_count; ++face)
+          batch.shared_flux[face] = Real(face + 1);
+      });
+  runtime.require_complete_active_level_interfaces();
+
+  runtime.rollback_bootstrap_level();
+  ASSERT_EQ(runtime.nlev(), 1);
+  EXPECT_TRUE(runtime.has_level_interfaces(0));
+  EXPECT_FALSE(runtime.has_level_interfaces(1));
+  runtime.require_complete_active_level_interfaces();
+
+  MultiFab& left = runtime.level_state(0, 0);
+  MultiFab& right = runtime.level_state(1, 0);
+  MultiFab left_rhs(left.box_array(), left.dmap(), 1, 0);
+  MultiFab right_rhs(right.box_array(), right.dmap(), 1, 0);
+  const BoundaryEvaluationPoint point{
+      "clock.interface-bind-bootstrap-rollback", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  runtime.level_rhs_with_interfaces(0, point, {&left, &right}, {&left_rhs, &right_rhs});
+  EXPECT_EQ(evaluator_calls, (std::array<int, 2>{1, 0}));
 }
 
 TEST(test_multiblock_interface_scheduler,
@@ -358,7 +584,7 @@ TEST(test_multiblock_interface_scheduler,
                                   {0, 7, amr::Rational(1, 1), 0.2}};
   const amr::ClockStamp clock{0, 7, amr::Rational(1, 2), 0.1};
   InterfaceFluxFragmentPublication publication{
-      &ledger, topology_epoch, 0, 1, clock, "program.group.node.42", interval, amr::Rational(3, 4)};
+      &ledger, topology_epoch, 2, clock, "program.group.node.42", interval, amr::Rational(3, 4)};
   const BoundaryEvaluationPoint point{"clock.fragments",   7,   0,  0, 42,
                                       amr::Rational(1, 2), 0.2, 0.1};
   std::vector<MultiFab*> states{&left_state, &right_state};
@@ -417,8 +643,7 @@ TEST(test_multiblock_interface_scheduler,
                                   {1, 9, amr::Rational(1, 1), 0.5}};
   InterfaceFluxFragmentPublication publication{&ledger,
                                                23,
-                                               0,
-                                               1,
+                                               2,
                                                amr::ClockStamp{1, 9, amr::Rational(1, 2), 0.45},
                                                "program.group.node.8",
                                                interval,
@@ -438,7 +663,7 @@ TEST(test_multiblock_interface_scheduler,
 }
 
 TEST(test_multiblock_interface_scheduler,
-     AmrProgramPublishesExactFixedHierarchyFragmentsAndRestoresReportOnRejectedAttempt) {
+     AmrProgramPersistsInterfaceFragmentsAcrossAcceptedStateImportAndRejectedAttempt) {
   ensure_runtime();
   constexpr int cells = 4;
   AmrBuildParams params;
@@ -582,7 +807,7 @@ TEST(test_multiblock_interface_scheduler,
         EXPECT_DOUBLE_EQ(entry.key.clock.physical_time, 0.15);
       }
     } else {
-      ADD_FAILURE() << "fragment clock escaped the fixed two-level hierarchy";
+      ADD_FAILURE() << "fragment clock escaped the authored two-level test hierarchy";
     }
   }
   EXPECT_EQ(coarse_orientation_count, 1);
@@ -660,6 +885,396 @@ TEST(test_multiblock_interface_scheduler,
     EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 2));
     EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.2);
   }
+
+  // The accepted audit is part of the canonical Program image, not a process-local report. Decode
+  // the exact bytes published by the real interface execution, overwrite the live report with
+  // another accepted step, then import and enter a rejected attempt. Import plus rollback must
+  // recover the report exactly; an unresolved accepted weight is rejected by the canonical decoder
+  // before facade publication.
+  const std::vector<std::uint8_t> checkpoint = facade.program_accepted_state();
+  const auto persisted = runtime::program::deserialize_amr_program_accepted_state(checkpoint);
+  ASSERT_EQ(persisted.accepted_interface_flux_ledger.size(), 2u);
+  for (const auto& entry : persisted.accepted_interface_flux_ledger) {
+    EXPECT_EQ(entry.key.stage_identity, "program.group.node.44");
+    EXPECT_TRUE(entry.measure.stage_weight_resolved);
+  }
+
+  evaluate_group(false);
+  ASSERT_EQ(context.accepted_interface_flux_fragments().size(), 3u);
+  EXPECT_EQ(context.accepted_interface_flux_fragments().front().key.stage_identity,
+            "program.group.node.42");
+  EXPECT_NE(facade.program_accepted_state(), checkpoint);
+
+  auto malformed = persisted;
+  malformed.accepted_interface_flux_ledger.front().measure.stage_weight_resolved = false;
+  const auto malformed_bytes = runtime::program::serialize_amr_program_accepted_state(malformed);
+  const auto accepted_before_malformed = facade.program_accepted_state();
+  const std::uint64_t revision_before_malformed = facade.program_accepted_state_revision();
+  EXPECT_THROW(runtime::program::deserialize_amr_program_accepted_state(malformed_bytes),
+               std::runtime_error);
+  EXPECT_EQ(facade.program_accepted_state(), accepted_before_malformed);
+  EXPECT_EQ(facade.program_accepted_state_revision(), revision_before_malformed);
+
+  facade.restore_program_accepted_state(checkpoint);
+  EXPECT_THROW(
+      context.advance_hierarchy(0.2,
+                                [&](double) {
+                                  throw std::runtime_error(
+                                      "reject after strict interface-ledger restart import");
+                                }),
+      std::runtime_error);
+  EXPECT_EQ(facade.program_accepted_state(), checkpoint);
+  const auto& restored_fragments = context.accepted_interface_flux_fragments();
+  ASSERT_EQ(restored_fragments.size(), 2u);
+  for (const auto& entry : restored_fragments) {
+    EXPECT_EQ(entry.key.stage_identity, "program.group.node.44");
+    EXPECT_EQ(entry.key.topology_epoch, runtime.topology_epoch());
+    EXPECT_TRUE(entry.measure.stage_weight_resolved);
+    EXPECT_EQ(entry.measure.stage_weight, amr::Rational(1, 2));
+    EXPECT_DOUBLE_EQ(entry.measure.substep_duration, 0.2);
+  }
+}
+
+TEST(test_multiblock_interface_scheduler,
+     FrozenThreeLevelProgramPublishesEverySubcycledInterfaceLevel) {
+  ensure_runtime();
+  constexpr int cells = 4;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = cells;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 3);
+  for (int level = 1; level < 3; ++level) {
+    const int refinement = level == 1 ? kAmrRefRatio : kAmrRefRatio * kAmrRefRatio;
+    layout.ba[static_cast<std::size_t>(level)] =
+        BoxArray(std::vector<Box2D>{layout.geom.domain.refine(refinement)});
+    layout.dm[static_cast<std::size_t>(level)] =
+        layout.load_balance->distribute(layout.ba[static_cast<std::size_t>(level)], n_ranks());
+  }
+
+  std::vector<AmrRuntimeBlock> blocks;
+  for (const char* name : {"left", "right"}) {
+    AmrRuntimeBlock block = detail::dispatch_amr_block(
+        scalar_model(), "none", "rusanov", layout, name,
+        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1);
+    const auto omit_local_interface = [](MultiFab&, const MultiFab&, const Geometry&, MultiFab& fx,
+                                         MultiFab& fy, MultiFab& rhs) {
+      fx.set_val(Real(0));
+      fy.set_val(Real(0));
+      rhs.set_val(Real(0));
+    };
+    block.level_flux_capture = omit_local_interface;
+    block.level_flux_capture_neg_div = omit_local_interface;
+    block.level_rhs_without_prepared_interfaces = [](const BoundaryEvaluationPoint&, MultiFab&,
+                                                     const MultiFab&, const Geometry&,
+                                                     MultiFab& rhs) { rhs.set_val(Real(0)); };
+    block.level_neg_div_flux_without_prepared_interfaces =
+        block.level_rhs_without_prepared_interfaces;
+    blocks.push_back(std::move(block));
+  }
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
+  runtime.set_parent_child_temporal_relations(
+      {amr::ParentChildClockRelation(0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly),
+       amr::ParentChildClockRelation(1, 2, amr::Rational(2, 1),
+                                     amr::RemainderPolicy::IntegralOnly)});
+
+  std::array<int, 3> evaluator_calls{0, 0, 0};
+  for (int level = 0; level < 3; ++level) {
+    AxisAlignedInterface route = aligned_x_route("amr.program.three-level.shared-flux");
+    route.level = level;
+    route.affine_mapping_identity = "periodic-x-translation";
+    route.right_normal_translation = Real(1);
+    runtime.install_level_interface_flux(
+        level, route, serial_interface_execution(),
+        [&, level](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+          ++evaluator_calls[static_cast<std::size_t>(level)];
+          for (int face = 0; face < batch.face_count; ++face)
+            batch.shared_flux[face] = Real(level + face + 1);
+        });
+  }
+  runtime.require_complete_active_level_interfaces();
+
+  AmrSystem facade(AmrSystemConfig{});
+  facade.set_program_block_map({0, 1});
+  runtime::program::AmrProgramContext context(&runtime, &facade);
+  context.configure_primary_clock("clock.program-three-level-fragments");
+  context.advance_hierarchy(0.2, [&](double level_dt) {
+    context.set_stage_time(1, 2);
+    MultiFab& left = context.state(0);
+    MultiFab& right = context.state(1);
+    MultiFab& left_rhs = context.rhs_scratch(150, 0, left);
+    MultiFab& right_rhs = context.rhs_scratch(151, 0, right);
+    context.rhs_group(52, {{0, &left, &left_rhs, 21, 0}, {1, &right, &right_rhs, 22, 0}});
+    const Box2D box = left.box(0);
+    const int j = box.lo[1];
+    EXPECT_NE(left_rhs.fab(0).const_array()(box.hi[0], j, 0), Real(0));
+    EXPECT_EQ(left_rhs.fab(0).const_array()(box.hi[0], j, 0) +
+                  right_rhs.fab(0).const_array()(box.lo[0], j, 0),
+              Real(0));
+    context.axpy(left, Real(0.5 * level_dt), left_rhs, Real(level_dt), {{1, 1, 2}});
+    context.axpy(right, Real(0.5 * level_dt), right_rhs, Real(level_dt), {{1, 1, 2}});
+  });
+
+  EXPECT_EQ(evaluator_calls, (std::array<int, 3>{1, 2, 4}));
+  const auto& fragments = context.accepted_interface_flux_fragments();
+  ASSERT_EQ(fragments.size(), 9u);
+  std::array<int, 3> level_fragments{0, 0, 0};
+  std::array<int, 2> pair_fragments{0, 0};
+  int coarse_orientation_count = 0;
+  int fine_orientation_count = 0;
+  for (const auto& fragment : fragments) {
+    EXPECT_EQ(fragment.key.interface_identity, "amr.program.three-level.shared-flux");
+    EXPECT_EQ(fragment.key.topology_epoch, runtime.topology_epoch());
+    EXPECT_EQ(fragment.key.stage_identity, "program.group.node.52");
+    ASSERT_GE(fragment.key.clock.level, 0);
+    ASSERT_LT(fragment.key.clock.level, 3);
+    EXPECT_EQ(fragment.key.interval.begin.level, fragment.key.clock.level);
+    EXPECT_EQ(fragment.key.interval.end.level, fragment.key.clock.level);
+    EXPECT_EQ(fragment.key.clock.macro_step, fragment.key.interval.begin.macro_step);
+    EXPECT_EQ(fragment.key.clock.macro_step, fragment.key.interval.end.macro_step);
+    EXPECT_EQ(fragment.key.clock.phase,
+              fragment.key.interval.begin.phase +
+                  amr::Rational(1, 2) *
+                      (fragment.key.interval.end.phase - fragment.key.interval.begin.phase));
+    ++level_fragments[static_cast<std::size_t>(fragment.key.clock.level)];
+    ASSERT_GE(fragment.key.coarse_level, 0);
+    ASSERT_LT(fragment.key.coarse_level, 2);
+    EXPECT_EQ(fragment.key.fine_level, fragment.key.coarse_level + 1);
+    ++pair_fragments[static_cast<std::size_t>(fragment.key.coarse_level)];
+    EXPECT_TRUE(fragment.key.clock.level == fragment.key.coarse_level ||
+                fragment.key.clock.level == fragment.key.fine_level);
+    if (fragment.key.clock.level == fragment.key.coarse_level)
+      EXPECT_EQ(fragment.key.orientation, amr::InterfaceFluxOrientation::CoarseOutward);
+    else
+      EXPECT_EQ(fragment.key.orientation, amr::InterfaceFluxOrientation::FineOutward);
+    EXPECT_EQ(fragment.measure.stage_weight, amr::Rational(1, 2));
+    EXPECT_TRUE(fragment.measure.stage_weight_resolved);
+    EXPECT_DOUBLE_EQ(fragment.measure.substep_duration,
+                     0.2 / static_cast<double>(1 << fragment.key.clock.level));
+    EXPECT_DOUBLE_EQ(fragment.measure.face_measure,
+                     0.25 / static_cast<double>(1 << fragment.key.clock.level));
+    if (fragment.key.orientation == amr::InterfaceFluxOrientation::CoarseOutward)
+      ++coarse_orientation_count;
+    else
+      ++fine_orientation_count;
+  }
+  EXPECT_EQ(level_fragments, (std::array<int, 3>{1, 4, 4}));
+  EXPECT_EQ(pair_fragments, (std::array<int, 2>{3, 6}));
+  EXPECT_EQ(coarse_orientation_count, 3);
+  EXPECT_EQ(fine_orientation_count, 6);
+}
+
+TEST(test_multiblock_interface_scheduler,
+     DynamicTwoLevelRegridRematerializesConservativeInterfacesAndFragmentIdentity) {
+  ensure_runtime();
+  std::array<int, 2> evaluator_calls{0, 0};
+  AmrRuntime runtime = make_dynamic_interface_runtime(4, 2, evaluator_calls);
+  ASSERT_EQ(runtime.nlev(), 2);
+  ASSERT_EQ(runtime.level_state(0, 1).box_array().size(), 1);
+  const auto initial_fine_boxes = runtime.level_state(0, 1).box_array().boxes();
+
+  const auto evaluate_level = [&](int level, std::int64_t tick) {
+    MultiFab& left = runtime.level_state(0, level);
+    MultiFab& right = runtime.level_state(1, level);
+    MultiFab left_rhs(left.box_array(), left.dmap(), 1, 0);
+    MultiFab right_rhs(right.box_array(), right.dmap(), 1, 0);
+    const BoundaryEvaluationPoint point{"clock.dynamic-interface", tick, level, 0, 1,
+                                        amr::Rational(1, 2),       0.1,  0.05};
+    runtime.level_rhs_with_interfaces(level, point, {&left, &right}, {&left_rhs, &right_rhs});
+    const Box2D domain = left.box_array().bounding_box();
+    for (int j = domain.lo[1]; j <= domain.hi[1]; ++j)
+      EXPECT_EQ(get_cell(left_rhs, domain.hi[0], j, 0) + get_cell(right_rhs, domain.lo[0], j, 0),
+                Real(0));
+  };
+  evaluate_level(0, 0);
+  evaluate_level(1, 0);
+  EXPECT_EQ(evaluator_calls, (std::array<int, 2>{1, 1}));
+
+  runtime.set_clustering(/*min_efficiency=*/1.0, /*min_box_size=*/1,
+                         /*max_box_size=*/2);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}, {1, 0, Real(0.5)}},
+                                         "test::dynamic-interface-full-domain@1");
+  const std::uint64_t accepted_epoch = runtime.topology_epoch();
+  runtime.regrid();
+
+  ASSERT_EQ(runtime.nlev(), 2);
+  EXPECT_GT(runtime.level_state(0, 1).box_array().size(), 1)
+      << "the proof requires one real fine-layout replacement";
+  EXPECT_NE(runtime.level_state(0, 1).box_array().boxes(), initial_fine_boxes);
+  EXPECT_GT(runtime.topology_epoch(), accepted_epoch);
+  runtime.require_complete_active_level_interfaces();
+
+  AmrSystem facade(AmrSystemConfig{});
+  facade.set_program_block_map({0, 1});
+  runtime::program::AmrProgramContext context(&runtime, &facade);
+  context.configure_primary_clock("clock.dynamic-interface");
+  context.advance_hierarchy(0.2, [&](double level_dt) {
+    context.set_stage_time(1, 2);
+    MultiFab& left = context.state(0);
+    MultiFab& right = context.state(1);
+    MultiFab& left_rhs = context.rhs_scratch(900, 0, left);
+    MultiFab& right_rhs = context.rhs_scratch(901, 0, right);
+    context.rhs_group(902, {{0, &left, &left_rhs, 903, 0}, {1, &right, &right_rhs, 904, 0}});
+    const Box2D domain = left.box_array().bounding_box();
+    for (int j = domain.lo[1]; j <= domain.hi[1]; ++j)
+      EXPECT_EQ(get_cell(left_rhs, domain.hi[0], j, 0) + get_cell(right_rhs, domain.lo[0], j, 0),
+                Real(0));
+    context.axpy(left, Real(0.5 * level_dt), left_rhs, Real(level_dt), {{1, 1, 2}});
+    context.axpy(right, Real(0.5 * level_dt), right_rhs, Real(level_dt), {{1, 1, 2}});
+  });
+
+  EXPECT_EQ(evaluator_calls, (std::array<int, 2>{2, 3}))
+      << "rematerialization must preserve the prepared evaluator and its audit count";
+  const auto& fragments = context.accepted_interface_flux_fragments();
+  ASSERT_EQ(fragments.size(), 3u);
+  for (const auto& fragment : fragments) {
+    EXPECT_EQ(fragment.key.interface_identity, "amr.dynamic.shared-flux");
+    EXPECT_EQ(fragment.key.topology_epoch, runtime.topology_epoch());
+    EXPECT_EQ(fragment.key.stage_identity, "program.group.node.902");
+    EXPECT_EQ(fragment.key.left_block, 0u);
+    EXPECT_EQ(fragment.key.right_block, 1u);
+  }
+}
+
+TEST(test_multiblock_interface_scheduler,
+     DynamicThreeLevelFinestTransitionRematerializesTheCompletePreparedPrefix) {
+  ensure_runtime();
+  std::array<int, 3> evaluator_calls{0, 0, 0};
+  AmrRuntime runtime = make_dynamic_interface_runtime(4, 3, evaluator_calls);
+  ASSERT_EQ(runtime.nlev(), 3);
+  const auto initial_middle_boxes = runtime.level_state(0, 1).box_array().boxes();
+  const auto initial_finest_boxes = runtime.level_state(0, 2).box_array().boxes();
+
+  // L1 already uses the exact max-size-4 clustering of a fully tagged L0 parent, whereas L2 starts
+  // as one box. Reapplying the same full-domain tags therefore leaves L0 -> L1 unchanged and
+  // replaces only L1 -> L2, while every physical interface face remains completely covered.
+  runtime.set_clustering(/*min_efficiency=*/1.0, /*min_box_size=*/1,
+                         /*max_box_size=*/4);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}, {1, 0, Real(0.5)}},
+                                         "test::dynamic-interface-three-level-finest@1");
+  const std::uint64_t accepted_epoch = runtime.topology_epoch();
+  runtime.regrid();
+
+  ASSERT_EQ(runtime.nlev(), 3);
+  EXPECT_EQ(runtime.level_state(0, 1).box_array().boxes(), initial_middle_boxes);
+  EXPECT_NE(runtime.level_state(0, 2).box_array().boxes(), initial_finest_boxes);
+  EXPECT_GT(runtime.topology_epoch(), accepted_epoch);
+  runtime.require_complete_active_level_interfaces();
+
+  for (int level = 0; level < 3; ++level) {
+    MultiFab& left = runtime.level_state(0, level);
+    MultiFab& right = runtime.level_state(1, level);
+    MultiFab left_rhs(left.box_array(), left.dmap(), 1, 0);
+    MultiFab right_rhs(right.box_array(), right.dmap(), 1, 0);
+    const BoundaryEvaluationPoint point{
+        "clock.dynamic-interface-three-level", 1,  level, 0, 0, amr::Rational(0, 1),
+        0.1 / static_cast<double>(1 << level), 0.0};
+    runtime.level_rhs_with_interfaces(level, point, {&left, &right}, {&left_rhs, &right_rhs});
+    const Box2D domain = left.box_array().bounding_box();
+    for (int j = domain.lo[1]; j <= domain.hi[1]; ++j)
+      EXPECT_EQ(get_cell(left_rhs, domain.hi[0], j, 0) + get_cell(right_rhs, domain.lo[0], j, 0),
+                Real(0));
+  }
+  EXPECT_EQ(evaluator_calls, (std::array<int, 3>{1, 1, 1}));
+}
+
+TEST(test_multiblock_interface_scheduler,
+     DynamicThreeLevelNonFinestReplacementFailsClosedWithoutAFlatFallback) {
+  ensure_runtime();
+  std::array<int, 3> evaluator_calls{0, 0, 0};
+  AmrRuntime runtime = make_dynamic_interface_runtime(4, 3, evaluator_calls);
+  const auto accepted_middle_boxes = runtime.level_state(0, 1).box_array().boxes();
+  const auto accepted_finest_boxes = runtime.level_state(0, 2).box_array().boxes();
+  const std::uint64_t accepted_epoch = runtime.topology_epoch();
+
+  // Max-size-2 reclusters the fully tagged L0 -> L1 transition itself. That non-finest replacement
+  // transiently removes L2, which cannot be reconciled with the accepted three-level route prefix.
+  runtime.set_clustering(/*min_efficiency=*/1.0, /*min_box_size=*/1,
+                         /*max_box_size=*/2);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}, {1, 0, Real(0.5)}},
+                                         "test::dynamic-interface-three-level-non-finest@1");
+
+  try {
+    runtime.regrid();
+    FAIL() << "non-finest replacement transiently removed L2 without failing closed";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("active hierarchy depth"), std::string::npos);
+  }
+  EXPECT_EQ(runtime.nlev(), 3);
+  EXPECT_EQ(runtime.level_state(0, 1).box_array().boxes(), accepted_middle_boxes);
+  EXPECT_EQ(runtime.level_state(0, 2).box_array().boxes(), accepted_finest_boxes);
+  EXPECT_EQ(runtime.topology_epoch(), accepted_epoch);
+  EXPECT_EQ(runtime.regrid_count(), 0);
+  runtime.require_complete_active_level_interfaces();
+}
+
+TEST(test_multiblock_interface_scheduler,
+     DynamicInterfaceActiveDepthChangeFailsClosedAndRestoresAcceptedRegistry) {
+  ensure_runtime();
+  std::array<int, 2> evaluator_calls{0, 0};
+  AmrRuntime runtime = make_dynamic_interface_runtime(4, 2, evaluator_calls);
+  const auto accepted_boxes = runtime.level_state(0, 1).box_array().boxes();
+  const std::uint64_t accepted_epoch = runtime.topology_epoch();
+
+  test::install_prepared_threshold_decisions(
+      runtime, {{0, 0, Real(10)}, {1, 0, Real(10)}},
+      {{0, 0, Real(10), test::PreparedThresholdRelation::Below},
+       {1, 0, Real(10), test::PreparedThresholdRelation::Below}},
+      "test::dynamic-interface-remove-level@1");
+  EXPECT_THROW(runtime.regrid(), std::runtime_error);
+  EXPECT_EQ(runtime.nlev(), 2);
+  EXPECT_EQ(runtime.topology_epoch(), accepted_epoch);
+  EXPECT_EQ(runtime.level_state(0, 1).box_array().boxes(), accepted_boxes);
+  EXPECT_EQ(runtime.regrid_count(), 0);
+  runtime.require_complete_active_level_interfaces();
+
+  MultiFab& left = runtime.level_state(0, 1);
+  MultiFab& right = runtime.level_state(1, 1);
+  MultiFab left_rhs(left.box_array(), left.dmap(), 1, 0);
+  MultiFab right_rhs(right.box_array(), right.dmap(), 1, 0);
+  const BoundaryEvaluationPoint point{
+      "clock.dynamic-interface-rollback", 1, 1, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  runtime.level_rhs_with_interfaces(1, point, {&left, &right}, {&left_rhs, &right_rhs});
+  EXPECT_EQ(evaluator_calls[1], 1)
+      << "rollback must leave the accepted interface registry executable";
+}
+
+TEST(test_multiblock_interface_scheduler,
+     DynamicInterfaceRuntimeDepthCreationRequiresAnInstalledFineRoute) {
+  ensure_runtime();
+  std::array<int, 2> evaluator_calls{0, 0};
+  AmrRuntime runtime = make_dynamic_interface_runtime(4, 1, evaluator_calls);
+  ASSERT_EQ(runtime.nlev(), 1);
+  ASSERT_EQ(runtime.max_levels(), 2);
+  const std::uint64_t accepted_epoch = runtime.topology_epoch();
+
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(-1)}, {1, 0, Real(-1)}},
+                                         "test::dynamic-interface-create-level@1");
+  try {
+    runtime.regrid();
+    FAIL() << "runtime regrid created L1 without an installed fine interface route";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("incomplete on the active hierarchy"),
+              std::string::npos);
+  }
+  EXPECT_EQ(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.topology_epoch(), accepted_epoch);
+  EXPECT_EQ(runtime.regrid_count(), 0);
+
+  MultiFab& left = runtime.level_state(0, 0);
+  MultiFab& right = runtime.level_state(1, 0);
+  MultiFab left_rhs(left.box_array(), left.dmap(), 1, 0);
+  MultiFab right_rhs(right.box_array(), right.dmap(), 1, 0);
+  const BoundaryEvaluationPoint point{
+      "clock.dynamic-interface-create-rollback", 1, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  runtime.level_rhs_with_interfaces(0, point, {&left, &right}, {&left_rhs, &right_rhs});
+  EXPECT_EQ(evaluator_calls[0], 1)
+      << "rejected depth creation must restore the accepted coarse interface registry";
 }
 
 TEST(test_multiblock_interface_scheduler,
@@ -692,6 +1307,7 @@ TEST(test_multiblock_interface_scheduler,
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
+  authenticate_cell_average_trace(route);
   const Geometry left_geometry{left_box, Real(0), Real(1), Real(0), Real(3)};
   const Geometry right_geometry{right_box, Real(1), Real(2), Real(0), Real(3)};
 
@@ -768,8 +1384,22 @@ TEST(test_multiblock_interface_scheduler, UnsupportedOrUnauthenticatedMappingsFa
   EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
                                             serial_interface_execution(), evaluator_factory),
                std::invalid_argument);
+  route = heterogeneous_route();
+  route.identity = "missing-trace-provider";
+  route.left_trace_provider_identity.clear();
+  EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
+                                            serial_interface_execution(), evaluator_factory),
+               std::invalid_argument);
+  route = heterogeneous_route();
+  route.identity = "unavailable-reconstructed-trace";
+  route.left_trace_provider_identity = "limiter.minmod";
+  route.left_trace_operation = InterfaceTraceOperation::ReconstructedFace;
+  route.left_trace_required_depth = 2;
+  EXPECT_THROW(store.install_interface_flux(route, left_geometry, coincident_right,
+                                            serial_interface_execution(), evaluator_factory),
+               std::invalid_argument);
   EXPECT_EQ(prepare_calls, 0)
-      << "invalid topology/geometry must be rejected before component prepare";
+      << "invalid topology/geometry/trace projection must fail before component prepare";
   EXPECT_THROW(store.interface_evaluation_count("non-bijection", 0), std::out_of_range);
 
   route = heterogeneous_route();
@@ -848,6 +1478,7 @@ TEST(test_multiblock_interface_scheduler,
   route.left_side = InterfaceSide::High;
   route.right_side = InterfaceSide::Low;
   route.right_component_for_left = {0};
+  authenticate_cell_average_trace(route);
   route.affine_mapping_identity = "periodic-x-translation";
   route.right_normal_translation = Real(1);
 
