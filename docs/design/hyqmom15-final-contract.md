@@ -16,9 +16,12 @@ gauge and multigrid solver remain separate `FieldDiscretization` choices on the 
 
 ## Generic extension boundaries
 
-- `LocalClosure(order, name, evaluator)` is the closure extension interface. The evaluator executes
-  once on symbolic standardized moments during authoring and must return exactly the order `N + 1`
-  keys. It is absent from native execution.
+- `LocalClosure(order, name, evaluator)` is the closure extension interface. The final script writes
+  the six fifth-order HyQMOM relations under `@closure(4)` and passes that value to
+  `HyQMOM15.vlasov_lorentz(closure=...)`. The evaluator executes once on symbolic standardized
+  moments during authoring and must return exactly the order `N + 1` keys. Its arithmetic is folded
+  into the ordinary flux graph, so there is no Python callback or mutable closure state in native
+  execution; the installed Program hash authenticates the resulting graph across restart.
 - `RealizabilityProjection` configures the smooth floors and the complete 15-moment projection.
   `guard_hyqmom15_candidate(...)` authors ordinary typed acceptance guards with
   `ProjectAndRecheck(on_failure=RejectAttempt())` inside the `Program` transaction. Rejection and
@@ -43,6 +46,12 @@ explicitly so its realizability guard is visibly inside the commit transaction. 
 route, but it does not hide this model-specific scientific guard. The local solve is specialized from
 the resolved state manifest and therefore prepares exact 15 by 15 stack storage for the shared
 pivoted local provider, without an explicit inverse, eight-component fallback or family dispatch.
+The executable also requires the installed transaction plan to own every typed provisional store:
+states, fields, topology, flux ledgers, caches, solver warm starts, histories, clocks, schedules,
+consumers, diagnostics and external effects. Its forced non-realizable attempt compares the
+accepted state, solved fields, histories, Program identity and ConsumerGraph cursors before and
+after rejection and refuses any published artifact. This Uniform case has no non-empty AMR reflux
+ledger; non-empty multilevel ledger persistence remains the responsibility of the AMR final example.
 
 The example executes only:
 
