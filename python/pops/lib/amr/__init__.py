@@ -374,6 +374,58 @@ class SymbolicTagger:
 
 
 @dataclass(frozen=True, slots=True)
+class FluxRegisterReflux:
+    """Builtin conservative flux-register correction through the Reflux provider protocol."""
+
+    __pops_ir_immutable__: ClassVar[bool] = True
+
+    def resolve_references(self, resolver: Any) -> FluxRegisterReflux:
+        if not callable(resolver):
+            raise TypeError("FluxRegisterReflux.resolve_references requires a callable resolver")
+        return self
+
+    def require_component_inputs(self, components: Any) -> None:
+        del components
+
+    def lower_amr_provider(self, context: Any) -> Any:
+        from pops.amr.providers import (
+            AMRProviderLoweringContext,
+            ResolvedAMRProviderBinding,
+            amr_provider_binding_identity,
+        )
+
+        if type(context) is not AMRProviderLoweringContext:
+            raise TypeError("FluxRegisterReflux requires an AMRProviderLoweringContext")
+        self.require_component_inputs(context.components)
+        data = {
+            **self.runtime_binding_data(),
+            "layout_identity": context.layout_identity,
+            "clock_identity": context.clock_identity,
+        }
+        data["provider_identity"] = amr_provider_binding_identity("reflux", data)
+        return ResolvedAMRProviderBinding("reflux", data)
+
+    def runtime_binding_data(self) -> dict[str, Any]:
+        from pops import interfaces
+
+        data = {
+            "schema_version": 1,
+            "provider_type": "builtin_amr_reflux",
+            "runtime_installation": {
+                "schema_version": 1,
+                "protocol": "builtin",
+            },
+            "provider_id": "pops.lib.amr::flux_register_reflux",
+            "native_interface": interfaces.Reflux.to_data(),
+        }
+        data["provider_identity"] = make_identity("amr-reflux-provider", data).token
+        return data
+
+    inspect = runtime_binding_data
+    canonical_identity = runtime_binding_data
+
+
+@dataclass(frozen=True, slots=True)
 class BergerRigoutsos:
     """Builtin clustering provider with intrinsic validated algorithm controls."""
 
@@ -459,6 +511,7 @@ __all__ = [
     "DivergencePreservingFace",
     "EllipticRecompute",
     "FaceTransfer",
+    "FluxRegisterReflux",
     "LinearTimeInterpolation",
     "Knapsack",
     "NodeTransfer",

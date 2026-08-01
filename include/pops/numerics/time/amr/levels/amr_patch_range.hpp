@@ -593,6 +593,29 @@ struct RefluxStripConstView {
   int components = 0;
 };
 
+/// Four already-computed, signed coarse-cell corrections around one fine-patch footprint.
+///
+/// A native Reflux component may fill these contiguous face buffers, but it never receives the
+/// sparse global register, coverage mask, periodicity or MPI communicator. PoPS alone maps the
+/// values onto canonical uncovered parent cells.
+struct RefluxFaceCorrectionView {
+  int I0 = 0, I1 = -1, J0 = 0, J1 = -1;
+  Real* x_low = nullptr;
+  Real* x_high = nullptr;
+  Real* y_low = nullptr;
+  Real* y_high = nullptr;
+  int components = 0;
+};
+
+struct RefluxFaceCorrectionConstView {
+  int I0 = 0, I1 = -1, J0 = 0, J1 = -1;
+  const Real* x_low = nullptr;
+  const Real* x_high = nullptr;
+  const Real* y_low = nullptr;
+  const Real* y_high = nullptr;
+  int components = 0;
+};
+
 template <class Strip>
 inline RefluxStripView reflux_strip_view(Strip& strip, int components) {
   return {strip.I0,        strip.I1,        strip.J0,        strip.J1,        strip.cL.data(),
@@ -817,6 +840,64 @@ struct RouteRefluxStripKernel {
         add_if_uncovered(
             I, shape.J1 + 1, component,
             +(value(fine.fT, index) - coarse_scale * value(coarse.cT, index)) * inverse_dy);
+      }
+  }
+};
+
+/// Deposit one external/local Reflux result into PoPS' sparse correction authority. The provider
+/// has already applied side*(fine-coarse)/spacing; this kernel owns only topology canonicalisation,
+/// coverage exclusion and deterministic face order.
+struct RoutePreparedRefluxCorrectionKernel {
+  RefluxFaceCorrectionConstView faces;
+  FluxRegisterView correction;
+  CoverageMaskView coverage;
+  Box2D coarse_domain;
+  Periodicity periodicity;
+
+  POPS_HD static int wrap_index(int value, int lo, int extent) {
+    const std::int64_t relative = static_cast<std::int64_t>(value) - lo;
+    std::int64_t quotient = relative / extent;
+    if (relative % extent < 0)
+      --quotient;
+    return static_cast<int>(static_cast<std::int64_t>(lo) + relative - quotient * extent);
+  }
+
+  POPS_HD bool canonicalize(int& I, int& J) const {
+    if (I < coarse_domain.lo[0] || I > coarse_domain.hi[0]) {
+      if (!periodicity.x)
+        return false;
+      I = wrap_index(I, coarse_domain.lo[0], coarse_domain.nx());
+    }
+    if (J < coarse_domain.lo[1] || J > coarse_domain.hi[1]) {
+      if (!periodicity.y)
+        return false;
+      J = wrap_index(J, coarse_domain.lo[1], coarse_domain.ny());
+    }
+    return true;
+  }
+
+  POPS_HD void add_if_uncovered(int I, int J, int component, Real amount) const {
+    if (!canonicalize(I, J) || coverage.covered(I, J))
+      return;
+    correction.add(I, J, component, amount);
+  }
+
+  POPS_HD void operator()(int, int) const {
+    for (int J = faces.J0; J <= faces.J1; ++J)
+      for (int component = 0; component < faces.components; ++component) {
+        const std::size_t index =
+            static_cast<std::size_t>(J - faces.J0) * static_cast<std::size_t>(faces.components) +
+            static_cast<std::size_t>(component);
+        add_if_uncovered(faces.I0 - 1, J, component, faces.x_low[index]);
+        add_if_uncovered(faces.I1 + 1, J, component, faces.x_high[index]);
+      }
+    for (int I = faces.I0; I <= faces.I1; ++I)
+      for (int component = 0; component < faces.components; ++component) {
+        const std::size_t index =
+            static_cast<std::size_t>(I - faces.I0) * static_cast<std::size_t>(faces.components) +
+            static_cast<std::size_t>(component);
+        add_if_uncovered(I, faces.J0 - 1, component, faces.y_low[index]);
+        add_if_uncovered(I, faces.J1 + 1, component, faces.y_high[index]);
       }
   }
 };
@@ -1085,6 +1166,17 @@ struct CoarseFineInterface {
                                                  reflux_strip_const_view(fine, nc), ref.view(),
                                                  cmask.view(), coarse_region, periodicity,
                                                  Real(1) / dx, Real(1) / dy, Real(1)});
+  }
+
+  void route_prepared_reflux_correction_(const RefluxFaceCorrectionConstView& faces,
+                                         FluxRegister& ref, int nc) const {
+    if (nc <= 0 || ref.nc != nc || faces.components != nc || faces.I1 < faces.I0 ||
+        faces.J1 < faces.J0 || faces.x_low == nullptr || faces.x_high == nullptr ||
+        faces.y_low == nullptr || faces.y_high == nullptr)
+      throw std::invalid_argument("prepared Reflux correction view is incomplete");
+    for_each_cell(Box2D{{0, 0}, {0, 0}},
+                  detail::RoutePreparedRefluxCorrectionKernel{faces, ref.view(), cmask.view(),
+                                                              coarse_region, periodicity});
   }
 
   template <class Reg>

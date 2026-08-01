@@ -246,6 +246,7 @@ struct AmrSystem::Impl {
   std::map<std::string, std::string> field_storage_routes_;
   std::shared_ptr<runtime::amr::PreparedTaggerComponent> amr_tagger_component_;
   std::shared_ptr<runtime::amr::PreparedClusteringComponent> amr_clustering_component_;
+  std::shared_ptr<runtime::amr::PreparedRefluxComponent> amr_reflux_component_;
   struct BootstrapArray {
     std::string centering;
     int ncomp = 0;
@@ -903,6 +904,9 @@ struct AmrSystem::Impl {
       runtime->install_external_tagger(amr_tagger_component_);
     if (amr_clustering_component_)
       runtime->install_external_clustering(amr_clustering_component_);
+    // Reflux selection is a collective optional-provider contract: every rank enters this call,
+    // including ranks where no external provider was selected.
+    runtime->install_external_reflux(amr_reflux_component_);
     if (!boundary_plans_.empty())
       runtime->install_boundary_storage_routes(field_storage_routes_);
     // Low-level facade compatibility has no authored AMRTransfer object.  Resolve its exact
@@ -1503,6 +1507,17 @@ POPS_EXPORT void AmrSystem::install_amr_clustering_component(
       std::move(spec), std::move(component));
 }
 
+POPS_EXPORT void AmrSystem::install_amr_reflux_component(
+    runtime::amr::PreparedRefluxSpec spec, std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_amr_reflux_component");
+  if (P->built || P->amr_reflux_component_)
+    throw std::runtime_error(
+        "AmrSystem external Reflux requires one installation before runtime build");
+  P->amr_reflux_component_ = std::make_shared<runtime::amr::PreparedRefluxComponent>(
+      std::move(spec), std::move(component));
+}
+
 POPS_EXPORT void AmrSystem::discard_amr_provider_components() {
   Impl* P = p_.get();
   require_assembling_amr(P->bound_, "discard_amr_provider_components");
@@ -1510,6 +1525,7 @@ POPS_EXPORT void AmrSystem::discard_amr_provider_components() {
     throw std::runtime_error("AmrSystem cannot discard AMR providers after runtime build");
   P->amr_tagger_component_.reset();
   P->amr_clustering_component_.reset();
+  P->amr_reflux_component_.reset();
 }
 
 POPS_EXPORT void AmrSystem::install_interface_flux_component(

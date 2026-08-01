@@ -36,6 +36,7 @@ from .providers import (
     AMRProviderLoweringContext,
     amr_provider_binding_identity,
     ClusteringProvider,
+    RefluxProvider,
     ResolvedAMRProviderBinding,
     TaggerProvider,
 )
@@ -66,6 +67,7 @@ __all__ = [
     "PatchLayout",
     "PreparedHierarchyNativeLowering",
     "PreparedHierarchyNativeProvider",
+    "RefluxProvider",
     "ResolvedAMRProviderBinding",
     "Tag",
     "TaggerProvider",

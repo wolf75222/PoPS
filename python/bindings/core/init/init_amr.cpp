@@ -182,6 +182,19 @@ pops::runtime::amr::PreparedClusteringSpec amr_clustering_spec_from_python(
   return spec;
 }
 
+pops::runtime::amr::PreparedRefluxSpec amr_reflux_spec_from_python(const py::dict& row,
+                                                                   const py::dict& execution) {
+  pops::runtime::amr::PreparedRefluxSpec spec;
+  spec.provider_identity = py::cast<std::string>(row["provider_identity"]);
+  spec.component_id = py::cast<std::string>(row["component_id"]);
+  spec.manifest_identity = py::cast<std::string>(row["component_manifest_identity"]);
+  spec.layout_identity = py::cast<std::string>(row["layout_identity"]);
+  spec.clock_identity = py::cast<std::string>(row["clock_identity"]);
+  spec.interface_version = py::cast<std::uint32_t>(row["interface_version"]);
+  spec.execution = pops::python::detail::make_component_execution_context(execution);
+  return spec;
+}
+
 // Assembly seams: per-block composition, native block, and refinement tagging.
 void bind_amr_assembly(py::class_<AmrSystem>& cls) {
   cls.def(py::init<const AmrSystemConfig&>())
@@ -270,6 +283,14 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const py::dict& binding, const py::dict& execution) {
             system.install_amr_clustering_component(
                 amr_clustering_spec_from_python(binding, execution), std::move(component));
+          },
+          py::arg("component"), py::arg("binding"), py::arg("execution_context"))
+      .def(
+          "_install_amr_reflux_component",
+          [](AmrSystem& system, std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& binding, const py::dict& execution) {
+            system.install_amr_reflux_component(amr_reflux_spec_from_python(binding, execution),
+                                                std::move(component));
           },
           py::arg("component"), py::arg("binding"), py::arg("execution_context"))
       .def("_discard_amr_provider_components", &AmrSystem::discard_amr_provider_components,
