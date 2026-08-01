@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 import numpy as np
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -33,7 +34,16 @@ def test_hyqmom15_example_runs_outputs_and_restarts_bit_identically(tmp_path) ->
         line for line in completed.stdout.splitlines() if line.startswith("report: "))
     report = json.loads(report_line.removeprefix("report: "))
     assert report["finite"] is True
+    assert report["realizable"] is True
     assert report["n_moments"] == 15
+    assert report["particle_number"] == pytest.approx(
+        report["particle_number_reference"],
+        rel=report["particle_number_relative_tolerance"],
+    )
+    assert (
+        report["particle_number_relative_error"]
+        <= report["particle_number_relative_tolerance"]
+    )
     assert report["nonrealizable_rollback"] is True
     assert "hyqmom15_realizability_density" in report["rejection_reason"]
     assert report["runtime_steps"] == 2

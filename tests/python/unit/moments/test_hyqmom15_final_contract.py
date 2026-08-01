@@ -169,6 +169,36 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     assert projection.kind == "projection"
 
 
+def test_particle_number_diagnostic_integrates_m00_and_rejects_drift() -> None:
+    example = _load_example()
+    target = example.build_authoring()
+    state = example.build_initial_state(cells=4)["plasma"]
+    reference = example._particle_number(state)
+
+    assert reference == pytest.approx(1.0)
+    diagnostics = example._require_physical_diagnostics(
+        state,
+        projection=target.realizability,
+        reference_particle_number=reference,
+        where="initial state",
+    )
+    assert diagnostics.realizable is True
+    assert diagnostics.particle_number == pytest.approx(reference)
+    assert diagnostics.particle_number_relative_error == pytest.approx(0.0)
+
+    drifted = state.copy()
+    drifted[HyQMOM15.components.index("M00")] += (
+        2.0 * example.PARTICLE_NUMBER_RELATIVE_TOLERANCE
+    )
+    with pytest.raises(RuntimeError, match="changed particle number"):
+        example._require_physical_diagnostics(
+            drifted,
+            projection=target.realizability,
+            reference_particle_number=reference,
+            where="drifted state",
+        )
+
+
 def test_hyqmom15_projection_checks_all_moments_and_refuses_to_manufacture_density() -> None:
     example = _load_example()
     target = example.build_authoring()

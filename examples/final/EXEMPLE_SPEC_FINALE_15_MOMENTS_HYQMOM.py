@@ -54,6 +54,7 @@ from pops.time import (
 
 DEFAULT_CELLS = 8
 DEFAULT_T_END = 1.0e-5
+PARTICLE_NUMBER_RELATIVE_TOLERANCE = 1.0e-10
 
 
 def _native_output_mode() -> ParallelMode:
@@ -121,6 +122,15 @@ class RuntimeSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class PhysicalDiagnostics:
+    """Retained-state checks required by the HyQMOM15 specification."""
+
+    realizable: bool
+    particle_number: float
+    particle_number_relative_error: float
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionEvidence:
     """Scientific artifacts and exact states produced by one final execution."""
 
@@ -137,6 +147,8 @@ class ExecutionEvidence:
     restored: RuntimeSnapshot
     continuous: RuntimeSnapshot
     restarted: RuntimeSnapshot
+    reference_particle_number: float
+    physical_diagnostics: dict[str, PhysicalDiagnostics]
 
 
 def _guarded_imex_program(
@@ -329,6 +341,55 @@ def build_initial_state(*, cells: int = DEFAULT_CELLS) -> dict[str, np.ndarray]:
     return {"plasma": state}
 
 
+def _particle_number(state: Any) -> float:
+    """Integrate ``M00`` over the unit square represented by cell averages."""
+
+    values = np.asarray(state, dtype=np.float64)
+    if values.ndim != 3 or values.shape[0] != len(HyQMOM15.components):
+        raise ValueError(
+            "HyQMOM15 diagnostics require a (15, ny, nx) cell-average state"
+        )
+    density = values[HyQMOM15.components.index("M00")]
+    if density.size == 0:
+        raise ValueError("HyQMOM15 diagnostics require at least one cell")
+    return float(np.sum(density, dtype=np.float64) / density.size)
+
+
+def _require_physical_diagnostics(
+    state: Any,
+    *,
+    projection: RealizabilityProjection,
+    reference_particle_number: float,
+    where: str,
+) -> PhysicalDiagnostics:
+    """Require finite, realizable moments and conservative particle number."""
+
+    values = np.asarray(state, dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise RuntimeError("%s contains a non-finite moment" % where)
+    if (
+        not np.isfinite(reference_particle_number)
+        or reference_particle_number <= 0.0
+    ):
+        raise ValueError("reference particle number must be finite and positive")
+    realizable = bool(projection.is_hyqmom15_realizable(values))
+    if not realizable:
+        raise RuntimeError("%s is not HyQMOM15-realizable" % where)
+    particle_number = _particle_number(values)
+    scale = max(abs(reference_particle_number), np.finfo(np.float64).tiny)
+    relative_error = abs(particle_number - reference_particle_number) / scale
+    if relative_error > PARTICLE_NUMBER_RELATIVE_TOLERANCE:
+        raise RuntimeError(
+            "%s changed particle number by %.6e (limit %.6e)"
+            % (where, relative_error, PARTICLE_NUMBER_RELATIVE_TOLERANCE)
+        )
+    return PhysicalDiagnostics(
+        realizable=realizable,
+        particle_number=particle_number,
+        particle_number_relative_error=relative_error,
+    )
+
+
 def compile_final_case(
     *, cells: int = DEFAULT_CELLS, inject_nonrealizable: bool = False,
 ) -> tuple[HyQMOM15Authoring, Any, Any]:
@@ -461,8 +522,9 @@ def run_and_restart(
     root.mkdir(parents=True, exist_ok=True)
     rejected_before, rejected_after, rejection_reason = \
         _run_rejected_nonrealizable_attempt(root, cells=cells)
-    _target, _resolved, artifact = compile_final_case(cells=cells)
+    target, _resolved, artifact = compile_final_case(cells=cells)
     initial = build_initial_state(cells=cells)
+    reference_particle_number = _particle_number(initial["plasma"])
     simulation = _bind_artifact(artifact, initial_state=initial)
     accepted_root = root / "accepted"
     run_report = pops.run(
@@ -499,6 +561,23 @@ def run_and_restart(
         resumed, t_end=final_time, max_steps=1, output_dir=root / "restarted")
     continuous, restarted = _snapshot(simulation), _snapshot(resumed)
     _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
+    snapshots = {
+        "rejected_before": rejected_before,
+        "rejected_after": rejected_after,
+        "accepted": accepted,
+        "restored": restored,
+        "continuous": continuous,
+        "restarted": restarted,
+    }
+    physical_diagnostics = {
+        name: _require_physical_diagnostics(
+            snapshot.state,
+            projection=target.realizability,
+            reference_particle_number=reference_particle_number,
+            where=name.replace("_", " "),
+        )
+        for name, snapshot in snapshots.items()
+    }
 
     return ExecutionEvidence(
         hdf5_path=hdf5_path,
@@ -514,6 +593,8 @@ def run_and_restart(
         restored=restored,
         continuous=continuous,
         restarted=restarted,
+        reference_particle_number=reference_particle_number,
+        physical_diagnostics=physical_diagnostics,
     )
 
 
@@ -533,9 +614,17 @@ def main(argv: list[str] | None = None) -> None:
     print("checkpoint: %s" % evidence.manual_checkpoint_path)
     print("non-realizable rollback: %s" % rollback)
     print("bit-identical restart: True")
+    diagnostics = evidence.physical_diagnostics
+    restarted_diagnostics = diagnostics["restarted"]
     print("report: " + json.dumps({
         "finite": bool(np.isfinite(evidence.restarted.state).all()),
+        "realizable": all(value.realizable for value in diagnostics.values()),
         "n_moments": int(evidence.restarted.state.shape[0]),
+        "particle_number": restarted_diagnostics.particle_number,
+        "particle_number_reference": evidence.reference_particle_number,
+        "particle_number_relative_error": max(
+            value.particle_number_relative_error for value in diagnostics.values()),
+        "particle_number_relative_tolerance": PARTICLE_NUMBER_RELATIVE_TOLERANCE,
         "runtime_steps": evidence.restarted.macro_step,
         "runtime_time": evidence.restarted.time,
         "rejection_reason": evidence.rejection_reason,

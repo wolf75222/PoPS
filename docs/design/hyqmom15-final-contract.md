@@ -19,9 +19,10 @@ gauge and multigrid solver remain separate `FieldDiscretization` choices on the 
 - `LocalClosure(order, name, evaluator)` is the closure extension interface. The evaluator executes
   once on symbolic standardized moments during authoring and must return exactly the order `N + 1`
   keys. It is absent from native execution.
-- `RealizabilityProjection` configures the smooth floors used by moment algebra. It does not pretend
-  to be a time-step acceptance guard. A future realizability rejection policy must implement the
-  ordinary typed `AcceptanceGuard` protocol and participate in the Program transaction explicitly.
+- `RealizabilityProjection` configures the smooth floors and the complete 15-moment projection.
+  `guard_hyqmom15_candidate(...)` authors ordinary typed acceptance guards with
+  `ProjectAndRecheck(on_failure=RejectAttempt())` inside the `Program` transaction. Rejection and
+  rollback therefore use the shared runtime path rather than a HyQMOM-specific branch.
 - `Model.field_spaces()` derives solved storage from the generic field-output protocol. A scalar
   `FieldOutput` contributes one component; a Cartesian `GradientOutput` contributes two. This rule
   lets any provided or user model add a potential-plus-gradient solve without a model-specific
@@ -53,4 +54,7 @@ One accepted step publishes authenticated HDF5, ParaView and scheduled checkpoin
 script reopens both scientific formats, creates a manual checkpoint, restores it into a fresh bind,
 compares the full 15-component state, solved field, clock, program identity and consumer cursors,
 then advances the uninterrupted and restarted instances one more step and requires exact equality.
-This is the final behavior, not a transition or compatibility example.
+Every retained state must remain realizable and conserve the integral of `M00` over the unit square
+within a relative tolerance of `1e-10`; the machine-readable report exposes the measured particle
+number and maximum relative error. This is the final behavior, not a transition or compatibility
+example.
