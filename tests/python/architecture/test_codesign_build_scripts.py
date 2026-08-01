@@ -56,7 +56,7 @@ def test_non_darwin_never_locates_or_invokes_codesign(monkeypatch):
     assert helper.codesign_imported_extensions() == ()
 
 
-def test_darwin_signs_then_verifies_and_authenticates_ad_hoc_signature(tmp_path, monkeypatch):
+def test_darwin_preserves_an_existing_valid_ad_hoc_signature(tmp_path, monkeypatch):
     helper = _helper()
     extension = tmp_path / "_pops.so"
     extension.touch()
@@ -74,6 +74,32 @@ def test_darwin_signs_then_verifies_and_authenticates_ad_hoc_signature(tmp_path,
 
     assert helper.codesign_imported_extensions() == (extension,)
     assert calls == [
+        ("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(extension)),
+        ("/usr/bin/codesign", "--display", "--verbose=4", str(extension)),
+    ]
+
+
+def test_darwin_repairs_then_verifies_a_missing_signature(tmp_path, monkeypatch):
+    helper = _helper()
+    extension = tmp_path / "_pops.so"
+    extension.touch()
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(tuple(command))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(command, 1, "", "unsigned")
+        evidence = "Signature=adhoc\n" if "--display" in command else ""
+        return subprocess.CompletedProcess(command, 0, "", evidence)
+
+    monkeypatch.setattr(helper.sys, "platform", "darwin")
+    monkeypatch.setattr(helper, "locate_imported_pops_extensions", lambda: (extension,))
+    monkeypatch.setattr(helper.shutil, "which", lambda command: "/usr/bin/codesign")
+    monkeypatch.setattr(helper.subprocess, "run", run)
+
+    assert helper.codesign_imported_extensions() == (extension,)
+    assert calls == [
+        ("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(extension)),
         ("/usr/bin/codesign", "--force", "--sign", "-", str(extension)),
         ("/usr/bin/codesign", "--verify", "--strict", "--verbose=2", str(extension)),
         ("/usr/bin/codesign", "--display", "--verbose=4", str(extension)),
@@ -101,7 +127,7 @@ def test_structured_evidence_binds_the_post_sign_extension_bytes(tmp_path, monke
     }
 
 
-@pytest.mark.parametrize("failure_call", [0, 1])
+@pytest.mark.parametrize("failure_call", [1, 2, 3])
 def test_darwin_codesign_or_verification_failure_is_explicit(
     tmp_path, monkeypatch, failure_call,
 ):
@@ -113,9 +139,12 @@ def test_darwin_codesign_or_verification_failure_is_explicit(
     def run(command, **kwargs):
         call = len(calls)
         calls.append(tuple(command))
+        if call == 0:
+            return subprocess.CompletedProcess(command, 1, "", "unsigned")
         if call == failure_call:
             return subprocess.CompletedProcess(command, 9, "", "signature failure")
-        return subprocess.CompletedProcess(command, 0, "", "")
+        evidence = "Signature=adhoc\n" if "--display" in command else ""
+        return subprocess.CompletedProcess(command, 0, "", evidence)
 
     monkeypatch.setattr(helper.sys, "platform", "darwin")
     monkeypatch.setattr(helper, "locate_imported_pops_extensions", lambda: (extension,))
