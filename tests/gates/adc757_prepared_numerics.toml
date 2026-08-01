@@ -1,7 +1,7 @@
 schema_version = 1
 gate = "adc757-prepared-numerics-slice"
 issue = "ADC-757"
-evidence_from = ["ADC-749", "ADC-750", "ADC-752", "ADC-753", "ADC-754", "ADC-755"]
+evidence_from = ["ADC-749", "ADC-750", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
 deferred = [
   "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
   "python_ir_generated_abi_and_restart_parity",
@@ -156,3 +156,15 @@ requirement = "runtime_recovery_consumer_publication"
 polarity = "refusal"
 target = "test_facade_routing"
 test_regex = "^FacadeRouting\\.PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedState$"
+
+[[check]]
+requirement = "cell_local_temporal_partition_authority"
+polarity = "positive"
+target = "test_temporal_partition_restart"
+test_regex = "^test_temporal_partition_restart\\.batched_attempt_commit_and_rollback_are_exact$"
+
+[[check]]
+requirement = "cell_local_temporal_partition_authority"
+polarity = "refusal"
+target = "test_temporal_partition_restart"
+test_regex = "^test_temporal_partition_restart\\.strict_amr_restore_consumes_manifest_and_refuses_global_step_bypass$"
