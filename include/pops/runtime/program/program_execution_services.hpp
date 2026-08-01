@@ -555,21 +555,20 @@ class ProgramExecutionServices {
   }
 
   MultiFab& rhs_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return provider_().program_execution_scratch_(ScratchKind::Rhs, value_id, subslot, prototype,
-                                                  prototype.ncomp(), prototype.n_grow());
+    return persistent_scratch_(ScratchKind::Rhs, value_id, subslot, prototype, prototype.ncomp(),
+                               prototype.n_grow());
   }
 
   MultiFab& scratch_state(std::int64_t value_id, int subslot, const MultiFab& prototype) const {
-    return provider_().program_execution_scratch_(ScratchKind::State, value_id, subslot, prototype,
-                                                  prototype.ncomp(), prototype.n_grow());
+    return persistent_scratch_(ScratchKind::State, value_id, subslot, prototype, prototype.ncomp(),
+                               prototype.n_grow());
   }
 
   MultiFab& scalar_scratch(std::int64_t value_id, int subslot, const MultiFab& prototype,
                            int n_comp = 1, int n_ghost = 1) const {
     if (n_comp < 1 || n_ghost < 0)
       throw std::invalid_argument("Program scalar scratch requires n_comp >= 1 and n_ghost >= 0");
-    return provider_().program_execution_scratch_(ScratchKind::Scalar, value_id, subslot, prototype,
-                                                  n_comp, n_ghost);
+    return persistent_scratch_(ScratchKind::Scalar, value_id, subslot, prototype, n_comp, n_ghost);
   }
 
   /// Zero-copy access to one authored block's live state through the provider's storage authority.
@@ -894,8 +893,7 @@ class ProgramExecutionServices {
     if (!std::isfinite(static_cast<double>(target_offset)))
       throw std::invalid_argument("linear history interpolation offset must be finite");
 
-    HistoryRegistration registration =
-        history_registration_(name, max_lag, /*ncomp=*/-1, owner);
+    HistoryRegistration registration = history_registration_(name, max_lag, /*ncomp=*/-1, owner);
     if (!provider_().program_execution_history_initialized_storage_(registration))
       throw std::runtime_error(
           "linear history interpolation requires an initialized native history");
@@ -939,13 +937,11 @@ class ProgramExecutionServices {
     const double logical_fraction = coordinate + static_cast<double>(older_lag);
     const double target_time = older_time + logical_fraction * bracket_dt;
     const double timestamp_fraction = (target_time - older_time) / (newer_time - older_time);
-    if (!std::isfinite(timestamp_fraction) || timestamp_fraction < 0.0 ||
-        timestamp_fraction > 1.0)
+    if (!std::isfinite(timestamp_fraction) || timestamp_fraction < 0.0 || timestamp_fraction > 1.0)
       throw std::runtime_error(
           "linear history interpolation target does not bracket native timestamps");
 
-    registration =
-        ensure_history_registered_(name, older_lag, /*ncomp=*/-1, owner);
+    registration = ensure_history_registered_(name, older_lag, /*ncomp=*/-1, owner);
     MultiFab& older = provider_().program_execution_read_history_storage_(
         registration, older_lag, HistoryReadMode::RequireInitialized);
     MultiFab& newer = provider_().program_execution_read_history_storage_(
@@ -1522,6 +1518,34 @@ class ProgramExecutionServices {
   mutable amr::Rational stage_time_{0, 1};
 
  private:
+  struct ProgramScratchKey {
+    ScratchKind kind = ScratchKind::Rhs;
+    std::int64_t value_id = -1;
+    int subslot = -1;
+    int level = -1;
+
+    friend bool operator<(const ProgramScratchKey& lhs, const ProgramScratchKey& rhs) noexcept {
+      if (lhs.kind != rhs.kind)
+        return lhs.kind < rhs.kind;
+      if (lhs.value_id != rhs.value_id)
+        return lhs.value_id < rhs.value_id;
+      if (lhs.subslot != rhs.subslot)
+        return lhs.subslot < rhs.subslot;
+      return lhs.level < rhs.level;
+    }
+  };
+
+  struct ProgramScratchSlot {
+    MultiFab field;
+    std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  };
+
+  struct ProgramScratchRegistry {
+    std::map<ProgramScratchKey, ProgramScratchSlot> fields;
+    std::uint64_t topology_epoch = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
+  };
+
   struct HistoryBinding {
     int program_owner = -1;
     std::string state_identity;
@@ -1538,6 +1562,43 @@ class ProgramExecutionServices {
   };
 
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
+
+  /// Acquire one generated persistent field from the common resource registry.
+  ///
+  /// Providers authenticate the active topology and level through the existing resource hooks;
+  /// allocation, invalidation, exact-layout reuse and retry zeroing remain one shared semantic
+  /// operation. The shared owner also preserves Uniform copy semantics without a second context
+  /// implementation.
+  MultiFab& persistent_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
+                                const MultiFab& prototype, int n_comp, int n_ghost) const {
+    if (value_id < 0 || subslot < 0)
+      throw std::invalid_argument(
+          "Program persistent scratch requires non-negative IR value and sub-slot identities");
+    const ProgramResourceTopology topology = program_resource_topology();
+    const int level = this->level();
+    if (level < 0 || level >= topology.levels)
+      throw std::out_of_range("Program persistent scratch level is out of range");
+    if (!scratch_registry_)
+      throw std::logic_error("Program persistent scratch registry is unavailable");
+    if (scratch_registry_->topology_epoch != topology.epoch ||
+        scratch_registry_->materialization_generation != topology.generation) {
+      scratch_registry_->fields.clear();
+      scratch_registry_->topology_epoch = topology.epoch;
+      scratch_registry_->materialization_generation = topology.generation;
+    }
+
+    const ProgramScratchKey key{kind, value_id, subslot, level};
+    auto [entry, inserted] = scratch_registry_->fields.try_emplace(key);
+    ProgramScratchSlot& slot = entry->second;
+    if (inserted || slot.materialization_generation != topology.generation ||
+        !field_layout_matches_(slot.field, prototype, n_comp, n_ghost)) {
+      slot.field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
+      slot.materialization_generation = topology.generation;
+      count_scratch(slot.field);
+    }
+    slot.field.set_val(Real(0));
+    return slot.field;
+  }
 
   void invalidate_active_operator_snapshot_() const noexcept {
     active_operator_snapshot_revision_ = 0;
@@ -1751,6 +1812,8 @@ class ProgramExecutionServices {
   }
 
   mutable CouplingWorkspace coupling_workspace_;
+  mutable std::shared_ptr<ProgramScratchRegistry> scratch_registry_ =
+      std::make_shared<ProgramScratchRegistry>();
   mutable std::map<std::string, HistoryBinding> history_bindings_;
   mutable std::uint64_t operator_snapshot_revision_ = 0;
   mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never a minted revision

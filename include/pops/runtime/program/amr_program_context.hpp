@@ -1019,60 +1019,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return workspace.program_stages;
   }
 
-  struct ProgramScratchKey {
-    ScratchKind kind = ScratchKind::Rhs;
-    std::int64_t value_id = -1;
-    int subslot = -1;
-    int level = -1;
-
-    friend bool operator<(const ProgramScratchKey& lhs, const ProgramScratchKey& rhs) noexcept {
-      if (lhs.kind != rhs.kind)
-        return lhs.kind < rhs.kind;
-      if (lhs.value_id != rhs.value_id)
-        return lhs.value_id < rhs.value_id;
-      if (lhs.subslot != rhs.subslot)
-        return lhs.subslot < rhs.subslot;
-      return lhs.level < rhs.level;
-    }
-  };
-
-  struct ProgramScratchSlot {
-    MultiFab field;
-    std::uint64_t materialization_generation = std::numeric_limits<std::uint64_t>::max();
-  };
-
-  /// Provider-owned by design: a regrid, restart materialization or rejected-attempt rollback can
-  /// preserve the checkpointed epoch while replacing every hierarchy allocation.  The shared
-  /// service therefore selects scratch semantically, but only this AMR storage provider may
-  /// authenticate and invalidate slots against both topology epoch and materialization generation.
-  MultiFab& program_scratch_for_(ScratchKind kind, std::int64_t value_id, int subslot,
-                                 const MultiFab& prototype, int n_comp, int n_ghost) const {
-    if (value_id < 0 || subslot < 0)
-      throw std::invalid_argument(
-          "AMR Program persistent scratch requires non-negative IR value and sub-slot identities");
-    if (level_ < 0 || level_ >= nlev())
-      throw std::out_of_range("AMR Program persistent scratch level is out of range");
-    const std::uint64_t topology_epoch = eng_->topology_epoch();
-    const std::uint64_t generation = eng_->topology_materialization_generation();
-    if (program_scratch_topology_epoch_ != topology_epoch ||
-        program_scratch_materialization_generation_ != generation) {
-      program_scratch_.clear();
-      program_scratch_topology_epoch_ = topology_epoch;
-      program_scratch_materialization_generation_ = generation;
-    }
-    const ProgramScratchKey key{kind, value_id, subslot, level_};
-    auto [entry, inserted] = program_scratch_.try_emplace(key);
-    ProgramScratchSlot& slot = entry->second;
-    if (inserted || slot.materialization_generation != generation ||
-        !field_layout_matches_(slot.field, prototype, n_comp, n_ghost)) {
-      slot.field = MultiFab(prototype.box_array(), prototype.dmap(), n_comp, n_ghost);
-      slot.materialization_generation = generation;
-      count_scratch(slot.field);
-    }
-    slot.field.set_val(Real(0));
-    return slot.field;
-  }
-
   /// Fail loud for an op the codegen can emit but the installed AMR Program path does not wire (named-flux /
   /// scheduled Programs). [[noreturn]] so a non-void stub needs no dummy return -- the caller's signature
   /// stays byte-faithful to ProgramContext (the duck-typing requirement) without fabricating a value. @p
@@ -3275,8 +3221,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       const HistoryRegistration& registration) const {
     return pops::detail::AmrHistoryOps::initialized(*eng_, registration.name);
   }
-  double program_execution_history_slot_dt_storage_(
-      const HistoryRegistration& registration, int lag) const {
+  double program_execution_history_slot_dt_storage_(const HistoryRegistration& registration,
+                                                    int lag) const {
     return pops::detail::AmrHistoryOps::slot_dt(*eng_, registration.name, lag);
   }
   void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
@@ -3436,10 +3382,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     current_level_dt_ = rollback.parent_dt;
     stage_time_ = rollback.stage;
   }
-  MultiFab& program_execution_scratch_(ScratchKind kind, std::int64_t value_id, int subslot,
-                                       const MultiFab& prototype, int n_comp, int n_ghost) const {
-    return program_scratch_for_(kind, value_id, subslot, prototype, n_comp, n_ghost);
-  }
   void program_execution_validate_commit_aliases_(bool has_aliased_source) const {
     if (has_aliased_source && capturing())
       throw std::invalid_argument(
@@ -3461,10 +3403,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   mutable bool named_field_solve_in_use_ = false;
   mutable std::map<std::pair<int, int>, MultiFab> stage_state_scratch_;
   mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
-  mutable std::map<ProgramScratchKey, ProgramScratchSlot> program_scratch_;
-  mutable std::uint64_t program_scratch_topology_epoch_ = std::numeric_limits<std::uint64_t>::max();
-  mutable std::uint64_t program_scratch_materialization_generation_ =
-      std::numeric_limits<std::uint64_t>::max();
   mutable std::vector<std::pair<MultiFab*, MultiFab*>> stage_restore_scratch_;
   // Eager, exact-layout face fields used by flux-materialising residuals. Indexed block-major by
   // [runtime block * capture_flux_scratch_levels_ + level]; never resized from a stage.
