@@ -277,6 +277,14 @@ class System:
     def solve_fields(self) -> _SolveReport: ...
     def _consume_step_projections(self) -> list[str]: ...
     def _accepted_balance_terms(self, route: str) -> dict[str, float]: ...
+    def _selected_accepted_balance_terms(
+        self,
+        route: str,
+        block: str,
+        component: int,
+        levels: list[int],
+        automatic_terms: list[str],
+    ) -> dict[str, float]: ...
     def output_state_local_pieces(
         self, block: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
@@ -297,6 +305,14 @@ class AmrSystem:
     def configured_n_levels(self) -> int: ...
     def _consume_step_projections(self) -> list[str]: ...
     def _accepted_balance_terms(self, route: str) -> dict[str, float]: ...
+    def _selected_accepted_balance_terms(
+        self,
+        route: str,
+        block: str,
+        component: int,
+        levels: list[int],
+        automatic_terms: list[str],
+    ) -> dict[str, float]: ...
     def materialize_program_restart_histories(
         self,
         payload: bytes,

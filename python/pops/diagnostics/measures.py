@@ -334,7 +334,7 @@ class Balance(_Measure):
             )
         if block is None:
             raise TypeError("Balance(block=...) requires an exact physics BlockHandle")
-        super().__init__(block=block, role=None, cadence=cadence)
+        super().__init__(block=block, role=ledger.role, cadence=cadence)
         self.ledger = ledger
 
     def options(self) -> dict:
@@ -346,11 +346,19 @@ class Balance(_Measure):
         route = self.ledger.route_identity(self.block)
         return {
             "schema_version": 1,
-            "role": None,
+            "role": _role_name(self.ledger.role),
             "operations": [
                 {
                     **_operation("balance", "accepted_balance"),
                     "balance_route": route.token,
+                    **(
+                        {
+                            "automatic_terms": list(self.ledger.automatic_terms),
+                            "balance_component": self.ledger.component,
+                        }
+                        if self.ledger.automatic_terms
+                        else {}
+                    ),
                 },
             ],
             "conservation": None,

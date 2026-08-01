@@ -933,7 +933,8 @@ class PreparedAmrProgramRefluxTransition {
   void synchronize_integrated(MultiFab& parent_state, Real dx, Real dy,
                               const CoarseStripRange& coarse_role, const FineStripRange& fine_role,
                               const CommunicatorView& communicator,
-                              const amr::ClockStamp* logical_time = nullptr) {
+                              const amr::ClockStamp* logical_time = nullptr,
+                              std::vector<Real>* integrated_state_correction = nullptr) {
     validate_communicator_(communicator);
     using CoarseStrip = typename CoarseStripRange::value_type;
     using FineStrip = typename FineStripRange::value_type;
@@ -1052,6 +1053,8 @@ class PreparedAmrProgramRefluxTransition {
     }
     try {
       correction_.gather(communicator);
+      if (integrated_state_correction != nullptr)
+        *integrated_state_correction = correction_.component_sums(dx * dy);
       for (int local_parent = 0; local_parent < parent_state.local_size(); ++local_parent)
         for_each_cell(parent_state.box(local_parent),
                       detail::ApplyRefluxRegisterKernel{parent_state.fab(local_parent).array(),

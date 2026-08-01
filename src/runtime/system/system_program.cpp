@@ -435,6 +435,23 @@ std::map<std::string, Real> System::accepted_balance_terms(const std::string& ro
         "System::_accepted_balance_terms requires an active uncommitted external step transaction");
   return p_->program_.accepted_balance_terms(route, "System");
 }
+std::map<std::string, Real> System::selected_accepted_balance_terms(
+    const std::string& route, const std::string& block, int component,
+    const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const {
+  if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "System::_selected_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  const int runtime_block = p_->index(block);
+  const auto& state = p_->find(block);
+  if (component < 0 || component >= state.ncomp)
+    throw std::out_of_range("System::_selected_accepted_balance_terms component is out of range");
+  if (levels != std::vector<int>{0})
+    throw std::invalid_argument(
+        "System::_selected_accepted_balance_terms requires exactly uniform level 0");
+  return p_->program_.selected_accepted_balance_terms(route, runtime_block, component, levels,
+                                                      automatic_terms, "System");
+}
 void System::begin_step_projection_report() {
   p_->program_.begin_step_projection_report();
 }

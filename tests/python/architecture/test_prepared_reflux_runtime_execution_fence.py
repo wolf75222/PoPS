@@ -110,11 +110,11 @@ def test_runtime_installation_reprepares_transitions_and_routes_logical_time() -
     route = PROGRAM_REFLUX.read_text()
     assert "const amr::ClockStamp& logical_time" in route
     assert "&logical_time" in route
+    assert "integrated_state_correction" in route
     context = PROGRAM_CONTEXT.read_text()
-    assert (
-        "route_reflux_program(*eng_, sb, child, coarse_role, fine_role, sync_clock)"
-        in context
-    )
+    assert "route_reflux_program(*eng_, sb, child, coarse_role, fine_role," in context
+    assert "sync_clock," in context
+    assert "capture_balance ? &integrated_reflux : nullptr" in context
 
 
 def test_reflux_uses_the_public_normalized_amr_provider_resolution() -> None:

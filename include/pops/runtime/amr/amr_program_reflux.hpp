@@ -525,15 +525,19 @@ inline void sample_fine_role_strip(const MultiFab& state, const MultiFab& Fx, co
 /// per (cell,direction) (ADC-636 ownership: each C/F face is owned by the rank holding the covering fine
 /// patch), so the gather is associativity-free -> distributed == replicated bit-for-bit.
 inline void route_reflux_program(AmrRuntime& eng, std::size_t b, int k, const EdgeFlux& coarse_role,
-                                 const EdgeFlux& fine_role, const amr::ClockStamp& logical_time) {
+                                 const EdgeFlux& fine_role, const amr::ClockStamp& logical_time,
+                                 std::vector<Real>* integrated_state_correction = nullptr) {
   MultiFab& Uc = eng.level_state(b, k - 1);  // the PARENT (coarse) live state we correct
   const BoxArray child_ba = eng.level_state(b, k).box_array();  // GLOBAL level-k patches
-  if (child_ba.size() == 0)
+  if (child_ba.size() == 0) {
+    if (integrated_state_correction != nullptr)
+      integrated_state_correction->assign(static_cast<std::size_t>(Uc.ncomp()), Real(0));
     return;
+  }
   const Geometry gc = eng.level_geom(k - 1);
   eng.prepared_reflux_transition(b, k).synchronize_integrated(
       Uc, gc.dx(), gc.dy(), coarse_role.coarse, fine_role.fine, world_communicator_view(),
-      &logical_time);
+      &logical_time, integrated_state_correction);
 }
 
 }  // namespace detail

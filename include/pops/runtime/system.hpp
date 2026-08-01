@@ -1240,6 +1240,10 @@ class System {
   /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
   /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
   POPS_EXPORT std::map<std::string, Real> accepted_balance_terms(const std::string& route) const;
+  /// The same accepted route with selected attempt-local native reflux/projection producers.
+  POPS_EXPORT std::map<std::string, Real> selected_accepted_balance_terms(
+      const std::string& route, const std::string& block, int component,
+      const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const;
   POPS_EXPORT void begin_step_projection_report();
   POPS_EXPORT void note_step_projection(const std::string& name);
   POPS_EXPORT std::vector<std::string> consume_step_projections();
