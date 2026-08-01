@@ -1,7 +1,6 @@
 #include "../bindings_detail.hpp"
 
 #include <pops/parallel/execution_lane.hpp>
-#include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/output/hdf5_collective.hpp>
 
 #include <algorithm>
@@ -97,21 +96,12 @@ void init_parallel_hdf5(py::module_& m) {
       [](const py::object& communicator_value, const py::object& path_value,
          const py::object& manifest_value, const py::object& root_arrays_value,
          const py::object& field_rows_value) {
-        pops::CommunicatorView communicator;
-        if (py::isinstance<pops::WorldCommunicator>(communicator_value)) {
-          auto& world = communicator_value.cast<pops::WorldCommunicator&>();
-          if (&world != &pops::WorldCommunicator::world())
-            throw py::value_error("native HDF5 requires the exact process-world authority");
-          communicator = world.communicator();
-        } else if (py::isinstance<pops::ObserverMpiLane>(communicator_value)) {
-          auto& lane = communicator_value.cast<pops::ObserverMpiLane&>();
-          if (!lane.active())
-            throw py::value_error("native HDF5 observer lane is closed");
-          communicator = lane.communicator();
-        } else {
-          throw py::type_error(
-              "native HDF5 requires a PoPS world communicator or observer MPI lane");
-        }
+        if (!py::isinstance<pops::ObserverMpiLane>(communicator_value))
+          throw py::type_error("native HDF5 requires an exact duplicated observer MPI lane");
+        auto& lane = communicator_value.cast<pops::ObserverMpiLane&>();
+        if (!lane.active())
+          throw py::value_error("native HDF5 observer lane is closed");
+        const pops::CommunicatorView communicator = lane.communicator();
         std::vector<py::array> owners;
         std::vector<pops::runtime::output::NamedArrayView> arrays;
         std::vector<pops::runtime::output::FieldView> fields;

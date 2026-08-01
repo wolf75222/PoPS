@@ -14,6 +14,7 @@ from pops._platform_contracts import (
     launch_checked,
     proven_serial_manifest,
     validate_component_launch,
+    validate_component_runtime,
     validate_launch,
 )
 from pops.identity import make_identity
@@ -125,6 +126,11 @@ def test_unknown_is_missing_proof_and_3d_is_representable_then_refused():
     {"scalar": "float32"},
     {"extents": (15, 12)},
     {"memory_space": "device"},
+    {"strides": (1, 16)},
+    {"ghosts": ((1, 0), (0, 0))},
+    {"patch": "patch-1"},
+    {"layout": "left"},
+    {"ownership": "owned"},
 ])
 def test_field_mismatch_refuses_before_kernel(changed):
     launched = []
@@ -133,6 +139,62 @@ def test_field_mismatch_refuses_before_kernel(changed):
             _platform(), _context(), [_field(**changed)],
             lambda *_: launched.append(True), expected_fields=[_field()])
     assert launched == []
+
+
+def test_field_view_requires_exact_capability_proofs_before_kernel():
+    launched = []
+    platform = _platform()
+    context = _context()
+
+    missing = dict(platform.capabilities)
+    missing.pop("ownership")
+    with pytest.raises(PlatformContractError, match="omitted required field-view capability"):
+        launch_checked(
+            replace(platform, capabilities=missing), context, [_field()],
+            lambda *_: launched.append(True))
+
+    unsupported_layout = _proof(("left",))
+    artifact_capabilities = dict(platform.capabilities, layouts=unsupported_layout)
+    runtime_capabilities = dict(context.backend.capabilities, layouts=unsupported_layout)
+    with pytest.raises(PlatformContractError, match="unsupported layout='right'"):
+        launch_checked(
+            replace(platform, capabilities=artifact_capabilities),
+            replace(context, backend=replace(
+                context.backend, capabilities=runtime_capabilities)),
+            [_field()], lambda *_: launched.append(True))
+
+    generic_disabled = _proof(False)
+    artifact_capabilities = dict(platform.capabilities, generic_field_view=generic_disabled)
+    runtime_capabilities = dict(context.backend.capabilities, generic_field_view=generic_disabled)
+    with pytest.raises(PlatformContractError, match="does not prove the generic field-view"):
+        launch_checked(
+            replace(platform, capabilities=artifact_capabilities),
+            replace(context, backend=replace(
+                context.backend, capabilities=runtime_capabilities)),
+            [_field()], lambda *_: launched.append(True))
+
+    assert launched == []
+
+
+@pytest.mark.parametrize("expected", [False, True])
+def test_duplicate_field_names_refuse_before_kernel(expected):
+    launched = []
+    actual_fields = [_field(), _field()]
+    expected_fields = [_field(), _field()] if expected else [_field()]
+    if expected:
+        actual_fields = [_field()]
+    with pytest.raises(PlatformContractError, match="descriptors contain duplicate name"):
+        launch_checked(
+            _platform(), _context(), actual_fields, lambda *_: launched.append(True),
+            expected_fields=expected_fields)
+    assert launched == []
+
+
+def test_field_view_ghosts_must_leave_positive_interior():
+    with pytest.raises(ValueError, match="positive interior"):
+        _field(ghosts=((16, 0), (0, 0)))
+    with pytest.raises(ValueError, match="positive interior"):
+        _field(ghosts=((8, 8), (0, 0)))
 
 
 def test_generic_2d_double_descriptor_launches_once():
@@ -161,6 +223,16 @@ def test_aot_component_build_route_is_checked_against_simulation_execution_facts
         validate_component_launch(replace(component, device=_proof("cuda:0")), context, ())
     with pytest.raises(PlatformContractError, match="component artifact route"):
         validate_component_launch(_platform(), context, ())
+
+
+def test_aot_component_field_capabilities_fail_before_native_load():
+    component = proven_serial_manifest(
+        backend="aot-component", target="component", abi="headers|clang|c++23")
+    runtime = _context().backend
+    missing = dict(component.capabilities)
+    missing.pop("layouts")
+    with pytest.raises(PlatformContractError, match="omitted required field-view capability"):
+        validate_component_runtime(replace(component, capabilities=missing), runtime)
 
 
 def test_aot_component_rejects_openmpi_mpich_abi_mix_even_with_same_headers_and_standard():

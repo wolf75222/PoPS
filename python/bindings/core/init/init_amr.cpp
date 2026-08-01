@@ -1,5 +1,5 @@
 #include "../bindings_detail.hpp"
-#include <pops/parallel/world_communicator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include "boundary_component_install.hpp"
 #include "output_geometry_binding.hpp"
 
@@ -992,16 +992,16 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "Exact compact valid-cell pieces of one qualified field owned by this rank.")
       .def(
           "output_field_root_pieces",
-          [](AmrSystem& s, const WorldCommunicator& world, const std::string& provider_slot,
+          [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& provider_slot,
              int level) {
             std::vector<OutputPiece> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_field_root_pieces(world, provider_slot, level);
+              pieces = s.output_field_root_pieces(lane, provider_slot, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("provider_slot"), py::arg("level"),
+          py::arg("lane"), py::arg("provider_slot"), py::arg("level"),
           "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",
@@ -1044,15 +1044,15 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "Exact compact valid-cell pieces of one qualified state owned by this rank.")
       .def(
           "output_state_root_pieces",
-          [](AmrSystem& s, const WorldCommunicator& world, const std::string& name, int level) {
+          [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& name, int level) {
             std::vector<OutputPiece> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_state_root_pieces(world, name, level);
+              pieces = s.output_state_root_pieces(lane, name, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("block"), py::arg("level"),
+          py::arg("lane"), py::arg("block"), py::arg("level"),
           "Collectively gather compact state pieces in C++; complete only on MPI rank zero.")
       .def(
           "set_block_level_state",
