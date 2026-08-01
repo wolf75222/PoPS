@@ -37,6 +37,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved
   rational stage weight, geometry and duration before publishing the image; rejected restart or
   Program attempts leave the previous accepted report byte-exact.
+- Generated physical-flux bricks now make their qualified provider requirements executable native
+  ABI evidence: the binder validates every row at compile time and reads only its declared storage
+  slots instead of scanning the model's complete auxiliary width.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
   `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one

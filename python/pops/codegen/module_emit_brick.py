@@ -247,8 +247,10 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
             contract["representation"], contract["centering"], contract["unit"] or "",
             contract["layout"], contract["value_kind"] or "", provider["producer"] or "",
         ]
-        S.append("    {%s, %d}," %
-                 (", ".join(json.dumps(value) for value in values), provider["slot"]))
+        availability = "true" if provider["availability"] else "false"
+        S.append("    {%s, %s, %d}," %
+                 (", ".join(json.dumps(value) for value in values),
+                  availability, provider["slot"]))
     S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))

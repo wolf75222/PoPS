@@ -48,6 +48,14 @@ def test_bound_native_flux_pack_is_exact_and_does_not_store_global_aux():
     assert "FluxDensity<State> checked_density() const" in header
 
 
+def test_generated_flux_pack_metadata_controls_native_storage_reads():
+    header = _behavior(ROOT / "include/pops/numerics/fv/flux_interfaces.hpp")
+    assert "qualified_flux_provider_requirements_valid" in header
+    assert "qualified_flux_provider_storage_slot<Model, Indices>" in header
+    assert "std::make_index_sequence<count>" in header
+    assert "generated physical flux provider requirements are invalid" in header
+
+
 def test_provider_selection_is_qualified_and_never_returns_a_neutral_value():
     source = (ROOT / "python/pops/model/provider_pack.py").read_text(encoding="utf-8")
     assert "def select(" in source

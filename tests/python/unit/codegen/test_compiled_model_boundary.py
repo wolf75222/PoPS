@@ -32,6 +32,9 @@ class _SourceModel:
     def check(self):
         return None
 
+    def __pops_bind_component_provider_packs__(self, packs):
+        self.provider_packs = packs
+
     def __pops_native_loader_source__(
             self, *, name=None, target="system", hoist_reciprocals=False):
         return "// compiled-model-boundary fixture\n"

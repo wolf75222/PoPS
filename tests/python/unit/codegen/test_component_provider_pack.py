@@ -64,6 +64,29 @@ def test_minimal_selection_preserves_qualified_identity_and_refuses_missing_prov
         pack.select([ComponentKey("case/missing", "field", "electric", "grad_x")])
 
 
+def test_component_selection_is_space_qualified_and_refuses_homonym_ambiguity():
+    contract = ComponentContract("field", "cell", "V/m", "cell")
+    left = ComponentKey("owner", "field", "left", "grad_x")
+    right = ComponentKey("owner", "field", "right", "grad_x")
+    pack = ProviderPack([
+        (left, contract, ProviderEntry("left_solver", True, 0)),
+        (right, contract, ProviderEntry("right_solver", True, 0)),
+    ])
+
+    selected = pack.select_components(
+        owner_qid="owner",
+        spaces=(("field", "left"),),
+        components=("grad_x",),
+    )
+    assert tuple(selected) == (left,)
+    with pytest.raises(MissingInputProvider, match="ambiguous component"):
+        pack.select_components(
+            owner_qid="owner",
+            spaces=(("field", "left"), ("field", "right")),
+            components=("grad_x",),
+        )
+
+
 def test_operator_provider_pack_contains_fields_but_not_explicit_state_trace():
     module = Module("operator_pack")
     state = module.state_space("U", ("rho",))
@@ -76,6 +99,21 @@ def test_operator_provider_pack_contains_fields_but_not_explicit_state_trace():
         ("field", "electric", "grad_x"),
         ("field", "electric", "grad_y"),
     }
+
+
+def test_operator_requirements_select_only_declared_components():
+    module = Module("operator_component_pack")
+    state = module.state_space("U", ("rho",))
+    fields = module.field_space("electric", ("phi", "grad_x", "grad_y"))
+    module.operator("solve", state >> fields, "field_operator", expr=1.0)
+    operator = SimpleNamespace(
+        signature=SimpleNamespace(inputs=(state, fields)),
+        requirements={"aux": ("grad_x",)},
+    )
+
+    pack = build_operator_provider_pack(module, operator)
+
+    assert tuple(key.component for key in pack) == ("grad_x",)
 
 
 def test_provider_pack_accepts_exact_capacity_and_refuses_capacity_plus_one_atomically():
