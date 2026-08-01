@@ -327,6 +327,14 @@ test_regex = "^ProgramContextContract\\.AcceptedBalanceEvidenceIsCurrentAttemptE
 [[check]]
 issue = "ADC-686"
 requirement = "diagnostics"
+polarity = "positive"
+kind = "ctest"
+target = "diagnostics@test_program_runtime"
+test_regex = "^ProgramRuntime\\.SelectedAutomaticBalanceTermsRequireCompleteQualifiedEvidence$"
+
+[[check]]
+issue = "ADC-686"
+requirement = "diagnostics"
 polarity = "refusal"
 kind = "pytest"
 target = "diagnostics"

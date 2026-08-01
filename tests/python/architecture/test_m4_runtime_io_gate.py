@@ -39,7 +39,7 @@ def test_m4_manifest_is_a_closed_exact_matrix():
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
     assert data["deferred"] == []
-    assert len(data["check"]) == 51
+    assert len(data["check"]) == 52
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",

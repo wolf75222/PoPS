@@ -2,7 +2,7 @@
 
 The current status is **CLOSED AND CI-EXECUTED**. The ledger in
 `tests/gates/m4_runtime_io.toml` records exact executable evidence for
-ADC-679 through ADC-687. It contains exactly 51 executable checks and
+ADC-679 through ADC-687. It contains exactly 52 executable checks and
 `deferred = []`. Closure is accepted only for a commit whose required MPI job
 successfully executes the complete installed gate; source audit alone is not
 the acceptance evidence.
@@ -28,7 +28,8 @@ The source audit already authenticates real proofs for:
   parity;
 - a prepared native FieldSolver whose invalid first result is refused through
   RuntimeInstance with exact accepted-state rollback and a successful retry;
-- accepted scientific publication, diagnostics, two-rank collective HDF5,
+- accepted scientific publication, diagnostics including qualified native
+  projection/reflux term selection, two-rank collective HDF5,
   and a two-rank PVD/PVTU/rank-VTU hierarchy reopened by native VTK readers.
 
 The required Ubuntu 24.04 MPI lane installs Open MPI, parallel HDF5, NumPy,
