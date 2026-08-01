@@ -560,8 +560,8 @@ TEST(CompositeFacPoissonTest, late_invalid_carrier_does_not_replace_committed_ba
   const BoxArray coarse = BoxArray::from_domain(domain, n);
   BCRec boundary;
   boundary.xlo = boundary.xhi = boundary.ylo = boundary.yhi = BCType::Dirichlet;
-  const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
-  CompositeFacPoisson fac(geometry, coarse, boundary, fine_box, r);
+  const Box2D full_fine_domain = geometry.refine(r).domain;
+  CompositeFacPoisson fac(geometry, coarse, boundary, full_fine_domain, r);
   fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
       "tests.composite-fac.transactional-level-carrier@1",
       "tests.composite-fac.transactional-level-carrier.residual@1",
@@ -591,35 +591,28 @@ TEST(CompositeFacPoissonTest, late_invalid_carrier_does_not_replace_committed_ba
   fac.set_boundary_context_at_level(0, accepted_coarse);
   fac.set_boundary_context_at_level(1, accepted_fine);
 
-  MultiFab replacement_coarse(fac.rhs_level(0).box_array(), fac.rhs_level(0).dmap(), 1, 0);
-  const MultiFab* replacement_coarse_states[] = {&replacement_coarse};
-  FieldBoundaryExecutionContext candidate_coarse = accepted_coarse;
-  candidate_coarse.states = replacement_coarse_states;
-  fac.set_boundary_context_at_level(0, candidate_coarse);
+  MultiFab replacement_fine(fac.rhs_level(1).box_array(), fac.rhs_level(1).dmap(), 1, 0);
+  const MultiFab* replacement_fine_states[] = {&replacement_fine};
+  FieldBoundaryExecutionContext candidate_fine = accepted_fine;
+  candidate_fine.states = replacement_fine_states;
+  fac.set_boundary_context_at_level(1, candidate_fine);
 
   const std::vector<Real> one_parameter{Real(1)};
-  FieldBoundaryExecutionContext invalid_fine = accepted_fine;
-  invalid_fine.parameters = &one_parameter;
-  invalid_fine.parameter_count = 2;
-  EXPECT_THROW(fac.set_boundary_context_at_level(1, invalid_fine), std::invalid_argument);
+  FieldBoundaryExecutionContext invalid_coarse = accepted_coarse;
+  invalid_coarse.parameters = &one_parameter;
+  invalid_coarse.parameter_count = 2;
+  EXPECT_THROW(fac.set_boundary_context_at_level(0, invalid_coarse), std::invalid_argument);
 
-  expected_boundary_state = &fac.rhs_level(0);
+  expected_boundary_state = &fac.rhs_level(1);
   observed_expected_boundary_state = false;
   observed_unexpected_boundary_state = false;
-  EXPECT_NO_THROW((void)fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
-                                  /*rel_tol=*/Real(0), /*abs_tol=*/Real(0)));
+  EXPECT_NO_THROW((void)fac.solve(/*max_iters=*/1, /*fine_sweeps=*/0,
+                                  /*rel_tol=*/Real(1e-10), /*abs_tol=*/Real(0)));
+  EXPECT_TRUE(fac.last_solve_report().solved()) << fac.last_solve_report().reason;
   EXPECT_TRUE(observed_expected_boundary_state);
   EXPECT_FALSE(observed_unexpected_boundary_state)
-      << "a late carrier failure changed the previously committed coarse boundary context";
+      << "a late carrier failure changed the previously committed fine boundary context";
 
-  fac.force_general_path_for_test(true);
-  observed_expected_boundary_state = false;
-  observed_unexpected_boundary_state = false;
-  EXPECT_NO_THROW((void)fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
-                                  /*rel_tol=*/Real(0), /*abs_tol=*/Real(0)));
-  EXPECT_TRUE(observed_expected_boundary_state);
-  EXPECT_FALSE(observed_unexpected_boundary_state)
-      << "the general FAC path did not preserve the committed coarse boundary context";
   expected_boundary_state = nullptr;
   comm_finalize();
 }

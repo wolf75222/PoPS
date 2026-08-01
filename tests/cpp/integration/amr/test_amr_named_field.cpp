@@ -909,7 +909,7 @@ TEST(test_amr_named_field, ExternalProviderReceivesSolvedFieldDependencyOnEveryL
   }
 }
 
-TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenciesOnEveryLevel) {
+TEST(test_amr_named_field, LevelLocalProviderConsumesTopologicalBoundaryDependenciesOnEveryLevel) {
   constexpr int n = 16;
   AmrBuildParams params;
   params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
@@ -939,15 +939,15 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
     AmrFieldSolveConfig result;
     result.solver_options =
         geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
-    result.plan_identity = "tests:plasma/" + field + ":composite-plan@1";
+    result.plan_identity = "tests:plasma/" + field + ":level-local-plan@1";
     result.provider_identity = "tests:plasma/" + field;
-    result.topology_provider_kind = "tests.composite-level-qualified-topology";
-    result.topology_provenance = "tests:composite-level-qualified-boundary";
-    result.topology_digest = "tests:composite-level-qualified-boundary:layout@1";
+    result.topology_provider_kind = "tests.level-local-qualified-topology";
+    result.topology_provenance = "tests:level-local-qualified-boundary";
+    result.topology_digest = "tests:level-local-qualified-boundary:layout@1";
     result.output_owner_identity = "tests:plasma";
     result.output_block = "plasma";
     result.output_key = field;
-    result.hierarchy_policy = composite_hierarchy_policy();
+    result.hierarchy_policy = level_local_hierarchy_policy();
     result.nullspace = operator_topology_zero_mean_nullspace();
     result.has_reaction = true;
     result.reaction = Real(1);
@@ -963,29 +963,29 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
   };
 
   // The dependency sorts after its consumer. Exact graph traversal must still solve z_driver first,
-  // because the composite consumer refuses an unpublished dependency before installing any level
+  // because the level-local consumer refuses an unpublished dependency before installing any level
   // carrier.
   plan("z_driver", kAuxNamedBase);
 
   AmrFieldSolveConfig dependent;
   dependent.solver_options =
       geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
-  dependent.plan_identity = "tests:plasma/a_potential:composite-plan@1";
+  dependent.plan_identity = "tests:plasma/a_potential:level-local-plan@1";
   dependent.provider_identity = "tests:plasma/a_potential";
-  dependent.topology_provider_kind = "tests.composite-level-qualified-topology";
-  dependent.topology_provenance = "tests:composite-level-qualified-boundary";
-  dependent.topology_digest = "tests:composite-level-qualified-boundary:layout@1";
+  dependent.topology_provider_kind = "tests.level-local-qualified-topology";
+  dependent.topology_provenance = "tests:level-local-qualified-boundary";
+  dependent.topology_digest = "tests:level-local-qualified-boundary:layout@1";
   dependent.output_owner_identity = "tests:plasma";
   dependent.output_block = "plasma";
   dependent.output_key = "a_potential";
-  dependent.hierarchy_policy = composite_hierarchy_policy();
+  dependent.hierarchy_policy = level_local_hierarchy_policy();
   dependent.nullspace = operator_topology_zero_mean_nullspace();
   dependent.has_reaction = true;
   dependent.reaction = Real(1);
   dependent.has_boundary_kernel = true;
   dependent.boundary_kernel = CompiledFieldBoundaryKernel{
-      "tests:a_potential/composite-field-dependent-boundary@1",
-      "tests:a_potential/composite-field-dependent-boundary-residual@1",
+      "tests:a_potential/level-local-field-dependent-boundary@1",
+      "tests:a_potential/level-local-field-dependent-boundary-residual@1",
       "",
       composite_boundary_prepare,
       nullptr,
@@ -1064,18 +1064,18 @@ TEST(test_amr_named_field, CompositeProviderConsumesTopologicalBoundaryDependenc
   }
 
   // A selected failure after its producer has run must restore the complete bounded closure and
-  // leave an unrelated consumer untouched. One FAC iteration cannot meet this deliberately strict
+  // leave an unrelated consumer untouched. One MG cycle cannot meet this deliberately strict
   // tolerance, so the outcome exercises the ordinary RejectAttempt path rather than an exception.
   AmrFieldSolveConfig failing = dependent;
-  failing.solver_options.values["fac.rel_tol"] = 1e-30;
-  failing.solver_options.values["fac.abs_tol"] = 0.0;
-  failing.solver_options.values["fac.max_iters"] = std::int64_t{1};
-  failing.plan_identity = "tests:plasma/zz_failure:composite-plan@1";
+  failing.solver_options.values["mg.rel_tol"] = 1e-30;
+  failing.solver_options.values["mg.abs_tol"] = 0.0;
+  failing.solver_options.values["mg.max_cycles"] = std::int64_t{1};
+  failing.plan_identity = "tests:plasma/zz_failure:level-local-plan@1";
   failing.provider_identity = "tests:plasma/zz_failure";
   failing.output_key = "zz_failure";
   failing.boundary_kernel = CompiledFieldBoundaryKernel{
-      "tests:zz_failure/composite-field-dependent-boundary@1",
-      "tests:zz_failure/composite-field-dependent-boundary-residual@1",
+      "tests:zz_failure/level-local-field-dependent-boundary@1",
+      "tests:zz_failure/level-local-field-dependent-boundary-residual@1",
       "",
       composite_boundary_prepare,
       nullptr,
@@ -1174,7 +1174,7 @@ TEST(test_amr_named_field, LevelLocalDynamicBoundaryReceivesLevelQualifiedState)
                                        [charge](const MultiFab& state, MultiFab& rhs) {
                                          add_scaled_component(state, charge, 0, rhs);
                                        });
-  runtime.set_field_boundary_dependencies("level_boundary", {"plasma"}, {0});
+  runtime.set_field_boundary_dependencies("level_boundary", {"plasma"}, {0}, {}, {}, {});
   runtime.set_field_boundary_kernel(
       "level_boundary",
       CompiledFieldBoundaryKernel{"tests.level-qualified-boundary",
@@ -1246,7 +1246,7 @@ TEST(test_amr_named_field, FullyRefinedCompositeBoundaryReceivesFinestLevelState
                                        [charge](const MultiFab& state, MultiFab& rhs) {
                                          add_scaled_component(state, charge, 0, rhs);
                                        });
-  runtime.set_field_boundary_dependencies("composite_level_boundary", {"plasma"}, {0});
+  runtime.set_field_boundary_dependencies("composite_level_boundary", {"plasma"}, {0}, {}, {}, {});
   runtime.set_field_boundary_kernel(
       "composite_level_boundary",
       CompiledFieldBoundaryKernel{"tests.composite-level-qualified-boundary",
