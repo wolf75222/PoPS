@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 import pops
+from pops.diagnostics import Integral
 from pops.fields import (
     CellCenteredSecondOrder,
     ConstantNullspace,
@@ -348,6 +349,36 @@ def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
     if output_mode is None:
         output_mode = ParallelMode.SERIAL
 
+    end_schedule = on_end(clock=program.clock)
+    # The field RHS is -ne + ni, so these owner-qualified density integrals publish
+    # the two signed charge contributions with the same exact coefficients.
+    # Momentum is likewise selected by typed physical role, never by component name.
+    end_diagnostics = (
+        Integral(
+            block=electron_block,
+            role=Density(),
+            cadence=end_schedule,
+            coefficient=-1.0,
+        ),
+        Integral(
+            block=ion_block,
+            role=Density(),
+            cadence=end_schedule,
+            coefficient=1.0,
+        ),
+        Integral(
+            block=electron_block,
+            role=Momentum(axis=x_axis),
+            cadence=end_schedule,
+        ),
+        Integral(
+            block=electron_block,
+            role=Momentum(axis=y_axis),
+            cadence=end_schedule,
+        ),
+        Integral(block=ion_block, role=Momentum(axis=x_axis), cadence=end_schedule),
+        Integral(block=ion_block, role=Momentum(axis=y_axis), cadence=end_schedule),
+    )
     case.consumers(ConsumerGraph.from_consumers((
         ScientificOutput(
             format=ParaView(mode=output_mode),
@@ -357,8 +388,9 @@ def build_authoring(*, output_mode: Any = None) -> MultiphysicsAuthoring:
         ),
         ScientificOutput(
             format=HDF5(mode=output_mode),
-            schedule=on_end(clock=program.clock),
+            schedule=end_schedule,
             fields=(electron_state, ion_state),
+            diagnostics=end_diagnostics,
             target="state/two_fluid",
         ),
         Checkpoint(

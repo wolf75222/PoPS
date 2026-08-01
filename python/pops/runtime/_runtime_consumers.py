@@ -2572,6 +2572,26 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                     value = math.sqrt(value)
                 elif operation["transform"] != "identity":
                     raise ValueError("unknown diagnostic scalar transform")
+                coefficient_token = operation["coefficient"]
+                if not isinstance(coefficient_token, str):
+                    raise TypeError(
+                        "diagnostic coefficient must be canonical float.hex() text"
+                    )
+                try:
+                    coefficient = float.fromhex(coefficient_token)
+                except (OverflowError, ValueError) as exc:
+                    raise ValueError(
+                        "diagnostic coefficient is not valid float.hex() text"
+                    ) from exc
+                if (
+                    coefficient.hex() != coefficient_token
+                    or not math.isfinite(coefficient)
+                    or coefficient == 0.0
+                ):
+                    raise ValueError(
+                        "diagnostic coefficient is not canonical finite nonzero binary64"
+                    )
+                value *= coefficient
                 reduction_name = operation["name"]
                 terms: dict[str, float] = {}
                 conservation = execution["conservation"]
