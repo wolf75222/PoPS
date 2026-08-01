@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import zipfile
 
@@ -52,6 +55,21 @@ def _installed_package(root: Path) -> Path:
     return package
 
 
+def _installed_distribution(root: Path) -> Path:
+    package = _installed_package(root)
+    distribution = package.parent / "pops-1.0.0.dist-info"
+    distribution.mkdir()
+    (distribution / "METADATA").write_text(
+        "Metadata-Version: 2.3\nName: PoPS\nVersion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (distribution / "RECORD").write_text(
+        "pops/__init__.py,,\n",
+        encoding="utf-8",
+    )
+    return package
+
+
 def test_exact_wheel_and_source_share_public_api_typing_and_lazy_authoring(tmp_path):
     wheel = tmp_path / "pops-1.0.0-py3-none-any.whl"
     _synthetic_wheel(wheel)
@@ -93,6 +111,43 @@ def test_installed_proof_rejects_payload_drift_and_source_checkout_alias(tmp_pat
         proof.build_proof(wheel, installed_package=installed)
     with pytest.raises(proof.PublicApiParityError, match="inside the source checkout"):
         proof.build_proof(wheel, installed_package=proof.SOURCE_PACKAGE)
+
+
+def test_installed_cli_resolves_distribution_after_install_without_checkout_shadowing(
+    tmp_path,
+):
+    wheel = tmp_path / "pops-1.0.0-py3-none-any.whl"
+    _synthetic_wheel(wheel)
+    installed = _installed_distribution(tmp_path)
+    evidence = tmp_path / "installed-public-api.json"
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(installed.parent)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--wheel",
+            str(wheel),
+            "--installed",
+            "--evidence",
+            str(evidence),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    assert payload["installed"] is True
+    assert payload["installed_package"] == str(installed.resolve())
+    assert payload["installed_typed_payload_sha256"] == payload["typed_payload_sha256"]
+    assert payload["installed_public_api_sha256"] == payload["public_api_sha256"]
 
 
 def test_release_workflow_blocks_publication_on_source_wheel_api_parity():
