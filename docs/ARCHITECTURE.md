@@ -552,7 +552,9 @@ topology-independent generated operations. In particular, persistent RHS/state/s
 one shared resource service keyed by IR value, sub-slot and active level. Providers expose only the
 authenticated resource identity (topology epoch, process-local materialization generation and
 level); the shared service owns validation, invalidation, exact-layout allocation, zero-on-reuse and
-profiling for both Uniform and AMR execution.
+profiling for both Uniform and AMR execution. Prepared operator capabilities are likewise retained
+as complete evaluation snapshots: a probe re-authenticates the provider clock and topology against
+the exact active snapshot, so a provider transition cannot leave a stale nonzero revision usable.
 
 ### Adaptive runtime execution
 

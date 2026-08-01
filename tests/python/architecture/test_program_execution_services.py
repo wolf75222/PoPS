@@ -264,13 +264,15 @@ def test_operator_snapshot_revision_state_is_owned_only_by_the_shared_service():
     shared = _read(SHARED)
     declarations = (
         "mutable std::uint64_t operator_snapshot_revision_ = 0;",
-        "mutable std::uint64_t active_operator_snapshot_revision_ = 0;",
+        "mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;",
     )
     for declaration in declarations:
         assert shared.count(declaration) == 1
         assert declaration not in _read(UNIFORM)
         assert declaration not in _read(AMR)
     assert shared.count("void invalidate_active_operator_snapshot_() const noexcept") == 1
+    assert "probe != *active_operator_snapshot_" in shared
+    assert "active_operator_snapshot_revision_" not in shared
     assert "invalidate_active_operator_snapshot_" not in _read(UNIFORM)
     assert "invalidate_active_operator_snapshot_" not in _read(AMR)
 
