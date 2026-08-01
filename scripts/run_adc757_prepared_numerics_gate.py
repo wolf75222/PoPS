@@ -30,13 +30,14 @@ EXPECTED_REQUIREMENTS = {
     "prepared_limiter_provider",
     "cell_local_temporal_partition_authority",
     "python_ir_generated_abi_and_restart_parity",
+    "host_workspace_reentrancy",
 }
 EXPECTED_DEFERRED = (
     "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
     "remaining_legacy_recovery_and_boundary_authority_deletion",
     "amr_regrid_migration_and_restart_coherence",
     "gpu_backend_execution",
-    "workspace_reentrancy_and_stream_partitioning",
+    "accelerator_stream_partitioning",
     "performance_baselines_and_end_to_end_benchmarks",
     "local_time_and_load_balance_provider_families",
 )
@@ -66,8 +67,8 @@ def _python_files() -> set[str]:
     return files
 
 
-def _declared_gtests(suite: dict) -> tuple[set[str], list[str]]:
-    names: set[str] = set()
+def _declared_gtests(suite: dict) -> tuple[dict[str, bool], list[str]]:
+    tests: dict[str, bool] = {}
     errors: list[str] = []
     for relative in suite.get("sources", ()):
         source = ROOT / relative
@@ -75,10 +76,21 @@ def _declared_gtests(suite: dict) -> tuple[set[str], list[str]]:
             errors.append("missing source %s" % relative)
             continue
         text = source.read_text(encoding="utf-8")
-        if "GTEST_SKIP" in text or "DISABLED_" in text:
-            errors.append("%s contains a skip/disabled marker" % relative)
-        names.update("%s.%s" % match.groups() for match in GTEST_PATTERN.finditer(text))
-    return names, errors
+        matches = list(GTEST_PATTERN.finditer(text))
+        for index, match in enumerate(matches):
+            suite_name, test_name = match.groups()
+            name = "%s.%s" % (suite_name, test_name)
+            if name in tests:
+                errors.append("duplicate declared GTest %s" % name)
+                continue
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            body = text[match.start():end]
+            tests[name] = (
+                suite_name.startswith("DISABLED_")
+                or test_name.startswith("DISABLED_")
+                or "GTEST_SKIP" in body
+            )
+    return tests, errors
 
 
 def _declared_pytests(relative: str) -> tuple[dict[str, ast.FunctionDef], list[str]]:
@@ -241,10 +253,10 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             continue
         if "mpi" in labels or "gpu" in labels:
             errors.append("%s ordinary CTest claims a deferred MPI/GPU target %r" % (where, target))
-        names, source_errors = _declared_gtests(suites[target])
+        declared, source_errors = _declared_gtests(suites[target])
         errors.extend("%s: %s" % (where, error) for error in source_errors)
         try:
-            matches = sorted(name for name in names if re.fullmatch(selector, name))
+            matches = sorted(name for name in declared if re.fullmatch(selector, name))
         except re.error as exc:
             errors.append("%s has invalid test_regex: %s" % (where, exc))
             continue
@@ -252,6 +264,8 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             errors.append(
                 "%s must resolve to exactly one declared GTest; got %s" % (where, matches)
             )
+        elif declared[matches[0]]:
+            errors.append("%s selected CTest %r is skipped or disabled" % (where, matches[0]))
 
     duplicates = sorted(identity for identity, count in identities.items() if count > 1)
     if duplicates:

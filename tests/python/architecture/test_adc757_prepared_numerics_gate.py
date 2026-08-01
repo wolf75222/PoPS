@@ -47,6 +47,8 @@ def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
     assert data["deferred"] == list(runner.EXPECTED_DEFERRED)
     assert "mpi_collective_execution" not in data["deferred"]
     assert "gpu_backend_execution" in data["deferred"]
+    assert "accelerator_stream_partitioning" in data["deferred"]
+    assert "workspace_reentrancy_and_stream_partitioning" not in data["deferred"]
     assert "remaining_legacy_recovery_and_boundary_authority_deletion" in data["deferred"]
     assert all("riemann_authority" not in family for family in data["deferred"])
     assert "runtime_consumer_cutover_and_legacy_deletion" not in data["deferred"]
@@ -76,6 +78,30 @@ def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
         for row in data["check"]
     )
     assert runner.main(["--check-only", "--closure"]) == 3
+
+
+def test_adc757_slice_executes_host_workspace_reentrancy_without_claiming_streams():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    assert [
+        row for row in data["check"] if row["requirement"] == "host_workspace_reentrancy"
+    ] == [
+        {
+            "requirement": "host_workspace_reentrancy",
+            "polarity": "positive",
+            "target": "test_krylov_workspace_reentrancy",
+            "test_regex": "^test_krylov_workspace_reentrancy\\."
+            "distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently$",
+        },
+        {
+            "requirement": "host_workspace_reentrancy",
+            "polarity": "refusal",
+            "target": "test_krylov_workspace_reentrancy",
+            "test_regex": "^test_krylov_workspace_reentrancy\\."
+            "workspace_rebind_reserves_mutation_during_blocking_operator_prepare$",
+        },
+    ]
 
 
 def test_adc757_slice_executes_exact_python_ir_and_restart_proofs():
@@ -175,6 +201,20 @@ def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
         "@pytest.mark.xfail\ndef test_skipped():\n    pass\n"
     ).body[0]
     assert runner._pytest_is_skipped(skipped)
+
+    skipped_ctest = tmp_path / "skipped_ctest.toml"
+    skipped_ctest.write_text(
+        source.replace(
+            "^test_krylov_workspace_reentrancy\\\\."
+            "distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently$",
+            "^test_krylov_workspace_reentrancy\\\\."
+            "rank_local_problem_construction_failure_is_published_before_lane_unwind$",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _, errors = runner.validate_manifest(skipped_ctest)
+    assert any("selected CTest" in error and "skipped or disabled" in error for error in errors)
 
 
 def test_adc757_runner_refuses_a_declared_but_unbuilt_proof(monkeypatch, tmp_path):

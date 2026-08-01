@@ -7,7 +7,7 @@ deferred = [
   "remaining_legacy_recovery_and_boundary_authority_deletion",
   "amr_regrid_migration_and_restart_coherence",
   "gpu_backend_execution",
-  "workspace_reentrancy_and_stream_partitioning",
+  "accelerator_stream_partitioning",
   "performance_baselines_and_end_to_end_benchmarks",
   "local_time_and_load_balance_provider_families",
 ]
@@ -179,6 +179,18 @@ requirement = "cell_local_temporal_partition_authority"
 polarity = "refusal"
 target = "test_temporal_partition_restart"
 test_regex = "^test_temporal_partition_restart\\.strict_amr_restore_consumes_manifest_and_refuses_global_step_bypass$"
+
+[[check]]
+requirement = "host_workspace_reentrancy"
+polarity = "positive"
+target = "test_krylov_workspace_reentrancy"
+test_regex = "^test_krylov_workspace_reentrancy\\.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently$"
+
+[[check]]
+requirement = "host_workspace_reentrancy"
+polarity = "refusal"
+target = "test_krylov_workspace_reentrancy"
+test_regex = "^test_krylov_workspace_reentrancy\\.workspace_rebind_reserves_mutation_during_blocking_operator_prepare$"
 
 [[check]]
 requirement = "python_ir_generated_abi_and_restart_parity"
