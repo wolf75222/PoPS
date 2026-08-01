@@ -7,6 +7,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
@@ -63,8 +64,8 @@ struct FieldTopologyReportRow {
 /// materialized once from replicated patch metadata and reused for every solve.  A solve sends every
 /// local patch view in one request and calls the component exactly once on every participating rank,
 /// including ranks with zero local patches.  The currently proven System route is host-resident,
-/// serial, Cartesian, cell-centered and full-material; unsupported execution/layout facts are
-/// rejected before either component can mutate the solution.
+/// serial or singleton-MPI, Cartesian, cell-centered and full-material; unsupported
+/// execution/layout facts are rejected before either component can mutate the solution.
 class PreparedFieldSolverComponent final {
  public:
   PreparedFieldSolverComponent(PreparedFieldSolverSpec spec,
@@ -566,10 +567,20 @@ class PreparedFieldSolverComponent final {
       throw std::invalid_argument("prepared external field solver specification is incomplete");
     const auto execution = spec_.execution->view();
     component::validate_execution_context(execution);
+    const std::string communicator_identity(execution.communicator_identity);
+    bool singleton_mpi = false;
+#ifdef POPS_HAS_MPI
+    if (communicator_identity == "MPI_COMM_WORLD") {
+      const CommunicatorView communicator{
+          MPI_Comm_f2c(static_cast<MPI_Fint>(execution.communicator_f_handle))};
+      singleton_mpi = communicator.active() && communicator.size() == 1;
+    }
+#endif
     if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-        std::string(execution.communicator_identity) != "serial")
+        (communicator_identity != "serial" && !singleton_mpi))
       throw std::invalid_argument(
-          "external FieldSolver v2 System adapter currently proves host/serial execution only");
+          "external FieldSolver v2 System adapter currently proves host serial or singleton-MPI "
+          "execution only");
     const auto& topology_api = topology_component_->api();
     const auto& solver_api = solver_component_->api();
     if (topology_api.component_id == nullptr || topology_api.manifest_identity == nullptr ||

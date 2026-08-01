@@ -15,6 +15,7 @@ from tests.python.integration._final_field_program import (
     passive_field_model,
     resolve_periodic_field_program,
 )
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 def _manifest(name, interface, parameters=()):
@@ -314,6 +315,7 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     simulation = pops.bind(
         artifact,
         initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     slot, = simulation.field_provider_slots()
     before = simulation.inspect().to_dict()["instance"]["field_providers"]
@@ -379,9 +381,11 @@ def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retr
         target="system", n=8, field_solver=provider,
         components=(topology, solver))
 
+    artifact = pops.compile(resolved)
     simulation = pops.bind(
-        pops.compile(resolved),
+        artifact,
         initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     slot, = simulation.field_provider_slots()
     accepted_before = {
