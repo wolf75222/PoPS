@@ -169,6 +169,36 @@ def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy
     assert policy.error_message
 
 
+def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cutover():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    prepared = routes["recovery:prepared_variable"]
+    assert prepared.status == "partial"
+    assert prepared.layout == "uniform|amr"
+    assert prepared.backend == "production"
+    assert prepared.mpi is True
+    assert prepared.gpu is False
+    assert "one block-prepared closed-form method" in prepared.limitation
+    assert "device-copyable RecoveryOutcome/RecoveryReport" in prepared.limitation
+    assert "consume publication permission" in prepared.limitation
+    assert "no implicit repair, fallback, or mutable cache" in prepared.limitation
+
+    cutover = routes["recovery:complete_consumer_cutover"]
+    assert cutover.status == "unavailable"
+    assert cutover.layout == "uniform|amr"
+    assert cutover.backend == "none"
+    assert "initial and analytic materialization" in cutover.limitation
+    assert "AMR transfer/regrid" in cutover.limitation
+    assert "persistent warm starts" in cutover.limitation
+    assert "System materialization and spatial face reconstruction" in cutover.available_route
+    assert "missing fallible provider and cache/restart contracts" in cutover.alternative
+    assert cutover.error_message
+
+
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):
     monkeypatch.setattr(defaults, "_native_extension", lambda: None)
     assert defaults.numerical_defaults_report()["source"] == "source-only"

@@ -159,6 +159,15 @@ Supported native routes include:
   there is no prepared ordered solver chain, requested-versus-used solver outcome, block counter,
   or restart metadata yet. Callers can therefore request the single-solver typed-rejection route
   explicitly, but cannot claim a configured fallback policy.
+- Prepared variable recovery is explicitly `partial`. One block-prepared closed-form method returns
+  a device-copyable `RecoveryOutcome`/`RecoveryReport`; System conservative-to-primitive
+  materialization and Cartesian, polar, masked, and embedded-boundary face reconstruction consume
+  publication permission before copying a candidate or evaluating a flux. This route adds no
+  implicit repair, fallback, or mutable cache. The separate
+  `recovery:complete_consumer_cutover` capability remains `unavailable`: initial/analytic and
+  model/source conversion, AMR transfer/regrid, primitive boundary traces, fallible
+  primitive-to-conservative conversion, persistent warm starts, cache/restart, backend parity, and
+  performance evidence do not yet share that authority.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.

@@ -23,6 +23,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `FluxEvaluation` and transactional rejection, while ordered fallback chains,
   requested-versus-used solver diagnostics, counters, and restart metadata fail closed instead of
   being inferred from the selected solver.
+- Variable-recovery capability reports now separate the delivered prepared closed-form consumers
+  from the complete ADC-755 deletion gate. System materialization and every production face route
+  advertise typed publication control, while the remaining source, AMR-transfer, boundary,
+  inverse-conversion, cache/restart, backend, and performance families fail closed as an unavailable
+  complete-consumer cutover.
 - ADC-749 carries exact periodic face identifications through the model-aware hyperbolic boundary
   plan. Uniform scalar layouts execute mapped periodic halos (including cross-axis maps); mapped
   vector/axial component transforms and AMR mapped periodic fill-patch/regrid remain explicit
