@@ -106,6 +106,17 @@ def test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart(t
     assert evidence.accepted.macro_step > 0
     assert evidence.restored.macro_step == evidence.accepted.macro_step
     assert evidence.continuous.macro_step == evidence.restarted.macro_step
+    assert evidence.error_norms.active_cells > 0
+    assert evidence.error_norms.relative_l2 <= example.RELATIVE_L2_TOLERANCE
+    expected_levels = tuple(range(len(evidence.continuous.states)))
+    assert evidence.program_evidence.flux_ledger_levels == expected_levels
+    assert evidence.program_evidence.synchronization_relations == tuple(
+        (level, level + 1) for level in expected_levels[:-1]
+    )
+    assert evidence.program_evidence.synchronization_phases == (
+        "reflux",
+        "average_down",
+    )
     assert preset.macro_step == evidence.continuous.macro_step
     assert preset.program_hash == evidence.continuous.program_hash
     from pops.output import read_paraview

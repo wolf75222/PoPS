@@ -4,6 +4,9 @@ import ast
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+
+import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -133,6 +136,8 @@ def test_target_has_one_authority_per_concern_and_no_legacy_path():
     assert "def preset_ssprk2(" in source
     assert "read_hdf5(" in source
     assert "read_paraview(" in source
+    assert "_scalar_error_norms(paraview)" in source
+    assert "simulation.program_report()" in source
     assert "simulation.checkpoint(" in source
     assert "resumed.restart(" in source
 
@@ -147,3 +152,83 @@ def test_handle_reads_are_explicit_before_symbolic_parameter_algebra():
     assert "ValueExpr(core.tracer_state)" in source
     assert "core.case.value(core.refine_threshold)" in source
     assert "core.case.value(core.coarsen_threshold)" in source
+
+
+def test_reopened_leaf_cell_error_uses_exact_characteristics_and_cell_volumes():
+    module = _load_example()
+    points = np.asarray(
+        (
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+        ),
+        dtype=np.float64,
+    )
+    exact = module._analytic_solution(
+        np.asarray((0.5,)),
+        np.asarray((0.5,)),
+        time=0.0,
+    )
+    perturbation = 1.0e-3
+    reopened = SimpleNamespace(
+        manifest={
+            "datasets": {
+                "fields": {
+                    "qualified-state": {
+                        "name": "U",
+                        "association": "cell",
+                    },
+                },
+            },
+        },
+        arrays={
+            "U": (exact + perturbation).reshape((1, 1)),
+            "Points": points,
+            "connectivity": np.asarray((0, 1, 2, 3), dtype=np.int64),
+            "offsets": np.asarray((4,), dtype=np.int64),
+            "pops_coverage": np.asarray((0,), dtype=np.uint8),
+            "vtkGhostType": np.asarray((0,), dtype=np.uint8),
+            "pops_cell_volume": np.asarray((1.0,), dtype=np.float64),
+            "TimeValue": np.asarray((0.0,), dtype=np.float64),
+        },
+    )
+
+    error = module._scalar_error_norms(reopened)
+
+    assert error.time == 0.0
+    assert error.active_cells == 1
+    assert np.isclose(error.l1, perturbation)
+    assert np.isclose(error.l2, perturbation)
+    assert np.isclose(error.linf, perturbation)
+    assert np.isclose(error.relative_l2, perturbation / exact[0])
+    assert error.relative_l2 < module.RELATIVE_L2_TOLERANCE
+
+
+def test_program_evidence_requires_every_level_and_ordered_amr_synchronization():
+    module = _load_example()
+    synchronization = []
+    for parent, child in ((0, 1), (1, 2)):
+        for phase in ("reflux", "average_down"):
+            synchronization.append({
+                "parent_level": parent,
+                "child_level": child,
+                "block": 0,
+                "phase": phase,
+                "macro_step": 4,
+                "clock_phase": {"numerator": 1, "denominator": 1},
+            })
+    report = SimpleNamespace(
+        installed=True,
+        flux_ledger=[{"level": level} for level in (0, 1, 2)],
+        synchronization=synchronization,
+    )
+
+    evidence = module._require_multilevel_program_evidence(
+        report,
+        expected_levels=(0, 1, 2),
+    )
+
+    assert evidence.flux_ledger_levels == (0, 1, 2)
+    assert evidence.synchronization_relations == ((0, 1), (1, 2))
+    assert evidence.synchronization_phases == ("reflux", "average_down")
