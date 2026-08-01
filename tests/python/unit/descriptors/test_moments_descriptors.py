@@ -140,6 +140,10 @@ def test_handles_are_not_descriptors():
 def test_moment_model_has_no_transport_noop_surface():
     specification = moments.CartesianVelocityMoments(order=2)
     assert not hasattr(specification, "add_transport")
+    assert callable(specification.build)
+    assert not hasattr(
+        specification, "check"
+    ), "MomentModel.build() is the sole model-construction route"
 
 
 def test_moment_transport_blocks_follow_the_canonical_directional_chains():
