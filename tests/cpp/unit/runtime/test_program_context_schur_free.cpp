@@ -181,20 +181,12 @@ class ExecutionServicesFixture
         program_execution_field_solve_from_state_at_outcome_(point, provider_slot, block, state);
     return outcome.consume(pops::SolveConsumption::kAccept);
   }
-  pops::SolveOutcome program_execution_solve_named_field_from_state_outcome_(
-      const std::string&, int, pops::MultiFab&) const {
-    return solved_field_outcome_("named-state");
-  }
   pops::SolveOutcome program_execution_solve_fields_from_blocks_outcome_(
       const std::vector<const pops::MultiFab*>&) const {
     return solved_field_outcome_("default-blocks");
   }
-  pops::SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
-      const std::string&, const std::vector<const pops::MultiFab*>&) const {
-    return solved_field_outcome_("named-blocks");
-  }
   pops::SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
-      std::int64_t, std::string_view,
+      const pops::runtime::multiblock::BoundaryEvaluationPoint&, std::int64_t, std::string_view,
       std::initializer_list<typename SharedServices::FieldStageOverride>) const {
     return solved_field_outcome_("generated-blocks");
   }
@@ -598,14 +590,12 @@ void expect_shared_install_and_field_services(Context& context) {
   EXPECT_TRUE(accept(context.solve_fields()).solved());
   EXPECT_TRUE(accept(context.solve_fields_from_state(0, state)).solved());
   EXPECT_TRUE(accept(context.solve_fields_from_state_at(point, "field", 0, state)).solved());
-  EXPECT_TRUE(accept(context.solve_fields_from_state("field", 0, state)).solved());
   EXPECT_TRUE(accept(context.solve_fields_from_blocks(states)).solved());
-  EXPECT_TRUE(accept(context.solve_fields_from_blocks("field", states)).solved());
-  EXPECT_TRUE(accept(context.solve_fields_from_blocks(17, "field", {{0, &state}})).solved());
-  EXPECT_EQ(
-      context.field_solve_dispatches(),
-      std::vector<std::string>({"default", "default-state", "qualified-state-at", "named-state",
-                                "default-blocks", "named-blocks", "generated-blocks"}));
+  EXPECT_TRUE(
+      accept(context.solve_fields_from_blocks_at(point, 17, "field", {{0, &state}})).solved());
+  EXPECT_EQ(context.field_solve_dispatches(),
+            std::vector<std::string>({"default", "default-state", "qualified-state-at",
+                                      "default-blocks", "generated-blocks"}));
 
   int evaluated_bodies = 0;
   context.evaluate_with_field_state_at(point, "field", 0, state, state,

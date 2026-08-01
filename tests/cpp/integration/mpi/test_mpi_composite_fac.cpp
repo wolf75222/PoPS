@@ -23,8 +23,10 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -105,6 +107,12 @@ static double spread(double x) {
   return all_reduce_max(x) - (-all_reduce_max(-x));
 }
 
+static void boundary_prepare_noop(int, const MultiFab&, MultiFab&, const Geometry&,
+                                  const FieldBoundaryExecutionContext&) {}
+
+static void boundary_residual_noop(int, const MultiFab&, MultiFab&, const Geometry&,
+                                   const FieldBoundaryExecutionContext&) {}
+
 static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
   comm_init(&argc, &argv);
 #if defined(POPS_HAS_KOKKOS)
@@ -123,6 +131,114 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
   const Geometry g1 = geom_c.refine(r), g2 = geom_c.refine(r * r);
 
   int fails = 0;
+
+  // A public level-qualified refresh is collective. Different level identities must fail on every
+  // rank before one rank can enter the complete-batch collective while another returns early.
+  {
+    const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
+    CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
+    fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+        "tests.mpi.composite-fac.level-consensus@1",
+        "tests.mpi.composite-fac.level-consensus.residual@1",
+        "",
+        boundary_prepare_noop,
+        nullptr,
+        boundary_residual_noop,
+        nullptr,
+        false,
+    });
+    bool rejected = false;
+    try {
+      fac.set_boundary_context_at_level(np > 1 ? me % 2 : 0, {});
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    const long rejection_count = all_reduce_sum(rejected ? 1L : 0L);
+    if ((np > 1 && rejection_count != np) || (np == 1 && rejection_count != 0)) {
+      if (me == 0)
+        std::printf("FAIL level-qualified boundary carrier level identity was not collective\n");
+      ++fails;
+    }
+  }
+
+  // Matching level identities are insufficient: the complete semantic carrier contract must also
+  // agree before any rank stages the level. An exact parameter mismatch is a compact adversarial
+  // witness for all scalar and state/field layout metadata carried by the same consensus payload.
+  {
+    const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
+    CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
+    fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+        "tests.mpi.composite-fac.context-consensus@1",
+        "tests.mpi.composite-fac.context-consensus.residual@1",
+        "",
+        boundary_prepare_noop,
+        nullptr,
+        boundary_residual_noop,
+        nullptr,
+        false,
+    });
+    const std::vector<Real> parameters{static_cast<Real>(me)};
+    FieldBoundaryExecutionContext context;
+    context.parameters = &parameters;
+    context.parameter_count = 1;
+    bool rejected = false;
+    try {
+      fac.set_boundary_context_at_level(0, context);
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    const long rejection_count = all_reduce_sum(rejected ? 1L : 0L);
+    if ((np > 1 && rejection_count != np) || (np == 1 && rejection_count != 0)) {
+      if (me == 0)
+        std::printf("FAIL level-qualified boundary carrier payload was not collective\n");
+      ++fails;
+    }
+  }
+
+  // Equal layouts are not logical identities. Swap two same-layout carriers and their authenticated
+  // names on alternating ranks: the ordered identity contract must reject the permutation before
+  // either pointer table can become the pending level-0 context.
+  {
+    const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
+    CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
+    fac.set_boundary_kernel(CompiledFieldBoundaryKernel{
+        "tests.mpi.composite-fac.dependency-identity-consensus@1",
+        "tests.mpi.composite-fac.dependency-identity-consensus.residual@1",
+        "",
+        boundary_prepare_noop,
+        nullptr,
+        boundary_residual_noop,
+        nullptr,
+        false,
+    });
+    MultiFab alternate(fac.rhs_level(0).box_array(), fac.rhs_level(0).dmap(),
+                       fac.rhs_level(0).ncomp(), fac.rhs_level(0).n_grow());
+    const MultiFab* states[] = {&fac.rhs_level(0), &alternate};
+    std::string identities[] = {"tests.mpi.state.a", "tests.mpi.state.b"};
+    if (np > 1 && me % 2 != 0) {
+      std::swap(states[0], states[1]);
+      std::swap(identities[0], identities[1]);
+    }
+    const FieldDistribution distributions[] = {FieldDistribution::Replicated,
+                                               FieldDistribution::Replicated};
+    FieldBoundaryExecutionContext context;
+    context.states = states;
+    context.state_distributions = distributions;
+    context.state_identities = identities;
+    context.state_count = 2;
+    bool rejected = false;
+    try {
+      fac.set_boundary_context_at_level(0, context);
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    const long rejection_count = all_reduce_sum(rejected ? 1L : 0L);
+    if ((np > 1 && rejection_count != np) || (np == 1 && rejection_count != 0)) {
+      if (me == 0)
+        std::printf("FAIL same-layout boundary dependency permutation was not collective\n");
+      ++fails;
+    }
+  }
 
   // --- (A) 2-level, non-adjacent (routed to the general path via the MPI dispatch at np>1) ---
   {

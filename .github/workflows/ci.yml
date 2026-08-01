@@ -592,6 +592,17 @@ jobs:
             --verify-contracts "${compile_contracts[@]}"
           read -r -a cpp_targets <<< "${{ steps.test-plan.outputs.cpp_shard_targets }}"
           if [ "${#cpp_targets[@]}" -eq 0 ]; then
+            # Shard 0 owns target-less CTest contracts even when affected-test routing
+            # assigns it no executable target.
+            if [ "${{ matrix.shard }}" -eq 0 ]; then
+              ctest_inventory="$RUNNER_TEMP/ctest-shard-${{ matrix.shard }}.json"
+              standalone_regex_file="$RUNNER_TEMP/ctest-standalone-shard-${{ matrix.shard }}.regex"
+              ctest --preset ci-kokkos -N --show-only=json-v1 > "$ctest_inventory"
+              python3 scripts/ci_select_tests.py verify-cpp-target-labels \
+                --ctest-json "$ctest_inventory" \
+                --targets "${cpp_targets[@]}" \
+                --standalone-regex-file "$standalone_regex_file"
+            fi
             echo "No affected C++ tests selected for shard ${{ matrix.shard }}."
             exit 0
           fi

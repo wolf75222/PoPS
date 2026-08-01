@@ -9,7 +9,8 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
 (A) Validation + codegen (pure Python, always runs when pops.time imports): a 2-block program lowers
     with per-block ctx.state / rhs_into indices; a read-only block (declared but never committed) is
     allowed; a double commit and a commit of an undeclared block are rejected; the SIMULTANEOUS
-    multi-target solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks (Spec 3 crit 24).
+    multi-target solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks_at
+    (Spec 3 crit 24, ADC-759).
 
 (B) End-to-end parity (skips unless the full toolchain is present): a 2-block passive-transport model
     (a scalar with a non-trivial flux + a NAMED source_term, EMPTY default source -- avoids the
@@ -217,8 +218,8 @@ def section_a(t):
     )
     src_c = _emit(Pc)
     chk(
-        "ctx.solve_fields_from_blocks(" in src_c,
-        "solve_fields_from_blocks lowers to the coupled multi-block solve",
+        "ctx.solve_fields_from_blocks_at(field_boundary_point_" in src_c,
+        "solve_fields_from_blocks lowers to the exact coupled multi-block solve",
     )
     chk(
         "std::vector<const pops::MultiFab*>" not in src_c,

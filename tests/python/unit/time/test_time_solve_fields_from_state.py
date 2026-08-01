@@ -2,12 +2,13 @@
 """Per-stage elliptic field solve in the final public runtime (ADC-409).
 
 Each consumed callable ``FieldHandle(U_stage)`` now lowers to
-``ctx.solve_fields_from_state(0, <U_stage>)``:
+``ctx.solve_fields_from_state_at(point, provider, 0, <U_stage>)``:
 the elliptic fields are re-solved -- and the shared aux re-filled -- from THAT stage's state, not the
-block's current state. So a field-COUPLED multi-stage scheme (Poisson feedback into the RHS) is exact:
-stage k's RHS reads phi solved from stage k's own state. The compiled Program runs the stages
-sequentially, so stage k's solve overwrites the shared aux before stage k's RHS reads it -- no distinct
-per-stage FieldContext buffer is needed.
+block's current state. The point carries the exact active AMR level and logical stage time, while the
+provider slot is owner-qualified. So a field-COUPLED multi-stage scheme (Poisson feedback into the
+RHS) is exact: stage k's RHS reads phi solved from stage k's own state. The compiled Program runs the
+stages sequentially, so stage k's solve overwrites the shared aux before stage k's RHS reads it -- no
+distinct per-stage FieldContext buffer is needed.
 
 (A) Public IR/provenance: the detached compiled Program records two field solves with distinct
     state inputs.  The second solve consumes ``U1`` and the second RHS consumes both ``U1`` and the

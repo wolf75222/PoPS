@@ -487,8 +487,11 @@ that same transaction: a failed transform restores its exact accepted bytes, whi
 transform advances one tagging cycle and publishes the transformed image. The bounded route requires
 one AMR layout and unchanged MPI cardinality. Serial and exact-`MPI_COMM_WORLD` shared-interface
 flux groups participate in the same topology rematerialization, all-rank identity consensus,
-conservation check, rollback and retry. Rank-changing dynamic interface rematerialization, elliptic
-providers and bootstrap staggered caches remain refused. The phase-local history consensus
+conservation check, rollback and retry. One rank-local post-transform failure is closed
+collectively; rollback restores the complete accepted image before a retry may publish one common
+receipt and resume the rematerialized interface. Active-depth changes, unsupported non-finest
+replacements at depth greater than two, rank-changing dynamic interface rematerialization,
+elliptic providers and bootstrap staggered caches remain refused. The phase-local history consensus
 fingerprints materialize each dense ring slot collectively; they prove exact all-rank agreement on
 each hierarchy, not bitwise equality across a topology-changing interpolation. Conservation is the
 separate native before/after invariant on every accepted solution component. This is a cold-restart

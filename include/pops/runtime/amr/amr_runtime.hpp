@@ -73,6 +73,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -124,6 +125,13 @@ struct AmrFieldSolveConfig {
   std::shared_ptr<std::vector<Real>> boundary_parameters = std::make_shared<std::vector<Real>>();
   std::vector<std::string> boundary_state_blocks;
   std::vector<int> boundary_state_components;
+  std::vector<std::string> boundary_field_blocks;
+  std::vector<std::string> boundary_field_keys;
+  std::vector<int> boundary_field_components;
+  std::vector<const MultiFab*> boundary_state_buffers;
+  std::vector<FieldDistribution> boundary_state_distributions;
+  std::vector<const MultiFab*> boundary_field_buffers;
+  std::vector<FieldDistribution> boundary_field_distributions;
   FieldBoundaryExecutionContext boundary_context{};
   bool has_reaction = false;
   Real reaction = Real(0);
@@ -194,6 +202,11 @@ inline std::string exact_amr_field_solve_config_contract(const AmrFieldSolveConf
       .sequence(plan.boundary_state_blocks,
                 [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
       .sequence(plan.boundary_state_components)
+      .sequence(plan.boundary_field_blocks,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .sequence(plan.boundary_field_keys,
+                [](ExactContractBuilder& item, const std::string& value) { item.text(value); })
+      .sequence(plan.boundary_field_components)
       .scalar(plan.has_reaction)
       .scalar(plan.reaction)
       .scalar(plan.has_newton);
@@ -233,15 +246,19 @@ class AmrPreparedFieldSolver {
   virtual MultiFab& rhs_level(int level) = 0;
   virtual MultiFab& phi_level(int level) = 0;
   virtual void set_boundary_context(const FieldBoundaryExecutionContext& context) = 0;
-  /// Install one context whose dependency buffers and logical point belong to exactly @p level.
-  /// Existing one-level providers retain their source contract through set_boundary_context().
-  /// A multilevel provider must opt in explicitly; the core never reuses a coarse dependency on a
-  /// fine solve.
-  virtual void set_boundary_context_for_level(int level,
-                                              const FieldBoundaryExecutionContext& context) {
-    if (level != 0 || level_count() != 1)
-      throw std::invalid_argument(
-          "AMR field provider has no level-qualified boundary-context route");
+  /// Replace the dynamic-boundary carrier for one exact materialized hierarchy level. Provider
+  /// implementations rebuilt against this interface retain a fail-closed source-compatible
+  /// default: only level zero can reuse the historical single-context route. Providers advertising
+  /// genuine multilevel dynamic boundaries must override this seam instead of presenting coarse
+  /// dependency storage to a fine-level iterate. Binary compatibility for an already-built external
+  /// provider remains a separate ABI contract. Every override is a collective configuration call:
+  /// all communicator ranks enter with the same level sequence and must either commit the complete
+  /// rank-consistent carrier batch or reject it on every rank without changing the accepted batch.
+  virtual void set_boundary_context_at_level(int level,
+                                             const FieldBoundaryExecutionContext& context) {
+    if (level != 0)
+      throw std::runtime_error(
+          "AMR field provider has no level-qualified dynamic-boundary context route");
     set_boundary_context(context);
   }
   [[nodiscard]] virtual const SolveReport& last_solve_report() const noexcept = 0;
@@ -2383,8 +2400,18 @@ class AmrRuntime {
   /// @{
   /// The live state MultiFab of block @p b at level @p k (zero-copy; same address an AmrProgramContext
   /// reads each macro-step). @c b is the AMR block index (sys_block-resolved by the caller).
-  MultiFab& level_state(std::size_t b, int k) { return (*blocks_[b].levels)[k].U; }
-  const MultiFab& level_state(std::size_t b, int k) const { return (*blocks_[b].levels)[k].U; }
+  MultiFab& level_state(std::size_t b, int k) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || !blocks_[b].levels ||
+        static_cast<std::size_t>(k) >= blocks_[b].levels->size())
+      throw std::out_of_range("AmrRuntime::level_state block/level index is out of range");
+    return (*blocks_[b].levels)[static_cast<std::size_t>(k)].U;
+  }
+  const MultiFab& level_state(std::size_t b, int k) const {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || !blocks_[b].levels ||
+        static_cast<std::size_t>(k) >= blocks_[b].levels->size())
+      throw std::out_of_range("AmrRuntime::level_state block/level index is out of range");
+    return (*blocks_[b].levels)[static_cast<std::size_t>(k)].U;
+  }
 
   /// Apply every registered coupled-source operator to one complete candidate-state pack at an exact
   /// AMR level.  This is the Program-owned splitting primitive: it never solves fields, walks another
@@ -3441,7 +3468,10 @@ class AmrRuntime {
 
   void set_field_boundary_dependencies(const std::string& provider_slot,
                                        const std::vector<std::string>& state_blocks,
-                                       const std::vector<int>& state_components) {
+                                       const std::vector<int>& state_components,
+                                       const std::vector<std::string>& field_blocks,
+                                       const std::vector<std::string>& field_keys,
+                                       const std::vector<int>& field_components) {
     auto found = named_fields_.find(provider_slot);
     if (found == named_fields_.end())
       throw std::runtime_error("AmrRuntime: unknown field boundary-dependency slot");
@@ -3450,6 +3480,9 @@ class AmrRuntime {
           "AmrRuntime: field boundary dependencies require one component per state block");
     found->second.plan.boundary_state_blocks = state_blocks;
     found->second.plan.boundary_state_components = state_components;
+    found->second.plan.boundary_field_blocks = field_blocks;
+    found->second.plan.boundary_field_keys = field_keys;
+    found->second.plan.boundary_field_components = field_components;
     invalidate_named_field_solver(found->second);
   }
 
@@ -3719,28 +3752,223 @@ class AmrRuntime {
   /// injection. Reproduces AmrSystemCoupler::solve_fields identically, but the system RHS is assembled
   /// by the blocks' add_elliptic_rhs closures (Sum_b elliptic_rhs_b(U_b)) not a compile-time RhsAssembler.
   SolveOutcome solve_fields() {
-    return run_field_solve_transaction(
-        FieldSolveScope{true, NamedFieldSnapshotScope::kAll, nullptr}, [&]() {
-          SolveReport report = solve_default_field_uncommitted();
-          if (!report.solved() || named_fields_.empty())
-            return report;
-          return solve_named_fields_uncommitted();
-        });
+    const std::vector<std::string> solve_order =
+        named_field_solve_order_collectively_(nullptr, /*allow_empty=*/true);
+    return run_field_solve_transaction(FieldSolveScope{true, NamedFieldSnapshotScope::kAll, {}},
+                                       [&]() {
+                                         SolveReport report = solve_default_field_uncommitted();
+                                         if (!report.solved() || solve_order.empty())
+                                           return report;
+                                         return solve_named_fields_uncommitted(solve_order);
+                                       });
   }
 
   SolveOutcome solve_default_field() {
-    return run_field_solve_transaction(
-        FieldSolveScope{true, NamedFieldSnapshotScope::kNone, nullptr},
-        [&]() { return solve_default_field_uncommitted(); });
+    return run_field_solve_transaction(FieldSolveScope{true, NamedFieldSnapshotScope::kNone, {}},
+                                       [&]() { return solve_default_field_uncommitted(); });
   }
 
   SolveOutcome solve_named_fields(const std::string* selected = nullptr) {
+    const std::vector<std::string> solve_order =
+        named_field_solve_order_collectively_(selected, /*allow_empty=*/false);
     return run_field_solve_transaction(
         FieldSolveScope{false,
                         selected == nullptr ? NamedFieldSnapshotScope::kAll
                                             : NamedFieldSnapshotScope::kSelected,
-                        selected},
-        [&]() { return solve_named_fields_uncommitted(selected); });
+                        selected == nullptr ? std::vector<std::string>{} : solve_order},
+        [&]() { return solve_named_fields_uncommitted(solve_order); });
+  }
+
+  /// Re-evaluate one exact named-field provider from a stage state on any materialized hierarchy
+  /// level. The live conservative state is restored before the returned SolveOutcome can be
+  /// consumed; only the provider's candidate publication remains transactional. This is the native
+  /// field-coupled Jacobian seam used by AmrProgramContext.
+  ///
+  SolveOutcome solve_named_fields_from_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      std::size_t block, const MultiFab& stage_state) {
+    if (provider_slot.empty())
+      throw std::invalid_argument(
+          "AmrRuntime::solve_named_fields_from_state_at requires an exact provider slot");
+    if (point.level < 0 || point.level >= nlev_)
+      throw std::out_of_range("AmrRuntime::solve_named_fields_from_state_at level is out of range");
+    if (block >= blocks_.size())
+      throw std::out_of_range("AmrRuntime::solve_named_fields_from_state_at block is out of range");
+
+    MultiFab& live = (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U;
+    if (!same_exact_multifab_layout_(live, stage_state))
+      throw std::invalid_argument(
+          "AmrRuntime::solve_named_fields_from_state_at stage state does not match its exact "
+          "block/level layout");
+    const std::pair<std::size_t, int> scratch_key{block, point.level};
+    auto insertion = named_field_stage_state_scratch_.try_emplace(
+        scratch_key, live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+    MultiFab& accepted = insertion.first->second;
+    if (!same_exact_multifab_layout_(accepted, live))
+      accepted = MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+
+    PureFieldAlgebra::copy_allocated(accepted, live);
+    try {
+      PureFieldAlgebra::copy_allocated(live, stage_state);
+      SolveOutcome outcome = solve_named_fields(&provider_slot);
+      PureFieldAlgebra::copy_allocated(live, accepted);
+      return outcome;
+    } catch (...) {
+      PureFieldAlgebra::copy_allocated(live, accepted);
+      throw;
+    }
+  }
+
+  /// Re-evaluate one exact named-field provider from simultaneous stage states on one exact
+  /// hierarchy level. @p stage_states is indexed by runtime block; nullptr keeps that block's
+  /// accepted live state. Every live state is restored before the returned outcome can be consumed,
+  /// while the provider candidate remains private until collective Accept.
+  SolveOutcome solve_named_fields_from_states_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+      const std::vector<const MultiFab*>& stage_states) {
+    std::string request_contract;
+    std::exception_ptr validation_error;
+    long validation_failed_local = 0;
+    try {
+      if (provider_slot.empty())
+        throw std::invalid_argument(
+            "AmrRuntime::solve_named_fields_from_states_at requires an exact provider slot");
+      if (point.clock.empty() || point.tick < 0 || point.stage < 0 || point.substep < 0 ||
+          !std::isfinite(point.dt) || point.dt <= 0.0 || !std::isfinite(point.physical_time))
+        throw std::invalid_argument(
+            "AmrRuntime::solve_named_fields_from_states_at requires a complete evaluation point");
+      if (point.level < 0 || point.level >= nlev_)
+        throw std::out_of_range(
+            "AmrRuntime::solve_named_fields_from_states_at level is out of range");
+      if (stage_states.size() != blocks_.size())
+        throw std::invalid_argument(
+            "AmrRuntime::solve_named_fields_from_states_at stage pack size mismatch");
+
+      bool has_override = false;
+      for (std::size_t block = 0; block < stage_states.size(); ++block) {
+        const MultiFab* stage = stage_states[block];
+        if (stage == nullptr)
+          continue;
+        has_override = true;
+        MultiFab& live = (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U;
+        if (!same_exact_multifab_layout_(live, *stage))
+          throw std::invalid_argument(
+              "AmrRuntime::solve_named_fields_from_states_at stage state does not match its "
+              "exact block/level layout");
+        for (std::size_t other = 0; other < blocks_.size(); ++other) {
+          if (other != block &&
+              stage == &(*blocks_[other].levels)[static_cast<std::size_t>(point.level)].U)
+            throw std::invalid_argument(
+                "AmrRuntime::solve_named_fields_from_states_at cannot borrow another block's "
+                "live state");
+          if (other < block && stage_states[other] == stage)
+            throw std::invalid_argument(
+                "AmrRuntime::solve_named_fields_from_states_at contains a duplicate stage "
+                "state");
+        }
+      }
+      if (!has_override)
+        throw std::invalid_argument(
+            "AmrRuntime::solve_named_fields_from_states_at requires at least one stage override");
+
+      ExactContractBuilder request;
+      request.text("pops.amr.named-field-stage-pack")
+          .scalar(std::uint32_t{1})
+          .text(provider_slot)
+          .text(point.clock)
+          .scalar(point.tick)
+          .scalar(static_cast<std::int32_t>(point.level))
+          .scalar(static_cast<std::int32_t>(point.substep))
+          .scalar(static_cast<std::int32_t>(point.stage))
+          .scalar(point.stage_fraction.numerator)
+          .scalar(point.stage_fraction.denominator)
+          .scalar(point.dt)
+          .scalar(point.physical_time)
+          .scalar(static_cast<std::uint64_t>(stage_states.size()));
+      for (std::size_t block = 0; block < stage_states.size(); ++block) {
+        const MultiFab* stage = stage_states[block];
+        request.scalar(static_cast<std::uint64_t>(block)).presence(stage != nullptr);
+        if (stage != nullptr)
+          detail::append_elliptic_field_layout_contract(
+              request, "stage", stage->box_array(), stage->dmap(), stage->ncomp(), stage->n_grow(),
+              point.level == 0 && replicated_coarse_ ? FieldDistribution::Replicated
+                                                     : FieldDistribution::Distributed);
+      }
+      request_contract = std::move(request).release();
+    } catch (...) {
+      validation_error = std::current_exception();
+      validation_failed_local = 1;
+    }
+    if (all_reduce_max(validation_failed_local) != 0) {
+      if (n_ranks() == 1 && validation_error != nullptr)
+        std::rethrow_exception(validation_error);
+      throw std::runtime_error(
+          "AmrRuntime::solve_named_fields_from_states_at validation failed on at least one MPI "
+          "rank");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-named-field-stage-pack", std::string_view(request_contract)}}))
+      throw std::invalid_argument(
+          "AmrRuntime::solve_named_fields_from_states_at request differs between MPI ranks");
+    if (all_reduce_max(named_field_stage_pack_in_use_ ? 1L : 0L) != 0)
+      throw std::logic_error(
+          "AmrRuntime::solve_named_fields_from_states_at workspace is already in use");
+
+    struct WorkspaceUse {
+      bool& flag;
+      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
+      ~WorkspaceUse() { flag = false; }
+    } use(named_field_stage_pack_in_use_);
+
+    std::exception_ptr materialization_error;
+    long materialization_failed_local = 0;
+    try {
+      named_field_stage_restore_scratch_.clear();
+      named_field_stage_restore_scratch_.reserve(stage_states.size());
+      for (std::size_t block = 0; block < stage_states.size(); ++block) {
+        if (stage_states[block] == nullptr)
+          continue;
+        MultiFab& live = (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U;
+        const std::pair<std::size_t, int> scratch_key{block, point.level};
+        auto insertion = named_field_stage_state_scratch_.try_emplace(
+            scratch_key, live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+        MultiFab& accepted = insertion.first->second;
+        if (!same_exact_multifab_layout_(accepted, live))
+          accepted = MultiFab(live.box_array(), live.dmap(), live.ncomp(), live.n_grow());
+        named_field_stage_restore_scratch_.push_back({&live, &accepted});
+      }
+    } catch (...) {
+      materialization_error = std::current_exception();
+      materialization_failed_local = 1;
+    }
+    if (all_reduce_max(materialization_failed_local) != 0) {
+      named_field_stage_restore_scratch_.clear();
+      if (n_ranks() == 1 && materialization_error != nullptr)
+        std::rethrow_exception(materialization_error);
+      throw std::runtime_error(
+          "AmrRuntime::solve_named_fields_from_states_at workspace materialization failed on at "
+          "least one MPI rank");
+    }
+
+    for (const auto& [live, accepted] : named_field_stage_restore_scratch_)
+      PureFieldAlgebra::copy_allocated(*accepted, *live);
+    const auto restore = [&]() {
+      for (const auto& [live, accepted] : named_field_stage_restore_scratch_)
+        PureFieldAlgebra::copy_allocated(*live, *accepted);
+    };
+    try {
+      for (std::size_t block = 0; block < stage_states.size(); ++block)
+        if (stage_states[block] != nullptr)
+          PureFieldAlgebra::copy_allocated(
+              (*blocks_[block].levels)[static_cast<std::size_t>(point.level)].U,
+              *stage_states[block]);
+      SolveOutcome outcome = solve_named_fields(&provider_slot);
+      restore();
+      return outcome;
+    } catch (...) {
+      restore();
+      throw;
+    }
   }
 
   [[nodiscard]] bool field_solve_transaction_active() const noexcept {
@@ -3827,20 +4055,21 @@ class AmrRuntime {
     return report;
   }
 
-  /// Solves every registered NAMED elliptic field (ADC-428) on the coarse, writes phi (+ centered grad)
-  /// into the field's own aux components, ghost-fills them and injects coarse->fine. Mirror of the
-  /// default Poisson block above (steps 2-4), but each named field uses its resolved prepared provider.
-  /// The default phi/grad (comps 0..2) are never touched. No-op without a named field (default-only
-  /// path stays bit-identical).
-  SolveReport solve_named_fields_uncommitted(const std::string* selected = nullptr) {
+  /// Solves the prevalidated dependency order of NAMED elliptic fields (ADC-428), writes each
+  /// potential (+ centered gradient) into its own aux components, ghost-fills them and injects
+  /// coarse->fine. Mirror of the default Poisson block above (steps 2-4), but each named field uses
+  /// its resolved prepared provider. The default phi/grad (comps 0..2) are never touched.
+  SolveReport solve_named_fields_uncommitted(const std::vector<std::string>& solve_order) {
     SolveReport completed;
     bool has_completed_solve = false;
     if (named_fields_.empty())
       throw std::runtime_error("AmrRuntime::solve_named_fields has no registered field");
+    const auto included = [&](const std::string& field) {
+      return std::find(solve_order.begin(), solve_order.end(), field) != solve_order.end();
+    };
     const Real dx = geom_.dx(), dy = geom_.dy();
-    for (auto& [field, nf] : named_fields_) {
-      if (selected != nullptr && field != *selected)
-        continue;
+    for (const std::string& field : solve_order) {
+      auto& nf = named_fields_.at(field);
       if (!nf.has_plan)
         throw std::runtime_error("AmrRuntime: field provider slot '" + field +
                                  "' has no resolved install plan");
@@ -3856,53 +4085,195 @@ class AmrRuntime {
         throw std::runtime_error(
             "AmrRuntime: named elliptic field output components exceed the aux channel width");
       ensure_named_elliptic(nf);
-      if (nf.plan.boundary_state_blocks.size() != nf.plan.boundary_state_components.size())
-        throw std::runtime_error(
-            "AmrRuntime: field boundary dependency blocks and components differ in size");
-      // These carriers outlive the provider solve below. Every hierarchy provider receives only the
-      // state buffers and distribution belonging to its exact AMR level; a composite provider owns
-      // one context per level instead of retaining a coarse pointer and reusing it on refined work.
-      const int boundary_levels = nf.solver->level_count();
-      if (boundary_levels < 1)
-        throw std::runtime_error(
-            "AmrRuntime: field boundary provider has no materialized hierarchy level");
-      std::vector<std::vector<const MultiFab*>> boundary_state_buffers(
-          static_cast<std::size_t>(boundary_levels));
-      std::vector<std::vector<FieldDistribution>> boundary_state_distributions(
-          static_cast<std::size_t>(boundary_levels));
-      if (nf.plan.has_boundary_kernel) {
-        for (int level = 0; level < boundary_levels; ++level) {
-          if (level < 0 || level >= nlev_)
-            throw std::runtime_error(
-                "AmrRuntime: field boundary context level is outside the active hierarchy");
-          auto& buffers = boundary_state_buffers[static_cast<std::size_t>(level)];
-          auto& distributions = boundary_state_distributions[static_cast<std::size_t>(level)];
-          buffers.reserve(nf.plan.boundary_state_blocks.size());
-          distributions.reserve(nf.plan.boundary_state_blocks.size());
-          for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
-            const int block = block_index(nf.plan.boundary_state_blocks[index]);
-            if (block < 0)
-              throw std::runtime_error("AmrRuntime: boundary state dependency names unknown block");
-            const auto& levels = *blocks_[static_cast<std::size_t>(block)].levels;
-            if (static_cast<std::size_t>(level) >= levels.size())
-              throw std::runtime_error(
-                  "AmrRuntime: boundary state dependency has no requested AMR level");
-            const MultiFab& state = levels[static_cast<std::size_t>(level)].U;
-            if (nf.plan.boundary_state_components[index] < 0 ||
-                nf.plan.boundary_state_components[index] >= state.ncomp())
-              throw std::runtime_error("AmrRuntime: boundary state component is out of range");
-            buffers.push_back(&state);
-            distributions.push_back(level == 0 && replicated_coarse_
-                                        ? FieldDistribution::Replicated
-                                        : FieldDistribution::Distributed);
+      const bool has_boundary_dependencies =
+          !nf.plan.boundary_state_blocks.empty() || !nf.plan.boundary_field_blocks.empty();
+      if (nf.plan.has_boundary_kernel && has_boundary_dependencies) {
+        const int levels = nf.solver->level_count();
+        long dependency_error = 0;
+        if (nf.plan.boundary_state_blocks.size() != nf.plan.boundary_state_components.size() ||
+            nf.plan.boundary_field_blocks.size() != nf.plan.boundary_field_keys.size() ||
+            nf.plan.boundary_field_blocks.size() != nf.plan.boundary_field_components.size())
+          dependency_error = 1;
+        if (levels != nlev_)
+          dependency_error = std::max(dependency_error, 2L);
+        if (dependency_error == 0) {
+          for (int level = 0; level < levels; ++level)
+            for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
+              const int raw_block = block_index(nf.plan.boundary_state_blocks[index]);
+              if (raw_block < 0) {
+                dependency_error = std::max(dependency_error, 3L);
+                continue;
+              }
+              const std::size_t block = static_cast<std::size_t>(raw_block);
+              const MultiFab& accepted =
+                  (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+              const MultiFab* state = &accepted;
+              if (boundary_stage_states_ && boundary_stage_states_->point.level == level) {
+                MultiFab* staged = boundary_stage_states_->state(block);
+                if (staged != nullptr) {
+                  if (!same_exact_multifab_layout_(accepted, *staged))
+                    dependency_error = std::max(dependency_error, 4L);
+                  state = staged;
+                }
+              }
+              if (nf.plan.boundary_state_components[index] < 0 ||
+                  nf.plan.boundary_state_components[index] >= state->ncomp())
+                dependency_error = std::max(dependency_error, 5L);
+            }
+          for (std::size_t index = 0; index < nf.plan.boundary_field_blocks.size(); ++index) {
+            const std::string* dependency_slot = unique_boundary_field_dependency_slot_(
+                nf, nf.plan.boundary_field_blocks[index], nf.plan.boundary_field_keys[index]);
+            if (dependency_slot == nullptr) {
+              dependency_error = std::max(dependency_error, 6L);
+              continue;
+            }
+            const auto dependency = named_fields_.find(*dependency_slot);
+            if (dependency == named_fields_.end() || !dependency->second.solver ||
+                !dependency->second.solver->last_solve_report().solved_value_available()) {
+              dependency_error = std::max(dependency_error, 7L);
+              continue;
+            }
+            if (dependency->second.solver->level_count() != levels) {
+              dependency_error = std::max(dependency_error, 8L);
+              continue;
+            }
+            for (int level = 0; level < levels; ++level) {
+              const MultiFab& value = dependency->second.solver->phi_level(level);
+              if (nf.plan.boundary_field_components[index] < 0 ||
+                  nf.plan.boundary_field_components[index] >= value.ncomp())
+                dependency_error = std::max(dependency_error, 9L);
+            }
           }
-          FieldBoundaryExecutionContext context = nf.plan.boundary_context;
-          context.point.level = level;
-          context.states = buffers.empty() ? nullptr : buffers.data();
-          context.state_distributions = distributions.empty() ? nullptr : distributions.data();
-          context.state_count = static_cast<int>(buffers.size());
-          nf.solver->set_boundary_context_for_level(level, context);
         }
+        dependency_error = all_reduce_max(dependency_error);
+        if (dependency_error != 0)
+          throw std::runtime_error(
+              "AmrRuntime: level-qualified boundary state/field materialization failed "
+              "collectively "
+              "(code " +
+              std::to_string(dependency_error) + ")");
+        std::vector<NamedField::BoundaryLevelContext> prepared_contexts;
+        long preparation_error = 0;
+        try {
+          prepared_contexts.resize(static_cast<std::size_t>(levels));
+          for (int level = 0; level < levels; ++level) {
+            auto& carrier = prepared_contexts[static_cast<std::size_t>(level)];
+            carrier.state_buffers.reserve(nf.plan.boundary_state_blocks.size());
+            carrier.state_distributions.reserve(nf.plan.boundary_state_blocks.size());
+            carrier.state_identities.reserve(nf.plan.boundary_state_blocks.size());
+            carrier.field_buffers.reserve(nf.plan.boundary_field_blocks.size());
+            carrier.field_distributions.reserve(nf.plan.boundary_field_blocks.size());
+            carrier.field_identities.reserve(nf.plan.boundary_field_blocks.size());
+            for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
+              const int raw_block = block_index(nf.plan.boundary_state_blocks[index]);
+              const std::size_t block = static_cast<std::size_t>(raw_block);
+              const MultiFab& accepted =
+                  (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+              const MultiFab* state = &accepted;
+              if (boundary_stage_states_ && boundary_stage_states_->point.level == level) {
+                MultiFab* staged = boundary_stage_states_->state(block);
+                if (staged != nullptr)
+                  state = staged;
+              }
+              carrier.state_buffers.push_back(state);
+              carrier.state_distributions.push_back(level == 0 && replicated_coarse_
+                                                        ? FieldDistribution::Replicated
+                                                        : FieldDistribution::Distributed);
+              ExactContractBuilder identity;
+              identity.text("amr-boundary-state")
+                  .text(nf.plan.boundary_state_blocks[index])
+                  .scalar(static_cast<std::int32_t>(nf.plan.boundary_state_components[index]));
+              carrier.state_identities.push_back(std::move(identity).release());
+            }
+            for (std::size_t index = 0; index < nf.plan.boundary_field_blocks.size(); ++index) {
+              const std::string* dependency_slot = unique_boundary_field_dependency_slot_(
+                  nf, nf.plan.boundary_field_blocks[index], nf.plan.boundary_field_keys[index]);
+              auto& dependency = named_fields_.at(*dependency_slot);
+              carrier.field_buffers.push_back(&dependency.solver->phi_level(level));
+              carrier.field_distributions.push_back(dependency.solver->level_distribution(level));
+              ExactContractBuilder identity;
+              identity.text("amr-boundary-field")
+                  .text(nf.plan.boundary_field_blocks[index])
+                  .text(nf.plan.boundary_field_keys[index])
+                  .scalar(static_cast<std::int32_t>(nf.plan.boundary_field_components[index]))
+                  .text(*dependency_slot);
+              carrier.field_identities.push_back(std::move(identity).release());
+            }
+            carrier.context = nf.plan.boundary_context;
+            // The materialized hierarchy level, not the unqualified authoring baseline, owns the
+            // boundary evaluation point consumed by both level-local and composite providers.
+            carrier.context.point.level = level;
+            carrier.context.states = carrier.state_buffers.data();
+            carrier.context.state_distributions = carrier.state_distributions.data();
+            carrier.context.state_identities = carrier.state_identities.data();
+            carrier.context.state_count = static_cast<int>(carrier.state_buffers.size());
+            carrier.context.fields = carrier.field_buffers.data();
+            carrier.context.field_distributions = carrier.field_distributions.data();
+            carrier.context.field_identities = carrier.field_identities.data();
+            carrier.context.field_count = static_cast<int>(carrier.field_buffers.size());
+          }
+        } catch (...) {
+          preparation_error = 10;
+        }
+        preparation_error = all_reduce_max(preparation_error);
+        if (preparation_error != 0)
+          throw std::runtime_error(
+              "AmrRuntime: level-qualified boundary state/field carriers could not be prepared "
+              "collectively");
+        const bool transactional_composite_refresh = nf.solver->couples_hierarchy_levels();
+        std::vector<NamedField::BoundaryLevelContext>* installation_contexts = &prepared_contexts;
+        if (!transactional_composite_refresh) {
+          // Level-local providers consume each carrier independently. Preserve their established
+          // stable-owner route; composite providers instead stage the complete batch below.
+          nf.boundary_level_contexts = std::move(prepared_contexts);
+          installation_contexts = &nf.boundary_level_contexts;
+        }
+        long installation_error = 0;
+        std::exception_ptr installation_exception;
+        try {
+          for (int level = 0; level < levels; ++level) {
+            auto& carrier = installation_contexts->at(static_cast<std::size_t>(level));
+            carrier.context.states = carrier.state_buffers.data();
+            carrier.context.state_distributions = carrier.state_distributions.data();
+            carrier.context.state_identities = carrier.state_identities.data();
+            carrier.context.fields = carrier.field_buffers.data();
+            carrier.context.field_distributions = carrier.field_distributions.data();
+            carrier.context.field_identities = carrier.field_identities.data();
+            nf.solver->set_boundary_context_at_level(level, carrier.context);
+          }
+        } catch (...) {
+          installation_error = 11;
+          installation_exception = std::current_exception();
+        }
+        installation_error = all_reduce_max(installation_error);
+        if (installation_error != 0) {
+          if (n_ranks() == 1 && installation_exception)
+            std::rethrow_exception(installation_exception);
+          throw std::runtime_error(
+              "AmrRuntime: prepared field provider refused at least one exact level-qualified "
+              "boundary carrier collectively");
+        }
+        if (transactional_composite_refresh) {
+          // Moving the vector transfers its backing allocation, so every pointer installed in the
+          // provider remains stable. The previously accepted carriers stay alive until the complete
+          // provider batch succeeds; a late refusal therefore cannot leave its active context
+          // dangling.
+          static_assert(
+              std::is_nothrow_move_assignable_v<std::vector<NamedField::BoundaryLevelContext>>);
+          nf.boundary_level_contexts = std::move(prepared_contexts);
+        }
+      } else if (nf.plan.has_boundary_kernel) {
+        FieldBoundaryExecutionContext context = nf.plan.boundary_context;
+        context.states = nullptr;
+        context.state_distributions = nullptr;
+        context.state_identities = nullptr;
+        context.state_count = 0;
+        context.fields = nullptr;
+        context.field_distributions = nullptr;
+        context.field_identities = nullptr;
+        context.field_count = 0;
+        nf.boundary_level_contexts.clear();
+        nf.solver->set_boundary_context(context);
       }
       prepare_named_field_providers(nf);
       prepare_named_rhs_scratch_(nf);
@@ -3973,7 +4344,7 @@ class AmrRuntime {
     // Composite and level-local fields own a solved potential on every level. Write every valid
     // value before materialising halos so no coarse injection can overwrite refined solutions.
     for (auto& [field, nf] : named_fields_) {
-      if (selected != nullptr && field != *selected)
+      if (!included(field))
         continue;
       if (nf.solver->level_count() <= 1)
         continue;
@@ -4008,7 +4379,7 @@ class AmrRuntime {
         components.insert(component);
     };
     for (const auto& [field, nf] : named_fields_) {
-      if (selected != nullptr && field != *selected)
+      if (!included(field))
         continue;
       add_component(nf.phi_comp);
       add_component(nf.gx_comp);
@@ -5382,6 +5753,15 @@ class AmrRuntime {
       Real coefficient = Real(1);
       std::function<void(const MultiFab&, MultiFab&)> rhs;
     };
+    struct BoundaryLevelContext {
+      std::vector<const MultiFab*> state_buffers;
+      std::vector<FieldDistribution> state_distributions;
+      std::vector<std::string> state_identities;
+      std::vector<const MultiFab*> field_buffers;
+      std::vector<FieldDistribution> field_distributions;
+      std::vector<std::string> field_identities;
+      FieldBoundaryExecutionContext context{};
+    };
     int phi_comp = -1;
     int gx_comp = -1;
     int gy_comp = -1;
@@ -5398,8 +5778,109 @@ class AmrRuntime {
     std::vector<MultiFab*> nullspace_phi_levels;
     std::vector<MultiFab> rhs_contribution_scratch;
     std::uint64_t rhs_scratch_generation = 0;
+    std::vector<BoundaryLevelContext> boundary_level_contexts;
     bool nullspace_ready = false;
   };
+
+  [[nodiscard]] const std::string* unique_boundary_field_dependency_slot_(
+      const NamedField& consumer, std::string_view block, std::string_view key) const noexcept {
+    const std::string* result = nullptr;
+    for (const auto& [slot, candidate] : named_fields_) {
+      if (candidate.plan.output_block != block || candidate.plan.output_key != key)
+        continue;
+      if (result != nullptr || &candidate == &consumer)
+        return nullptr;
+      result = &slot;
+    }
+    return result;
+  }
+
+  [[nodiscard]] std::vector<std::string> named_field_solve_order_collectively_(
+      const std::string* selected, bool allow_empty) const {
+    const std::string_view selection_kind = selected == nullptr ? "all" : "selected";
+    const std::string_view selection_identity =
+        selected == nullptr ? std::string_view{} : std::string_view(*selected);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-named-field-selection-kind", selection_kind},
+             {"amr-named-field-selection", selection_identity}}))
+      throw std::runtime_error("AmrRuntime: named-field selection differs across MPI ranks");
+
+    std::vector<std::string> solve_order;
+    std::vector<ExactOrderedBytePair> closure_contract;
+    std::exception_ptr order_error;
+    long order_failed_local = 0;
+    try {
+      if (allow_empty && selected == nullptr && named_fields_.empty()) {
+        solve_order.clear();
+      } else {
+        solve_order = named_field_solve_order_(selected);
+      }
+      closure_contract.reserve(solve_order.size());
+      for (const std::string& field : solve_order)
+        closure_contract.emplace_back("amr-named-field-closure", field);
+    } catch (...) {
+      order_error = std::current_exception();
+      order_failed_local = 1;
+    }
+    if (all_reduce_max(order_failed_local) != 0) {
+      if (n_ranks() == 1 && order_error != nullptr)
+        std::rethrow_exception(order_error);
+      throw std::runtime_error(
+          "AmrRuntime: named-field dependency closure failed on at least one MPI rank");
+    }
+    if (!all_ranks_agree_exact_ordered_byte_pairs(closure_contract))
+      throw std::runtime_error(
+          "AmrRuntime: named-field dependency closure differs across MPI ranks");
+    return solve_order;
+  }
+
+  [[nodiscard]] std::vector<std::string> named_field_solve_order_(
+      const std::string* selected) const {
+    if (named_fields_.empty())
+      throw std::runtime_error("AmrRuntime::solve_named_fields has no registered field");
+    if (selected != nullptr && named_fields_.find(*selected) == named_fields_.end())
+      throw std::runtime_error("AmrRuntime::solve_named_fields selected an unknown field");
+
+    enum class VisitState { kUnseen, kVisiting, kDone };
+    std::map<std::string, VisitState> visit;
+    std::vector<std::string> solve_order;
+    std::function<void(const std::string&)> append_with_dependencies =
+        [&](const std::string& field) {
+          const VisitState state = visit[field];
+          if (state == VisitState::kDone)
+            return;
+          if (state == VisitState::kVisiting)
+            throw std::runtime_error(
+                "AmrRuntime: named-field boundary dependency graph contains a cycle");
+          visit[field] = VisitState::kVisiting;
+          const NamedField& consumer = named_fields_.at(field);
+          for (std::size_t index = 0; index < consumer.plan.boundary_field_blocks.size(); ++index) {
+            if (index >= consumer.plan.boundary_field_keys.size())
+              throw std::runtime_error(
+                  "AmrRuntime: named-field boundary dependency pack is incomplete");
+            const std::string* dependency_slot = unique_boundary_field_dependency_slot_(
+                consumer, consumer.plan.boundary_field_blocks[index],
+                consumer.plan.boundary_field_keys[index]);
+            if (dependency_slot == nullptr)
+              throw std::runtime_error(
+                  "AmrRuntime: named-field boundary dependency is missing, ambiguous, or "
+                  "recursive");
+            append_with_dependencies(*dependency_slot);
+          }
+          visit[field] = VisitState::kDone;
+          solve_order.push_back(field);
+        };
+
+    if (selected != nullptr) {
+      append_with_dependencies(*selected);
+    } else {
+      for (const auto& [field, unused] : named_fields_) {
+        (void)unused;
+        append_with_dependencies(field);
+      }
+    }
+    return solve_order;
+  }
 
   enum class NamedFieldSnapshotScope { kNone, kSelected, kAll };
 
@@ -5420,7 +5901,7 @@ class AmrRuntime {
     std::uint64_t topology_generation = 0;
     bool scope_default_field = false;
     NamedFieldSnapshotScope scope_named_fields = NamedFieldSnapshotScope::kNone;
-    std::string scope_selected_named_field;
+    std::vector<std::string> scope_selected_named_fields;
     bool candidate_slot = false;
     AmrRuntime* publication_owner = nullptr;
     FieldSolveSnapshot* publication_candidate = nullptr;
@@ -5429,11 +5910,12 @@ class AmrRuntime {
   struct FieldSolveScope {
     bool default_field = false;
     NamedFieldSnapshotScope named_fields = NamedFieldSnapshotScope::kNone;
-    const std::string* selected_named_field = nullptr;
+    std::vector<std::string> selected_named_fields;
   };
 
   std::vector<int> default_aux_components() const;
   std::vector<int> named_aux_components(const std::string* selected) const;
+  std::vector<int> named_aux_components(const std::vector<std::string>& selected) const;
   std::vector<int> field_solve_aux_components(const FieldSolveScope& scope) const;
   std::vector<MultiFab> allocate_aux_component_carriers_(const std::vector<int>& components) const;
   void copy_aux_components_to_(std::vector<MultiFab>& packed,
@@ -5479,6 +5961,7 @@ class AmrRuntime {
     field.nullspace_phi_levels.clear();
     field.rhs_contribution_scratch.clear();
     field.rhs_scratch_generation = 0;
+    field.boundary_level_contexts.clear();
     field.solver.reset();
     field.nullspace = {};
     field.level_nullspace.clear();
@@ -5917,6 +6400,12 @@ class AmrRuntime {
   std::map<int, AuxHaloPolicy> named_aux_bc_;
   // NAMED multi-elliptic fields (ADC-428): field name -> aux outputs + prepared provider instance.
   std::map<std::string, NamedField> named_fields_;
+  // Persistent exact-layout snapshots used while a named provider assembles from a provisional
+  // stage state. Compatibility is rechecked on every use, so regrid/restart cannot retain stale
+  // storage while steady-state replays allocate nothing.
+  std::map<std::pair<std::size_t, int>, MultiFab> named_field_stage_state_scratch_;
+  std::vector<std::pair<MultiFab*, MultiFab*>> named_field_stage_restore_scratch_;
+  bool named_field_stage_pack_in_use_ = false;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
   // TYPED coupling operator inspect metadata (ADC-595, parity with System::Impl::coupled_operators_):

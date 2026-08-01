@@ -2402,13 +2402,19 @@ void AmrSystem::set_field_boundary_dependencies(const std::string& provider_slot
                                                 const std::vector<std::string>& field_keys,
                                                 const std::vector<int>& field_components) {
   require_assembling_amr(p_->bound_, "set_field_boundary_dependencies");
-  if (state_blocks.size() != state_components.size() || !field_blocks.empty() ||
-      !field_keys.empty() || !field_components.empty())
+  if (state_blocks.size() != state_components.size() || field_blocks.size() != field_keys.size() ||
+      field_blocks.size() != field_components.size())
     throw std::runtime_error(
-        "AmrSystem::set_field_boundary_dependencies accepts exact state buffers only");
+        "AmrSystem::set_field_boundary_dependencies requires exact state/field dependency packs");
   if (std::any_of(state_blocks.begin(), state_blocks.end(),
                   [](const auto& value) { return value.empty(); }) ||
       std::any_of(state_components.begin(), state_components.end(),
+                  [](int value) { return value < 0; }) ||
+      std::any_of(field_blocks.begin(), field_blocks.end(),
+                  [](const auto& value) { return value.empty(); }) ||
+      std::any_of(field_keys.begin(), field_keys.end(),
+                  [](const auto& value) { return value.empty(); }) ||
+      std::any_of(field_components.begin(), field_components.end(),
                   [](int value) { return value < 0; }))
     throw std::runtime_error("AmrSystem::set_field_boundary_dependencies contains invalid entries");
   auto found = p_->field_plans_.find(provider_slot);
@@ -2416,8 +2422,12 @@ void AmrSystem::set_field_boundary_dependencies(const std::string& provider_slot
     throw std::runtime_error("AmrSystem::set_field_boundary_dependencies unknown provider slot");
   found->second.boundary_state_blocks = state_blocks;
   found->second.boundary_state_components = state_components;
+  found->second.boundary_field_blocks = field_blocks;
+  found->second.boundary_field_keys = field_keys;
+  found->second.boundary_field_components = field_components;
   if (p_->runtime)
-    p_->runtime->set_field_boundary_dependencies(provider_slot, state_blocks, state_components);
+    p_->runtime->set_field_boundary_dependencies(provider_slot, state_blocks, state_components,
+                                                 field_blocks, field_keys, field_components);
   p_->field_plan_consensus_verified_ = false;
 }
 

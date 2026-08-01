@@ -57,11 +57,13 @@
 /// the unsupported polar stencil. The `{amr_install}` slot
 /// installs one recursive Berger-Oliger driver: child steps partition the parent window, each rate reads
 /// a mandatory old/new dense-output interpolation at its exact Program abscissa, and level sync is
-/// conservative reflux followed by average-down. The single coarse system Poisson per macro-step
-/// (OncePerStep) is injected coarse -> fine; unsupported per-stage fine re-solves fail loudly. Multistep
-/// history rings (keep_history / T.prev) are owner/space/clock-qualified; their per-level slots are
-/// remapped through regrid and v3 checkpoint native replay. GPU execution stays device-clean by
-/// construction: every per-cell op is for_each_cell / a POPS_HD named functor reused from the engine.
+/// conservative reflux followed by average-down. The single default system Poisson per macro-step
+/// (OncePerStep) is injected coarse -> fine; a field-coupled Jacobian perturbation instead re-evaluates
+/// its exact named prepared provider from the active hierarchy level and restores the accepted state
+/// transactionally. Multistep history rings (keep_history / T.prev) are owner/space/clock-qualified;
+/// their per-level slots are remapped through regrid and v3 checkpoint native replay. GPU execution
+/// stays device-clean by construction: every per-cell op is for_each_cell / a POPS_HD named functor
+/// reused from the engine.
 namespace pops {
 namespace runtime {
 namespace program {
@@ -94,7 +96,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           "multi-block AmrRuntime build before installing a compiled time Program over the "
           "hierarchy");
     require_supported_program_refinement_ratios_(*eng_);
-    stage_restore_scratch_.reserve(eng_->n_blocks());
     materialize_capture_flux_scratch_();
     hierarchy_tensor_solver_registry_ = facade_->hierarchy_tensor_solver_provider_registry();
   }
@@ -105,7 +106,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     // the production facade constructor above remains fail-closed when the engine was not built.
     if (eng_ != nullptr) {
       require_supported_program_refinement_ratios_(*eng_);
-      stage_restore_scratch_.reserve(eng_->n_blocks());
       materialize_capture_flux_scratch_();
     }
     if (facade_ != nullptr)
@@ -122,9 +122,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
   /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
   void reset_step() const {
-    default_solve_report_.reset();
-    for (auto& [_, report] : named_solve_reports_)
-      report = SolveReport{};
     // Keep exact-layout EdgeFlux storage resident across accepted macro steps.  Presence is tracked
     // separately, so stale numerical values are unreachable while their pinned allocations remain
     // available to the next replay.
@@ -294,54 +291,26 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   bool history_flux_topology_bound() const { return history_flux_topology_.bound(); }
   int history_flux_topology_rebind_count() const { return history_flux_topology_rebind_count_; }
 
-  // --- field solve (the SHARED coarse Poisson) ------------------------------------------------------
-  /// The default head-of-step elliptic solve: the coarse system Poisson + coarse->fine aux injection.
-  /// The AMR runtime runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard):
-  /// calling it again at fine levels within the same macro-step is a no-op cache-hit (parity: the
-  /// body stays atomic, the solve fires once -- the OncePerStep cadence the native AMR step uses).
+  // --- explicitly coarse-only default field solve ---------------------------------------------------
+  /// Legacy/manual driver route for the hierarchy's default coarse-provider solve. Generated
+  /// Programs always carry an exact provider identity and use the level-qualified shared services.
+  SolveOutcome solve_default_field_on_coarse_level() const {
+    if (level_ != 0)
+      throw std::logic_error(
+          "AmrProgramContext::solve_default_field_on_coarse_level is level-0-only; a fine-level "
+          "field request requires an exact provider and evaluation point; "
+          "coarse-to-fine auxiliary injection is not a "
+          "fine-level solve");
+    return eng_->solve_default_field();
+  }
+
  private:
   SolveOutcome program_execution_solve_fields_outcome_() const {
-    if (level_ == 0 || !default_solve_report_) {
-      default_solve_report_.reset();
-      SolveOutcome outcome = eng_->solve_default_field();
-      const SolveReport report = outcome.report();
-      if (report.solved())
-        default_solve_report_ = report;
-      return outcome;
-    }
-    if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
-      throw std::logic_error(
-          "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
-    return SolveOutcome::collective_world(*default_solve_report_);
+    return solve_default_field_on_coarse_level();
   }
-  /// Per-stage re-solve from a stage state is currently a coarse-only capability.  A fine-level request
-  /// is rejected explicitly; it never consumes a stale injected auxiliary field.
-  SolveOutcome program_execution_solve_fields_from_state_outcome_(int b, MultiFab& u_stage) const {
-    if (level_ == 0) {
-      MultiFab& live = state(b);
-      MultiFab& saved = stage_state_scratch_for_(b, level_, live);
-      PureFieldAlgebra::copy_allocated(saved, live);
-      default_solve_report_.reset();
-      SolveOutcome outcome = [&]() -> SolveOutcome {
-        try {
-          PureFieldAlgebra::copy_allocated(live, u_stage);
-          SolveOutcome candidate = eng_->solve_default_field();
-          PureFieldAlgebra::copy_allocated(live, saved);
-          return candidate;
-        } catch (...) {
-          PureFieldAlgebra::copy_allocated(live, saved);
-          throw;
-        }
-      }();
-      const SolveReport report = outcome.report();
-      if (report.solved())
-        default_solve_report_ = report;
-      return outcome;
-    }
-    deferred_op(
-        "solve_fields_from_state_default",
-        "the default per-stage fine-level field re-solve requires a composite stage solver; use "
-        "OncePerStep field cadence or an exact named field provider");
+  SolveOutcome program_execution_solve_fields_from_state_outcome_(int, MultiFab&) const {
+    throw std::invalid_argument(
+        "AMR Program stage field solves require an exact provider identity and evaluation point");
   }
   SolveOutcome program_execution_field_solve_from_state_at_outcome_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
@@ -349,64 +318,13 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     if (point.level < 0 || point.level >= eng_->nlev())
       throw std::out_of_range(
           "AmrProgramContext::solve_fields_from_state_at level is out of range");
-    if (point.level != 0)
-      deferred_op("solve_fields_from_state_at_fine_level",
-                  "a fine-level stage perturbation requires a composite field solver");
-    named_solve_reports_.erase(provider_slot);
-    MultiFab& live = eng_->level_state(static_cast<std::size_t>(sys_block(b)), point.level);
-    MultiFab& saved = stage_state_scratch_for_(b, point.level, live);
-    PureFieldAlgebra::copy_allocated(saved, live);
-    SolveOutcome outcome = [&]() -> SolveOutcome {
-      try {
-        PureFieldAlgebra::copy_allocated(live, u_stage);
-        SolveOutcome candidate = eng_->solve_named_fields(&provider_slot);
-        PureFieldAlgebra::copy_allocated(live, saved);
-        return candidate;
-      } catch (...) {
-        PureFieldAlgebra::copy_allocated(live, saved);
-        named_solve_reports_.insert_or_assign(provider_slot, SolveReport{});
-        throw;
-      }
-    }();
-    const SolveReport report = outcome.report();
-    named_solve_reports_.insert_or_assign(provider_slot, report);
-    return outcome;
-  }
-  /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
-  /// fine levels consume only that exact provider-qualified report.
-  SolveOutcome program_execution_solve_named_field_from_state_outcome_(const std::string& field,
-                                                                       int b,
-                                                                       MultiFab& u_stage) const {
-    if (level_ != 0) {
-      if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
-        throw std::logic_error(
-            "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
-      const auto cached = named_solve_reports_.find(field);
-      if (cached == named_solve_reports_.end() || !cached->second.solved())
-        throw std::runtime_error(
-            "AmrProgramContext::solve_fields_from_state(field): fine-level reuse requires an "
-            "accepted coarse SolveReport");
-      return SolveOutcome::collective_world(
-          cached->second);  // the coarse solve publishes/injects every level once per stage
-    }
-    MultiFab& live = state(b);
-    MultiFab& published = stage_state_scratch_for_(b, level_, live);
-    PureFieldAlgebra::copy_allocated(published, live);
-    SolveOutcome outcome = [&]() -> SolveOutcome {
-      try {
-        PureFieldAlgebra::copy_allocated(live, u_stage);
-        SolveOutcome candidate = eng_->solve_named_fields(&field);
-        PureFieldAlgebra::copy_allocated(live, published);
-        return candidate;
-      } catch (...) {
-        PureFieldAlgebra::copy_allocated(live, published);
-        named_solve_reports_.insert_or_assign(field, SolveReport{});
-        throw;
-      }
-    }();
-    const SolveReport report = outcome.report();
-    named_solve_reports_.insert_or_assign(field, report);
-    return outcome;
+    if (point.level != level_)
+      throw std::invalid_argument(
+          "AmrProgramContext::solve_fields_from_state_at point level differs from the active "
+          "Program level");
+    require_field_evaluation_point_(point, level_, "AMR Program single-state field solve");
+    return eng_->solve_named_fields_from_state_at(point, provider_slot,
+                                                  static_cast<std::size_t>(sys_block(b)), u_stage);
   }
   /// Retained default-provider overload: the final Program IR always carries an exact field identity,
   /// while an unqualified coupled solve has no provider authority and therefore fails loud.
@@ -418,90 +336,21 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         "exact field-qualified Program operation");
   }
 
-  SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
-      const std::string& field, const std::vector<const MultiFab*>& u_stages) const {
-    if (level_ != 0) {
-      if (all_reduce_max(eng_->field_solve_transaction_active() ? 1L : 0L) != 0)
-        throw std::logic_error(
-            "AMR fine-level field reuse requires the coarse SolveOutcome to be consumed first");
-      const auto cached = named_solve_reports_.find(field);
-      if (cached == named_solve_reports_.end() || !cached->second.solved())
-        throw std::runtime_error(
-            "AmrProgramContext::solve_fields_from_blocks(field): fine-level reuse requires an "
-            "accepted coarse SolveReport");
-      return SolveOutcome::collective_world(cached->second);
-    }
-    if (u_stages.size() != static_cast<std::size_t>(n_blocks()))
-      throw std::runtime_error(
-          "AmrProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
-    ExclusiveUseGuard use(named_field_solve_in_use_,
-                          "AMR simultaneous field-solve workspace is already in use");
-
-    // Validate the complete request before taking a snapshot or touching a live state.  In particular,
-    // a stage may alias its own live block, but borrowing another block's live object would make the
-    // sequential substitutions order-dependent.
-    for (std::size_t p = 0; p < u_stages.size(); ++p) {
-      if (u_stages[p] == nullptr)
-        continue;
-      const MultiFab& live = state(static_cast<int>(p));
-      const MultiFab& stage = *u_stages[p];
-      if (stage.box_array().boxes() != live.box_array().boxes() ||
-          stage.dmap().ranks() != live.dmap().ranks() || stage.ncomp() != live.ncomp() ||
-          stage.n_grow() != live.n_grow())
-        throw std::invalid_argument(
-            "AMR simultaneous field solve stage does not match its exact level layout");
-      for (std::size_t other = 0; other < facade_->program_block_map().size(); ++other) {
-        if (other != p && &stage == &state(static_cast<int>(other)))
-          throw std::invalid_argument(
-              "AMR simultaneous field solve cannot use another block's live state as a stage "
-              "override");
-      }
-    }
-    stage_restore_scratch_.clear();
-    // Materialize and capture every accepted live image before mutating any block.  Snapshot storage
-    // is context-owned and exact-layout; after warm-up this loop copies bytes but allocates nothing.
-    for (std::size_t p = 0; p < u_stages.size(); ++p) {
-      if (u_stages[p] == nullptr)
-        continue;
-      MultiFab& state_value = state(static_cast<int>(p));
-      MultiFab& published = stage_state_scratch_for_(static_cast<int>(p), level_, state_value);
-      PureFieldAlgebra::copy_allocated(published, state_value);
-      stage_restore_scratch_.push_back({&state_value, &published});
-    }
-    auto restore = [&]() {
-      for (const auto& [live, published] : stage_restore_scratch_)
-        PureFieldAlgebra::copy_allocated(*live, *published);
-    };
-    SolveOutcome outcome = [&]() -> SolveOutcome {
-      try {
-        for (std::size_t p = 0; p < u_stages.size(); ++p) {
-          if (u_stages[p] != nullptr)
-            PureFieldAlgebra::copy_allocated(state(static_cast<int>(p)), *u_stages[p]);
-        }
-        SolveOutcome candidate = eng_->solve_named_fields(&field);
-        restore();
-        return candidate;
-      } catch (...) {
-        restore();
-        named_solve_reports_.insert_or_assign(field, SolveReport{});
-        throw;
-      }
-    }();
-    const SolveReport report = outcome.report();
-    named_solve_reports_.insert_or_assign(field, report);
-    return outcome;
-  }
-
-  /// Generated allocation-free route. The static initializer-list request is copied into one
-  /// context-owned pointer workspace keyed by the exact IR identity; field and ordered block pack
-  /// cannot drift across replays. The vector overload above remains the manual C++ API.
+  /// Generated allocation-free route. The static initializer-list request is mapped into one
+  /// context-owned runtime-block pointer workspace keyed by the exact IR identity. The evaluation
+  /// point, provider, active level and ordered block pack cannot drift across replays.
   SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
-      std::int64_t value_id, std::string_view field,
-      std::initializer_list<FieldStageOverride> overrides) const {
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
+      std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
+    if (point.level != level_)
+      throw std::invalid_argument(
+          "AmrProgramContext::solve_fields_from_blocks_at point level differs from the active "
+          "Program level");
+    require_field_evaluation_point_(point, level_, "AMR Program simultaneous field solve");
     const std::vector<const MultiFab*>& stages =
         generated_field_solve_stages_(value_id, field, overrides);
-    return solve_fields_from_blocks(generated_field_solve_workspaces_.at(value_id).field_identity,
-                                    stages);
+    return eng_->solve_named_fields_from_states_at(
+        point, generated_field_solve_workspaces_.at(value_id).field_identity, stages);
   }
 
  public:
@@ -915,26 +764,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     return CaptureFluxScratchLease(*capture_flux_scratch_[index]);
   }
 
-  MultiFab& stage_state_scratch_for_(int program_block, int level,
-                                     const MultiFab& prototype) const {
-    const std::pair<int, int> key{program_block, level};
-    auto insertion = stage_state_scratch_.try_emplace(key, prototype.box_array(), prototype.dmap(),
-                                                      prototype.ncomp(), prototype.n_grow());
-    MultiFab& scratch = insertion.first->second;
-    const bool compatible = scratch.box_array().boxes() == prototype.box_array().boxes() &&
-                            scratch.dmap().ranks() == prototype.dmap().ranks() &&
-                            scratch.ncomp() == prototype.ncomp() &&
-                            scratch.n_grow() == prototype.n_grow();
-    if (!compatible)
-      scratch =
-          MultiFab(prototype.box_array(), prototype.dmap(), prototype.ncomp(), prototype.n_grow());
-    return scratch;
-  }
-
   struct GeneratedFieldSolveWorkspace {
     std::string field_identity;
     std::vector<int> program_to_system;
-    std::vector<const MultiFab*> program_stages;
+    std::vector<const MultiFab*> runtime_stages;
     std::vector<int> expected_program_blocks;
     bool expected_program_blocks_initialized = false;
   };
@@ -967,14 +800,14 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           "installed; positional block identity is not supported");
     bool structure_matches =
         workspace.program_to_system.size() == block_map.size() &&
-        workspace.program_stages.size() == static_cast<std::size_t>(n_blocks());
+        workspace.runtime_stages.size() == static_cast<std::size_t>(n_blocks());
     for (std::size_t p = 0; structure_matches && p < block_map.size(); ++p)
       structure_matches = workspace.program_to_system[p] == sys_block(static_cast<int>(p));
     if (!structure_matches) {
       workspace.program_to_system.resize(block_map.size());
       for (std::size_t p = 0; p < block_map.size(); ++p)
         workspace.program_to_system[p] = sys_block(static_cast<int>(p));
-      workspace.program_stages.assign(static_cast<std::size_t>(n_blocks()), nullptr);
+      workspace.runtime_stages.assign(static_cast<std::size_t>(n_blocks()), nullptr);
       workspace.expected_program_blocks.clear();
       workspace.expected_program_blocks_initialized = false;
     }
@@ -987,7 +820,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       throw std::logic_error(
           "generated AMR simultaneous field solve IR identity changed its block pack");
     }
-    std::fill(workspace.program_stages.begin(), workspace.program_stages.end(), nullptr);
+    std::fill(workspace.runtime_stages.begin(), workspace.runtime_stages.end(), nullptr);
     std::size_t ordinal = 0;
     for (const FieldStageOverride& override_value : overrides) {
       if (override_value.program_block < 0 ||
@@ -997,8 +830,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       if (override_value.state == nullptr)
         throw std::invalid_argument(
             "generated AMR simultaneous field solve stage override cannot be null");
-      const std::size_t slot = static_cast<std::size_t>(override_value.program_block);
-      if (workspace.program_stages[slot] != nullptr)
+      const std::size_t program_slot = static_cast<std::size_t>(override_value.program_block);
+      const std::size_t runtime_slot =
+          static_cast<std::size_t>(workspace.program_to_system[program_slot]);
+      if (workspace.runtime_stages[runtime_slot] != nullptr)
         throw std::invalid_argument(
             "generated AMR simultaneous field solve contains a duplicate Program block");
       if (learn_blocks)
@@ -1013,17 +848,17 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           stage.n_grow() != live.n_grow())
         throw std::invalid_argument(
             "generated AMR simultaneous field solve stage does not match its exact level layout");
-      for (std::size_t other = 0; other < block_map.size(); ++other) {
-        if (other != slot && &stage == &state(static_cast<int>(other)))
+      for (std::size_t other = 0; other < static_cast<std::size_t>(n_blocks()); ++other) {
+        if (other != runtime_slot && &stage == &eng_->level_state(other, level_))
           throw std::invalid_argument(
               "generated AMR simultaneous field solve cannot use another block's live state as a "
               "stage override");
       }
-      workspace.program_stages[slot] = override_value.state;
+      workspace.runtime_stages[runtime_slot] = override_value.state;
       ++ordinal;
     }
     workspace.expected_program_blocks_initialized = true;
-    return workspace.program_stages;
+    return workspace.runtime_stages;
   }
 
   /// Fail loud for an op the codegen can emit but the installed AMR Program path does not wire (named-flux /
@@ -1685,8 +1520,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     ClockScheduleState clock_schedule;
     std::vector<LiveStateRing> live_state_rings;
     bool rotate_pending = false;
-    std::optional<SolveReport> default_solve_report;
-    std::map<std::string, SolveReport> named_solve_reports;
     int level = 0;
     amr::Rational stage_time{0, 1};
     std::optional<ActiveParentWindow> active_parent;
@@ -1942,8 +1775,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     clock_schedule_.copy_into(snapshot.clock_schedule);
     copy_vector_values_in_place_(snapshot.live_state_rings, live_state_rings_);
     snapshot.rotate_pending = rotate_pending_;
-    snapshot.default_solve_report = default_solve_report_;
-    copy_map_values_in_place_(snapshot.named_solve_reports, named_solve_reports_);
     snapshot.level = level_;
     snapshot.stage_time = stage_time_;
     snapshot.active_parent = active_parent_;
@@ -1992,8 +1823,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     snapshot.clock_schedule.copy_into(clock_schedule_);
     copy_vector_values_in_place_(live_state_rings_, snapshot.live_state_rings);
     rotate_pending_ = snapshot.rotate_pending;
-    default_solve_report_ = snapshot.default_solve_report;
-    copy_map_values_in_place_(named_solve_reports_, snapshot.named_solve_reports);
     level_ = snapshot.level;
     stage_time_ = snapshot.stage_time;
     active_parent_ = snapshot.active_parent;
@@ -2223,6 +2052,17 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   static std::string interface_flux_group_identity_(int group_id) {
     require_group_identity_(group_id);
     return "program.group.node." + std::to_string(group_id);
+  }
+
+  static void require_field_evaluation_point_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int expected_level,
+      const char* route) {
+    if (point.clock.empty() || point.tick < 0 || point.level != expected_level ||
+        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
+        !std::isfinite(point.physical_time) || point.stage_fraction < amr::Rational(0, 1) ||
+        amr::Rational(1, 1) < point.stage_fraction)
+      throw std::invalid_argument(std::string(route) +
+                                  " requires a complete exact BoundaryEvaluationPoint");
   }
 
   void register_interface_flux_group_(int group_id, const std::vector<int>& runtime_blocks,
@@ -3405,10 +3245,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   AmrSystem* facade_;
   AmrRuntime* eng_;
   mutable int level_ = 0;
-  mutable std::optional<SolveReport> default_solve_report_;
-  mutable std::map<std::string, SolveReport> named_solve_reports_;
-  mutable bool named_field_solve_in_use_ = false;
-  mutable std::map<std::pair<int, int>, MultiFab> stage_state_scratch_;
   mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
   mutable std::vector<std::pair<MultiFab*, MultiFab*>> stage_restore_scratch_;
   // Eager, exact-layout face fields used by flux-materialising residuals. Indexed block-major by

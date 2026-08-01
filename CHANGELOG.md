@@ -31,8 +31,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   and the M3 proof requires the successful transform to advance that persistent cycle exactly once.
   This bounded route is one AMR layout at unchanged MPI cardinality. Serial and exact
   `MPI_COMM_WORLD` shared-interface groups use the same atomic rematerialization, consensus and
-  retry route; rank-changing dynamic interface rematerialization, elliptic fields, and bootstrap
-  staggered caches remain refused. Dense-history fingerprints are phase-local all-rank consensus
+  retry route; the MPI proof injects one rank-local fault after the native transform, verifies exact
+  rollback on every rank, retries with one collective receipt identity, then executes the
+  rematerialized interface. Active-depth changes, unsupported non-finest replacements at depth
+  greater than two, rank-changing dynamic interface rematerialization, elliptic fields, and
+  bootstrap staggered caches remain refused. Dense-history fingerprints are phase-local all-rank consensus
   witnesses, not a false bitwise-equality condition across interpolation; accepted solution
   components retain their independent native composite-conservation check.
 - Native `SymbolicTagger` hysteresis is now a checkpointed accepted-state capability. The M3 gate
@@ -53,7 +56,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
   reflux source. `AMRRegrid.frozen()` now exposes the materialize-once public hierarchy policy, and
   the installed shared-interface route covers every materialized level of a frozen hierarchy, plus
-  a serial dynamic hierarchy whose complete configured depth is active at bind, with exact
+  a dynamic hierarchy whose complete configured depth is active at bind, with exact
   SSPRK2/subcycling evaluation when both endpoint hierarchies provide matching full-face coverage.
   Every interior level contributes its canonical evaluation to both adjacent, level-qualified
   coarse/fine audit pairs. A depth-preserving finest-transition regrid rematerializes face cells,
@@ -67,19 +70,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   level route is installed before it becomes the parent of another transition, so proper-nesting
   may cross only the exact physical faces deliberately omitted from their paired boundary plans.
   One-sided tag propagation, dynamic active-depth changes, non-finest dynamic replacements at depth
-  greater than two, rank-changing dynamic refined rematerialization, implicit JVP and
-  historical-rate paths remain fail-closed.
+  greater than two, implicit JVP and historical-rate paths remain fail-closed. Depth-preserving
+  refined `MPI_COMM_WORLD` rematerialization now stages one detached collective registry; a
+  rank-local preparation failure rolls back the layout, topology epoch, evaluator audit count and
+  executable registry exactly before a retry may publish the replacement hierarchy. Rank-changing
+  dynamic refined rematerialization remains fail-closed.
   Each interface endpoint now carries the exact projection Handle, reconstruction-provider
   identity, operation and provider-derived trace depth into the native collective plan identity
   `pops.multiblock.interface-plan.v2`. The
   type-erased scheduler continues to execute only authenticated cell-average projections;
   MUSCL/WENO face reconstruction is rejected with its retained provider/depth contract until a
   mapped-halo reconstruction provider is installed, rather than being silently lowered.
-- Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the
+- Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v7. They persist the
   held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
   hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay
-  only for the exact ring/depth authority exported by the installed artifact. AMR v5 images are
-  rejected fail-closed rather than silently restarting without their missing hysteresis state.
+  only for the exact ring/depth authority exported by the installed artifact. AMR v5/v6 images are
+  rejected fail-closed rather than silently restarting without their missing accepted-state data.
   Explicit AMR bootstrap also republishes the Program's level-qualified accepted image before each
   hierarchy transition commits, so a checkpoint taken before the first accepted step (after the
   required zero-step `pops.run` establishes its controls identity) already covers every active level.

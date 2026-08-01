@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 #include "amr_tagging_test_authority.hpp"
 #include "gtest_compat.hpp"
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -106,6 +108,284 @@ bool field_is_zero(const MultiFab& field) {
             return false;
   }
   return true;
+}
+
+template <class Value>
+void append_exact(std::string& bytes, const Value& value) {
+  bytes.append(reinterpret_cast<const char*>(&value), sizeof(Value));
+}
+
+void append_exact_text(std::string& bytes, const std::string& value) {
+  append_exact(bytes, static_cast<std::uint64_t>(value.size()));
+  bytes.append(value);
+}
+
+std::string exact_layout_identity(const MultiFab& field) {
+  std::string bytes;
+  const auto& boxes = field.box_array().boxes();
+  const auto& ranks = field.dmap().ranks();
+  append_exact(bytes, static_cast<std::uint64_t>(boxes.size()));
+  for (std::size_t index = 0; index < boxes.size(); ++index) {
+    const Box2D& box = boxes[index];
+    append_exact(bytes, box.lo[0]);
+    append_exact(bytes, box.lo[1]);
+    append_exact(bytes, box.hi[0]);
+    append_exact(bytes, box.hi[1]);
+    append_exact(bytes, ranks[index]);
+  }
+  return bytes;
+}
+
+template <class Fragment>
+std::string exact_fragment_identity(const Fragment& fragment) {
+  std::string bytes;
+  append_exact_text(bytes, fragment.key.interface_identity);
+  append_exact(bytes, fragment.key.topology_epoch);
+  append_exact(bytes, fragment.key.coarse_level);
+  append_exact(bytes, fragment.key.fine_level);
+  append_exact(bytes, fragment.key.clock.level);
+  append_exact(bytes, fragment.key.clock.macro_step);
+  append_exact(bytes, fragment.key.clock.phase.numerator);
+  append_exact(bytes, fragment.key.clock.phase.denominator);
+  append_exact(bytes, fragment.key.clock.physical_time);
+  append_exact_text(bytes, fragment.key.stage_identity);
+  append_exact(bytes, fragment.key.interval.begin.level);
+  append_exact(bytes, fragment.key.interval.begin.macro_step);
+  append_exact(bytes, fragment.key.interval.begin.phase.numerator);
+  append_exact(bytes, fragment.key.interval.begin.phase.denominator);
+  append_exact(bytes, fragment.key.interval.begin.physical_time);
+  append_exact(bytes, fragment.key.interval.end.level);
+  append_exact(bytes, fragment.key.interval.end.macro_step);
+  append_exact(bytes, fragment.key.interval.end.phase.numerator);
+  append_exact(bytes, fragment.key.interval.end.phase.denominator);
+  append_exact(bytes, fragment.key.interval.end.physical_time);
+  append_exact(bytes, fragment.key.orientation);
+  append_exact(bytes, fragment.key.left_block);
+  append_exact(bytes, fragment.key.right_block);
+  append_exact(bytes, fragment.measure.stage_weight.numerator);
+  append_exact(bytes, fragment.measure.stage_weight.denominator);
+  append_exact(bytes, fragment.measure.stage_weight_resolved);
+  append_exact(bytes, fragment.measure.substep_duration);
+  append_exact(bytes, fragment.measure.face_measure);
+  append_exact(bytes, static_cast<std::uint64_t>(fragment.payload.size()));
+  for (const Real value : fragment.payload)
+    append_exact(bytes, value);
+  return bytes;
+}
+
+struct OneShotRematerializationFailure {
+  std::shared_ptr<bool> fail_next_copy;
+  std::array<int, 2>* evaluator_calls = nullptr;
+  int level = 0;
+
+  OneShotRematerializationFailure(std::shared_ptr<bool> fail, std::array<int, 2>* calls, int k)
+      : fail_next_copy(std::move(fail)), evaluator_calls(calls), level(k) {}
+
+  OneShotRematerializationFailure(const OneShotRematerializationFailure& other)
+      : fail_next_copy(other.fail_next_copy),
+        evaluator_calls(other.evaluator_calls),
+        level(other.level) {
+    if (*fail_next_copy && my_rank() == 1) {
+      *fail_next_copy = false;
+      throw std::runtime_error("injected rank-local interface rematerialization failure");
+    }
+  }
+
+  OneShotRematerializationFailure(OneShotRematerializationFailure&&) noexcept = default;
+  OneShotRematerializationFailure& operator=(const OneShotRematerializationFailure&) = default;
+  OneShotRematerializationFailure& operator=(OneShotRematerializationFailure&&) noexcept = default;
+
+  void operator()(const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) const {
+    ++(*evaluator_calls)[static_cast<std::size_t>(level)];
+    for (int face = 0; face < batch.face_count; ++face)
+      for (int component = 0; component < batch.component_count; ++component)
+        batch.shared_flux[static_cast<std::size_t>(face) * batch.component_count + component] =
+            Real(level + face + component + 1);
+  }
+};
+
+AmrRuntime make_dynamic_mpi_interface_runtime(
+    std::array<int, 2>& evaluator_calls,
+    const std::shared_ptr<bool>& fail_next_rematerialization_copy) {
+  constexpr int cells = 4;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = cells;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 1;
+  params.mesh.distribute_coarse = true;
+  params.mesh.coarse_max_grid = 2;
+  params.poisson.bc = BCRec{};
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 2);
+  layout.ba[1] = BoxArray(std::vector<Box2D>{layout.geom.domain.refine(kAmrRefRatio)});
+  layout.dm[1] = layout.load_balance->distribute(layout.ba[1], n_ranks());
+
+  std::vector<AmrRuntimeBlock> blocks;
+  for (const char* name : {"left", "right"}) {
+    AmrRuntimeBlock block = detail::dispatch_amr_block(
+        scalar_model(), "none", "rusanov", layout, name,
+        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1);
+    block.state_identity = std::string("test://dynamic-mpi-interface/block/") + name + "/state/U";
+    const auto omit_local_interface = [](MultiFab&, const MultiFab&, const Geometry&, MultiFab& fx,
+                                         MultiFab& fy, MultiFab& rhs) {
+      fx.set_val(Real(0));
+      fy.set_val(Real(0));
+      rhs.set_val(Real(0));
+    };
+    block.level_flux_capture = omit_local_interface;
+    block.level_flux_capture_neg_div = omit_local_interface;
+    block.level_rhs_without_prepared_interfaces = [](const BoundaryEvaluationPoint&, MultiFab&,
+                                                     const MultiFab&, const Geometry&,
+                                                     MultiFab& rhs) { rhs.set_val(Real(0)); };
+    block.level_neg_div_flux_without_prepared_interfaces =
+        block.level_rhs_without_prepared_interfaces;
+    blocks.push_back(std::move(block));
+  }
+
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
+  runtime.set_parent_child_temporal_relations({amr::ParentChildClockRelation(
+      0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly)});
+  runtime.set_regrid(/*every=*/1, /*grow=*/0, /*margin=*/0);
+
+  const PopsExecutionContextV1 execution = mpi_world_execution();
+  for (int level = 0; level < 2; ++level) {
+    AxisAlignedInterface route;
+    route.identity = "mpi-two-rank.dynamic-refined-shared-flux";
+    route.left_block = 0;
+    route.right_block = 1;
+    route.level = level;
+    route.left_axis = route.right_axis = InterfaceAxis::X;
+    route.left_side = InterfaceSide::High;
+    route.right_side = InterfaceSide::Low;
+    route.right_component_for_left = {0};
+    route.affine_mapping_identity = "periodic-x-translation";
+    route.right_normal_translation = Real(1);
+    authenticate_cell_average_trace(route);
+    runtime.install_level_interface_flux(
+        level, std::move(route), execution,
+        InterfaceFluxEvaluator(OneShotRematerializationFailure{fail_next_rematerialization_copy,
+                                                               &evaluator_calls, level}));
+  }
+  runtime.require_complete_active_level_interfaces();
+  return runtime;
+}
+
+long exercise_dynamic_refined_interface_rematerialization() {
+  long failures = 0;
+  const auto require = [&failures](bool condition) {
+    if (!condition)
+      ++failures;
+  };
+
+  std::array<int, 2> evaluator_calls{0, 0};
+  auto fail_next_rematerialization_copy = std::make_shared<bool>(false);
+  AmrRuntime runtime =
+      make_dynamic_mpi_interface_runtime(evaluator_calls, fail_next_rematerialization_copy);
+  const std::string interface_identity = "mpi-two-rank.dynamic-refined-shared-flux";
+  const std::string accepted_layout = exact_layout_identity(runtime.level_state(0, 1));
+  const std::uint64_t accepted_epoch = runtime.topology_epoch();
+
+  const auto evaluate_level = [&](std::int64_t tick) {
+    MultiFab& left = runtime.level_state(0, 1);
+    MultiFab& right = runtime.level_state(1, 1);
+    MultiFab left_rhs(left.box_array(), left.dmap(), 1, 0);
+    MultiFab right_rhs(right.box_array(), right.dmap(), 1, 0);
+    const BoundaryEvaluationPoint point{"clock.dynamic-mpi-interface", tick, 1,          0, 0,
+                                        amr::Rational(0, 1),           0.05, 0.05 * tick};
+    runtime.level_rhs_with_interfaces(1, point, {&left, &right}, {&left_rhs, &right_rhs});
+    require(all_reduce_sum(field_is_zero(left_rhs) ? 0L : 1L) > 0);
+    require(all_reduce_sum(field_is_zero(right_rhs) ? 0L : 1L) > 0);
+  };
+
+  evaluate_level(1);
+  require(evaluator_calls == (std::array<int, 2>{0, 1}));
+  require(runtime.interface_evaluation_count(interface_identity, 1) == 1u);
+
+  runtime.set_clustering(/*min_efficiency=*/1.0, /*min_box_size=*/1, /*max_box_size=*/2);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}, {1, 0, Real(0.5)}},
+                                         "test::dynamic-mpi-interface-full-domain@1");
+  *fail_next_rematerialization_copy = my_rank() == 1;
+  bool collective_failure_observed = false;
+  try {
+    runtime.regrid();
+  } catch (const std::runtime_error& error) {
+    const std::string message(error.what());
+    collective_failure_observed =
+        my_rank() == 1
+            ? message.find("injected rank-local interface rematerialization failure") !=
+                  std::string::npos
+            : message.find("replacement route/layout preflight failed on another MPI rank") !=
+                  std::string::npos;
+  }
+  require(collective_failure_observed);
+  require(runtime.topology_epoch() == accepted_epoch);
+  require(runtime.regrid_count() == 0);
+  require(exact_layout_identity(runtime.level_state(0, 1)) == accepted_layout);
+  require(runtime.interface_evaluation_count(interface_identity, 1) == 1u);
+  runtime.require_complete_active_level_interfaces();
+
+  evaluate_level(2);
+  require(evaluator_calls == (std::array<int, 2>{0, 2}));
+  require(runtime.interface_evaluation_count(interface_identity, 1) == 2u);
+
+  runtime.regrid();
+  require(runtime.topology_epoch() > accepted_epoch);
+  require(runtime.regrid_count() == 1);
+  const std::string replacement_layout = exact_layout_identity(runtime.level_state(0, 1));
+  require(replacement_layout != accepted_layout);
+  require(all_ranks_agree_exact_ordered_byte_pairs(
+      {{std::string_view("dynamic-refined-layout"), std::string_view(replacement_layout)}}));
+  runtime.require_complete_active_level_interfaces();
+
+  MultiFab& left = runtime.level_state(0, 1);
+  MultiFab& right = runtime.level_state(1, 1);
+  MultiFab left_rhs(left.box_array(), left.dmap(), 1, 0);
+  MultiFab right_rhs(right.box_array(), right.dmap(), 1, 0);
+  left_rhs.set_val(Real(0));
+  right_rhs.set_val(Real(0));
+  const BoundaryEvaluationPoint point{"clock.dynamic-mpi-interface", 3,    1,    0, 1,
+                                      amr::Rational(1, 2),           0.05, 0.125};
+  InterfaceFluxFragmentLedger ledger(runtime.topology_epoch());
+  ledger.begin();
+  const amr::ClockWindow interval{{1, 3, amr::Rational(0, 1), 0.1},
+                                  {1, 3, amr::Rational(1, 1), 0.15}};
+  InterfaceFluxFragmentPublication publication{&ledger,
+                                               runtime.topology_epoch(),
+                                               2,
+                                               amr::ClockStamp{1, 3, amr::Rational(1, 2), 0.125},
+                                               "program.group.dynamic-refined-mpi",
+                                               interval,
+                                               amr::Rational(1, 2)};
+  runtime.publish_level_interface_flux_fragments(1, point, {0, 1}, {&left, &right},
+                                                 {&left_rhs, &right_rhs}, publication);
+  require(evaluator_calls == (std::array<int, 2>{0, 3}));
+  require(runtime.interface_evaluation_count(interface_identity, 1) == 3u);
+  require(ledger.pending_size() == 1u);
+  if (ledger.pending_size() == 1u) {
+    const auto& fragment = ledger.pending_entries().front();
+    require(fragment.key.interface_identity == interface_identity);
+    require(fragment.key.topology_epoch == runtime.topology_epoch());
+    require(fragment.key.coarse_level == 0 && fragment.key.fine_level == 1);
+    require(fragment.key.clock == publication.clock);
+    require(fragment.key.stage_identity == publication.stage_identity);
+    require(fragment.key.interval.begin == interval.begin &&
+            fragment.key.interval.end == interval.end);
+    require(fragment.key.orientation == amr::InterfaceFluxOrientation::FineOutward);
+    require(fragment.measure.stage_weight == amr::Rational(1, 2));
+    require(fragment.measure.stage_weight_resolved);
+    require(fragment.measure.substep_duration == point.dt);
+    const std::string fragment_identity = exact_fragment_identity(fragment);
+    require(all_ranks_agree_exact_ordered_byte_pairs(
+        {{std::string_view("dynamic-refined-fragment"), std::string_view(fragment_identity)}}));
+  }
+  ledger.commit();
+  require(ledger.published_size() == 1u);
+  require(all_reduce_sum(field_is_zero(left_rhs) ? 0L : 1L) > 0);
+  require(all_reduce_sum(field_is_zero(right_rhs) ? 0L : 1L) > 0);
+  return failures;
 }
 
 int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
@@ -742,6 +1022,8 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       require(divergence_rejected);
       require(divergent_scheduler.evaluation_count(route.identity, 0) == 0u);
       require(field_is_zero(left_rhs) && field_is_zero(right_rhs));
+
+      failures += exercise_dynamic_refined_interface_rematerialization();
 
       // A rank-local incomplete active-level prefix must close its structural status reduction
       // before any rank enters exact registry consensus. Deliberately destroy the accepted L1 route

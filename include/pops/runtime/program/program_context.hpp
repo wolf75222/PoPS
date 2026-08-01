@@ -107,25 +107,15 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int b, MultiFab& u_stage) const {
     count_kernel();
+    require_field_evaluation_point_(point, 0, "Program single-state field solve");
+    if (provider_slot.empty())
+      throw std::invalid_argument(
+          "System::solve_fields_from_state_at requires an exact provider slot");
     sys_->prepare_named_field_publication_storage_(provider_slot);
     return run_field_solve_transaction_([&]() {
       return sys_->solve_fields_from_state_at_in_place_(point, provider_slot, sys_block(b),
                                                         u_stage);
     });
-  }
-  /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
-  /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
-  /// components (distinct from the shared phi/grad the default solve_fields fills). Forwards to
-  /// System::solve_fields_from_state(field, b, u_stage). The codegen lowers
-  /// P.solve_fields(field=name, state=U) to this; a default (unnamed) solve_fields keeps the overload
-  /// above, byte-identical.
-  SolveOutcome program_execution_solve_named_field_from_state_outcome_(const std::string& field,
-                                                                       int b,
-                                                                       MultiFab& u_stage) const {
-    count_kernel();
-    sys_->prepare_named_field_publication_storage_(field);
-    return run_field_solve_transaction_(
-        [&]() { return sys_->solve_fields_from_state_in_place_(field, sys_block(b), u_stage); });
   }
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): re-solve the elliptic fields and
   /// re-fill the shared aux from the SIMULTANEOUS stage states of MULTIPLE blocks at once -- the system
@@ -166,27 +156,17 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
         [&]() { return solve_default_field_workspace_(workspace); });
   }
 
-  SolveOutcome program_execution_solve_named_field_from_blocks_outcome_(
-      const std::string& field, const std::vector<const MultiFab*>& u_stages) const {
-    count_kernel();
-    FieldSolveWorkspace& workspace = manual_named_field_solve_workspace_(field);
-    fill_manual_field_stages_(workspace, u_stages, /*require_exact_size=*/true);
-    sys_->prepare_named_field_publication_storage_(field);
-    return run_field_solve_transaction_(
-        [&]() { return solve_named_field_workspace_(field, workspace); });
-  }
-
   /// Allocation-free generated route.  The exact IR identity owns one context-local pointer/snapshot
-  /// workspace; @p field and the ordered Program block pack are authenticated on every replay.  The
-  /// old vector overloads above remain available for manual C++ callers.
+  /// workspace; @p field and the ordered Program block pack are authenticated on every replay.
   SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
-      std::int64_t value_id, std::string_view field,
-      std::initializer_list<FieldStageOverride> overrides) const {
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
+      std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
     count_kernel();
+    require_field_evaluation_point_(point, 0, "Program simultaneous field solve");
     FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
     sys_->prepare_named_field_publication_storage_(workspace.generated_field_identity);
     return run_field_solve_transaction_([&]() {
-      return solve_named_field_workspace_(workspace.generated_field_identity, workspace);
+      return solve_named_field_workspace_at_(point, workspace.generated_field_identity, workspace);
     });
   }
 
@@ -239,7 +219,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
 
   struct FieldSolveWorkspaceRegistry {
     FieldSolveWorkspace manual_default;
-    std::map<std::string, FieldSolveWorkspace, std::less<>> manual_named;
     std::map<std::int64_t, FieldSolveWorkspace> generated;
     FieldPublicationTransaction publication;
   };
@@ -419,20 +398,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return workspace;
   }
 
-  FieldSolveWorkspace& manual_named_field_solve_workspace_(const std::string& field) const {
-    if (field.empty())
-      throw std::invalid_argument(
-          "Program named simultaneous field solve requires a field identity");
-    if (!field_solve_workspace_registry_)
-      throw std::logic_error("Program field-solve workspace registry is unavailable");
-    auto& workspaces = field_solve_workspace_registry_->manual_named;
-    auto found = workspaces.find(field);
-    if (found == workspaces.end())
-      found = workspaces.try_emplace(field).first;
-    prepare_field_solve_structure_(found->second);
-    return found->second;
-  }
-
   FieldSolveWorkspace& generated_field_solve_workspace_(
       std::int64_t value_id, std::string_view field,
       std::initializer_list<FieldStageOverride> overrides) const {
@@ -500,10 +465,19 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->solve_fields_from_blocks_in_place_(workspace.system_stages);
   }
 
-  SolveReport solve_named_field_workspace_(const std::string& field,
-                                           FieldSolveWorkspace& workspace) const {
-    ExclusiveUseGuard use(workspace.in_use,
-                          "Program simultaneous field-solve workspace is already in use");
+  SolveReport solve_named_field_workspace_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+      FieldSolveWorkspace& workspace) const {
+    if (point.level != 0)
+      throw std::invalid_argument(
+          "Program simultaneous field solve requires BoundaryEvaluationPoint.level == 0");
+    if (workspace.in_use)
+      throw std::logic_error("Program simultaneous field-solve workspace is already in use");
+    struct WorkspaceUse {
+      bool& flag;
+      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
+      ~WorkspaceUse() { flag = false; }
+    } use(workspace.in_use);
     std::fill(workspace.system_stages.begin(), workspace.system_stages.end(), nullptr);
     bool has_override = false;
     for (std::size_t p = 0; p < workspace.program_stages.size(); ++p) {
@@ -515,10 +489,20 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     }
     if (!has_override)
       throw std::runtime_error(
-          "ProgramContext::solve_fields_from_blocks(field): no stage override was supplied");
-    return sys_->solve_fields_from_blocks_in_place_(field, workspace.system_stages);
+          "ProgramContext::solve_fields_from_blocks_at: no stage override was supplied");
+    return sys_->solve_fields_from_blocks_at_in_place_(point, field, workspace.system_stages);
   }
 
+  static void require_field_evaluation_point_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, int expected_level,
+      const char* route) {
+    if (point.clock.empty() || point.tick < 0 || point.level != expected_level ||
+        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
+        !std::isfinite(point.physical_time) || point.stage_fraction < amr::Rational(0, 1) ||
+        amr::Rational(1, 1) < point.stage_fraction)
+      throw std::invalid_argument(std::string(route) +
+                                  " requires a complete exact BoundaryEvaluationPoint");
+  }
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
