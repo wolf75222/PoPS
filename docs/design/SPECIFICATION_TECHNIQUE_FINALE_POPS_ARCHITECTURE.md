@@ -1536,14 +1536,23 @@ dans `examples/final/`. Chaque script doit :
 
 ## 14. Gate de conformance finale
 
-Le job de release commence par
-`scripts/prove_public_api_parity.py --wheel <wheel> --evidence <chemin-hors-checkout>`.
-Cette preuve compare octet par octet tous les fichiers Python et de typage (`*.py`, `*.pyi`,
-`py.typed`) du checkout et du wheel retenu, puis importe séparément les deux arbres dans des
-interpréteurs isolés. Les deux snapshots doivent exposer la même racine publique, les mêmes
-signatures et annotations, un `Case` explicite, des handles qualifiés distincts et
+Le job de release exécute d'abord
+`scripts/run_final_gate.py --wheel <wheel> --evidence <chemin-hors-checkout>`. Ce gate installe
+l'artefact exact avant que
+`scripts/prove_public_api_parity.py --wheel <wheel> --installed --evidence <autre-chemin-hors-checkout>`
+ne résolve la distribution installée avec `importlib.metadata`, sans importer `pops` dans le
+processus du gate. Le chemin résolu doit être extérieur au checkout. La preuve compare octet par
+octet tous les fichiers Python et de typage (`*.py`, `*.pyi`, `py.typed`) du checkout, du wheel
+retenu et du package installé, puis importe séparément les trois arbres dans des interpréteurs
+isolés. Les trois snapshots doivent exposer la même racine publique, les mêmes signatures et
+annotations, un `Case` explicite, des handles qualifiés distincts et
 authoring/validation/inspection sans chargement de `_pops`. Un ancien nom public, un fichier de
-typage absent ou une divergence source/wheel bloque la publication.
+typage absent, un chemin provenant du checkout ou une divergence source/wheel/installé bloque la
+publication. La preuve authentifie aussi le `Name`, la `Version` et le digest du `METADATA` de la
+distribution installée contre ceux du wheel. Enfin `release_preflight.py` reçoit cette evidence via
+`--public-api-evidence` et vérifie son producteur, le SHA-256 du wheel et le chemin du package contre
+le même runtime installé que l'evidence finale ; une evidence de parité issue d'un autre wheel ou
+d'une autre installation ne peut donc pas être réutilisée.
 
 Une release ne peut être déclarée conforme que par
 `scripts/run_final_gate.py --evidence <chemin-hors-checkout>`. La commande exige un checkout propre,
