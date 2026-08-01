@@ -3,8 +3,8 @@ from __future__ import annotations
 
 COMPONENT_CATALOG_SCHEMA_VERSION = 1
 COMPONENT_MANIFEST_SCHEMA_VERSION = 2
-COMPONENT_CATALOG_SHA256 = '84c68fcee96663f71e7e7fa7589ec1ddee0d1037e741a678e4afd83c9749620a'
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'c0e14d4a3dd082612d052b2ce293e17de712c6916e39f430d0ff311ed0f24ef8'
+COMPONENT_CATALOG_SHA256 = '8e26814c1bd3dadb62ad91511debdeee75c1fb31a1514e854237d901f88288fe'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'c26ee448d6689af86d464b04669bbb21fd70c8f4eab9155d5aa1d3535d41d52e'
 COMPONENT_INTERFACE_SPECS = ({'name': 'requirement', 'method': 'requirements', 'required_args': 0},
  {'name': 'lowering', 'method': 'lower', 'required_args': 1},
  {'name': 'stencil', 'method': 'stencil', 'required_args': 0},

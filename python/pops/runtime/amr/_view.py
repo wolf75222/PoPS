@@ -172,7 +172,7 @@ class AmrRuntimeView:
             per_level_depth=None,
             requirement_note=(
                 "the reconstruction stencil sets the ghost depth "
-                "(minmod / vanleer -> 1, weno5 -> 3); the coarse-fine fine ghosts "
+                "(minmod / vanleer / mc / superbee -> 1, weno5 -> 3); the coarse-fine fine ghosts "
                 "are re-derived per path on the AMR transport."
             ),
             notes=["per-level ghost depth is not exposed by this native build."],

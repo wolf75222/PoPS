@@ -187,7 +187,8 @@ class System {
 
   /// Adds an equation block (one species).
   /// @param model    composition of bricks (transport/source/elliptic + parameters)
-  /// @param limiter  reconstruction: "none" | "minmod" | "vanleer" | "weno5"
+  /// @param limiter  reconstruction: "none" | "minmod" | "vanleer" | "weno5" | "mc" |
+  ///                 "superbee"
   /// @param riemann  numerical flux: "rusanov" (minimal generic) | "hll" (generic, requires
   ///                 model.wave_speeds) | "hllc" | "roe" (generic when the model supplies the
   ///                 HasHLLCStructure / HasRoeDissipation hooks; no layout inference or fallback)
@@ -268,8 +269,9 @@ class System {
   /// real System context and installs a zero-copy native block. The complete canonical BindSchema
   /// vector crosses the fixed ABI once and is injected into the generated model before those closures
   /// are constructed. Package and module ABI keys must match.
-  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5: add_compiled_model reallocates
-  ///                the block state to block_n_ghost = 3 ghosts after install_block, like add_block)
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" | "mc" | "superbee"
+  ///                (weno5: add_compiled_model reallocates the block state to block_n_ghost = 3
+  ///                ghosts after install_block, like add_block)
   /// @param riemann "rusanov" | "hll" | "hllc" | "roe"
   /// @param recon   "conservative" | "primitive"
   /// @param time    "explicit" (SSPRK2) | "ssprk3" | "euler" | "imex" (the template marshals the explicit
@@ -392,7 +394,8 @@ class System {
   /// spatial stencil). WENO5 reads 3 ghosts, > the 2 allocated by install_block; called by add_compiled_model
   /// (header) with block_n_ghost(limiter) AFTER install_block, so the native compiled path
   /// (loader .so) accepts weno5 -- SAME mechanism as add_block. No-op if U already has enough ghosts
-  /// (none/minmod/vanleer, <= 2): allocation and data bit-identical to history. POPS_EXPORT:
+  /// (all catalogue routes with <= 2 ghosts): allocation and data bit-identical to history.
+  /// POPS_EXPORT:
   /// called by the header template add_compiled_model -> must be exported for the loader .so.
   POPS_EXPORT void set_block_ghosts(const std::string& name, int n_ghost);
   /// @}

@@ -102,14 +102,18 @@ enum class LimiterRouteId : int {
   kMinmod = 1,
   kVanLeer = 2,
   kWeno5 = 3,
+  kMc = 4,
+  kSuperbee = 5,
 };
 inline constexpr RouteInfo kLimiterRoutes[] = {
   {0, "none", "pops::NoSlope", "", ""},
   {1, "minmod", "pops::Minmod", "", ""},
   {2, "vanleer", "pops::VanLeer", "", ""},
   {3, "weno5", "pops::Weno5", "3-cell halo", ""},
+  {4, "mc", "pops::MC", "", ""},
+  {5, "superbee", "pops::Superbee", "", ""},
 };
-inline constexpr const char* kLimiterRouteTokensCsv = "none|minmod|vanleer|weno5";
+inline constexpr const char* kLimiterRouteTokensCsv = "none|minmod|vanleer|weno5|mc|superbee";
 
 enum class ReconRouteId : int {
   kConservative = 0,
@@ -241,6 +245,8 @@ inline constexpr LimiterTag kLimiters[] = {
   {"minmod", 2},
   {"vanleer", 2},
   {"weno5", 3},
+  {"mc", 2},
+  {"superbee", 2},
 };
 
 struct RiemannTag {
@@ -301,9 +307,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 2;
-inline constexpr const char* kComponentCatalogSha256 = "84c68fcee96663f71e7e7fa7589ec1ddee0d1037e741a678e4afd83c9749620a";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "c0e14d4a3dd082612d052b2ce293e17de712c6916e39f430d0ff311ed0f24ef8";
-inline constexpr const char* kRouteRegistrySignature = "v2:c0e14d4a3dd082612d052b2ce293e17de712c6916e39f430d0ff311ed0f24ef8";
+inline constexpr const char* kComponentCatalogSha256 = "8e26814c1bd3dadb62ad91511debdeee75c1fb31a1514e854237d901f88288fe";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "c26ee448d6689af86d464b04669bbb21fd70c8f4eab9155d5aa1d3535d41d52e";
+inline constexpr const char* kRouteRegistrySignature = "v2:c26ee448d6689af86d464b04669bbb21fd70c8f4eab9155d5aa1d3535d41d52e";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",
