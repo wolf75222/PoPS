@@ -345,9 +345,12 @@ void bind_system_program(py::class_<System>& cls) {
       .def("program_block_map", &System::program_block_map)
       // Metadata-only parameter occupancy for ProgramRuntimeReport.  Keep the fixed-size values
       // private while exposing the native count that proves every compiled carrier was installed.
-      .def("program_param_count", [](const System& system, int program_block) {
-        return system.program_params(program_block).count;
-      }, py::arg("program_block"))
+      .def(
+          "program_param_count",
+          [](const System& system, int program_block) {
+            return system.program_params(program_block).count;
+          },
+          py::arg("program_block"))
       // ADC-592: runtime freeze lifecycle. mark_bound() (called LAST by the Python bind flow) freezes
       // the composition -> every structural setter then rejects; lifecycle_state() reports
       // assembling / bound / running (running derived from macro_step()).
