@@ -214,10 +214,14 @@ class AmrRuntimeView:
             "RegridOnRestart() is an explicit weaker continuation for one AMR layout with an "
             "artifact-backed Program and unchanged MPI cardinality: it restores the exact accepted "
             "state first, then performs one scientific tag/regrid at the restored clock.",
-            "RegridOnRestart() supports depth-preserving rematerializable shared-interface flux "
-            "groups in serial and under unchanged MPI_COMM_WORLD; it still refuses Uniform and "
-            "multi-layout runtimes, active-depth changes, unsupported non-finest replacements at "
-            "depth greater than two, elliptic field providers, and bootstrap staggered caches.",
+            "RegridOnRestart() supports serial and exact-MPI-world rematerializable "
+            "depth-preserving shared-interface flux groups at unchanged MPI cardinality; it still "
+            "refuses Uniform and multi-layout runtimes, active-depth changes, unsupported "
+            "non-finest replacements at depth greater than two, elliptic field providers, and "
+            "bootstrap staggered caches.",
+            "Its phase-local history consensus fingerprints are cold-restart collectives whose "
+            "memory and communication cost scales with every dense history slot; they prove "
+            "all-rank agreement per hierarchy, not bitwise equality across interpolation.",
         ]
         return CheckpointReport(
             restartable=not violations, constraints=constraints, violations=violations, notes=notes

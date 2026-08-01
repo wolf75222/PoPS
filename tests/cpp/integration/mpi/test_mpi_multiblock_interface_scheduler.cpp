@@ -2,6 +2,7 @@
 
 #include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
+#include "amr_tagging_test_authority.hpp"
 #include "gtest_compat.hpp"
 #include <pops/parallel/comm.hpp>
 #include <pops/physics/bricks/bricks.hpp>
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -389,9 +391,13 @@ long exercise_dynamic_refined_interface_rematerialization() {
 int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
   comm_init(&argc, &argv);
   long failures = 0;
-  const auto require = [&failures](bool condition) {
-    if (!condition)
+  const auto require = [&failures](bool condition, const std::source_location where =
+                                                       std::source_location::current()) {
+    if (!condition) {
       ++failures;
+      std::cerr << "rank " << my_rank() << ": failed requirement at " << where.file_name() << ':'
+                << where.line() << '\n';
+    }
   };
 
   {
@@ -504,7 +510,6 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       initialize_right(fine_right_state, route.right_component_for_left);
 
       AxisAlignedInterface fine_route = route;
-      fine_route.identity = "mpi-two-rank.refined-shared-flux";
       fine_route.level = 1;
       const Geometry fine_left_geometry = left_geometry.refine(2);
       const Geometry fine_right_geometry = right_geometry.refine(2);
@@ -590,6 +595,8 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
         AmrRuntimeBlock block =
             detail::dispatch_amr_block(scalar_model(), "none", "rusanov", amr_layout, name,
                                        std::vector<double>(16, 1.0), true, 1.4, 1, false, 1);
+        block.state_identity =
+            std::string("test://mpi-three-level-interface/block/") + name + "/state/U";
         const auto omit_local_interface = [](MultiFab&, const MultiFab&, const Geometry&,
                                              MultiFab& fx, MultiFab& fy, MultiFab& rhs) {
           fx.set_val(Real(0));
@@ -680,6 +687,86 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       require(all_reduce_sum(field_is_zero(amr_left_rhs) ? 0L : 1L) > 0);
       require(all_reduce_sum(field_is_zero(amr_right_rhs) ? 0L : 1L) > 0);
       amr_ledger.commit();
+
+      // Cross the capability boundary that RegridOnRestart uses: keep L0->L1 unchanged, recluster
+      // only the finest L1->L2 transition, and require the distributed interface registry to be
+      // rematerialized over the new boxes/owners before any Program flux can run again.
+      const auto accepted_middle_boxes = amr_runtime.level_state(0, 1).box_array().boxes();
+      const auto accepted_finest_boxes = amr_runtime.level_state(0, 2).box_array().boxes();
+      const std::uint64_t accepted_epoch = amr_runtime.topology_epoch();
+      const auto accepted_counts = amr_evaluator_calls;
+      amr_runtime.set_clustering(/*min_efficiency=*/1.0, /*min_box_size=*/1,
+                                 /*max_box_size=*/4);
+      test::install_prepared_threshold_union(amr_runtime, {{0, 0, Real(0.5)}, {1, 0, Real(0.5)}},
+                                             "test::mpi-dynamic-interface-finest@1");
+      amr_runtime.require_restart_regrid_supported();
+      amr_runtime.regrid();
+      require(amr_runtime.nlev() == 3);
+      require(amr_runtime.level_state(0, 1).box_array().boxes() == accepted_middle_boxes);
+      require(amr_runtime.level_state(0, 2).box_array().boxes() != accepted_finest_boxes);
+      require(amr_runtime.topology_epoch() > accepted_epoch);
+      require(amr_evaluator_calls == accepted_counts);
+      amr_runtime.require_complete_active_level_interfaces();
+
+      const auto rematerialized_boxes = amr_runtime.level_state(0, 2).box_array().boxes();
+      const auto rematerialized_owners = amr_runtime.level_state(0, 2).dmap().ranks();
+      const long rematerialized_count = static_cast<long>(rematerialized_boxes.size());
+      const long rematerialized_owner_count = static_cast<long>(rematerialized_owners.size());
+      const long minimum_rematerialized_count = all_reduce_min(rematerialized_count);
+      const long maximum_rematerialized_count = all_reduce_max(rematerialized_count);
+      const long minimum_rematerialized_owner_count = all_reduce_min(rematerialized_owner_count);
+      const long maximum_rematerialized_owner_count = all_reduce_max(rematerialized_owner_count);
+      const bool stable_rematerialized_cardinality =
+          minimum_rematerialized_count == maximum_rematerialized_count &&
+          minimum_rematerialized_owner_count == maximum_rematerialized_owner_count &&
+          rematerialized_count == rematerialized_owner_count;
+      require(stable_rematerialized_cardinality);
+      if (!stable_rematerialized_cardinality)
+        throw std::runtime_error(
+            "rematerialized MPI hierarchy has rank-divergent box/owner cardinality");
+      for (std::size_t patch = 0; patch < rematerialized_boxes.size(); ++patch) {
+        const Box2D& box = rematerialized_boxes[patch];
+        for (const int coordinate : {box.lo[0], box.lo[1], box.hi[0], box.hi[1]})
+          require(all_reduce_min(static_cast<long>(coordinate)) ==
+                  all_reduce_max(static_cast<long>(coordinate)));
+        require(all_reduce_min(static_cast<long>(rematerialized_owners[patch])) ==
+                all_reduce_max(static_cast<long>(rematerialized_owners[patch])));
+      }
+
+      MultiFab& rematerialized_left = amr_runtime.level_state(0, 2);
+      MultiFab& rematerialized_right = amr_runtime.level_state(1, 2);
+      MultiFab rematerialized_left_rhs(rematerialized_left.box_array(), rematerialized_left.dmap(),
+                                       1, 0);
+      MultiFab rematerialized_right_rhs(rematerialized_right.box_array(),
+                                        rematerialized_right.dmap(), 1, 0);
+      rematerialized_left_rhs.set_val(Real(0));
+      rematerialized_right_rhs.set_val(Real(0));
+      const BoundaryEvaluationPoint rematerialized_point{"clock.mpi-three-level", 6,    2,    0, 5,
+                                                         amr::Rational(1, 2),     0.05, 0.525};
+      InterfaceFluxFragmentLedger rematerialized_ledger(amr_runtime.topology_epoch());
+      rematerialized_ledger.begin();
+      const amr::ClockWindow rematerialized_interval{{2, 6, amr::Rational(0, 1), 0.5},
+                                                     {2, 6, amr::Rational(1, 1), 0.55}};
+      InterfaceFluxFragmentPublication rematerialized_publication{
+          &rematerialized_ledger,
+          amr_runtime.topology_epoch(),
+          3,
+          amr::ClockStamp{2, 6, amr::Rational(1, 2), 0.525},
+          "program.group.mpi-rematerialized",
+          rematerialized_interval,
+          amr::Rational(1, 1)};
+      amr_runtime.publish_level_interface_flux_fragments(
+          2, rematerialized_point, {0, 1}, {&rematerialized_left, &rematerialized_right},
+          {&rematerialized_left_rhs, &rematerialized_right_rhs}, rematerialized_publication);
+      require(amr_evaluator_calls == (std::array<int, 3>{0, 1, 1}));
+      require(rematerialized_ledger.pending_size() == 1u);
+      const auto& rematerialized_fragment = rematerialized_ledger.pending_entries().front();
+      require(rematerialized_fragment.key.topology_epoch == amr_runtime.topology_epoch());
+      require(rematerialized_fragment.key.coarse_level == 1);
+      require(rematerialized_fragment.key.fine_level == 2);
+      require(rematerialized_fragment.key.orientation ==
+              amr::InterfaceFluxOrientation::FineOutward);
+      rematerialized_ledger.commit();
 
       fine_left_rhs.set_val(Real(0));
       fine_right_rhs.set_val(Real(0));
@@ -937,6 +1024,23 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       require(field_is_zero(left_rhs) && field_is_zero(right_rhs));
 
       failures += exercise_dynamic_refined_interface_rematerialization();
+
+      // A rank-local incomplete active-level prefix must close its structural status reduction
+      // before any rank enters exact registry consensus. Deliberately destroy the accepted L1 route
+      // on rank one only; every rank must return from the same preflight rather than deadlocking.
+      if (my_rank() == 1)
+        scheduler.rollback_installations(1);
+      bool incomplete_registry_rejected = false;
+      try {
+        scheduler.require_runtime_rematerialization_ready(2);
+      } catch (const std::runtime_error& error) {
+        const std::string message(error.what());
+        incomplete_registry_rejected =
+            my_rank() == 1
+                ? message.find("registry is incomplete") != std::string::npos
+                : message.find("preflight failed on another MPI rank") != std::string::npos;
+      }
+      require(incomplete_registry_rejected);
     } catch (const std::exception& error) {
       ++failures;
       std::cerr << "rank " << my_rank()

@@ -107,9 +107,10 @@ def validate_prepared_boundary_jacvec(blocks: tuple[Any, ...], program: Any) -> 
     """Fail closed when an external boundary JVP cannot execute the authored ``rhs_jacvec``.
 
     The current matrix-free runtime supplies one direction for the owning conservative state and
-    one mutable output.  It can keep solved fields frozen, but it has no tangent-field materializer
-    for a field-coupled total derivative.  Validate those facts at resolve rather than after the
-    first Krylov matvec.
+    one mutable output.  A field-coupled apply re-solves its exact prepared field-provider closure
+    from the perturbed state and finite-differences the complete boundary residual while that
+    perturbed field publication is active.  Validate the remaining single-block direction/output
+    facts at resolve rather than after the first Krylov matvec.
     """
     if program is None:
         return
@@ -180,15 +181,10 @@ def validate_prepared_boundary_jacvec(blocks: tuple[Any, ...], program: Any) -> 
                     "%s supports exactly one mutable external boundary output per residual/JVP; "
                     "got residual=%d, jvp=%d"
                     % (where, len(residual_outputs), len(jvp_outputs)))
-            fields = _qualified_table(residual, "fields")
+            _qualified_table(residual, "fields")
             field_coupled = value.attrs.get("field_coupled")
             if not isinstance(field_coupled, bool):
                 raise TypeError("%s requires a boolean field_coupled contract" % where)
-            if field_coupled and fields:
-                raise NotImplementedError(
-                    "%s reads solved boundary field(s) %s, but the native matrix-free runtime "
-                    "has no field-tangent materializer for field_coupled=True"
-                    % (where, list(fields)))
 
 
 def validate_shared_interface_program(

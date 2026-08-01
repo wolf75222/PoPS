@@ -484,7 +484,8 @@ inline void CompositeFacPoisson::prepare_fully_refined_solver_() {
   if (has_reaction_)
     fully_refined_solver_->set_reaction(constant_scalar_field_provider(reaction_));
   if (has_boundary_kernel_)
-    fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_);
+    fully_refined_solver_->set_boundary_kernel(boundary_kernel_,
+                                               boundary_context_for_level_(finest));
 }
 
 inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(int max_iters, Real rel_tol,
@@ -499,8 +500,8 @@ inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(int max_iters, R
   }
   if (has_cross_)
     solver.set_cross_terms(a_xy_level(finest), a_yx_level(finest));
-  if (has_boundary_kernel_ && boundary_kernel_.observes_iteration)
-    solver.set_boundary_context(boundary_context_);
+  if (has_boundary_kernel_)
+    solver.set_boundary_context(boundary_context_for_level_(finest));
   copy0_(solver.rhs(), rhs_level(finest));
   copy0_(solver.phi(), phi_level(finest));
   Real residual = Real(0);
@@ -757,7 +758,7 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
   if (m == 0) {
     prepare_field_residual_view(phim, has_boundary_kernel_ ? &boundary_view_c_ : nullptr, gm, bc_,
                                 has_boundary_kernel_ ? &boundary_kernel_ : nullptr,
-                                has_boundary_kernel_ ? &boundary_context_ : nullptr);
+                                has_boundary_kernel_ ? &boundary_context_for_level_(0) : nullptr);
   } else {
     if (m - 1 == 0)
       fill_ghosts(phi_c_, geom_c_.domain, bc_);
@@ -792,6 +793,9 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
     const Box2D b = resm.box(li);
     for_each_cell(b, detail::FacMaskedResidualKernel{R, FM, LAP, coverage});
   }
+  if (m == 0 && has_boundary_kernel_)
+    for (int face = 0; face < 4; ++face)
+      boundary_kernel_.add_residual(face, phim, resm, gm, boundary_context_for_level_(0));
   add_flux_correction_(m, resm);  // += (coarse - fine) on the bordering cells
 
   Real nrm = Real(0);

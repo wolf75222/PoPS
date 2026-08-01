@@ -203,12 +203,16 @@ def validate_regridded_contract(sim, payload, receipt):
         "accepted_macro_step",
         "before",
         "after",
+        "accepted_contract_identity_before",
+        "accepted_contract_identity_after",
+        "history_consensus_identity_before",
+        "history_consensus_identity_after",
         "composite_integrals_before",
         "composite_integrals_after",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         raise TypeError("restart: RegridOnRestart receipt has an invalid exact schema")
-    if receipt["schema_version"] != 1 or type(receipt["changed"]) is not bool:
+    if receipt["schema_version"] != 2 or type(receipt["changed"]) is not bool:
         raise ValueError("restart: RegridOnRestart receipt version or changed flag is invalid")
     accepted_time = float(payload["t"])
     accepted_step = int(payload["macro_step"])
@@ -241,8 +245,36 @@ def validate_regridded_contract(sim, payload, receipt):
     if receipt["changed"] is not changed:
         raise ValueError("restart: RegridOnRestart receipt has an inconsistent changed flag")
 
+    from pops.identity import Identity, make_identity
+
+    recorded = _decode_contract(payload)
     transformed = contract_for(sim)
-    expected_program_state = _decode_contract(payload)["program_state"]
+    expected_before_identity = make_identity("restart-accepted-contract", recorded).token
+    expected_after_identity = make_identity("restart-accepted-contract", transformed).token
+    if (
+        receipt["accepted_contract_identity_before"] != expected_before_identity
+        or receipt["accepted_contract_identity_after"] != expected_after_identity
+    ):
+        raise ValueError(
+            "restart: RegridOnRestart accepted-contract audit identity differs from "
+            "the recorded or transformed Program image"
+        )
+    # These are phase-local all-rank witnesses, not a bitwise-continuity assertion across a
+    # topology change.  A scientific regrid changes the dense level-domain encoding and
+    # interpolates newly refined cells, so equality before/after would be the wrong invariant.
+    # Conservation of the accepted solution is checked independently below from the composite
+    # per-block component integrals.
+    for key in (
+        "history_consensus_identity_before",
+        "history_consensus_identity_after",
+    ):
+        identity = Identity.from_token(receipt[key])
+        if identity.domain != "restart-history-image" or identity.schema_version != 1:
+            raise ValueError(
+                "restart: RegridOnRestart phase-local history consensus identity has the "
+                "wrong domain or schema version"
+            )
+    expected_program_state = recorded["program_state"]
     if transformed["program_state"] != expected_program_state:
         raise ValueError("restart: RegridOnRestart changed the installed Program authority")
     if transformed["ledger"]["transaction_depth"] != 0:

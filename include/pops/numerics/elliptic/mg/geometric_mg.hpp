@@ -1163,6 +1163,7 @@ class GeometricMG {
       append(boundary_context_.point.clock_slot);
       append(boundary_context_.point.partition_slot);
       append(boundary_context_.point.stage_slot);
+      append(boundary_context_.point.level);
       append(boundary_context_.point.step);
       append(boundary_context_.point.substep);
       append(boundary_context_.point.iteration);
@@ -1804,6 +1805,8 @@ class GeometricMG {
                                              owner.boundary_context_.point.partition_slot)));
       detail::fingerprint_mix(resources, static_cast<std::uint64_t>(static_cast<std::int64_t>(
                                              owner.boundary_context_.point.stage_slot)));
+      detail::fingerprint_mix(resources, static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                                             owner.boundary_context_.point.level)));
       detail::fingerprint_mix(resources, static_cast<std::uint64_t>(static_cast<std::int64_t>(
                                              owner.boundary_context_.point.substep)));
       detail::fingerprint_mix(resources,

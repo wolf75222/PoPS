@@ -198,9 +198,16 @@ def test_zero_direction_has_a_positive_fallback_step_instead_of_dividing_by_zero
 
 
 def test_field_coupled_apply_restores_the_frozen_provider_after_the_perturbed_rhs():
-    source, operator, jacvec, _ = _emit(sources=None, field_coupled=True)
+    source, operator, jacvec, r0 = _emit(sources=None, field_coupled=True)
     names = _names(operator, jacvec)
     apply_source = _apply_source(source, operator)
+    iterate, fields = r0.inputs
+    assert r0.op == "rhs"
+    assert r0.point == iterate.point == fields.point
+    assert r0.block == iterate.block == fields.block
+    assert r0.field_context == fields.field_context
+    assert r0.attrs["flux"] is True
+    assert r0.attrs["fluxes"] is None
     assert (
         'const std::string %s = "provider::potential::sha256:exact";'
         % names["field_slot"]
@@ -215,16 +222,31 @@ def test_field_coupled_apply_restores_the_frozen_provider_after_the_perturbed_rh
         )
     )
     perturbed_rhs = "ctx.rhs_core_into_at(*%s" % names["point"]
-    boundary_jvp = "ctx.boundary_jvp_into_at(*%s" % names["point"]
+    perturbed_boundary = (
+        "ctx.boundary_residual_into_at(*%s, 0, *jac_up%d_%d, *%s, "
+        "*operator_boundary_session%d_0);"
+        % (
+            names["point"], operator.id, jacvec.id, names["boundary_work"], operator.id,
+        )
+    )
+    complete_base = (
+        "pops::PureFieldAlgebra::axpy(out, jc, *jac_r0%d_%d);"
+        % (operator.id, jacvec.id)
+    )
+    boundary_guard = "if (%s) {" % names["has_boundary"]
     assert apply_source.count("ctx.evaluate_with_field_state_at(") == 1
     assert "ctx.solve_fields_from_state_at(" not in apply_source
     transaction_end = apply_source.index("});", apply_source.index(transactional_evaluation))
     assert (
         apply_source.index(transactional_evaluation)
         < apply_source.index(perturbed_rhs)
+        < apply_source.index(boundary_guard, apply_source.index(perturbed_rhs))
+        < apply_source.index(perturbed_boundary)
         < transaction_end
-        < apply_source.index(boundary_jvp)
+        < apply_source.index(complete_base)
     )
+    assert "ctx.boundary_jvp_into_at(" not in apply_source
+    assert "jac_r0_core" not in apply_source
     assert "ctx.solve_fields_from_state(0, *jac_up" not in apply_source
 
 
@@ -320,7 +342,9 @@ def test_codegen_defensively_rejects_an_ambiguous_coupled_field_context():
         field=object(),
         stage_sources=((block, iterate.id), (object(), 11)),
     )
-    fields = SimpleNamespace(vtype="fields", field_context=context)
+    fields = SimpleNamespace(
+        vtype="fields", field_context=context, block=block, point=point,
+    )
     r0 = SimpleNamespace(
         op="rhs",
         inputs=(iterate, fields),
@@ -335,4 +359,30 @@ def test_codegen_defensively_rejects_an_ambiguous_coupled_field_context():
         attrs={"field_coupled": True, "flux": True, "sources": None},
     )
     with pytest.raises(ValueError, match="unambiguous field context"):
+        _validate_matrix_free_contract(jacvec, None)
+
+
+def test_codegen_rejects_a_coupled_base_field_from_another_temporal_point():
+    block = object()
+    point = object()
+    other_point = object()
+    iterate = SimpleNamespace(block=block, point=point, id=7)
+    context = SimpleNamespace(field=object(), stage_sources=((block, iterate.id),))
+    fields = SimpleNamespace(
+        vtype="fields", field_context=context, block=block, point=other_point,
+    )
+    r0 = SimpleNamespace(
+        op="rhs",
+        inputs=(iterate, fields),
+        block=block,
+        point=point,
+        attrs={"flux": True, "sources": None, "fluxes": None},
+        field_context=context,
+    )
+    jacvec = SimpleNamespace(
+        op="rhs_jacvec",
+        inputs=(object(), object(), iterate, r0),
+        attrs={"field_coupled": True, "flux": True, "sources": None},
+    )
+    with pytest.raises(ValueError, match="exact block and temporal point"):
         _validate_matrix_free_contract(jacvec, None)

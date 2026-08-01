@@ -220,7 +220,8 @@ void install_stiff_pair_program(AmrSystem& system, StiffModel stiff_model, bool 
   context->install([context, stiff_model, implicit_stiff, stiff_substeps](double macro_dt) {
     context->advance_hierarchy(macro_dt, [context, stiff_model, implicit_stiff,
                                           stiff_substeps](double level_dt) {
-      (void)consume_solve_outcome(context->solve_fields());
+      if (context->level() == 0)
+        (void)consume_solve_outcome(context->solve_default_field_on_coarse_level());
       MultiFab& stiff_live = context->state(0);
       MultiFab& neutral_live = context->state(1);
       MultiFab& stiff_candidate = context->scratch_state(1000, 0, stiff_live);

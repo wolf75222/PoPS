@@ -375,21 +375,23 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
     gpu = bool(_flag_value(flags, "supports_gpu"))
     return [
         _row(
-            "amr:field_coupled_rhs_jacvec",
+            "amr:external_field_solver_v2",
             layout="amr",
             backend="none",
             platform="host",
-            mpi=mpi,
-            gpu=gpu,
+            mpi=False,
+            gpu=False,
             status="unavailable",
             limitation=(
-                "field-coupled rhs_jacvec has no level-qualified tangent-field provider ABI "
-                "for AMR level > 0"
+                "FieldSolver@2 carries a level on patch metadata, but the installed external "
+                "component adapter owns one uniform System MultiFab and no AmrFieldSolverProvider "
+                "hierarchy materialization"
             ),
-            requested="field_coupled rhs_jacvec on AMR level > 0",
-            available_route="field_coupled rhs_jacvec on AMR level 0",
+            requested="external FieldSolver@2 on an AMR hierarchy",
+            available_route="external FieldSolver@2 on one uniform host/serial level",
             alternative=(
-                "use the level-0 route or implement a level-qualified tangent-field provider ABI"
+                "implement an authenticated AMR component bridge that materializes all levels, "
+                "coarse-fine topology and collective solve ownership"
             ),
             source=source,
         ),

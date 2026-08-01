@@ -356,7 +356,12 @@ def test_native_named_field_solve_uses_exact_block_slots_not_a_representative():
                     / "program_context.hpp")
     assert "representative" not in context
     assert "workspace.program_to_system[p]" in context
-    assert "solve_fields_from_blocks_in_place_(field, workspace.system_stages)" in context
+    assert (
+        "solve_fields_from_blocks_at_in_place_(point, field, workspace.system_stages)"
+        in context
+    )
+    assert 'require_field_evaluation_point_(point, 0, "Program simultaneous field solve")' in context
+    assert "solve_fields_from_blocks_in_place_(field, workspace.system_stages)" not in context
     assert "solve_fields_from_state(field, representative" not in context
 
 

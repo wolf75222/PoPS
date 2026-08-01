@@ -29,12 +29,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   artifact-owned scientific regrid, emits a global before/after receipt, and derives a distinct
   continuation run identity. Its rollback boundary includes the runtime-owned tagging hysteresis,
   and the M3 proof requires the successful transform to advance that persistent cycle exactly once.
-  This operational slice is one AMR layout at unchanged MPI cardinality. Depth-preserving
-  shared-interface groups use the same atomic rematerialization and retry route in serial and under
-  `MPI_COMM_WORLD`; the MPI proof injects one rank-local fault after the native transform, verifies
-  exact rollback on every rank, retries with one collective receipt identity, then executes the
+  This bounded route is one AMR layout at unchanged MPI cardinality. Serial and exact
+  `MPI_COMM_WORLD` shared-interface groups use the same atomic rematerialization, consensus and
+  retry route; the MPI proof injects one rank-local fault after the native transform, verifies exact
+  rollback on every rank, retries with one collective receipt identity, then executes the
   rematerialized interface. Active-depth changes, unsupported non-finest replacements at depth
-  greater than two, elliptic fields and bootstrap staggered caches remain refused.
+  greater than two, rank-changing dynamic interface rematerialization, elliptic fields, and
+  bootstrap staggered caches remain refused. Dense-history fingerprints are phase-local all-rank consensus
+  witnesses, not a false bitwise-equality condition across interpolation; accepted solution
+  components retain their independent native composite-conservation check.
 - Native `SymbolicTagger` hysteresis is now a checkpointed accepted-state capability. The M3 gate
   executes a persisted two-rank to one-rank
   restart proof with non-empty hysteresis state, exact source-rank consensus, and byte-exact
@@ -70,7 +73,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   greater than two, implicit JVP and historical-rate paths remain fail-closed. Depth-preserving
   refined `MPI_COMM_WORLD` rematerialization now stages one detached collective registry; a
   rank-local preparation failure rolls back the layout, topology epoch, evaluator audit count and
-  executable registry exactly before a retry may publish the replacement hierarchy.
+  executable registry exactly before a retry may publish the replacement hierarchy. Rank-changing
+  dynamic refined rematerialization remains fail-closed.
   Each interface endpoint now carries the exact projection Handle, reconstruction-provider
   identity, operation and provider-derived trace depth into the native collective plan identity
   `pops.multiblock.interface-plan.v2`. The

@@ -41,16 +41,24 @@ native tagger uses non-zero hysteresis; both source ranks must publish the same 
 payload, and the one-rank checkpoint after restore must retain those bytes exactly. A separate
 two-rank process injects a byte-level producer disagreement and proves collective refusal leaves no
 published or temporary checkpoint.
-The serial RegridOnRestart proof restores that accepted hysteresis image, executes exactly one
-scientific regrid, and requires its cycle to advance exactly once. A fault injected after the native
-topology/tagging mutation must roll back the complete pre-restart Program image; a second successful
-attempt must reproduce the same transformed tagging bytes before continuation. The paired two-rank
-proof crosses a depth-preserving refined shared interface: rank one fails after the native transform,
-every rank observes the same failure and exact rollback, the retry publishes one common restart,
-continuation and topology-receipt identity, and the rematerialized interface executes conservatively
-on the next accepted step.
-The source validator requires that exact pytest path to remain in the manifest's
-`mpi_orchestrators` category; removing or reclassifying it invalidates `--check-only`.
+The serial and two-rank RegridOnRestart proofs restore that accepted hysteresis image, execute
+exactly one scientific regrid, and require its cycle to advance exactly once. At unchanged MPI
+cardinality, exact-`MPI_COMM_WORLD` shared-interface registries are preflighted before the transform,
+rematerialized against the detached candidate hierarchy, and authenticated again before commit. A
+fault or rank-divergent identity injected after the native topology/tagging mutation must roll back
+the complete pre-restart Program image; a second successful attempt must reproduce the same
+transformed tagging bytes before continuation. Dense-history fingerprints are exact phase-local
+all-rank consensus witnesses; they are deliberately not compared across the interpolation. The
+distinct scientific invariant is native composite conservation of every accepted solution
+component before and after the regrid. The mandatory two-rank entrypoint also compiles a real
+two-block `NumericalFlux`, advances both endpoints with persistent AB2 histories on distributed
+coarse/fine patches, checkpoints a non-empty accepted interface audit, injects one post-transform
+rank divergence, proves exact rollback of owners/histories/ledgers/Program bytes, retries, then
+requires a new topology-qualified interface audit, exact all-rank audit/receipt consensus and
+conservative continuation.
+The source validator requires that exact Python entrypoint to remain in the manifest's
+`mpi_entrypoints` category with `nproc = 2`; removing or reclassifying it invalidates
+`--check-only`.
 All Python checks run with native and MPI requirements forced on; a missing capability cannot turn
 this proof into an optional skip. Pytest also emits a mandatory JUnit report with strict xfail
 semantics; any skipped or xfailed proof fails the M3 gate.

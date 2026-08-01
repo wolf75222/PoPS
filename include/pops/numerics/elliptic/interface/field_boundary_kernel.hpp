@@ -21,6 +21,7 @@ struct FieldLogicalTimePoint {
   int clock_slot = 0;
   int partition_slot = 0;
   int stage_slot = 0;
+  int level = 0;
   int step = 0;
   int substep = 0;
   int iteration = 0;
@@ -75,9 +76,14 @@ struct FieldBoundaryExecutionContext {
   FieldLogicalTimePoint point{};
   const MultiFab* const* states = nullptr;
   const FieldDistribution* state_distributions = nullptr;
+  // Ordered owner-qualified identities travel beside the host pointer tables. They never enter a
+  // device kernel; collective prepared solvers use them to distinguish equal-layout dependencies
+  // and to reject a rank-local permutation before publishing a context.
+  const std::string* state_identities = nullptr;
   int state_count = 0;
   const MultiFab* const* fields = nullptr;
   const FieldDistribution* field_distributions = nullptr;
+  const std::string* field_identities = nullptr;
   int field_count = 0;
   // Host-owned carrier selected by the launcher before a device submission.  Generated launchers
   // copy the exact scalars they use into their named POD functor; a std::vector pointer is therefore

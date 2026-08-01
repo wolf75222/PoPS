@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 import sys
@@ -78,15 +79,13 @@ def test_m3_gate_pins_accepted_interface_ledger_restart_proof():
         "kind": "ctest",
         "target": "test_program_reflux_ledger",
         "test_regex": (
-            "^test_program_reflux_ledger\\."
-            "accepted_checkpoint_state_round_trips_canonically$"
+            "^test_program_reflux_ledger\\.accepted_checkpoint_state_round_trips_canonically$"
         ),
     } in data["check"]
 
     source = ROOT / "tests/cpp/integration/amr/test_program_reflux_ledger.cpp"
     assert (
-        "TEST(test_program_reflux_ledger, "
-        "accepted_checkpoint_state_round_trips_canonically)"
+        "TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonically)"
     ) in source.read_text(encoding="utf-8")
 
 
@@ -250,6 +249,32 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
         "nodeid": (
             "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::"
             "test_regrid_on_restart_mpi_collective_rollback_and_lineage"
+        ),
+        "nproc": 2,
+    } in checks
+    entrypoint = ROOT / "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py"
+    tree = ast.parse(entrypoint.read_text(encoding="utf-8"), filename=str(entrypoint))
+    run_all = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run_all"
+    )
+    direct_calls = {
+        node.func.id
+        for node in ast.walk(run_all)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {
+        "test_regrid_on_restart_mpi_collective_rollback_and_lineage",
+        "test_regrid_on_restart_mpi_shared_interface_transaction",
+    } <= direct_calls
+    assert {
+        "issue": "ADC-678",
+        "requirement": "restart_hierarchy_policy",
+        "polarity": "positive",
+        "kind": "mpi_python",
+        "target": "restart_hierarchy_policy",
+        "nodeid": (
+            "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::"
+            "test_regrid_on_restart_mpi_shared_interface_transaction"
         ),
         "nproc": 2,
     } in checks
