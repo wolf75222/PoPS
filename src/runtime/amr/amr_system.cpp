@@ -1549,6 +1549,22 @@ POPS_EXPORT void AmrSystem::discard_interface_flux_components() {
     P->runtime->discard_interface_fluxes();
 }
 
+POPS_EXPORT std::size_t AmrSystem::interface_flux_installation_checkpoint() const {
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem interface installation checkpoint requires a built runtime engine");
+  return p_->runtime->interface_flux_installation_checkpoint();
+}
+
+POPS_EXPORT void AmrSystem::rollback_interface_flux_installations(std::size_t accepted_size) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "rollback_interface_flux_installations");
+  if (!P->runtime)
+    throw std::runtime_error(
+        "AmrSystem interface installation rollback requires a built runtime engine");
+  P->runtime->rollback_interface_flux_installations(accepted_size);
+}
+
 POPS_EXPORT void AmrSystem::set_compiled_block(
     int ncomp, double gamma, int substeps, AmrCompiledBlockBuilder runtime_builder,
     const std::string& name, bool recon_prim, const std::string& time, int stride,
@@ -3301,6 +3317,29 @@ void AmrSystem::restore_program_accepted_state(const std::vector<std::uint8_t>& 
   p_->program_accepted_state_ = state;
   ++p_->program_accepted_state_revision_;
 }
+void AmrSystem::restore_checkpoint_accepted_state(const std::vector<std::uint8_t>& state) {
+  const bool has_program =
+      !p_->program_.installed_hash_.empty() || !p_->program_accepted_state_.empty();
+  if (has_program != !state.empty())
+    throw std::runtime_error("AMR checkpoint accepted state disagrees with the installed Program");
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AMR checkpoint accepted state requires a materialized runtime hierarchy");
+  runtime::amr::PersistentTaggingState tagging_candidate;
+  if (has_program) {
+    const auto accepted = runtime::program::deserialize_amr_program_accepted_state(state);
+    tagging_candidate =
+        p_->runtime->prepare_checkpoint_tagging_state(accepted.tagging_hysteresis_state);
+  } else {
+    tagging_candidate = p_->runtime->prepare_checkpoint_tagging_state({});
+  }
+  if (p_->program_accepted_state_revision_ == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("AMR checkpoint accepted-state revision overflow");
+  std::vector<std::uint8_t> bytes_candidate = state;
+  p_->program_accepted_state_.swap(bytes_candidate);
+  p_->runtime->commit_checkpoint_tagging_state(std::move(tagging_candidate));
+  ++p_->program_accepted_state_revision_;
+}
 void AmrSystem::materialize_program_restart_histories(const std::vector<std::uint8_t>& bytes,
                                                       const std::vector<std::string>& names,
                                                       const std::vector<int>& depths,
@@ -3425,6 +3464,53 @@ std::vector<std::vector<std::string>> AmrSystem::program_flux_ledger_manifest() 
                     orientation(entry.measure.orientation),
                     std::to_string(entry.measure.face_measure),
                     std::to_string(entry.measure.substep_duration)});
+  return rows;
+}
+std::vector<std::vector<std::string>> AmrSystem::program_interface_flux_ledger_manifest() const {
+  std::vector<std::vector<std::string>> rows;
+  if (p_->program_accepted_state_.empty())
+    return rows;
+  const auto state =
+      runtime::program::deserialize_amr_program_accepted_state(p_->program_accepted_state_);
+  const auto orientation = [](amr::InterfaceFluxOrientation value) {
+    switch (value) {
+      case amr::InterfaceFluxOrientation::CoarseOutward:
+        return "coarse_outward";
+      case amr::InterfaceFluxOrientation::FineOutward:
+        return "fine_outward";
+    }
+    return "invalid";
+  };
+  rows.reserve(state.accepted_interface_flux_ledger.size());
+  for (const auto& entry : state.accepted_interface_flux_ledger)
+    rows.push_back({entry.key.interface_identity,
+                    std::to_string(entry.key.topology_epoch),
+                    std::to_string(entry.key.coarse_level),
+                    std::to_string(entry.key.fine_level),
+                    std::to_string(entry.key.clock.level),
+                    std::to_string(entry.key.clock.macro_step),
+                    std::to_string(entry.key.clock.phase.numerator),
+                    std::to_string(entry.key.clock.phase.denominator),
+                    std::to_string(entry.key.clock.physical_time),
+                    entry.key.stage_identity,
+                    std::to_string(entry.key.interval.begin.level),
+                    std::to_string(entry.key.interval.begin.macro_step),
+                    std::to_string(entry.key.interval.begin.phase.numerator),
+                    std::to_string(entry.key.interval.begin.phase.denominator),
+                    std::to_string(entry.key.interval.begin.physical_time),
+                    std::to_string(entry.key.interval.end.level),
+                    std::to_string(entry.key.interval.end.macro_step),
+                    std::to_string(entry.key.interval.end.phase.numerator),
+                    std::to_string(entry.key.interval.end.phase.denominator),
+                    std::to_string(entry.key.interval.end.physical_time),
+                    orientation(entry.key.orientation),
+                    std::to_string(entry.key.left_block),
+                    std::to_string(entry.key.right_block),
+                    std::to_string(entry.measure.stage_weight.numerator),
+                    std::to_string(entry.measure.stage_weight.denominator),
+                    std::to_string(entry.measure.face_measure),
+                    std::to_string(entry.measure.substep_duration),
+                    entry.measure.stage_weight_resolved ? "resolved" : "unresolved"});
   return rows;
 }
 std::vector<std::vector<std::string>> AmrSystem::program_sync_manifest() const {

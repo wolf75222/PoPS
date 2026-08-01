@@ -269,16 +269,20 @@ def validate_shared_interface_program(
         neighbours[right].add(left)
 
     if target == "amr_system":
-        from pops.mesh._amr import FrozenHierarchy
+        from pops.mesh._amr import FrozenHierarchy, RegridSchedule
 
         if resolved_hierarchy is None:
             raise TypeError("shared-interface AMR validation requires a resolved hierarchy")
         hierarchy = resolved_hierarchy.plan
-        if hierarchy.level_count != 1 or type(hierarchy.regrid) is not FrozenHierarchy:
+        frozen = type(hierarchy.regrid) is FrozenHierarchy
+        dynamic_refined = (
+            type(hierarchy.regrid) is RegridSchedule and hierarchy.level_count >= 2
+        )
+        if not frozen and not dynamic_refined:
             raise NotImplementedError(
                 "shared block interfaces on AMR require a prepared interface-flux reflux ledger; "
-                "the installed scheduler supports only one frozen level and refuses refined or "
-                "regridded hierarchies during resolve"
+                "frozen hierarchies support any materialized L0 prefix, while dynamic regrid "
+                "requires at least two configured levels and the complete prefix active at bind"
             )
 
     participant_names = frozenset(neighbours)
