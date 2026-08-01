@@ -1135,6 +1135,11 @@ sources = ["tests/cpp/integration/amr/test_program_reflux_ledger.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_temporal_partition_restart"
+sources = ["tests/cpp/integration/amr/test_temporal_partition_restart.cpp"]
+labels = ["integration", "runtime", "amr", "medium"]
+
+[[cpp.suite]]
 name = "test_residual_operator"
 sources = ["tests/cpp/unit/runtime/test_residual_operator.cpp"]
 labels = ["unit", "runtime", "fast"]
