@@ -208,8 +208,8 @@ class _ProgramBase:
         storage_change: Any,
         outward_boundary_flux: Any,
         sources: Any,
-        reflux: Any,
-        projection: Any,
+        reflux: Any = None,
+        projection: Any = None,
     ) -> tuple[Any, ...]: ...
 
     # --- solve / commit / board sugar (_ProgramSolve) ---

@@ -99,15 +99,6 @@ def _program_balance_records(
             )
         by_term[term] = value
         record_routes[value.id] = route.token
-    expected = set(BALANCE_TERM_NAMES)
-    for route, by_term in terms.items():
-        if set(by_term) != expected:
-            missing = sorted(expected.difference(by_term))
-            extra = sorted(set(by_term).difference(expected))
-            raise ValueError(
-                "Program balance route %s must record exactly five terms; missing=%s extra=%s"
-                % (route, missing, extra)
-            )
     return operations, record_routes, terms
 
 
@@ -118,13 +109,23 @@ def validate_balance_due_contract(program: Any, contract: Any) -> None:
             "balance due validation requires an exact BalanceDueContract"
         )
     _operations, _records, terms = _program_balance_records(program)
-    missing = sorted(
-        row.route.token for row in contract.routes if row.route.token not in terms
-    )
-    if missing:
+    failures = []
+    for row in contract.routes:
+        expected = set(BALANCE_TERM_NAMES).difference(row.automatic_terms)
+        actual = set(terms.get(row.route.token, {}))
+        if actual != expected:
+            failures.append(
+                "%s missing=%s extra=%s"
+                % (
+                    row.route.token,
+                    sorted(expected.difference(actual)),
+                    sorted(actual.difference(expected)),
+                )
+            )
+    if failures:
         raise ValueError(
             "ConsumerGraph Balance routes have no Program.record_balance producer: %s"
-            % ", ".join(missing)
+            % "; ".join(failures)
         )
 
 
@@ -137,6 +138,7 @@ def prepare_balance_due_lowering(
         raise TypeError(
             "balance due lowering requires an exact BalanceDueContract"
         )
+    validate_balance_due_contract(program, contract)
     operations, record_routes, terms = _program_balance_records(program)
     route_periods = {
         route: (

@@ -34,17 +34,19 @@ class _ProgramDiagnostics(_ProgramBase):
         storage_change: Any,
         outward_boundary_flux: Any,
         sources: Any,
-        reflux: Any,
-        projection: Any,
+        reflux: Any = None,
+        projection: Any = None,
     ) -> tuple[ProgramValue, ...]:
         """Publish one exact five-term balance into the current native attempt.
 
-        Every term is a signed, time-integrated increment for this Program invocation and
-        must be an additive global Program reduction (sum/dot), or scalar arithmetic composed
-        exclusively from such reductions and exact literals. The native mailbox accumulates
-        these increments across cadence substeps in the same public macro-step. Raw Python values,
-        extrema/norm reductions, and rank-local runtime scalars are rejected. The five records are
-        attempt-local: a rejected step or consumer rollback cannot leave evidence for a later sample.
+        Every explicitly authored term is a signed, time-integrated increment for this Program
+        invocation and must be an additive global Program reduction (sum/dot), or scalar arithmetic
+        composed exclusively from such reductions and exact literals. A ledger that explicitly
+        delegates ``reflux`` or ``projection`` to its native producer requires the corresponding
+        argument to remain ``None``. The native mailbox accumulates all increments across cadence
+        substeps in the same public macro-step. Raw Python values, extrema/norm reductions, and
+        rank-local runtime scalars are rejected. The records are attempt-local: a rejected step or
+        consumer rollback cannot leave evidence for a later sample.
         """
         from pops._balance_contract import (
             BALANCE_TERM_NAMES,
@@ -90,10 +92,47 @@ class _ProgramDiagnostics(_ProgramBase):
                 "only from global reductions; got scalar op %r" % (term, value.op)
             )
 
+        automatic = set(ledger.automatic_terms)
+        for name in automatic:
+            if supplied[name] is not None:
+                raise ValueError(
+                    "record_balance %s is owned by the ledger's native automatic producer; "
+                    "leave it as None" % name
+                )
         terms = {
             name: require_reduced(supplied[name], name, set())
             for name in BALANCE_TERM_NAMES
+            if name not in automatic
         }
+        if automatic:
+            expected_component = ledger.component
+
+            def reduced_components(
+                value: ProgramValue, term: str, seen: set[int]
+            ) -> set[int]:
+                if value.id in seen:
+                    return set()
+                seen.add(value.id)
+                if value.op == "reduce":
+                    component = value.attrs.get("comp")
+                    if value.attrs.get("kind") != "sum" or type(component) is not int:
+                        raise ValueError(
+                            "record_balance %s must use component-qualified sum reductions "
+                            "when native terms are selected" % term
+                        )
+                    return {component}
+                components: set[int] = set()
+                for item in value.inputs:
+                    components.update(reduced_components(item, term, seen))
+                return components
+
+            for name, value in terms.items():
+                components = reduced_components(value, name, set())
+                if components != {expected_component}:
+                    raise ValueError(
+                        "record_balance %s selects components %s but the native ledger owns "
+                        "component %d" % (name, sorted(components), expected_component)
+                    )
         blocks = {value.block for value in terms.values()}
         if None in blocks or len(blocks) != 1:
             raise ValueError(
@@ -114,6 +153,7 @@ class _ProgramDiagnostics(_ProgramBase):
                 terms[name].block,
             )
             for name in BALANCE_TERM_NAMES
+            if name in terms
         )
 
     @atomic_authoring
