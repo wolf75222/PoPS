@@ -4203,6 +4203,9 @@ class AmrRuntime {
               carrier.field_identities.push_back(std::move(identity).release());
             }
             carrier.context = nf.plan.boundary_context;
+            // The materialized hierarchy level, not the unqualified authoring baseline, owns the
+            // boundary evaluation point consumed by both level-local and composite providers.
+            carrier.context.point.level = level;
             carrier.context.states = carrier.state_buffers.data();
             carrier.context.state_distributions = carrier.state_distributions.data();
             carrier.context.state_identities = carrier.state_identities.data();

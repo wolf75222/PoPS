@@ -586,6 +586,10 @@ class CompositeFacPoisson {
 
     FieldBoundaryExecutionContext staged = context;
     staged.failure = &boundary_failure_;
+    // The level argument is the prepared hierarchy authority.  Callers may carry an unqualified
+    // authoring baseline (including the default level zero) while materializing the same boundary
+    // plan on every level; never let that baseline leak into a level-qualified residual/JVP.
+    staged.point.level = level;
     if (!boundary_kernel_.observes_iteration)
       staged.point.iteration = 0;
     try {
@@ -897,12 +901,6 @@ class CompositeFacPoisson {
       phi_probe_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
     }
     boundary_probe_snapshot_ = MultiFab(ba_c_, dm_c_, 1, boundary_view_c_.n_grow());
-    phi_published_snapshot_.clear();
-    phi_published_snapshot_.reserve(static_cast<std::size_t>(n_levels_));
-    for (int level = 0; level < n_levels_; ++level) {
-      MultiFab& phi = phi_level(level);
-      phi_published_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
-    }
   }
 
   Real exact_zero_composite_residual_(bool general) {
@@ -1007,47 +1005,33 @@ class CompositeFacPoisson {
     require_complete_level_boundary_contexts_();
     require_supported_level_boundary_geometry_();
     validate_field_newton_options(nonlinear);
-    for (int level = 0; level < n_levels_; ++level) {
-      MultiFab& phi = phi_level(level);
-      copy_all_cells_(phi_published_snapshot_[static_cast<std::size_t>(level)], phi);
-    }
-    auto restore = [&]() {
-      for (int level = 0; level < n_levels_; ++level)
-        copy_all_cells_(phi_level(level), phi_published_snapshot_[static_cast<std::size_t>(level)]);
-    };
+    if (!fully_refined_solver_)
+      return SolveReport::capability_failure();
 
-    SolveReport report;
-    Real base = Real(1);
-    try {
-      for (int iteration = 0; iteration < nonlinear.max_iterations; ++iteration) {
-        set_boundary_iteration_(iteration);
-        boundary_failure_.reset();
-        const Real residual =
-            solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol, options_.abs_tol);
-        const bool failed = boundary_failure_.synchronize_across_ranks();
-        if (failed || !std::isfinite(static_cast<double>(residual))) {
-          report.iters = iteration + 1;
-          report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kRejectAttempt);
-          restore();
-          return report;
-        }
-        if (iteration == 0)
-          base = residual > Real(0) ? residual : Real(1);
-        report.iters = iteration + 1;
-        report.rel_residual = residual / base;
-        last_residual_ = residual;
-        if (residual <= nonlinear.tolerance * base) {
-          report.mark_solved();
-          return report;
-        }
-      }
-    } catch (...) {
-      restore();
-      throw;
+    const int finest = n_levels_ - 1;
+    GeometricMG& solver = *fully_refined_solver_;
+    if (has_eps_) {
+      if (has_eps_y_)
+        solver.set_epsilon_anisotropic(eps_level(finest), eps_y_level(finest));
+      else
+        solver.set_epsilon(eps_level(finest));
     }
-    report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kRejectAttempt);
-    restore();
-    return report;
+    if (has_cross_)
+      solver.set_cross_terms(a_xy_level(finest), a_yx_level(finest));
+    solver.set_boundary_context(boundary_context_for_level_(finest));
+    copy0_(solver.rhs(), rhs_level(finest));
+    copy0_(solver.phi(), phi_level(finest));
+    last_solve_report_ = solver.solve_boundary_newton(nonlinear);
+    device_fence();
+    last_residual_ = last_solve_report_.solved() ? solver.current_residual()
+                                                 : std::numeric_limits<Real>::infinity();
+    record_residual(last_solve_report_.iters, last_residual_);
+    if (last_solve_report_.solved()) {
+      copy0_(phi_level(finest), solver.phi());
+      cascade_avgdown_();
+      device_fence();
+    }
+    return last_solve_report_;
   }
 
  private:
@@ -1315,7 +1299,6 @@ class CompositeFacPoisson {
   FieldBoundaryFailure boundary_failure_{};
   std::vector<MultiFab> phi_probe_snapshot_;  ///< persistent full-state snapshots for exact R(0)
   MultiFab boundary_probe_snapshot_;          ///< persistent generated-boundary view snapshot
-  std::vector<MultiFab> phi_published_snapshot_;  ///< persistent rollback state for boundary FAS
   bool has_field_nonlinear_options_ = false;
   FieldNewtonOptions field_nonlinear_options_{};
   SolveReport last_solve_report_{};
@@ -1534,16 +1517,6 @@ class CompositeFacPoisson {
           "CompositeFacPoisson level-qualified dynamic boundaries require partially refined "
           "patches to remain strictly inside each physical domain; unsupported level " +
           std::to_string(unsupported_level - 1));
-  }
-
-  void set_boundary_iteration_(int iteration) {
-    boundary_context_.point.iteration = iteration;
-    if (has_level_qualified_boundary_contexts_)
-      for (auto& context : boundary_level_contexts_)
-        context.point.iteration = iteration;
-    mg_.set_boundary_context(boundary_context_for_level_(0));
-    if (fully_refined_solver_)
-      fully_refined_solver_->set_boundary_context(boundary_context_for_level_(n_levels_ - 1));
   }
 
   // ADC-636: the general FAC (N levels / adjacent patches / MPI). Declared here; DEFINED out-of-line
