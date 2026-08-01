@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 EVIDENCE_SCHEMA_VERSION = 4
+PUBLIC_API_EVIDENCE_SCHEMA_VERSION = 3
 
 
 class PreflightError(RuntimeError):
@@ -236,6 +237,96 @@ def _wheel_evidence(directory: Path, gates: dict[str, Any], contract: Any) -> No
         raise PreflightError("release wheel name/version disagrees with the release contract")
 
 
+def _public_api_evidence(
+    path: Path,
+    release_evidence: dict[str, Any],
+    contract: Any,
+) -> None:
+    resolved = path.expanduser().resolve()
+    if _inside(ROOT, resolved) or not resolved.is_file():
+        raise PreflightError(
+            "installed public API evidence must be one file outside the checkout")
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise PreflightError("installed public API evidence is unreadable") from exc
+    expected = {
+        "schema_version",
+        "producer",
+        "wheel_path",
+        "wheel_sha256",
+        "distribution",
+        "typed_payload_files",
+        "typed_payload_sha256",
+        "public_api_sha256",
+        "public_names",
+        "pure_authoring",
+        "qualified_handles",
+        "py_typed",
+        "installed",
+        "installed_distribution",
+        "installed_package",
+        "installed_typed_payload_sha256",
+        "installed_public_api_sha256",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected \
+            or payload["schema_version"] != PUBLIC_API_EVIDENCE_SCHEMA_VERSION:
+        raise PreflightError("installed public API evidence has an unknown schema")
+    producer = {
+        "script": "scripts/prove_public_api_parity.py",
+        "sha256": hashlib.sha256(
+            (ROOT / "scripts" / "prove_public_api_parity.py").read_bytes()
+        ).hexdigest(),
+    }
+    if payload["producer"] != producer:
+        raise PreflightError("installed public API evidence has another producer")
+    wheel = release_evidence["gates"]["official_build"]["evidence"]["wheel"]
+    if payload["wheel_sha256"] != wheel["sha256"]:
+        raise PreflightError("installed public API evidence belongs to another wheel")
+    distribution = payload["distribution"]
+    installed_distribution = payload["installed_distribution"]
+    if not isinstance(distribution, dict) or set(distribution) != {
+            "name", "version", "metadata_sha256"}:
+        raise PreflightError("public API wheel distribution identity is malformed")
+    if installed_distribution != distribution:
+        raise PreflightError("installed distribution identity differs from the release wheel")
+    if not isinstance(distribution["name"], str) \
+            or not isinstance(distribution["version"], str) \
+            or distribution["name"].lower() != "pops" \
+            or distribution["version"] != contract.PACKAGE_VERSION:
+        raise PreflightError("public API distribution identity disagrees with the release")
+    digests = (
+        distribution["metadata_sha256"],
+        payload["wheel_sha256"],
+        payload["typed_payload_sha256"],
+        payload["installed_typed_payload_sha256"],
+        payload["public_api_sha256"],
+        payload["installed_public_api_sha256"],
+    )
+    if any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+           for value in digests):
+        raise PreflightError("installed public API evidence contains an invalid digest")
+    if payload["installed_typed_payload_sha256"] != payload["typed_payload_sha256"] \
+            or payload["installed_public_api_sha256"] != payload["public_api_sha256"]:
+        raise PreflightError("installed public API or typing digest differs from source")
+    if payload["installed"] is not True or payload["pure_authoring"] is not True \
+            or payload["qualified_handles"] is not True or payload["py_typed"] is not True:
+        raise PreflightError("installed public API evidence did not prove the final contract")
+    if not isinstance(payload["typed_payload_files"], int) \
+            or payload["typed_payload_files"] <= 0 \
+            or not isinstance(payload["public_names"], list) \
+            or not payload["public_names"] \
+            or not all(isinstance(name, str) and name for name in payload["public_names"]):
+        raise PreflightError("installed public API evidence has an empty public surface")
+    if not isinstance(payload["installed_package"], str):
+        raise PreflightError("installed public API package path is malformed")
+    installed_package = Path(payload["installed_package"]).resolve()
+    runtime_package = Path(release_evidence["runtime"]["pops_file"]).resolve().parent
+    if installed_package != runtime_package:
+        raise PreflightError(
+            "public API parity was not proven on the authenticated installed runtime")
+
+
 def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
     examples = gates["examples"]["evidence"]
     reopen = gates["artifact_reopen"]["evidence"]
@@ -297,7 +388,12 @@ def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
             raise PreflightError("release evidence restart proof markers drifted for %s" % key)
 
 
-def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -> None:
+def _evidence(
+    path: Path,
+    contract: Any,
+    commit: str,
+    runtime: dict[str, str],
+) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     expected = {"schema_version", "producer", "commit_sha", "package_version", "contract_sha256",
                 "artifact_directory", "runtime", "gates"}
@@ -361,6 +457,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
     if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
         raise PreflightError("release evidence Python required-lane selection drifted")
     _examples_evidence(directory, gates)
+    return payload
 
 
 def main() -> int:
@@ -369,10 +466,18 @@ def main() -> int:
     parser.add_argument("--tag")
     parser.add_argument("--installed", action="store_true")
     parser.add_argument("--evidence", type=Path)
+    parser.add_argument("--public-api-evidence", type=Path)
     args = parser.parse_args()
     try:
-        if args.release and (not args.tag or not args.installed or args.evidence is None):
-            raise PreflightError("--release requires --tag, --installed and --evidence")
+        if args.release and (
+            not args.tag
+            or not args.installed
+            or args.evidence is None
+            or args.public_api_evidence is None
+        ):
+            raise PreflightError(
+                "--release requires --tag, --installed, --evidence and "
+                "--public-api-evidence")
         contract = _generated()
         checks = _static_contract(contract)
         if args.release:
@@ -381,8 +486,16 @@ def main() -> int:
             if _run("git", "status", "--porcelain"):
                 raise PreflightError("release checkout is dirty")
             runtime = _installed_contract(contract)
-            _evidence(args.evidence, contract, commit, runtime)
-            checks.extend(("tag", "changelog", "installed", "evidence", "clean"))
+            release_evidence = _evidence(args.evidence, contract, commit, runtime)
+            _public_api_evidence(args.public_api_evidence, release_evidence, contract)
+            checks.extend((
+                "tag",
+                "changelog",
+                "installed",
+                "evidence",
+                "public_api_parity",
+                "clean",
+            ))
         elif args.tag:
             _tag_contract(contract.PACKAGE_VERSION, args.tag)
             checks.extend(("tag", "changelog"))
