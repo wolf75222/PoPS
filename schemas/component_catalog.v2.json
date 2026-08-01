@@ -2,7 +2,7 @@
   "catalog_schema_version": 1,
   "component_manifest_schema_version": 2,
   "route_registry_version": 2,
-  "capability_vocabulary_version": 2,
+  "capability_vocabulary_version": 4,
   "interface_vocabulary": [
     {
       "name": "requirement",
@@ -95,7 +95,7 @@
     "maximum_stencil_terms": 16,
     "maximum_instruction_count": 128,
     "non_finite_policy": "reject",
-    "persistent_hysteresis": false
+    "persistent_hysteresis": true
   },
   "native_interface_abis": [
     {

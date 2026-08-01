@@ -393,6 +393,9 @@ class AmrSystem {
       std::shared_ptr<component::LoadedComponent> component);
   /// Roll back a failed all-interface post-block installation transaction.
   POPS_EXPORT void discard_interface_flux_components();
+  /// Internal bind transaction checkpoint for incremental per-level interface installation.
+  POPS_EXPORT std::size_t interface_flux_installation_checkpoint() const;
+  POPS_EXPORT void rollback_interface_flux_installations(std::size_t accepted_size);
   POPS_EXPORT std::size_t interface_evaluation_count(const std::string& identity,
                                                      int level = 0) const;
 
@@ -451,7 +454,8 @@ class AmrSystem {
 
   /// Install the exact prepared AMRTagging program resolved from the layout authority.
   /// This is the only tagging installation seam: the runtime never synthesizes a scalar
-  /// threshold, component-zero default, or shared-potential fallback.
+  /// threshold, component-zero default, or shared-potential fallback. The native tagger owns
+  /// `min_cycles > 0` as accepted sparse state and persists it through AMR checkpoint/restart.
   void set_bootstrap_tagging(
       const std::vector<std::string>& leaf_subject_kinds,
       const std::vector<std::string>& leaf_subject_identities,
@@ -833,6 +837,10 @@ class AmrSystem {
   /// Replace the accepted image during strict restart.  Each replacement advances a revision observed
   /// by the persistent AmrProgramContext before its next attempt; no stale context state is reused.
   POPS_EXPORT void restore_program_accepted_state(const std::vector<std::uint8_t>& state);
+  /// Strict checkpoint counterpart: authenticate the complete accepted image and its runtime-owned
+  /// tagging payload before atomically publishing either. A rejected payload changes neither bytes,
+  /// revision nor the live AMR hysteresis state.
+  POPS_EXPORT void restore_checkpoint_accepted_state(const std::vector<std::uint8_t>& state);
   /// Validate the exact history registry encoded by @p state and materialize its native per-level
   /// rings on the already rebuilt restart hierarchy. This is a transactional restart seam: it never
   /// advances the Program and refuses any name/depth/component/owner mismatch before allocation.
@@ -845,6 +853,7 @@ class AmrSystem {
   POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_clock_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_flux_ledger_manifest() const;
+  POPS_EXPORT std::vector<std::vector<std::string>> program_interface_flux_ledger_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_sync_manifest() const;
 
   /// @name Runtime freeze lifecycle (ADC-592, parity with System)

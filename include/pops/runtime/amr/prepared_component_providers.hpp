@@ -469,7 +469,7 @@ class PreparedTaggerComponent final {
     };
     if (program.min_cycles != 0)
       throw std::invalid_argument(
-          "external AMR Tagger minimum_cycles requires native persistent tagging state");
+          "external AMR Tagger minimum_cycles requires the checkpointed persistent-state adapter");
     if (program.non_finite_policy != spec_.non_finite_policy ||
         program.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1 ||
         program.clock_identity != spec_.clock_identity || program.leaves.empty() ||
