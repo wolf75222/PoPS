@@ -97,6 +97,11 @@ fault is removed, the same prepared component returns a finite result and the
 unchanged RuntimeInstance accepts the retry. The selected test defines no step
 wrapper and never replaces a native engine or step target.
 
+That installed proof uses the MPI-enabled module with a one-rank
+`MPI_COMM_WORLD`. The System adapter authenticates and accepts this singleton
+communicator explicitly; it still refuses multi-rank external FieldSolver
+execution until a collective distributed solve contract is proved.
+
 The positive RuntimeInstance proof is also a compiled route. It builds and
 executes one Uniform artifact, one AMR artifact, and one two-layout artifact
 with a native conservative Transfer. Every execution returns the exact public
@@ -104,10 +109,12 @@ with a native conservative Transfer. Every execution returns the exact public
 run, clock, step, and transaction evidence. The multi-layout executor
 authenticates each installed child Program, creates one domain-separated hash
 for the ordered Program set, and projects local block/parameter/cache metadata
-into deterministic layout-qualified report rows. Runtime inspection consumes
-that same complete `ProgramRuntimeReport`; the selected test proves direct and
-inspection parity without a wrapper, fake engine, replaced step target, or
-monkeypatch.
+into deterministic layout-qualified report rows. The block bijection and
+parameter occupancy come from the installed native `program_block_map()` and
+`program_param_count()` accessors; the report does not infer an identity map
+from missing bindings. Runtime inspection consumes that same complete
+`ProgramRuntimeReport`; the selected test proves direct and inspection parity
+without a wrapper, fake engine, replaced step target, or monkeypatch.
 
 ## Gate modes
 
