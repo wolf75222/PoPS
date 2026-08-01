@@ -136,6 +136,16 @@ def _option_family(configuration, prefix: str):
     }
 
 
+def _field_warm_starts(simulation, provider_slot: str) -> tuple[np.ndarray, ...]:
+    return tuple(
+        np.asarray(
+            simulation.field_potential_level_global(provider_slot, level),
+            dtype=np.float64,
+        ).copy()
+        for level in range(simulation.field_provider_levels(provider_slot))
+    )
+
+
 @pytest.mark.parametrize(
     "solver",
     (GeometricMG(), GeometricMG(fac=CompositeFAC())),
@@ -189,7 +199,7 @@ def test_partial_fac_overrides_do_not_inherit_or_replace_geometric_mg_options() 
 
 
 def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
-    isolated_native_cache, native_cxx, kokkos_root,
+    isolated_native_cache, native_cxx, kokkos_root, monkeypatch, tmp_path,
 ) -> None:
     del isolated_native_cache, native_cxx, kokkos_root
     solver = GeometricMG(
@@ -221,3 +231,50 @@ def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
     _assert_options(
         _option_family(provider["solver_configuration"], "fac."), _FAC_CONFIGURED
     )
+
+    accepted_warm_starts = _field_warm_starts(simulation, slot)
+    assert len(accepted_warm_starts) == 2
+    checkpoint = simulation.checkpoint(tmp_path / "qualified-field-warm-start")
+
+    restarted = pops.bind(
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    (restarted_slot,) = restarted.field_provider_slots()
+    assert restarted_slot == slot
+    rollback_warm_starts = _field_warm_starts(restarted, restarted_slot)
+
+    from pops.runtime import _amr_checkpoint_contract as checkpoint_contract
+
+    validate_restored_contract = checkpoint_contract.validate_restored_contract
+
+    def fail_after_exact_field_restore(native, payload):
+        validate_restored_contract(native, payload)
+        raise RuntimeError("injected post-field-restore validation failure")
+
+    monkeypatch.setattr(
+        checkpoint_contract,
+        "validate_restored_contract",
+        fail_after_exact_field_restore,
+    )
+    with pytest.raises(RuntimeError, match="post-field-restore validation failure"):
+        restarted.restart(checkpoint, bit_identical=True)
+    for actual, expected in zip(
+        _field_warm_starts(restarted, restarted_slot),
+        rollback_warm_starts,
+        strict=True,
+    ):
+        np.testing.assert_array_equal(actual, expected)
+
+    monkeypatch.setattr(
+        checkpoint_contract,
+        "validate_restored_contract",
+        validate_restored_contract,
+    )
+    restarted.restart(checkpoint, bit_identical=True)
+    for actual, expected in zip(
+        _field_warm_starts(restarted, restarted_slot),
+        accepted_warm_starts,
+        strict=True,
+    ):
+        np.testing.assert_array_equal(actual, expected)
