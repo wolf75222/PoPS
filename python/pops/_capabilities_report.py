@@ -463,6 +463,47 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             source=source,
         ),
         _row(
+            "riemann:typed_failure_outcome",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "Rusanov, HLL, HLLC, and Roe return one device-copyable FluxEvaluation with "
+                "typed status, stability bound, and reason code; face failures are reduced and "
+                "reject the owning transaction, but no fallback solver can be selected"
+            ),
+            source=source,
+        ),
+        _row(
+            "riemann:prepared_recovery_policy",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "there is no prepared ordered Riemann recovery chain, requested-versus-used "
+                "solver outcome, block counter, or restart metadata; a typed candidate failure "
+                "rejects the step and never substitutes another solver"
+            ),
+            requested=(
+                "prepared Riemann recovery chain with requested/used solver diagnostics"
+            ),
+            available_route=(
+                "one explicitly selected Riemann solver with typed rejection and transactional "
+                "rollback"
+            ),
+            alternative=(
+                "select one supported Riemann route explicitly and consume rejection through "
+                "the step retry/failure policy"
+            ),
+            source=source,
+        ),
+        _row(
             "amr:field_coupled_rhs_jacvec",
             layout="amr",
             backend="none",
