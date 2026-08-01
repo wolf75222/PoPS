@@ -11,6 +11,7 @@ fallback formats are refused.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import hashlib
 from typing import Any, TypeVar, cast
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _VERSION
@@ -774,6 +775,13 @@ def _restart_topology_image(sim):
     return restart_topology_image(sim)
 
 
+def _restart_accepted_contract_identity(sim):
+    from pops.identity import make_identity
+    from pops.runtime._amr_checkpoint_contract import contract_for
+
+    return make_identity("restart-accepted-contract", contract_for(sim)).token
+
+
 def _restart_collective_phase(
     owner: Any,
     phase: str,
@@ -802,6 +810,62 @@ def _restart_collective_phase(
     if any(row["value"] != rows[0]["value"] for row in rows[1:]):
         raise RuntimeError("AMR RegridOnRestart ranks returned divergent %s evidence" % phase)
     return cast(_RestartPhaseT, value)
+
+
+def _restart_history_identity(owner, sim, *, phase):
+    """Hash every dense accepted history slot into one phase-local consensus witness.
+
+    RegridOnRestart is a cold path, so this deliberately favors an exact all-rank proof over hot-path
+    cost. Each slot digest is closed by a checkpoint-communicator consensus before the next
+    collective starts; one rank can therefore never accept a rank-local history remap silently.
+    The witness is intentionally not compared across phases: a different hierarchy changes the
+    dense level-domain encoding and legitimately interpolates newly refined cells. Accepted-solution
+    conservation is proved separately from native composite component integrals.
+    """
+    plan = _restart_collective_phase(
+        owner,
+        "%s history plan" % phase,
+        lambda: [
+            {
+                "name": str(name),
+                "depth": int(sim.history_depth(name)),
+                "ncomp": int(sim.history_ncomp(name)),
+                "initialized": bool(sim.history_initialized(name)),
+                "fill_count": int(sim.history_fill_count(name)),
+            }
+            for name in sim.history_names()
+        ],
+    )
+
+    def slot_image(name, slot):
+        import numpy as np
+
+        values = np.asarray(sim.history_global(name, slot), dtype=np.dtype("<f8")).ravel()
+        return {
+            "slot": slot,
+            "size": int(values.size),
+            "dt": float(sim.history_slot_dt(name, slot)).hex(),
+            "sha256": hashlib.sha256(values.tobytes(order="C")).hexdigest(),
+        }
+
+    rows = []
+    for history in plan:
+        row = dict(history)
+        row["slots"] = [
+            _restart_collective_phase(
+                owner,
+                "%s history %s slot %d" % (phase, history["name"], slot),
+                lambda name=history["name"], slot=slot: slot_image(name, slot),
+            )
+            for slot in range(history["depth"])
+        ]
+        rows.append(row)
+    from pops.identity import make_identity
+
+    return make_identity(
+        "restart-history-image",
+        {"schema_version": 1, "histories": rows},
+    ).token
 
 
 def _restart_composite_integrals(owner, sim, *, phase):
@@ -991,6 +1055,14 @@ def apply_v3(owner, sim, prepared):
             "recorded topology image",
             lambda: _restart_topology_image(sim),
         )
+        before_contract_identity = _restart_collective_phase(
+            owner,
+            "recorded accepted-contract identity",
+            lambda: _restart_accepted_contract_identity(sim),
+        )
+        before_history_identity = _restart_history_identity(
+            owner, sim, phase="recorded hierarchy"
+        )
         before_integrals = _restart_composite_integrals(owner, sim, phase="recorded hierarchy")
         _restart_collective_phase(
             owner,
@@ -1007,9 +1079,17 @@ def apply_v3(owner, sim, prepared):
             "transformed topology image",
             lambda: _restart_topology_image(sim),
         )
+        after_contract_identity = _restart_collective_phase(
+            owner,
+            "transformed accepted-contract identity",
+            lambda: _restart_accepted_contract_identity(sim),
+        )
+        after_history_identity = _restart_history_identity(
+            owner, sim, phase="transformed hierarchy"
+        )
         after_integrals = _restart_composite_integrals(owner, sim, phase="transformed hierarchy")
         receipt = {
-            "schema_version": 1,
+            "schema_version": 2,
             "policy_identity": prepared.hierarchy_identity,
             "changed": (
                 before_topology["topology_identity"] != after_topology["topology_identity"]
@@ -1018,6 +1098,10 @@ def apply_v3(owner, sim, prepared):
             "accepted_macro_step": macro_step,
             "before": before_topology,
             "after": after_topology,
+            "accepted_contract_identity_before": before_contract_identity,
+            "accepted_contract_identity_after": after_contract_identity,
+            "history_consensus_identity_before": before_history_identity,
+            "history_consensus_identity_after": after_history_identity,
             "composite_integrals_before": before_integrals,
             "composite_integrals_after": after_integrals,
         }

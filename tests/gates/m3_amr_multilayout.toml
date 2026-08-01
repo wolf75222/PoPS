@@ -202,6 +202,14 @@ nodeid = "tests/python/integration/amr/test_amr_regrid_on_restart.py::test_regri
 issue = "ADC-678"
 requirement = "accepted_state"
 polarity = "refusal"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/amr/test_external_amr_providers.py::test_external_tagger_requires_exact_candidate_program_capability"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "refusal"
 kind = "ctest"
 target = "test_amr_native_loader"
 test_regex = "^test_amr_native_loader\\.PreparedAmrProvidersExecuteExactTablesAndProvenance$"
@@ -310,6 +318,15 @@ polarity = "positive"
 kind = "mpi_python"
 target = "restart_hierarchy_policy"
 nodeid = "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::test_regrid_on_restart_mpi_collective_rollback_and_lineage"
+nproc = 2
+
+[[check]]
+issue = "ADC-678"
+requirement = "restart_hierarchy_policy"
+polarity = "positive"
+kind = "mpi_python"
+target = "restart_hierarchy_policy"
+nodeid = "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::test_regrid_on_restart_mpi_shared_interface_transaction"
 nproc = 2
 
 [[check]]

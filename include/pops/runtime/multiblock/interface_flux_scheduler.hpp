@@ -537,7 +537,7 @@ class InterfaceFluxScheduler {
                                    "replacement registry materialization");
     }
 
-    std::exception_ptr registry_failure;
+    std::exception_ptr structural_registry_failure;
     try {
       // Bind bootstrap authenticates L0 before the native hierarchy creates L1, then installs the
       // fine route immediately afterwards in the same bind transaction. Only that explicit
@@ -548,14 +548,14 @@ class InterfaceFluxScheduler {
           !candidate.has_interfaces(active_level_count - 1);
       if (!incremental_bind_prefix)
         candidate.require_complete_active_level_registry_(active_level_count);
-      if (collective_world && !candidate.registry_agrees_across_ranks_())
-        throw std::runtime_error(
-            "multi-block interface replacement registry differs across MPI ranks");
     } catch (...) {
-      registry_failure = std::current_exception();
+      structural_registry_failure = std::current_exception();
     }
-    finish_collective_preflight_(collective_world, registry_failure,
-                                 "replacement registry completeness");
+    finish_collective_preflight_(collective_world, structural_registry_failure,
+                                 "replacement registry structural completeness");
+    if (collective_world && !candidate.registry_agrees_across_ranks_())
+      throw std::runtime_error(
+          "multi-block interface replacement registry differs across MPI ranks");
     return candidate;
   }
 
@@ -568,6 +568,26 @@ class InterfaceFluxScheduler {
       throw std::invalid_argument(
           "multi-block interface registry validation requires a positive active level count");
     require_complete_active_level_registry_(active_level_count);
+  }
+
+  /// Prove that the accepted registry can enter one runtime-owned topology replacement.
+  ///
+  /// This is a non-mutating collective preflight.  It authenticates the complete active-level
+  /// prefix and the exact route/layout/owner identity on every rank before a restart transaction
+  /// enters tagging or clustering.  The later rematerialized() call repeats the same proof against
+  /// the candidate hierarchy before its detached registry is swapped into the runtime.
+  void require_runtime_rematerialization_ready(int active_level_count) const {
+    const bool collective_world = comm_active() && n_ranks() > 1;
+    std::exception_ptr structural_failure;
+    try {
+      require_complete_active_level_registry(active_level_count);
+    } catch (...) {
+      structural_failure = std::current_exception();
+    }
+    finish_collective_preflight_(collective_world, structural_failure,
+                                 "accepted registry structural rematerialization preflight");
+    if (collective_world && !registry_agrees_across_ranks_())
+      throw std::runtime_error("multi-block interface accepted registry differs across MPI ranks");
   }
 
   bool participates(std::size_t block, int level) const {
@@ -888,9 +908,16 @@ class InterfaceFluxScheduler {
 
   bool registry_agrees_across_ranks_() const {
     std::vector<std::pair<std::string_view, std::string_view>> identities;
-    identities.reserve(interfaces_.size());
-    for (const PreparedInterface& prepared : interfaces_)
-      identities.emplace_back(prepared.route.identity, prepared.collective_identity);
+    std::exception_ptr allocation_failure;
+    try {
+      identities.reserve(interfaces_.size());
+      for (const PreparedInterface& prepared : interfaces_)
+        identities.emplace_back(prepared.route.identity, prepared.collective_identity);
+    } catch (...) {
+      allocation_failure = std::current_exception();
+    }
+    finish_collective_preflight_(comm_active() && n_ranks() > 1, allocation_failure,
+                                 "registry identity allocation");
     return all_ranks_agree_exact_ordered_byte_pairs(identities);
   }
 

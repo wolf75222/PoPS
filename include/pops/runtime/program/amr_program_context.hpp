@@ -1591,23 +1591,33 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         (interface_flux_ledger_ &&
          (interface_flux_ledger_->in_transaction() || !interface_flux_ledger_->empty())))
       throw std::logic_error("AMR RegridOnRestart requires a clean accepted Program boundary");
-    if (!interface_flux_group_rates_.empty() && n_ranks() > 1)
-      throw std::runtime_error(
-          "AMR RegridOnRestart supports shared-interface flux groups only in serial until "
-          "distributed dynamic interface rematerialization is authenticated");
   }
 
-  /// Validate every rank-local prerequisite before the Python collective transaction lets peers
-  /// enter the native scientific regrid. Importing the accepted Program image is rollback-safe and
-  /// contains no MPI collective.
+  /// Validate every rank-local prerequisite before peers enter the native scientific regrid.
+  /// Importing the accepted Program image is rollback-safe and local; one explicit status reduction
+  /// closes that phase before the runtime enters its topology-registry collective preflights.
   void preflight_regrid_on_restart_() const {
-    require_restart_regrid_boundary_();
-    import_program_accepted_state_(true);
-    const std::int64_t accepted_step = macro_step();
-    const double accepted_time = facade_->time();
-    if (accepted_step < 0 || accepted_step > std::numeric_limits<int>::max() ||
-        !std::isfinite(accepted_time))
-      throw std::runtime_error("AMR RegridOnRestart requires a representable accepted clock");
+    std::exception_ptr local_failure;
+    try {
+      require_restart_regrid_boundary_();
+      import_program_accepted_state_(true);
+      const std::int64_t accepted_step = macro_step();
+      const double accepted_time = facade_->time();
+      if (accepted_step < 0 || accepted_step > std::numeric_limits<int>::max() ||
+          !std::isfinite(accepted_time))
+        throw std::runtime_error("AMR RegridOnRestart requires a representable accepted clock");
+    } catch (...) {
+      local_failure = std::current_exception();
+    }
+    const long failure_count =
+        n_ranks() > 1 ? all_reduce_sum(local_failure ? 1L : 0L) : (local_failure ? 1L : 0L);
+    if (failure_count != 0) {
+      if (local_failure)
+        std::rethrow_exception(local_failure);
+      throw std::runtime_error(
+          "AMR RegridOnRestart rank-local Program preflight failed on another MPI rank");
+    }
+    // No rank can now leave before the runtime enters its scheduler-registry collective preflight.
     eng_->require_restart_regrid_supported();
     restart_regrid_prepared_ = true;
   }

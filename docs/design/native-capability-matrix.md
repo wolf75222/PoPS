@@ -116,7 +116,8 @@ Supported native routes include:
   as the flat route. Dynamic rematerialization stages a detached collective candidate; a
   rank-local failure restores the accepted layout, topology epoch, evaluator audit count and
   executable registry before retry. Every rank evaluates the canonical shared flux and scatters
-  only to its locally owned endpoint cells.
+  only to its locally owned endpoint cells. Rank-changing dynamic refined rematerialization remains
+  unavailable.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes
@@ -136,6 +137,10 @@ Supported native routes include:
   conditional scratch. A field-dependent boundary closure under `field_coupled=True` is refused
   until a qualified tangent-field solve exists. Core field-coupled `rhs_jacvec` currently has an
   exact provider route only on AMR level 0.
+- Level-local AMR named-field solves materialize linear dynamic-boundary state dependencies once per
+  active level. The context carries that exact level and the matching state layout/distribution;
+  coarse storage is never silently reused by a fine solver. Composite-FAC dynamic boundaries,
+  iterate-dependent multilevel boundaries, and field-to-field dependencies remain unavailable.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
 - Runtime accepted-state checkpoint v5 for Uniform and v7 for AMR. The single-file MPI route captures
@@ -178,10 +183,15 @@ Explicit unsupported rows include:
   tagger/clustering regrid, history/flux topology is rebound, composite conservation is checked, and
   a global transform receipt derives a distinct run identity. Persistent tagging state is restored
   and rolled back with the accepted image, then advanced exactly once by a successful transform.
-  Serial shared-interface groups are rematerialized in the same transaction and execute
-  conservatively after rollback or commit. Uniform, multi-layout, elliptic-field, distributed
-  dynamic shared-interface, and bootstrap-staggered/cache cases remain explicit refusals;
-  `bit_identical=True` is incompatible with the policy.
+  Serial and exact-`MPI_COMM_WORLD` shared-interface groups are rematerialized at unchanged
+  cardinality in the same transaction and execute conservatively after rollback or commit. Uniform,
+  multi-layout, elliptic-field, rank-changing dynamic shared-interface, and
+  bootstrap-staggered/cache cases remain explicit refusals; `bit_identical=True` is incompatible
+  with the policy. Exact phase-local dense-history consensus fingerprints are gathered only on this
+  cold restart path; they prove all-rank agreement per hierarchy rather than bitwise continuity
+  across interpolation. Accepted solution components retain the separate native composite
+  conservation invariant. Fingerprint memory and collective-communication cost scales with all
+  retained slots and active level-domain cells.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 - `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a
@@ -191,7 +201,16 @@ Explicit unsupported rows include:
 - `amr:field_coupled_rhs_jacvec`: AMR level greater than zero is explicitly unavailable because the
   provider ABI does not transport a level-qualified tangent field. The reported error identifies
   the level-0 field-coupled route as the available route; a multi-level request must fail rather
-  than silently reuse the coarse provider.
+  than silently reuse the coarse provider. The shared execution service additionally requires the
+  JVP evaluation point to match the active Program resource level before either the perturbed solve
+  or frozen-state restoration can dispatch. Closing the remaining gap requires a typed per-level
+  tangent-field publication and transactional primal restoration, plus CompositeFAC coupling where
+  selected; the existing primal `fields` table cannot represent that derivative.
+- `amr:composite_dynamic_boundary`: a fully refined hierarchy uses the exact finest-level uniform
+  field solver and receives that level's logical time, state dependencies, distributions, and
+  nonlinear/JVP context. A partially refined FAC hierarchy refuses the same request because its
+  interface correction does not yet own the required homogeneous/JVP boundary operator per level;
+  it never reuses the inhomogeneous primal closure as a correction boundary.
 
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and

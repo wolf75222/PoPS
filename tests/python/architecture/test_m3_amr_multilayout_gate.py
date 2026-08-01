@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 import sys
@@ -26,7 +27,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 40
+    assert len(data["check"]) == 42
 
 
 def test_m3_gate_pins_three_level_subcycled_reflux_proof():
@@ -78,15 +79,13 @@ def test_m3_gate_pins_accepted_interface_ledger_restart_proof():
         "kind": "ctest",
         "target": "test_program_reflux_ledger",
         "test_regex": (
-            "^test_program_reflux_ledger\\."
-            "accepted_checkpoint_state_round_trips_canonically$"
+            "^test_program_reflux_ledger\\.accepted_checkpoint_state_round_trips_canonically$"
         ),
     } in data["check"]
 
     source = ROOT / "tests/cpp/integration/amr/test_program_reflux_ledger.cpp"
     assert (
-        "TEST(test_program_reflux_ledger, "
-        "accepted_checkpoint_state_round_trips_canonically)"
+        "TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonically)"
     ) in source.read_text(encoding="utf-8")
 
 
@@ -120,6 +119,17 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         "issue": "ADC-678",
         "requirement": "accepted_state",
         "polarity": "refusal",
+        "kind": "pytest",
+        "target": "accepted_state",
+        "nodeid": (
+            "tests/python/unit/amr/test_external_amr_providers.py::"
+            "test_external_tagger_requires_exact_candidate_program_capability"
+        ),
+    } in checks
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "refusal",
         "kind": "ctest",
         "target": "test_amr_native_loader",
         "test_regex": (
@@ -127,6 +137,15 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         ),
     } in checks
 
+    provider_source = (
+        ROOT / "tests/python/unit/amr/test_external_amr_providers.py"
+    ).read_text(encoding="utf-8")
+    assert "external AMR Tagger persistent_hysteresis is not implemented" in provider_source
+    runtime_source = (
+        ROOT / "tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp"
+    ).read_text(encoding="utf-8")
+    assert "check_persistent_tagging_hysteresis_and_rollback()" in runtime_source
+    assert "check_persistent_tagging_equality_at_inclusive_boundary()" in runtime_source
     restart_source = (
         ROOT / "tests/python/integration/amr/test_amr_regrid_on_restart.py"
     ).read_text(encoding="utf-8")
@@ -250,6 +269,32 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
         "nodeid": (
             "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::"
             "test_regrid_on_restart_mpi_collective_rollback_and_lineage"
+        ),
+        "nproc": 2,
+    } in checks
+    entrypoint = ROOT / "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py"
+    tree = ast.parse(entrypoint.read_text(encoding="utf-8"), filename=str(entrypoint))
+    run_all = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run_all"
+    )
+    direct_calls = {
+        node.func.id
+        for node in ast.walk(run_all)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {
+        "test_regrid_on_restart_mpi_collective_rollback_and_lineage",
+        "test_regrid_on_restart_mpi_shared_interface_transaction",
+    } <= direct_calls
+    assert {
+        "issue": "ADC-678",
+        "requirement": "restart_hierarchy_policy",
+        "polarity": "positive",
+        "kind": "mpi_python",
+        "target": "restart_hierarchy_policy",
+        "nodeid": (
+            "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::"
+            "test_regrid_on_restart_mpi_shared_interface_transaction"
         ),
         "nproc": 2,
     } in checks
