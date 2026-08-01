@@ -22,7 +22,14 @@ def _runtime_data(layout: Any) -> dict[str, Any]:
 
 
 def _regrid_every(data: dict[str, Any]) -> int:
-    schedule = data["regrid"]["schedule"]
+    regrid = data["regrid"]
+    if regrid == {
+        "schema_version": 1,
+        "authority_type": "amr_regrid",
+        "mode": "frozen",
+    }:
+        return 0
+    schedule = regrid["schedule"]
     if schedule["domain"]["type"] != "accepted_step":
         raise ValueError("native AMR regrid schedule must use AcceptedStep")
     trigger = schedule["trigger"]

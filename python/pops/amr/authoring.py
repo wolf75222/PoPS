@@ -113,12 +113,19 @@ class AMRHierarchy:
 
 @dataclass(frozen=True, slots=True)
 class AMRRegrid:
-    """Accepted-step schedule for transactional hierarchy changes."""
+    """Explicit runtime-regrid policy for an AMR hierarchy.
 
-    schedule: Schedule
+    ``AMRRegrid(schedule=...)`` requests transactional hierarchy changes on an
+    accepted-step cadence. ``AMRRegrid.frozen()`` materializes the initial
+    hierarchy once and never schedules a runtime regrid.
+    """
+
+    schedule: Schedule | None
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
+        if self.schedule is None:
+            return
         if type(self.schedule) is not Schedule:
             raise TypeError("AMRRegrid.schedule must be an exact typed Schedule")
         data = self.schedule.to_data()
@@ -126,7 +133,18 @@ class AMRRegrid:
                 or data["trigger"]["type"] not in {"always", "every"}:
             raise ValueError("AMRRegrid requires an always/every AcceptedStep schedule")
 
+    @classmethod
+    def frozen(cls) -> AMRRegrid:
+        """Build an explicit materialize-once hierarchy policy."""
+        return cls(schedule=None)
+
     def to_data(self) -> dict[str, Any]:
+        if self.schedule is None:
+            return {
+                "schema_version": 1,
+                "authority_type": "amr_regrid",
+                "mode": "frozen",
+            }
         return {
             "schema_version": 1,
             "authority_type": "amr_regrid",

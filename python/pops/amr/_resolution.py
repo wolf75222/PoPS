@@ -459,6 +459,7 @@ def _hierarchy(
         CanonicalOptions,
         ClusteringPolicy,
         DerivedNestingRequirements,
+        FrozenHierarchy,
         HierarchyPlan,
         HierarchyProviderCapabilities,
         HierarchyResolutionContext,
@@ -540,16 +541,23 @@ def _hierarchy(
     def provider(local_id: str, kind: str) -> Handle:
         return Handle(local_id, kind=kind, owner=context.owner)
 
-    due_id = _handle_token(
-        "amr-regrid-event",
-        {
-            "layout_plan": context.layout_plan.qualified_id,
-            "schedule": regrid.schedule.to_data(),
-        },
-    )
-    clock_owner = regrid.schedule.clock.owner
-    if clock_owner is None:
-        raise TypeError("AMR regrid clocks must carry an explicit owner")
+    if regrid.schedule is None:
+        hierarchy_regrid = FrozenHierarchy()
+    else:
+        due_id = _handle_token(
+            "amr-regrid-event",
+            {
+                "layout_plan": context.layout_plan.qualified_id,
+                "schedule": regrid.schedule.to_data(),
+            },
+        )
+        clock_owner = regrid.schedule.clock.owner
+        if clock_owner is None:
+            raise TypeError("AMR regrid clocks must carry an explicit owner")
+        hierarchy_regrid = RegridSchedule(
+            regrid.schedule,
+            EventHandle(clock_owner, "amr.regrid.due.%s" % due_id),
+        )
     patch_layout_data = _protocol(
         patch_layout, "to_data", where="AMR patch layout authority")()
     from pops.amr._load_balance_contract import load_balance_provider_data
@@ -587,10 +595,7 @@ def _hierarchy(
             ),
             CanonicalOptions({"provider": load_balance_data}),
         ),
-        regrid=RegridSchedule(
-            regrid.schedule,
-            EventHandle(clock_owner, "amr.regrid.due.%s" % due_id),
-        ),
+        regrid=hierarchy_regrid,
     )
     from pops.mesh._amr.hierarchy_native import prepared_hierarchy_native_provider
 
@@ -628,6 +633,8 @@ def resolve_amr_authorities(
     context: AMRResolutionContext,
 ) -> ResolvedAMRAuthorities:
     """Resolve every adaptive-layout concern exactly once from its owning declaration."""
+    if type(regrid) is not AMRRegrid:
+        raise TypeError("AMR regrid resolution requires an exact AMRRegrid authority")
     protocols = {
         "hierarchy": (hierarchy, ("to_data",)),
         "tagging": (tagging, ("resolve_references", "resolve", "inspect")),

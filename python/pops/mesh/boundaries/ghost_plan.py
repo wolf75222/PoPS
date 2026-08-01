@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from .component_binding import BoundaryComponentBinding
 from .ghost_plan_types import (
     BoundaryLinearizationContribution, BoundaryResidualContribution, CornerPolicy,
-    GhostCoverageManifest, GhostRegion, MultiBlockInterface)
+    GhostCoverageManifest, GhostRegion, InterfaceTraceOperation, MultiBlockInterface)
 from .providers import BoundaryProvider
 from .topology import BoundaryTopology, PeriodicIdentification
 
@@ -505,14 +505,47 @@ class GhostProducerPlan:
                 "permutation": list(orientation.permutation),
                 "signs": list(orientation.signs),
             })
+        owned_boundaries = {
+            production.region.boundary for production in self.productions
+            if production.region.boundary is not None
+        }
         if self.interfaces:
             depth = data.get("required_depth")
-            if isinstance(depth, bool) or not isinstance(depth, int) or depth != 1:
+            if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
+                raise TypeError(
+                    "shared-interface lowering requires an authenticated positive trace depth")
+            trace_sides = []
+            for interface in self.interfaces:
+                owned = tuple(
+                    side for side in (interface.left, interface.right)
+                    if side.boundary in owned_boundaries
+                )
+                if len(owned) != 1:
+                    raise ValueError(
+                        "shared-interface trace contract must own exactly one endpoint")
+                side = owned[0]
+                if depth < side.required_depth:
+                    raise ValueError(
+                        "selected boundary provider depth %d does not cover shared-interface "
+                        "trace depth %d for %s"
+                        % (depth, side.required_depth, side.projection.qualified_id)
+                    )
+                trace_sides.append(side)
+            unsupported = [
+                side for side in trace_sides
+                if side.trace_operation is not InterfaceTraceOperation.CELL_AVERAGE
+            ]
+            if unsupported:
+                details = ", ".join(
+                    "%s(provider=%s, required_depth=%d)"
+                    % (side.projection.qualified_id, side.trace_provider, side.required_depth)
+                    for side in unsupported
+                )
                 raise NotImplementedError(
-                    "shared-interface NumericalFlux requires a prepared trace provider for "
-                    "reconstruction order > 1; the current scheduler authenticates cell-average "
-                    "traces only (required_depth=1). Physical GhostBoundary providers remain "
-                    "available at higher order."
+                    "shared-interface NumericalFlux selected reconstructed face projection(s) "
+                    "%s, but the current type-erased scheduler has no executable "
+                    "reconstruction/mapped-halo provider; refusing a silent cell-average "
+                    "substitution" % details
                 )
             ncomp = data.get("ncomp")
             if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
@@ -596,10 +629,6 @@ class GhostProducerPlan:
                         "one implicit boundary residual/JVP pair must use the same exact "
                         "FieldBoundaryClosure component"
                     )
-        owned_boundaries = {
-            production.region.boundary for production in self.productions
-            if production.region.boundary is not None
-        }
         omitted_interface_faces = sorted({
             2 * side.boundary.orientation.axis + (
                 0 if side.boundary.orientation.side.value == "lower" else 1)
