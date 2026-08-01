@@ -412,11 +412,29 @@ step stays bounded by the CFL of section 1, `dt <= C dx / max|lambda|`. Limits a
   (the reconstructed states can leave the admissible domain on the conserved side).
 - The ghost cost drives the halo width to exchange: 1 (NoSlope), 2 (MUSCL), 3 (WENO5).
 
+For a Python-authored model, finite primitive recovery can be strengthened with explicit physical
+constraints after declaring the primitive layout:
+
+```python
+# after model.primitive_state(rho, u, v, p, conservative=(...))
+model.recovery_admissibility(rho=rho > 0, p=p > 0)
+```
+
+Each keyword identifies the primitive component reported on failure; its value is a symbolic Boolean
+expression over the primitive state.  Code generation emits a device-callable
+`recovery_admissible(Prim, failing_component)` method.  `CompositeModel` forwards that optional
+contract and `prepare_model_variable_recovery` installs it in the same ordered recovery plan as the
+conversion method.  A finite candidate that violates a predicate is therefore not published: the
+chain proceeds to its next declared method, or finishes with `inadmissible_candidate` when no method
+remains.  Models that declare no policy retain the finite-only path and emit no extra method.
+
 **Validation.** `test_weno_convergence` (the face reconstruction of a smooth function reaches order 5),
 `test_primitive_recon` (conserved <-> primitive conversions and their use in the reconstruction),
 `test_spatial_discretisation` (the reconstruction x numerical flux pair is a named type, exercised end
 to end), and `test_weno_convergence` (MC/Superbee reference formulas, symmetry, homogeneity, TVD
-bounds and finite extreme inputs in addition to WENO convergence).
+bounds and finite extreme inputs in addition to WENO convergence), and
+`test_variable_recovery_chain` (a model-declared physical predicate blocks publication
+and preserves the typed failing component).
 
 
 ---

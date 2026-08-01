@@ -406,6 +406,23 @@ struct FiniteModelRecoveryAdmissibility {
   }
 };
 
+/// Adapter for a model-declared primitive admissibility predicate.
+///
+/// The plan owns a concrete model value, so the predicate remains allocation-free and
+/// device-callable.  This adapter is selected only when HasRecoveryAdmissibility<Model> is true;
+/// models without the optional contract retain the historical finite-only fast path above.
+template <HasRecoveryAdmissibility Model>
+struct DeclaredModelRecoveryAdmissibility {
+  Model model;
+
+  POPS_HD bool operator()(const Real (&value)[Model::n_vars], int* failing_component) const {
+    typename Model::Prim primitive{};
+    for (int component = 0; component < Model::n_vars; ++component)
+      primitive[component] = value[component];
+    return model.recovery_admissible(primitive, failing_component);
+  }
+};
+
 /// One declared closed-form method around the model-owned conservative -> primitive formula.
 template <HasPrimitiveVars Model>
 struct ClosedFormModelRecoveryMethod {
@@ -442,9 +459,13 @@ template <class Model>
 POPS_HD constexpr auto prepare_model_variable_recovery(const Model& model) {
   constexpr int N = Model::n_vars;
   if constexpr (HasPrimitiveVars<Model>) {
-    return prepare_variable_recovery<N>(
-        FiniteModelRecoveryAdmissibility<N>{},
-        recovery_methods(ClosedFormModelRecoveryMethod<Model>{model}));
+    const auto methods = recovery_methods(ClosedFormModelRecoveryMethod<Model>{model});
+    if constexpr (HasRecoveryAdmissibility<Model>) {
+      return prepare_variable_recovery<N>(DeclaredModelRecoveryAdmissibility<Model>{model},
+                                          methods);
+    } else {
+      return prepare_variable_recovery<N>(FiniteModelRecoveryAdmissibility<N>{}, methods);
+    }
   } else {
     return prepare_variable_recovery<N>(FiniteModelRecoveryAdmissibility<N>{},
                                         recovery_methods(IdentityModelRecoveryMethod<N>{}));
