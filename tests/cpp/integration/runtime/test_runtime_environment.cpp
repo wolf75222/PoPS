@@ -29,7 +29,7 @@ TEST(RuntimeEnvironment, ReportsDimensionPrecisionAndBackends) {
   EXPECT_TRUE(report.has_kokkos) << "has_kokkos";
   EXPECT_TRUE(!report.kokkos_backend.empty()) << "kokkos_backend_named";
   if (report.kokkos_initialized) {
-    EXPECT_TRUE(report.kokkos_concurrency == Kokkos::DefaultExecutionSpace::concurrency())
+    EXPECT_TRUE(report.kokkos_concurrency == Kokkos::DefaultExecutionSpace{}.concurrency())
         << "initialized_kokkos_concurrency";
   } else {
     EXPECT_TRUE(report.kokkos_concurrency == 0) << "inactive_kokkos_concurrency";
@@ -45,7 +45,7 @@ TEST(RuntimeEnvironment, ReportsDimensionPrecisionAndBackends) {
     const RuntimeEnvironmentReport initialized_report = runtime_environment_report();
     EXPECT_TRUE(initialized_report.kokkos_initialized) << "kokkos_initialized_for_exact_probe";
     EXPECT_TRUE(initialized_report.kokkos_concurrency ==
-                Kokkos::DefaultExecutionSpace::concurrency())
+                Kokkos::DefaultExecutionSpace{}.concurrency())
         << "exact_default_execution_space_concurrency";
   }
 #else

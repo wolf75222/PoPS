@@ -333,6 +333,15 @@ class _AmrSystemInstall(_AmrSystem):
         # Extracted into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
         self._finish_program_install(compiled, so_path, bind_schema, params)
 
+        # Authenticate and install the level-zero shared-interface routes before bootstrap.  The
+        # clustering proper-nesting proof may reach a face deliberately omitted from a block's
+        # physical-boundary plan; only an already prepared exact interface route may own that face.
+        # The same incremental finalizer runs after every successful level creation so each newly
+        # materialized parent owns its exact shared-face route before the next transition is tagged.
+        if install_plan is not None:
+            from pops.runtime._runtime_authorities import finalize_runtime_authorities
+            finalize_runtime_authorities(self, install_plan)
+
         if bootstrap_plan is not None:
             from pops.runtime._amr_bootstrap_execution import execute_native_bootstrap
 
@@ -344,14 +353,19 @@ class _AmrSystemInstall(_AmrSystem):
                     name: field_plan.native_options["provider_slot"]
                     for name, field_plan in field_plans.items()
                 },
+                on_level_materialized=(
+                    None
+                    if install_plan is None
+                    else lambda: finalize_runtime_authorities(self, install_plan)
+                ),
             )
 
-        # The shared-interface scheduler authenticates the materialized per-level MultiFabs. Keep
-        # that structural install inside the bind transaction: after lazy runtime construction, before
-        # the BoundSnapshot and native lifecycle freeze.
+        # Extend the already authenticated interface registry to the complete materialized level
+        # prefix. Keep that structural install inside the bind transaction, before the BoundSnapshot
+        # and native lifecycle freeze.
         if install_plan is not None:
             from pops.runtime._runtime_authorities import finalize_runtime_authorities
-            finalize_runtime_authorities(self, install_plan)
+            finalize_runtime_authorities(self, install_plan, complete=True)
 
         # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
         # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the
