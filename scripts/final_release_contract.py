@@ -371,6 +371,9 @@ def source_contract_errors(root: Path) -> list[str]:
         ("acceptance", FINAL_EXAMPLE_ACCEPTANCE_TESTS),
         ("qualification", FINAL_EXAMPLE_QUALIFICATION_TESTS),
     )
+    required_nodeids = tuple(nodeid for _kind, ledger in ledgers for nodeid in ledger)
+    if len(set(required_nodeids)) != len(required_nodeids):
+        errors.append("final-example required test nodeids must be unique")
     for proof_kind, ledger in ledgers:
         if len(ledger) != len(FINAL_EXAMPLES):
             errors.append(

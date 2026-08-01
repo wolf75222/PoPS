@@ -158,6 +158,24 @@ def test_final_release_source_contract_requires_exact_mandatory_example_tests(tm
     assert any("must resolve exactly once" in error for error in errors)
 
 
+def test_final_release_source_contract_refuses_duplicate_required_nodeids(
+    monkeypatch, tmp_path
+):
+    _write_final_source_tree(tmp_path)
+    monkeypatch.setattr(
+        contract,
+        "FINAL_EXAMPLE_QUALIFICATION_TESTS",
+        (
+            contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS[0],
+            *contract.FINAL_EXAMPLE_QUALIFICATION_TESTS[1:],
+        ),
+    )
+
+    errors = contract.source_contract_errors(tmp_path)
+
+    assert "final-example required test nodeids must be unique" in errors
+
+
 @pytest.mark.parametrize("module", ("pops.ir", "pops._ir"))
 def test_final_release_source_contract_refuses_internal_or_transitional_imports(
     tmp_path, module
