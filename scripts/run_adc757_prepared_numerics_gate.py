@@ -155,6 +155,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         "ADC-682",
         "ADC-749",
         "ADC-750",
+        "ADC-751",
         "ADC-752",
         "ADC-753",
         "ADC-754",
