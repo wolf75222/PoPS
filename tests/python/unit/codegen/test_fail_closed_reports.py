@@ -128,6 +128,36 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
         assert route.error_message
 
 
+def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    typed = routes["riemann:typed_failure_outcome"]
+    assert typed.status == "partial"
+    assert typed.layout == "uniform|amr"
+    assert typed.backend == "production"
+    assert typed.mpi is True
+    assert typed.gpu is False
+    assert "one device-copyable FluxEvaluation" in typed.limitation
+    assert "typed status, stability bound, and reason code" in typed.limitation
+    assert "reject the owning transaction" in typed.limitation
+    assert "no fallback solver can be selected" in typed.limitation
+
+    policy = routes["riemann:prepared_recovery_policy"]
+    assert policy.status == "unavailable"
+    assert policy.layout == "uniform|amr"
+    assert policy.backend == "none"
+    assert "no prepared ordered Riemann recovery chain" in policy.limitation
+    assert "requested-versus-used solver outcome" in policy.limitation
+    assert "never substitutes another solver" in policy.limitation
+    assert "typed rejection and transactional rollback" in policy.available_route
+    assert "consume rejection through the step retry/failure policy" in policy.alternative
+    assert policy.error_message
+
+
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):
     monkeypatch.setattr(defaults, "_native_extension", lambda: None)
     assert defaults.numerical_defaults_report()["source"] == "source-only"
