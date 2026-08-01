@@ -312,7 +312,6 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_solve_fields_from_blocks_outcome_",
             "program_execution_solve_named_field_from_blocks_outcome_",
             "program_execution_solve_generated_field_from_blocks_outcome_",
-            "program_execution_scratch_",
             "program_execution_default_grid_context_",
             "program_execution_block_grid_context_",
             "program_execution_owns_operator_authority_",
@@ -579,12 +578,13 @@ def test_resource_topology_transaction_is_shared_while_raw_topology_and_scratch_
         assert retired_direct_surface not in uniform
         assert retired_direct_surface not in amr
         assert retired_direct_surface not in emitter
-    for provider_owned_scratch in (
+    for retired_provider_scratch in (
         "program_scratch_topology_epoch_",
         "program_scratch_materialization_generation_",
     ):
-        assert provider_owned_scratch not in shared
-        assert provider_owned_scratch in amr
+        assert retired_provider_scratch not in shared
+        assert retired_provider_scratch not in uniform
+        assert retired_provider_scratch not in amr
     assert "ctx.for_each_program_resource_level(" in emitter
     assert "ctx.with_program_resource_level(" in emitter
     assert "ctx.set_level(" not in emitter
@@ -792,6 +792,31 @@ def test_logical_subdivision_is_shared_and_provider_rollback_is_opaque():
     assert " / static_cast<double>(count)" not in amr
     assert "amr::Rational(iteration, count)" not in uniform
     assert "amr::Rational(iteration, count)" not in amr
+
+
+def test_persistent_scratch_registry_is_one_shared_resource_service():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+    for authority in (
+        "struct ProgramScratchKey",
+        "struct ProgramScratchSlot",
+        "struct ProgramScratchRegistry",
+        "MultiFab& persistent_scratch_",
+    ):
+        assert authority in shared
+        assert authority not in uniform
+        assert authority not in amr
+    assert "program_execution_scratch_" not in shared
+    assert "program_execution_scratch_" not in uniform
+    assert "program_execution_scratch_" not in amr
+    assert "const ProgramResourceTopology topology = program_resource_topology();" in shared
+    assert "const int level = this->level();" in shared
+    for invariant in (
+        "non-negative IR value and sub-slot identities",
+        "persistent scratch level is out of range",
+    ):
+        assert shared.count(invariant) == 1
 
 
 def test_error_schedule_is_shared_not_an_amr_capability_deferral():

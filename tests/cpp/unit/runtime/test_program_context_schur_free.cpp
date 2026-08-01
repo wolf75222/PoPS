@@ -91,6 +91,15 @@ class ExecutionServicesFixture
   bool history_initialized() const { return history_initialized_; }
   pops::Real history_outgoing_dt() const { return history_outgoing_dt_; }
   const std::string& history_rotation_clock() const { return history_rotation_clock_; }
+  int resource_level() const { return resource_level_; }
+  int resource_levels() const { return resource_levels_; }
+  void set_scratch_resource_identity(std::uint64_t epoch, std::uint64_t generation, int levels,
+                                     int level) {
+    resource_topology_epoch_ = epoch;
+    resource_materialization_generation_ = generation;
+    resource_levels_ = levels;
+    resource_level_ = level;
+  }
   int boundary_program_block() const { return boundary_program_block_; }
   int assembly_target_count() const { return assembly_target_count_; }
   int assembly_source_count() const { return assembly_source_count_; }
@@ -369,7 +378,7 @@ class ExecutionServicesFixture
   }
   typename SharedServices::ProgramResourceTopology program_execution_resource_topology_()
       const noexcept {
-    return {11, 17, Amr ? 3 : 1, 2};
+    return {resource_topology_epoch_, resource_materialization_generation_, resource_levels_, 2};
   }
   int program_execution_resource_level_() const noexcept { return resource_level_; }
   void program_execution_select_resource_level_(int selected) const noexcept {
@@ -393,6 +402,9 @@ class ExecutionServicesFixture
 
   int active_level_ = -1;
   mutable int resource_level_ = Amr ? 1 : 0;
+  mutable std::uint64_t resource_topology_epoch_ = 11;
+  mutable std::uint64_t resource_materialization_generation_ = 17;
+  mutable int resource_levels_ = Amr ? 3 : 1;
   mutable pops::runtime::program::ProgramRuntimeState program_runtime_state_;
   mutable int field_update_count_ = 0;
   mutable FieldFacade field_facade_{&field_update_count_};
@@ -844,6 +856,50 @@ void expect_shared_operator_snapshot_services(Context& context, std::uint64_t to
   EXPECT_EQ(context.operator_topology_count(), 3);
 }
 
+template <class Context>
+void expect_shared_persistent_scratch_services(Context& context) {
+  const pops::Box2D domain = pops::Box2D::from_extents(4, 4);
+  const pops::BoxArray boxes(std::vector<pops::Box2D>{domain});
+  const pops::DistributionMapping mapping(std::vector<int>{0});
+  pops::MultiFab prototype(boxes, mapping, 2, 1);
+
+  context.profiler().enable();
+  pops::MultiFab& first = context.rhs_scratch(41, 0, prototype);
+  EXPECT_EQ(first.ncomp(), 2);
+  EXPECT_EQ(first.n_grow(), 1);
+  first.set_val(pops::Real(9));
+  const std::int64_t allocations_after_first = context.profiler().counter("scratch_allocs");
+
+  pops::MultiFab& reused = context.rhs_scratch(41, 0, prototype);
+  EXPECT_EQ(&reused, &first);
+  EXPECT_EQ(context.profiler().counter("scratch_allocs"), allocations_after_first);
+  if (reused.local_size() > 0) {
+    const auto cell = reused.box(0).lo;
+    EXPECT_EQ(reused.fab(0).const_array()(cell[0], cell[1], 0), pops::Real(0))
+        << "a shared persistent slot must clear provisional bytes before reuse";
+  }
+
+  pops::MultiFab& other_kind = context.scratch_state(41, 0, prototype);
+  pops::MultiFab& other_subslot = context.rhs_scratch(41, 1, prototype);
+  EXPECT_NE(&other_kind, &reused);
+  EXPECT_NE(&other_subslot, &reused);
+  EXPECT_EQ(context.profiler().counter("scratch_allocs"), allocations_after_first + 2);
+
+  const int level = context.resource_level();
+  const int levels = context.resource_levels();
+  context.set_scratch_resource_identity(11, 18, levels, level);
+  (void)context.rhs_scratch(41, 0, prototype);
+  EXPECT_EQ(context.profiler().counter("scratch_allocs"), allocations_after_first + 3)
+      << "a process-local materialization change must invalidate every shared scratch slot";
+
+  EXPECT_THROW((void)context.rhs_scratch(-1, 0, prototype), std::invalid_argument);
+  EXPECT_THROW((void)context.rhs_scratch(41, -1, prototype), std::invalid_argument);
+  context.set_scratch_resource_identity(12, 19, 0, 0);
+  EXPECT_THROW((void)context.rhs_scratch(41, 0, prototype), std::runtime_error);
+  context.set_scratch_resource_identity(12, 19, levels, levels);
+  EXPECT_THROW((void)context.rhs_scratch(41, 0, prototype), std::out_of_range);
+}
+
 }  // namespace
 
 TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameContractFixture) {
@@ -886,4 +942,11 @@ TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSameOperatorSnapshotF
   ExecutionServicesFixture<true> amr(1);
   expect_shared_operator_snapshot_services(uniform, 1);
   expect_shared_operator_snapshot_services(amr, 17);
+}
+
+TEST(ProgramExecutionServices, UniformAndAmrProvidersRunTheSamePersistentScratchFixture) {
+  ExecutionServicesFixture<false> uniform(-1);
+  ExecutionServicesFixture<true> amr(1);
+  expect_shared_persistent_scratch_services(uniform);
+  expect_shared_persistent_scratch_services(amr);
 }
