@@ -1,10 +1,9 @@
-schema_version = 1
+schema_version = 2
 gate = "adc757-prepared-numerics-slice"
 issue = "ADC-757"
 evidence_from = ["ADC-749", "ADC-750", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
 deferred = [
   "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
-  "python_ir_generated_abi_and_restart_parity",
   "remaining_legacy_recovery_and_boundary_authority_deletion",
   "amr_regrid_migration_and_restart_coherence",
   "gpu_backend_execution",
@@ -168,3 +167,31 @@ requirement = "cell_local_temporal_partition_authority"
 polarity = "refusal"
 target = "test_temporal_partition_restart"
 test_regex = "^test_temporal_partition_restart\\.strict_amr_restore_consumes_manifest_and_refuses_global_step_bypass$"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_recovery_admissibility_codegen.py"
+test = "test_recovery_admissibility_is_emitted_and_hashed"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_recovery_admissibility_codegen.py"
+test = "test_recovery_admissibility_rejects_ambiguous_authoring"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/runtime/test_amr_checkpoint_contract.py"
+test = "test_preflight_returns_exact_native_payload_and_counters"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/runtime/test_amr_checkpoint_contract.py"
+test = "test_historical_version_refusal_happens_before_restart_transaction"

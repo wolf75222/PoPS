@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from collections import Counter, defaultdict
 from pathlib import Path
 import re
@@ -28,10 +29,10 @@ EXPECTED_REQUIREMENTS = {
     "model_declared_admissibility",
     "prepared_limiter_provider",
     "cell_local_temporal_partition_authority",
+    "python_ir_generated_abi_and_restart_parity",
 }
 EXPECTED_DEFERRED = (
     "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
-    "python_ir_generated_abi_and_restart_parity",
     "remaining_legacy_recovery_and_boundary_authority_deletion",
     "amr_regrid_migration_and_restart_coherence",
     "gpu_backend_execution",
@@ -47,6 +48,24 @@ def _cpp_suites() -> dict[str, dict]:
     return {str(row["name"]): row for row in data.get("cpp", {}).get("suite", ())}
 
 
+def _python_files() -> set[str]:
+    data = tomllib.loads(TEST_MANIFEST.read_text(encoding="utf-8"))
+    files: set[str] = set()
+    for suite in data.get("python", {}).get("suite", ()):
+        relative_root = suite.get("path")
+        if not isinstance(relative_root, str):
+            continue
+        root = ROOT / relative_root
+        if not root.is_dir():
+            continue
+        files.update(
+            source.relative_to(ROOT).as_posix()
+            for source in root.rglob("test_*.py")
+            if source.is_file()
+        )
+    return files
+
+
 def _declared_gtests(suite: dict) -> tuple[set[str], list[str]]:
     names: set[str] = set()
     errors: list[str] = []
@@ -60,6 +79,39 @@ def _declared_gtests(suite: dict) -> tuple[set[str], list[str]]:
             errors.append("%s contains a skip/disabled marker" % relative)
         names.update("%s.%s" % match.groups() for match in GTEST_PATTERN.finditer(text))
     return names, errors
+
+
+def _declared_pytests(relative: str) -> tuple[dict[str, ast.FunctionDef], list[str]]:
+    source = ROOT / relative
+    if not source.is_file():
+        return {}, ["missing source %s" % relative]
+    try:
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=relative)
+    except (OSError, SyntaxError) as exc:
+        return {}, ["cannot parse %s: %s" % (relative, exc)]
+    tests = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+    }
+    return tests, []
+
+
+def _pytest_is_skipped(test: ast.FunctionDef) -> bool:
+    blocked_decorators = ("pytest.mark.skip", "pytest.mark.skipif", "pytest.mark.xfail")
+    if any(
+        any(blocked in ast.unparse(decorator) for blocked in blocked_decorators)
+        for decorator in test.decorator_list
+    ):
+        return True
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "pytest"
+        and node.func.attr in {"skip", "xfail"}
+        for node in ast.walk(test)
+    )
 
 
 def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
@@ -80,8 +132,8 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     }
     if set(data) != expected_fields:
         errors.append("manifest fields must be exactly %s" % sorted(expected_fields))
-    if data.get("schema_version") != 1:
-        errors.append("schema_version must be exactly 1")
+    if data.get("schema_version") != 2:
+        errors.append("schema_version must be exactly 2")
     if data.get("gate") != "adc757-prepared-numerics-slice":
         errors.append("gate must be exactly 'adc757-prepared-numerics-slice'")
     if data.get("issue") != "ADC-757":
@@ -105,13 +157,17 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         errors.append("manifest must contain [[check]] rows")
         checks = []
     suites = _cpp_suites()
+    python_files = _python_files()
     coverage: dict[str, set[str]] = defaultdict(set)
     identities = Counter()
     mpi_checks = 0
     for index, row in enumerate(checks, 1):
         where = "check[%d]" % index
         kind = row.get("kind", "ctest")
-        expected_row_fields = {"requirement", "polarity", "target", "test_regex"}
+        if kind == "pytest":
+            expected_row_fields = {"requirement", "polarity", "kind", "path", "test"}
+        else:
+            expected_row_fields = {"requirement", "polarity", "target", "test_regex"}
         if kind == "mpi_ctest":
             expected_row_fields.update({"kind", "nproc"})
         if set(row) != expected_row_fields:
@@ -127,7 +183,26 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             errors.append("%s polarity must be positive or refusal" % where)
         else:
             coverage[str(requirement)].add(str(polarity))
-        identity = (target, selector)
+        if kind == "pytest":
+            relative = row.get("path")
+            test_name = row.get("test")
+            identity = (kind, relative, test_name)
+            identities[identity] += 1
+            if relative not in python_files:
+                errors.append("%s references unknown Python test file %r" % (where, relative))
+                continue
+            declared, source_errors = _declared_pytests(str(relative))
+            errors.extend("%s: %s" % (where, error) for error in source_errors)
+            if test_name not in declared:
+                errors.append(
+                    "%s references unknown top-level pytest %r in %r"
+                    % (where, test_name, relative)
+                )
+                continue
+            if _pytest_is_skipped(declared[str(test_name)]):
+                errors.append("%s pytest proof %r is skipped or xfailed" % (where, test_name))
+            continue
+        identity = (kind, target, selector)
         identities[identity] += 1
         if (
             not isinstance(selector, str)
@@ -216,6 +291,18 @@ def _run_ctest(build_dir: Path, target: str, selector: str) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
+def _run_pytest(relative: str, test_name: str) -> None:
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "%s::%s" % (relative, test_name),
+    ]
+    print("+", " ".join(command), flush=True)
+    subprocess.run(command, cwd=ROOT, check=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -247,8 +334,19 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     if args.check_only:
         return 0
-    for row in sorted(data["check"], key=lambda value: (value["target"], value["test_regex"])):
-        _run_ctest(args.build_dir, row["target"], row["test_regex"])
+    checks = sorted(
+        data["check"],
+        key=lambda value: (
+            value.get("kind", "ctest"),
+            value.get("target", value.get("path", "")),
+            value.get("test_regex", value.get("test", "")),
+        ),
+    )
+    for row in checks:
+        if row.get("kind") == "pytest":
+            _run_pytest(row["path"], row["test"])
+        else:
+            _run_ctest(args.build_dir, row["target"], row["test_regex"])
     return 0
 
 

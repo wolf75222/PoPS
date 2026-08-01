@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 25
+    assert len(data["check"]) == 29
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-749",
@@ -71,8 +71,48 @@ def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
             "nproc": 2,
         },
     ]
-    assert all("gpu" not in row["target"].lower() for row in data["check"])
+    assert all(
+        "gpu" not in row.get("target", row.get("path", "")).lower()
+        for row in data["check"]
+    )
     assert runner.main(["--check-only", "--closure"]) == 3
+
+
+def test_adc757_slice_executes_exact_python_ir_and_restart_proofs():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    assert [row for row in data["check"] if row.get("kind") == "pytest"] == [
+        {
+            "requirement": "python_ir_generated_abi_and_restart_parity",
+            "polarity": "positive",
+            "kind": "pytest",
+            "path": "tests/python/unit/codegen/test_recovery_admissibility_codegen.py",
+            "test": "test_recovery_admissibility_is_emitted_and_hashed",
+        },
+        {
+            "requirement": "python_ir_generated_abi_and_restart_parity",
+            "polarity": "refusal",
+            "kind": "pytest",
+            "path": "tests/python/unit/codegen/test_recovery_admissibility_codegen.py",
+            "test": "test_recovery_admissibility_rejects_ambiguous_authoring",
+        },
+        {
+            "requirement": "python_ir_generated_abi_and_restart_parity",
+            "polarity": "positive",
+            "kind": "pytest",
+            "path": "tests/python/unit/runtime/test_amr_checkpoint_contract.py",
+            "test": "test_preflight_returns_exact_native_payload_and_counters",
+        },
+        {
+            "requirement": "python_ir_generated_abi_and_restart_parity",
+            "polarity": "refusal",
+            "kind": "pytest",
+            "path": "tests/python/unit/runtime/test_amr_checkpoint_contract.py",
+            "test": "test_historical_version_refusal_happens_before_restart_transaction",
+        },
+    ]
+    assert "python_ir_generated_abi_and_restart_parity" not in data["deferred"]
 
 
 def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
@@ -107,6 +147,35 @@ def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
     _, errors = runner.validate_manifest(wrong_mpi_rank)
     assert any("one exact rank count" in error for error in errors)
 
+    unknown_python_file = tmp_path / "unknown_python_file.toml"
+    unknown_python_file.write_text(
+        source.replace(
+            'path = "tests/python/unit/codegen/test_recovery_admissibility_codegen.py"',
+            'path = "tests/python/unit/codegen/test_missing_gate_proof.py"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _, errors = runner.validate_manifest(unknown_python_file)
+    assert any("unknown Python test file" in error for error in errors)
+
+    unknown_pytest = tmp_path / "unknown_pytest.toml"
+    unknown_pytest.write_text(
+        source.replace(
+            'test = "test_recovery_admissibility_is_emitted_and_hashed"',
+            'test = "test_missing_gate_proof"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _, errors = runner.validate_manifest(unknown_pytest)
+    assert any("unknown top-level pytest" in error for error in errors)
+
+    skipped = runner.ast.parse(
+        "@pytest.mark.xfail\ndef test_skipped():\n    pass\n"
+    ).body[0]
+    assert runner._pytest_is_skipped(skipped)
+
 
 def test_adc757_runner_refuses_a_declared_but_unbuilt_proof(monkeypatch, tmp_path):
     runner = _load_runner()
@@ -122,3 +191,31 @@ def test_adc757_runner_refuses_a_declared_but_unbuilt_proof(monkeypatch, tmp_pat
             "test_prepared_numerics_gate",
             r"^PreparedNumericsGate\.ConvergedPreparedPathAllocatesNothingAndRollsBack$",
         )
+
+
+def test_adc757_runner_executes_one_exact_pytest(monkeypatch):
+    runner = _load_runner()
+    calls = []
+
+    def capture_pytest(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, "run", capture_pytest)
+    runner._run_pytest(
+        "tests/python/unit/codegen/test_recovery_admissibility_codegen.py",
+        "test_recovery_admissibility_is_emitted_and_hashed",
+    )
+    assert calls == [
+        (
+            [
+                runner.sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "tests/python/unit/codegen/test_recovery_admissibility_codegen.py::"
+                "test_recovery_admissibility_is_emitted_and_hashed",
+            ],
+            {"cwd": runner.ROOT, "check": True},
+        )
+    ]
