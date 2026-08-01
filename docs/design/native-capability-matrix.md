@@ -126,6 +126,13 @@ Supported native routes include:
   authenticated block state and cannot name an unrelated callback or kernel.
   `primitive_values` follows the model's declared primitive-variable order.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
+  `riemann:typed_failure_outcome` is deliberately `partial`: every built-in returns the common
+  device-copyable `FluxEvaluation` with typed status, stability bound, and reason code, and a
+  reduced failure rejects the owning transaction instead of publishing a candidate or silently
+  selecting another solver. `riemann:prepared_recovery_policy` is separately `unavailable`:
+  there is no prepared ordered solver chain, requested-versus-used solver outcome, block counter,
+  or restart metadata yet. Callers can therefore request the single-solver typed-rejection route
+  explicitly, but cannot claim a configured fallback policy.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.

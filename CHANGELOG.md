@@ -18,6 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Capability reports now distinguish the delivered typed Riemann rejection path from an unavailable
+  prepared recovery policy. Rusanov, HLL, HLLC, and Roe advertise their common device-copyable
+  `FluxEvaluation` and transactional rejection, while ordered fallback chains,
+  requested-versus-used solver diagnostics, counters, and restart metadata fail closed instead of
+  being inferred from the selected solver.
 - ADC-749 carries exact periodic face identifications through the model-aware hyperbolic boundary
   plan. Uniform scalar layouts execute mapped periodic halos (including cross-axis maps); mapped
   vector/axial component transforms and AMR mapped periodic fill-patch/regrid remain explicit
