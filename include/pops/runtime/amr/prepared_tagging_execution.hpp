@@ -278,7 +278,7 @@ class PreparedTaggingExecutionPlan {
     if (!program.prepared || program.provider_identity.empty() || program.clock_identity.empty() ||
         program.leaves.empty() || program.refine_ops.empty() || fields_by_level.empty() ||
         fields_by_level.size() != domains.size() || topology_generation == 0 ||
-        program.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1 || program.min_cycles != 0 ||
+        program.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1 ||
         program.equality_policy < 0 || program.equality_policy > 2 || program.conflict_policy < 0 ||
         program.conflict_policy > 3 ||
         program.leaves.size() > tagging_detail::kPreparedTaggingMaximumLeaves ||

@@ -34,7 +34,9 @@ TAGGER_CAPABILITY = {
     "maximum_instruction_count": NATIVE_TAGGING_PROGRAM_ABI[
         "maximum_instruction_count"],
     "non_finite_policy": NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"],
-    "persistent_hysteresis": NATIVE_TAGGING_PROGRAM_ABI["persistent_hysteresis"],
+    # The external component evaluates candidates only.  The current adapter deliberately
+    # refuses non-zero hysteresis even though the builtin runtime owns that accepted state.
+    "persistent_hysteresis": False,
     "execution_mode": "native_backend",
     "collective_scope": "none",
     "memory_spaces": ["host"],
@@ -71,6 +73,7 @@ def test_tagging_opcode_catalog_is_the_single_python_cpp_authority():
         NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"]) in header
     assert "POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1" in header
     assert NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"] == "reject"
+    assert NATIVE_TAGGING_PROGRAM_ABI["persistent_hysteresis"] is True
     assert "POPS_TAGGING_NON_FINITE_REJECT_V1 1" in header
 
 
@@ -141,11 +144,11 @@ def test_external_tagger_native_backend_accepts_an_exact_gpu_target(tmp_path):
         TaggerProvider(mismatched)
 
 
-def _layout(authored, *, tagger, clustering):
+def _layout(authored, *, tagger, clustering, tagging=None):
     return AMR(
         grid=authored.grid,
         hierarchy=authored.hierarchy,
-        tagging=authored.tagging,
+        tagging=authored.tagging if tagging is None else tagging,
         tagger=tagger,
         clustering=clustering,
         regrid=authored.regrid,
@@ -377,12 +380,22 @@ def test_external_tagger_requires_exact_candidate_program_capability(tmp_path):
     persistent_clustering = _component(
         tmp_path, name="persistent_clustering", interface=interfaces.Clustering)
     target = _example().build_final_case()
+    from pops.amr import AMRTagging, EqualityPolicy, Hysteresis
+
+    persistent_tagging = AMRTagging(
+        rules=target.layout.tagging.rules,
+        hysteresis=Hysteresis(3, EqualityPolicy.HOLD),
+        conflict_policy=target.layout.tagging.conflict_policy,
+    )
     layout = _layout(
         target.layout,
         tagger=TaggerProvider(advertised_but_unsupported),
         clustering=ClusteringProvider(persistent_clustering),
+        tagging=persistent_tagging,
     )
-    with pytest.raises(NotImplementedError, match="persistent_hysteresis is not implemented"):
+    with pytest.raises(
+            NotImplementedError,
+            match="external AMR Tagger persistent_hysteresis is not implemented"):
         pops.resolve(
             pops.validate(target.authoring.case), layout=layout,
             components=(advertised_but_unsupported, persistent_clustering))

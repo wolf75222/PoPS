@@ -466,6 +466,7 @@ inline void CompositeFacPoisson::finalize_hierarchy_metadata_() {
     correction_axy_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
     correction_ayx_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
   }
+  boundary_context_levels_.assign(static_cast<std::size_t>(L), FieldBoundaryExecutionContext{});
   prepare_fully_refined_solver_();
 }
 
@@ -484,7 +485,7 @@ inline void CompositeFacPoisson::prepare_fully_refined_solver_() {
   if (has_reaction_)
     fully_refined_solver_->set_reaction(constant_scalar_field_provider(reaction_));
   if (has_boundary_kernel_)
-    fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_);
+    fully_refined_solver_->set_boundary_kernel(boundary_kernel_, boundary_context_levels_.back());
 }
 
 inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(int max_iters, Real rel_tol,
@@ -499,8 +500,8 @@ inline Real CompositeFacPoisson::solve_fully_refined_hierarchy_(int max_iters, R
   }
   if (has_cross_)
     solver.set_cross_terms(a_xy_level(finest), a_yx_level(finest));
-  if (has_boundary_kernel_ && boundary_kernel_.observes_iteration)
-    solver.set_boundary_context(boundary_context_);
+  if (has_boundary_kernel_)
+    solver.set_boundary_context(boundary_context_levels_.back());
   copy0_(solver.rhs(), rhs_level(finest));
   copy0_(solver.phi(), phi_level(finest));
   Real residual = Real(0);

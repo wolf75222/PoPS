@@ -13,7 +13,7 @@ from pops.codegen._interface_validation import validate_shared_interface_program
 from pops.codegen.program_emit_control import _emit_contiguous_rhs_group
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.numerics.terms import Flux
-from pops.time import Program, TimePoint
+from pops.time import EventHandle, Program, TimePoint, every
 from typed_program_support import typed_state
 
 
@@ -96,38 +96,75 @@ def _paired_flux_program() -> Program:
     return program
 
 
-def _resolved_amr_hierarchy(*, levels: int, frozen: bool = True) -> object:
-    from pops.mesh._amr import FrozenHierarchy
+def _resolved_amr_hierarchy(
+    *, levels: int, program: Program, frozen: bool = True
+) -> object:
+    from pops.mesh._amr import FrozenHierarchy, RegridSchedule
 
-    regrid = FrozenHierarchy() if frozen else object()
+    if frozen:
+        regrid = FrozenHierarchy()
+    else:
+        owner = program.clock.owner
+        assert owner is not None
+        regrid = RegridSchedule(
+            every(1, clock=program.clock),
+            EventHandle(owner, "shared_interface_regrid_due"),
+        )
     return SimpleNamespace(plan=SimpleNamespace(level_count=levels, regrid=regrid))
 
 
 def test_amr_shared_interface_accepts_one_frozen_level() -> None:
+    program = _paired_flux_program()
     _validate(
-        _paired_flux_program(),
+        program,
         target="amr_system",
-        resolved_hierarchy=_resolved_amr_hierarchy(levels=1),
+        resolved_hierarchy=_resolved_amr_hierarchy(levels=1, program=program),
     )
 
 
-def test_amr_shared_interface_rejects_dynamic_regrid_before_codegen() -> None:
-    with pytest.raises(NotImplementedError, match="supports only one frozen level"):
+def test_amr_shared_interface_accepts_two_frozen_levels() -> None:
+    program = _paired_flux_program()
+    _validate(
+        program,
+        target="amr_system",
+        resolved_hierarchy=_resolved_amr_hierarchy(levels=2, program=program),
+    )
+
+
+@pytest.mark.parametrize("levels", [2, 3, 4])
+def test_amr_shared_interface_accepts_dynamic_refined_regrid(levels: int) -> None:
+    program = _paired_flux_program()
+    _validate(
+        program,
+        target="amr_system",
+        resolved_hierarchy=_resolved_amr_hierarchy(
+            levels=levels, program=program, frozen=False
+        ),
+    )
+
+
+def test_amr_shared_interface_rejects_dynamic_single_level_hierarchy() -> None:
+    program = _paired_flux_program()
+    with pytest.raises(
+        NotImplementedError, match="dynamic regrid requires at least two configured levels"
+    ):
         _validate(
-            _paired_flux_program(),
+            program,
             target="amr_system",
-            resolved_hierarchy=_resolved_amr_hierarchy(levels=1, frozen=False),
+            resolved_hierarchy=_resolved_amr_hierarchy(
+                levels=1, program=program, frozen=False
+            ),
         )
 
 
-@pytest.mark.parametrize("levels", (2, 3))
-def test_amr_shared_interface_rejects_refined_hierarchy(levels: int) -> None:
-    with pytest.raises(NotImplementedError, match="supports only one frozen level"):
-        _validate(
-            _paired_flux_program(),
-            target="amr_system",
-            resolved_hierarchy=_resolved_amr_hierarchy(levels=levels),
-        )
+@pytest.mark.parametrize("levels", [3, 4])
+def test_amr_shared_interface_accepts_deep_frozen_hierarchy(levels: int) -> None:
+    program = _paired_flux_program()
+    _validate(
+        program,
+        target="amr_system",
+        resolved_hierarchy=_resolved_amr_hierarchy(levels=levels, program=program),
+    )
 
 
 def test_shared_interface_rejects_default_flux_rhs_nested_in_branch() -> None:

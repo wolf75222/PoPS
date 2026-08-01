@@ -39,6 +39,22 @@ def _component_data(component: Any) -> dict[str, Any]:
         "CompiledComponentArtifact")
 
 
+def _trace_projection_contract(block: Any) -> tuple[str, Any, int]:
+    """Derive one endpoint trace requirement from its selected reconstruction authority."""
+    from .ghost_plan_types import InterfaceTraceOperation
+    from pops.numerics.reconstruction import authenticated_reconstruction_route
+    from pops.runtime.routes import LIMITER_NONE
+
+    spatial = block.numerics.primary_spatial()
+    route = authenticated_reconstruction_route(spatial.reconstruction)
+    operation = (
+        InterfaceTraceOperation.CELL_AVERAGE
+        if route.id == LIMITER_NONE.id
+        else InterfaceTraceOperation.RECONSTRUCTED_FACE
+    )
+    return route.id, operation, spatial.ghost_depth
+
+
 @dataclass(frozen=True, slots=True)
 class BlockInterfaceSide:
     """One authored endpoint: a block-qualified state and one geometric frame boundary."""
@@ -264,14 +280,19 @@ class ConservativeInterface:
         right_disc = interface_handle(
             "%s_right_%s" % (self.name, by_name[right_name].numerics.identity.token),
             "discretization")
+
+        left_trace = _trace_projection_contract(by_name[left_name])
+        right_trace = _trace_projection_contract(by_name[right_name])
         interface = MultiBlockInterface(
             interface_handle(self.name, "multiblock_interface"),
             InterfaceSide(
                 left_boundary, left_layout, left_disc, left_boundary.orientation,
-                interface_handle(self.name + "_left_trace", "interface_projection")),
+                interface_handle(self.name + "_left_trace", "interface_projection"),
+                *left_trace),
             InterfaceSide(
                 right_boundary, right_layout, right_disc, right_boundary.orientation,
-                interface_handle(self.name + "_right_trace", "interface_projection")),
+                interface_handle(self.name + "_right_trace", "interface_projection"),
+                *right_trace),
             interface_handle(self.name + "_shared_flux", "conservative_flux"),
             InterfacePermutation(
                 interface_handle(self.name + "_permutation", "interface_permutation"),
