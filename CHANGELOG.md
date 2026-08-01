@@ -28,13 +28,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - ParaView output now has one collection-authoring keyword: `collection`. The deprecated
   `ParaView(series=...)` compatibility route is deleted instead of being retained beside the
   canonical PVD collection contract.
+- Strict AMR checkpoint payload v7 now persists the accepted shared-interface flux audit together
+  with Program clocks, histories, tagging state, conservative ledger and synchronization report.
+  Restart validates every fragment's topology epoch, level pair, exact clock window, resolved
+  rational stage weight, geometry and duration before publishing the image; rejected restart or
+  Program attempts leave the previous accepted report byte-exact.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
-  non-bit-identical rank-count rematerialization with Dense persisted histories. The M3 gate
-  executes the persisted two-rank to one-rank restart proof. The explicit `RegridOnRestart()`
-  policy restores and authenticates the recorded accepted state before one artifact-owned
-  scientific regrid, emits a global before/after receipt, and derives a distinct continuation run
-  identity. This first operational slice is one AMR layout, unchanged MPI cardinality, and refuses
-  fields, shared interfaces, and bootstrap staggered caches.
+  non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
+  `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one
+  artifact-owned scientific regrid, emits a global before/after receipt, and derives a distinct
+  continuation run identity. Its rollback boundary includes the runtime-owned tagging hysteresis,
+  and the M3 proof requires the successful transform to advance that persistent cycle exactly once.
+  This bounded route is one AMR layout at unchanged MPI cardinality. Serial and exact
+  `MPI_COMM_WORLD` shared-interface groups use the same atomic rematerialization, consensus and
+  retry route; rank-changing dynamic interface rematerialization, elliptic fields, and bootstrap
+  staggered caches remain refused. Dense-history fingerprints are phase-local all-rank consensus
+  witnesses, not a false bitwise-equality condition across interpolation; accepted solution
+  components retain their independent native composite-conservation check.
+- Native `SymbolicTagger` hysteresis is now a checkpointed accepted-state capability. The M3 gate
+  executes a persisted two-rank to one-rank
+  restart proof with non-empty hysteresis state, exact source-rank consensus, and byte-exact
+  rematerialization. MPI capture now validates common accepted-state bytes on every producer before
+  sealing, so a divergent tagging payload fails collectively without a partial file; external
+  Tagger components remain fail-closed for non-zero hysteresis.
 - Add an explicit offline-only migration for the byte-exact frozen Uniform-v2 checkpoint fixture.
   Migration requires a complete authenticated current-v5 authority plus a reviewed mapping that pins
   both artifacts, all lifecycle/ABI/Program identities, every block/component/history
@@ -42,14 +58,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   deliberately limited to same-grid/same-clock, Dense fully stored histories and empty
   field-provider/cache/ConsumerGraph state; it validates before atomic no-clobber publication.
   Runtime restart remains unchanged and fail-closed for every historical payload.
-- Internal frozen two-level serial AMR shared-interface transactions now retain endpoint-qualified
+- Internal refined AMR shared-interface transactions now retain endpoint-qualified
   canonical flux fragments, authoritative local substep durations, and exact rational Program
   weights. The fragments authenticate the paired RHS update and are deliberately not a second
-  reflux source. Public refined execution remains fail-closed until fixed-hierarchy authoring,
-  bind-to-run conservation, and historical-rate provenance are proved end to end.
-- Strict Uniform/AMR accepted-state checkpoints now use payload v5, persist the held Program cadence
-  window and last accepted Program interval, commit clock restoration transactionally, and allow
-  selective history replay only for the exact ring/depth authority exported by the installed artifact.
+  reflux source. `AMRRegrid.frozen()` now exposes the materialize-once public hierarchy policy, and
+  the installed shared-interface route covers every materialized level of a frozen hierarchy, plus
+  a serial dynamic hierarchy whose complete configured depth is active at bind, with exact
+  SSPRK2/subcycling evaluation when both endpoint hierarchies provide matching full-face coverage.
+  Every interior level contributes its canonical evaluation to both adjacent, level-qualified
+  coarse/fine audit pairs. A depth-preserving finest-transition regrid rematerializes face cells,
+  ownership, scratch and collective layout identity before the next Program stage; a missing face,
+  active-depth change, or deeper regrid that transiently removes descendants fails closed and
+  restores the accepted interface registry. Frozen refined `MPI_COMM_WORLD`
+  publication now authenticates the publication identity and ledger transaction coordinates
+  collectively before every rank appends the same canonical shared-flux fragment; a rank-local
+  append failure reaches consensus before either endpoint residual is scattered.
+  Level-zero interface ownership is authenticated before AMR bootstrap, and each newly created
+  level route is installed before it becomes the parent of another transition, so proper-nesting
+  may cross only the exact physical faces deliberately omitted from their paired boundary plans.
+  One-sided tag propagation, dynamic active-depth changes, non-finest dynamic replacements at depth
+  greater than two, rank-changing dynamic refined rematerialization, implicit JVP and
+  historical-rate paths remain fail-closed.
+  Each interface endpoint now carries the exact projection Handle, reconstruction-provider
+  identity, operation and provider-derived trace depth into the native collective plan identity
+  `pops.multiblock.interface-plan.v2`. The
+  type-erased scheduler continues to execute only authenticated cell-average projections;
+  MUSCL/WENO face reconstruction is rejected with its retained provider/depth contract until a
+  mapped-halo reconstruction provider is installed, rather than being silently lowered.
+- Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v6. They persist the
+  held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
+  hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay
+  only for the exact ring/depth authority exported by the installed artifact. AMR v5 images are
+  rejected fail-closed rather than silently restarting without their missing hysteresis state.
   Explicit AMR bootstrap also republishes the Program's level-qualified accepted image before each
   hierarchy transition commits, so a checkpoint taken before the first accepted step (after the
   required zero-step `pops.run` establishes its controls identity) already covers every active level.

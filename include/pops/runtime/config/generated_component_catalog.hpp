@@ -300,10 +300,10 @@ inline constexpr BrickCatalogEntry kBrickCatalog[] = {
 inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
-inline constexpr int kCapabilityVocabularyVersion = 2;
-inline constexpr const char* kComponentCatalogSha256 = "5c991781aadafd3165dccb4642086c8b20fbd4a83ee8e462f1e29078ecb0d1c4";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "b29e5d1d811234bd55bfce83ffdf810ed95868392d1ac1da5644f8886620e129";
-inline constexpr const char* kRouteRegistrySignature = "v2:b29e5d1d811234bd55bfce83ffdf810ed95868392d1ac1da5644f8886620e129";
+inline constexpr int kCapabilityVocabularyVersion = 4;
+inline constexpr const char* kComponentCatalogSha256 = "651f858030d8a17d2d9f0b7c5e4ef0ba4c20799f996be99ee94f75e37023b76b";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "47c3a146c9d7e20d0786fa703fe5e6b9ba27f063065e39646f4a20bb4b0e97ec";
+inline constexpr const char* kRouteRegistrySignature = "v2:47c3a146c9d7e20d0786fa703fe5e6b9ba27f063065e39646f4a20bb4b0e97ec";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

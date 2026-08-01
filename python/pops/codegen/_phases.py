@@ -264,10 +264,8 @@ def resolve(
             raise TypeError("resolved AMR hierarchy evidence is missing")
         hierarchy = resolved_hierarchy.plan
         amr_program_context = AMRProgramSupportContext(
-            refined_hierarchy=(
-                hierarchy.level_count != 1
-                or type(hierarchy.regrid) is not FrozenHierarchy
-            ),
+            hierarchy_level_count=hierarchy.level_count,
+            frozen_hierarchy=type(hierarchy.regrid) is FrozenHierarchy,
             shared_block_interfaces=has_shared_interfaces,
             field_routes_validated=True,
         )

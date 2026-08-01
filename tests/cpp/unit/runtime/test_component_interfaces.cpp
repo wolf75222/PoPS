@@ -1,6 +1,7 @@
 #include <pops/amr/tagging/tagging_truth.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
+#include <pops/runtime/amr/persistent_tagging_state.hpp>
 #include <pops/runtime/config/component_interfaces.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
@@ -123,6 +124,51 @@ TEST(ComponentInterfaces, FallibleOutcomeKeepsTransactionActionExplicit) {
   EXPECT_EQ(solve.status, pops::component::EvaluationStatus::kReject);
   EXPECT_EQ(solve.reason, "non-converged");
   EXPECT_THROW(pops::component::EvaluationOutcome<int>::retry(""), std::invalid_argument);
+}
+
+TEST(ComponentInterfaces, PersistentTaggingStateUsesInclusiveCyclesAndCanonicalRestartImage) {
+  using State = pops::runtime::amr::PersistentTaggingState;
+  constexpr std::int32_t minimum_cycles = 2;
+  const State::CellKey first{0, 3, 4};
+  const State::CellKey redistributed{1, 6, 8};
+
+  State state;
+  state.begin_cycle(minimum_cycles);
+  ASSERT_TRUE(state.transition_allowed(first, minimum_cycles));
+  state.record(first, State::Decision::Refine, minimum_cycles);
+  EXPECT_FALSE(state.transition_allowed(first, minimum_cycles));
+
+  state.begin_cycle(minimum_cycles);
+  EXPECT_FALSE(state.transition_allowed(first, minimum_cycles));
+  state.record(redistributed, State::Decision::Coarsen, minimum_cycles);
+  const auto image = state.encode(minimum_cycles, "test::tagging-graph@1");
+  ASSERT_FALSE(image.empty());
+
+  const std::vector<pops::Box2D> domains{
+      pops::Box2D{{0, 0}, {7, 7}},
+      pops::Box2D{{0, 0}, {15, 15}},
+  };
+  State restored = State::decode(image, minimum_cycles, "test::tagging-graph@1", domains);
+  EXPECT_EQ(restored.cycle(), state.cycle());
+  EXPECT_EQ(restored.active_entry_count(), state.active_entry_count());
+  EXPECT_FALSE(restored.transition_allowed(first, minimum_cycles));
+  EXPECT_FALSE(restored.transition_allowed(redistributed, minimum_cycles));
+
+  const State accepted = restored;
+  restored.begin_cycle(minimum_cycles);
+  EXPECT_EQ(accepted.cycle(), state.cycle())
+      << "a speculative tagging cycle must detach from the accepted snapshot";
+  EXPECT_TRUE(restored.transition_allowed(first, minimum_cycles))
+      << "the inclusive min-cycle boundary must allow the next transition";
+  EXPECT_FALSE(restored.transition_allowed(redistributed, minimum_cycles));
+  EXPECT_THROW((void)State::decode(image, minimum_cycles + 1, "test::tagging-graph@1", domains),
+               std::invalid_argument);
+  EXPECT_THROW((void)State::decode(image, minimum_cycles, "test::other-graph", domains),
+               std::invalid_argument);
+  std::vector<std::uint8_t> truncated = image;
+  truncated.pop_back();
+  EXPECT_THROW((void)State::decode(truncated, minimum_cycles, "test::tagging-graph@1", domains),
+               std::invalid_argument);
 }
 
 TEST(ComponentInterfaces, SolveReportCarriesTypedIncompatibleRhsReason) {

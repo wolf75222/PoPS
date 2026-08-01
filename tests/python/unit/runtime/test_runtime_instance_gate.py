@@ -1613,13 +1613,25 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
     restart_identity = make_identity("restart", {"test": "checkpoint"})
     hierarchy = RegridOnRestart()
     receipt = {
-        "schema_version": 1,
+        "schema_version": 2,
         "policy_identity": hierarchy.identity.token,
         "changed": True,
         "accepted_time": 0.5,
         "accepted_macro_step": 7,
         "before": {"topology_epoch": 3},
         "after": {"topology_epoch": 4},
+        "accepted_contract_identity_before": make_identity(
+            "restart-accepted-contract", {"phase": "before"}
+        ).token,
+        "accepted_contract_identity_after": make_identity(
+            "restart-accepted-contract", {"phase": "after"}
+        ).token,
+        "history_consensus_identity_before": make_identity(
+            "restart-history-image", {"phase": "before"}
+        ).token,
+        "history_consensus_identity_after": make_identity(
+            "restart-history-image", {"phase": "after"}
+        ).token,
         "composite_integrals_before": [
             {"block": "tracer", "component": 0, "value": 1.25}
         ],

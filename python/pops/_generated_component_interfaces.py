@@ -3,8 +3,8 @@ from __future__ import annotations
 
 NATIVE_COMPONENT_ABI_VERSION = 1
 NATIVE_COMPONENT_COMMON_ABI_VERSION = 1
-NATIVE_COMPONENT_CATALOG_SHA256 = '5c991781aadafd3165dccb4642086c8b20fbd4a83ee8e462f1e29078ecb0d1c4'
-NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'b29e5d1d811234bd55bfce83ffdf810ed95868392d1ac1da5644f8886620e129'
+NATIVE_COMPONENT_CATALOG_SHA256 = '651f858030d8a17d2d9f0b7c5e4ef0ba4c20799f996be99ee94f75e37023b76b'
+NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = '47c3a146c9d7e20d0786fa703fe5e6b9ba27f063065e39646f4a20bb4b0e97ec'
 NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
  'execution_modes': {'native_backend': 1, 'host': 2},
  'collective_scopes': {'none': 0},
@@ -23,7 +23,7 @@ NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
  'maximum_stencil_terms': 16,
  'maximum_instruction_count': 128,
  'non_finite_policy': 'reject',
- 'persistent_hysteresis': False}
+ 'persistent_hysteresis': True}
 NATIVE_COMPONENT_INTERFACES = ({'id': 0,
   'name': 'numerical_flux',
   'uri': 'pops://interfaces/numerical-flux',

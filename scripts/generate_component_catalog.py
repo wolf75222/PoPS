@@ -154,9 +154,9 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
         "indicator_stencil_routes", "maximum_stencil_terms",
         "maximum_instruction_count", "non_finite_policy", "persistent_hysteresis",
     }, "tagging_program_abi")
-    if tagging["version"] != 1 or tagging["persistent_hysteresis"] is not False:
+    if tagging["version"] != 1 or tagging["persistent_hysteresis"] is not True:
         raise CatalogError(
-            "tagging_program_abi v1 requires explicit non-persistent hysteresis")
+            "tagging_program_abi v1 requires checkpointed persistent hysteresis")
     if tagging["non_finite_policy"] != "reject":
         raise CatalogError(
             "tagging_program_abi v1 requires fail-closed non-finite rejection")
