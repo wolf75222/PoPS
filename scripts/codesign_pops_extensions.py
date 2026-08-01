@@ -72,6 +72,33 @@ def _checked_codesign(command: Sequence[str], *, action: str) -> subprocess.Comp
     return result
 
 
+def _has_valid_adhoc_signature(codesign: str, extension: Path) -> bool:
+    """Return whether ``extension`` already carries the release signature policy.
+
+    Release validation must not rewrite bytes which came from the retained wheel: those are the
+    bytes eventually published.  Probe first and only repair an absent/invalid signature.  The
+    release preflight separately refuses a repair which changes the retained native-member digest.
+    """
+
+    verification = subprocess.run(
+        (codesign, "--verify", "--strict", "--verbose=2", str(extension)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if verification.returncode != 0:
+        return False
+    inspection = subprocess.run(
+        (codesign, "--display", "--verbose=4", str(extension)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if inspection.returncode != 0:
+        return False
+    return "Signature=adhoc" in "%s\n%s" % (inspection.stdout, inspection.stderr)
+
+
 def codesign_imported_extensions(*, if_present: bool = False) -> tuple[Path, ...]:
     """Sign and verify every extension a clean ``import pops`` will load on Darwin."""
     if sys.platform != "darwin":
@@ -86,6 +113,8 @@ def codesign_imported_extensions(*, if_present: bool = False) -> tuple[Path, ...
     if not codesign:
         raise CodesignError("Darwin requires 'codesign', but it is not available on PATH")
     for extension in extensions:
+        if _has_valid_adhoc_signature(codesign, extension):
+            continue
         _checked_codesign(
             (codesign, "--force", "--sign", "-", str(extension)),
             action="ad-hoc signing %s" % extension)
