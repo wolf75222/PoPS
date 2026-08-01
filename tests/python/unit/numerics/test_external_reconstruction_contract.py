@@ -70,13 +70,17 @@ def test_builtin_reconstruction_contract_is_derived_from_generated_routes() -> N
         WENO5Z,
         authenticated_reconstruction_route,
     )
-    from pops.numerics.reconstruction.limiters import Minmod, VanLeer
+    from pops.numerics.reconstruction.limiters import MC, Minmod, Superbee, VanLeer
 
     for descriptor, token, native_id, order, depth in (
         (FirstOrder(), "none", "pops::NoSlope", 1, 1),
         (Minmod(), "minmod", "pops::Minmod", 2, 2),
         (VanLeer(), "vanleer", "pops::VanLeer", 2, 2),
+        (MC(), "mc", "pops::MC", 2, 2),
+        (Superbee(), "superbee", "pops::Superbee", 2, 2),
         (MUSCL(VanLeer()), "vanleer", "pops::VanLeer", 2, 2),
+        (MUSCL(MC()), "mc", "pops::MC", 2, 2),
+        (MUSCL(Superbee()), "superbee", "pops::Superbee", 2, 2),
         (WENO5(), "weno5", "pops::Weno5", 5, 3),
         (WENO5Z(), "weno5", "pops::Weno5", 5, 3),
     ):

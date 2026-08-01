@@ -128,11 +128,11 @@ TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {
         << "field_solver 'amg' refuse (famille, token, set valide, no-default)";
   }
   {
-    const std::string m = throw_message([] { parse_limiter_route("superbee"); });
-    EXPECT_TRUE(contains(m, "limiter") && contains(m, "superbee") &&
-                contains(m, "none|minmod|vanleer|weno5") &&
+    const std::string m = throw_message([] { parse_limiter_route("koren"); });
+    EXPECT_TRUE(contains(m, "limiter") && contains(m, "koren") &&
+                contains(m, "none|minmod|vanleer|weno5|mc|superbee") &&
                 contains(m, "never fall back to a default"))
-        << "limiter 'superbee' refuse (famille, token, set valide, no-default)";
+        << "limiter 'koren' refuse (famille, token, set valide, no-default)";
   }
   {
     const std::string m = throw_message([] { parse_transport_route("upwind"); });

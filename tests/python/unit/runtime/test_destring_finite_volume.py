@@ -25,7 +25,7 @@ import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 from pops.numerics.riemann import Rusanov, HLL, HLLC, Roe  # noqa: E402
 from pops.numerics.reconstruction import FirstOrder, MUSCL, WENO5, WENO5Z  # noqa: E402
-from pops.numerics.reconstruction.limiters import Minmod, VanLeer  # noqa: E402
+from pops.numerics.reconstruction.limiters import MC, Minmod, Superbee, VanLeer  # noqa: E402
 from pops.numerics.variables import Conservative, Primitive  # noqa: E402
 
 
@@ -91,9 +91,12 @@ def test_typed_flux_descriptors_lower():
 
 def test_typed_limiter_descriptors_lower():
     cases = ((FirstOrder(), "none"), (Minmod(), "minmod"), (VanLeer(), "vanleer"),
+             (MC(), "mc"), (Superbee(), "superbee"),
              (WENO5(), "weno5"), (WENO5Z(), "weno5"),
              (MUSCL(limiter=Minmod()), "minmod"),
-             (MUSCL(limiter=VanLeer()), "vanleer"))
+             (MUSCL(limiter=VanLeer()), "vanleer"),
+             (MUSCL(limiter=MC()), "mc"),
+             (MUSCL(limiter=Superbee()), "superbee"))
     for desc, token in cases:
         s = engine.Spatial(limiter=desc)
         assert s.limiter == token, (desc, s.limiter)
@@ -109,6 +112,17 @@ def test_typed_variable_descriptors_lower():
 def test_combined_typed_spatial():
     s = engine.Spatial(limiter=VanLeer(), flux=HLLC(), recon=Primitive())
     assert (s.limiter, s.flux, s.recon) == ("vanleer", "hllc", "primitive")
+
+
+def test_mc_and_superbee_share_the_prepared_spatial_route() -> None:
+    for limiter, token in ((MC(), "mc"), (Superbee(), "superbee")):
+        for variables, variables_token in (
+            (Conservative(), "conservative"), (Primitive(), "primitive")
+        ):
+            spatial = engine.Spatial(limiter=limiter, flux=Roe(), recon=variables)
+            assert spatial.limiter.id == "limiter.%s" % token
+            assert spatial.limiter.native_entry == limiter.native_id
+            assert (spatial.flux, spatial.recon) == ("roe", variables_token)
 
 
 def test_defaults_are_canonical():
