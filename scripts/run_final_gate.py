@@ -38,7 +38,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 4
+EVIDENCE_SCHEMA_VERSION = 7
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -188,6 +188,41 @@ print(json.dumps({
                                            for name in expected):
         raise FinalGateError("runtime provenance is incomplete")
     return payload
+
+
+def _json_evidence(stdout: str, *, gate: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise FinalGateError("%s evidence was not JSON: %s" % (gate, stdout[-4000:])) from exc
+    if not isinstance(payload, dict):
+        raise FinalGateError("%s evidence must be a JSON object" % gate)
+    return payload
+
+
+def _signed_runtime_sha256(
+    evidence: dict[str, Any], *, retained_native_sha256: str
+) -> str:
+    if set(evidence) != {"schema_version", "platform", "extensions"} \
+            or evidence["schema_version"] != 1 or evidence["platform"] != "darwin":
+        raise FinalGateError("codesign evidence is not the Darwin release proof")
+    extensions = evidence["extensions"]
+    if not isinstance(extensions, list) or len(extensions) != 1:
+        raise FinalGateError("codesign evidence must authenticate exactly one extension")
+    extension = extensions[0]
+    if not isinstance(extension, dict) or set(extension) != {
+            "path", "sha256", "signature"} or extension["signature"] != "adhoc":
+        raise FinalGateError("codesign extension evidence is malformed")
+    digest = extension["sha256"]
+    if not isinstance(digest, str) or len(digest) != 64 \
+            or any(character not in "0123456789abcdef" for character in digest):
+        raise FinalGateError("codesign extension sha256 is malformed")
+    if digest != retained_native_sha256:
+        raise FinalGateError(
+            "codesign changed the retained wheel native bytes; refusing to publish "
+            "an artifact different from the validated runtime"
+        )
+    return digest
 
 
 def _contract() -> tuple[str, str]:
@@ -363,7 +398,11 @@ print("reopened_npz=%d arrays=%d" % (len(sys.argv) - 1, arrays))
         ["python", "-c", code, *(str(path) for path in paths)]))
 
 
-def _run_examples(recorder: Recorder) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _run_examples(
+    recorder: Recorder,
+    *,
+    runtime_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     results: dict[str, Any] = {}
     reopened: dict[str, Any] = {}
     restarted: dict[str, Any] = {}
@@ -372,7 +411,17 @@ def _run_examples(recorder: Recorder) -> tuple[dict[str, Any], dict[str, Any], d
         destination = examples_root / example.stem
         stdout = recorder.run(
             "examples",
-            _conda_command(["python", str(example), "--output-dir", str(destination)]),
+            _conda_command([
+                "python",
+                "scripts/run_installed_example.py",
+                "--runtime-sha256",
+                runtime_sha256,
+                "--example",
+                str(example),
+                "--",
+                "--output-dir",
+                str(destination),
+            ]),
         )
         missing = [marker for marker in REQUIRED_PROOF_MARKERS if marker not in stdout]
         if missing:
@@ -391,6 +440,7 @@ def _run_examples(recorder: Recorder) -> tuple[dict[str, Any], dict[str, Any], d
             "source_sha256": _sha256(ROOT / example),
             "stdout_sha256": hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
             "output_root": str(destination.relative_to(recorder.root)),
+            "runtime_sha256": runtime_sha256,
         }
     return results, reopened, restarted
 
@@ -465,6 +515,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "size": wheel.stat().st_size,
             },
         }
+        recorder.run("installed_wheel", _conda_command([
+            "python", "-m", "pip", "install", "--force-reinstall", "--no-deps", str(wheel),
+        ]))
+        installed_wheel_stdout = recorder.run(
+            "installed_wheel",
+            _conda_command([
+                "python", "scripts/prove_installed_wheel.py", "--wheel", str(wheel),
+            ]),
+        )
+        recorder.rows["installed_wheel"]["evidence"] = _json_evidence(
+            installed_wheel_stdout, gate="installed_wheel"
+        )
+        codesign_stdout = recorder.run(
+            "codesign",
+            _conda_command([
+                "python", "scripts/codesign_pops_extensions.py", "--json",
+            ]),
+        )
+        recorder.rows["codesign"]["evidence"] = _json_evidence(
+            codesign_stdout, gate="codesign"
+        )
         recorder.run("official_build", _conda_command(["cmake", "--preset", "serial"]))
         recorder.run("official_build", _conda_command(["cmake", "--build", "--preset", "serial"]))
         doctor_code = (
@@ -475,8 +546,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             "print('doctor package=' + pops.__version__)"
         )
         recorder.run("doctor", _conda_command(["python", "-c", doctor_code]))
-        recorder.run("codesign", _conda_command(
-            ["python", "scripts/codesign_pops_extensions.py"]))
 
         ctest_dir = _resolve_ctest_dir(args.ctest_dir)
         native_junit = evidence_root / "reports" / "native-conformance.xml"
@@ -500,7 +569,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "required_lane": _junit_summary(python_junit),
             "selection": PYTHON_REQUIRED_SELECTION,
         }
-        examples, reopened, restarted = _run_examples(recorder)
+        signed_runtime_sha256 = _signed_runtime_sha256(
+            recorder.rows["codesign"]["evidence"],
+            retained_native_sha256=(
+                recorder.rows["installed_wheel"]["evidence"]["native_sha256"]
+            ),
+        )
+        examples, reopened, restarted = _run_examples(
+            recorder, runtime_sha256=signed_runtime_sha256)
         recorder.rows["examples"]["evidence"] = {"examples": examples}
         recorder.rows["artifact_reopen"]["evidence"] = {"examples": reopened}
         recorder.derived("strict_restart", {"examples": restarted})
