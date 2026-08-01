@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 import sys
@@ -26,7 +27,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 39
+    assert len(data["check"]) == 41
 
 
 def test_m3_gate_pins_three_level_subcycled_reflux_proof():
@@ -39,15 +40,13 @@ def test_m3_gate_pins_three_level_subcycled_reflux_proof():
         "kind": "ctest",
         "target": "test_amr_history_ring",
         "test_regex": (
-            "^test_amr_history_ring\\."
-            "ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"
+            "^test_amr_history_ring\\.ThreeLevelProgramSynchronizesEachRecursiveCatchUp$"
         ),
     } in data["check"]
 
     source = ROOT / "tests/cpp/integration/amr/test_amr_history_ring.cpp"
     assert (
-        "TEST(test_amr_history_ring, "
-        "ThreeLevelProgramSynchronizesEachRecursiveCatchUp)"
+        "TEST(test_amr_history_ring, ThreeLevelProgramSynchronizesEachRecursiveCatchUp)"
     ) in source.read_text(encoding="utf-8")
 
 
@@ -63,27 +62,57 @@ def test_m3_gate_pins_metric_weighted_composite_diagnostic_proof():
         "test_regex": "^test_mpi_amr_distributed_coarse_np2$",
     } in data["check"]
 
-    source = (
-        ROOT
-        / "tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "tests/cpp/integration/mpi/test_mpi_amr_distributed_coarse.cpp").read_text(
+        encoding="utf-8"
+    )
     assert "runtime::amr::composite_reduce_fields" in source
     assert "std::fabs(integral - 1.25)" in source
 
 
-def test_m3_gate_pins_fail_closed_persistent_hysteresis_proofs():
+def test_m3_gate_pins_accepted_interface_ledger_restart_proof():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "positive",
+        "kind": "ctest",
+        "target": "test_program_reflux_ledger",
+        "test_regex": (
+            "^test_program_reflux_ledger\\.accepted_checkpoint_state_round_trips_canonically$"
+        ),
+    } in data["check"]
+
+    source = ROOT / "tests/cpp/integration/amr/test_program_reflux_ledger.cpp"
+    assert (
+        "TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonically)"
+    ) in source.read_text(encoding="utf-8")
+
+
+def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
     checks = data["check"]
     assert {
         "issue": "ADC-678",
         "requirement": "accepted_state",
-        "polarity": "refusal",
+        "polarity": "positive",
         "kind": "pytest",
         "target": "accepted_state",
         "nodeid": (
-            "tests/python/unit/amr/test_public_amr_resolution.py::"
-            "test_tagging_resolution_refuses_unimplemented_persistent_hysteresis"
+            "tests/python/integration/amr/test_amr_regrid_on_restart.py::"
+            "test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault"
+        ),
+    } in checks
+    assert {
+        "issue": "ADC-678",
+        "requirement": "restart_hierarchy_policy",
+        "polarity": "positive",
+        "kind": "pytest",
+        "target": "restart_hierarchy_policy",
+        "nodeid": (
+            "tests/python/unit/runtime/test_amr_checkpoint_contract.py::"
+            "test_regridded_contract_authenticates_transformed_topology_and_level_axes"
         ),
     } in checks
     assert {
@@ -93,20 +122,19 @@ def test_m3_gate_pins_fail_closed_persistent_hysteresis_proofs():
         "kind": "ctest",
         "target": "test_amr_native_loader",
         "test_regex": (
-            "^test_amr_native_loader\\."
-            "PreparedAmrProvidersExecuteExactTablesAndProvenance$"
+            "^test_amr_native_loader\\.PreparedAmrProvidersExecuteExactTablesAndProvenance$"
         ),
     } in checks
 
-    authoring_source = (
-        ROOT / "tests/python/unit/amr/test_public_amr_resolution.py"
+    restart_source = (
+        ROOT / "tests/python/integration/amr/test_amr_regrid_on_restart.py"
     ).read_text(encoding="utf-8")
-    assert "test_tagging_resolution_refuses_unimplemented_persistent_hysteresis" in (
-        authoring_source
-    )
+    assert "HYSTERESIS_CYCLES = 4" in restart_source
+    assert "transformed_cycle == source_cycle + 1" in restart_source
+    assert "_assert_same_accepted_image(restarted, rollback_image)" in restart_source
+    assert "_runtime_tagging_hysteresis(restarted) == transformed_hysteresis[0]" in restart_source
     native_source = (
-        ROOT
-        / "tests/cpp/integration/native_loader/test_amr_native_loader.cpp"
+        ROOT / "tests/cpp/integration/native_loader/test_amr_native_loader.cpp"
     ).read_text(encoding="utf-8")
     assert "unsupported_hysteresis.min_cycles = 1" in native_source
     assert "EXPECT_EQ(tag_call_count(), calls_before_hysteresis)" in native_source
@@ -163,8 +191,7 @@ def test_m3_gate_rejects_a_missing_or_non_exact_ctest_case_before_build(tmp_path
     _, errors = _load_runner().validate_manifest(manifest)
 
     assert any(
-        "is not one exact source-registered case for target 'test_amr_history_ring'"
-        in error
+        "is not one exact source-registered case for target 'test_amr_history_ring'" in error
         for error in errors
     )
 
@@ -176,20 +203,19 @@ def test_m3_gate_rejects_a_missing_or_non_exact_ctest_case_before_build(tmp_path
     manifest.write_text(data, encoding="utf-8")
     _, errors = _load_runner().validate_manifest(manifest)
     assert any(
-        "is not one exact source-registered case for target 'test_amr_history_ring'"
-        in error
+        "is not one exact source-registered case for target 'test_amr_history_ring'" in error
         for error in errors
     )
 
 
 def test_m3_gate_does_not_authenticate_commented_or_stringified_gtests():
-    source = r'''
+    source = r"""
 TEST(RealFixture, ExecutedProof) {}
 // TEST(CommentFixture, NotAProof) {}
 /* TEST(BlockCommentFixture, NotAProofEither) {} */
 const char* text = "TEST(StringFixture, StillNotAProof)";
 const char* raw = R"cpp(TEST(RawStringFixture, StillNotAProof))cpp";
-'''
+"""
 
     assert _load_runner()._registered_gtest_cases(source) == {
         "RealFixture.ExecutedProof",
@@ -223,6 +249,32 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
         "nodeid": (
             "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::"
             "test_regrid_on_restart_mpi_collective_rollback_and_lineage"
+        ),
+        "nproc": 2,
+    } in checks
+    entrypoint = ROOT / "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py"
+    tree = ast.parse(entrypoint.read_text(encoding="utf-8"), filename=str(entrypoint))
+    run_all = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run_all"
+    )
+    direct_calls = {
+        node.func.id
+        for node in ast.walk(run_all)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {
+        "test_regrid_on_restart_mpi_collective_rollback_and_lineage",
+        "test_regrid_on_restart_mpi_shared_interface_transaction",
+    } <= direct_calls
+    assert {
+        "issue": "ADC-678",
+        "requirement": "restart_hierarchy_policy",
+        "polarity": "positive",
+        "kind": "mpi_python",
+        "target": "restart_hierarchy_policy",
+        "nodeid": (
+            "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py::"
+            "test_regrid_on_restart_mpi_shared_interface_transaction"
         ),
         "nproc": 2,
     } in checks
@@ -270,8 +322,7 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
     monkeypatch.setattr(runner, "_python_mpi_orchestrators", lambda: set())
     _, errors = runner.validate_manifest(MANIFEST)
     assert any(
-        "test_amr_rank_change_restart.py is not a manifest-owned serial MPI orchestrator"
-        in error
+        "test_amr_rank_change_restart.py is not a manifest-owned serial MPI orchestrator" in error
         for error in errors
     )
 
@@ -306,9 +357,7 @@ def test_m3_mpi_python_launch_is_explicit_required_and_check_only_safe(monkeypat
         runner._mpi_python_command("mpiexec", 2, relative)
 
 
-def test_m3_required_pytest_execution_rejects_every_skip_or_xfail(
-    tmp_path, monkeypatch
-):
+def test_m3_required_pytest_execution_rejects_every_skip_or_xfail(tmp_path, monkeypatch):
     runner = _load_runner()
     report = tmp_path / "pytest.xml"
     skipped_xml = (

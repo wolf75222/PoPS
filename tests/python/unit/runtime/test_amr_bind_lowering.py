@@ -1,17 +1,88 @@
 """AMR bind lowering preserves every authored Cartesian axis topology."""
 from __future__ import annotations
 
+import pytest
+
+from pops.amr import AMRRegrid
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh.grid import CartesianGrid, PeriodicAxes
 from pops.runtime._amr_bind_lowering import (
     _native_amr_grid_values,
     _physical_patch_rectangles,
+    _regrid_every,
 )
+from pops.runtime._runtime_authorities import (
+    _materialized_shared_interface_levels,
+    _validate_refined_shared_interface_execution,
+)
+from pops.time import Clock, every
 
 
 def _frame():
     return Rectangle("unit_square", (0, 0), (1, 1)).frame(Cartesian2D())
+
+
+def test_native_regrid_lowering_preserves_explicit_frozen_and_scheduled_policies() -> None:
+    assert AMRRegrid.frozen().to_data() == {
+        "schema_version": 1,
+        "authority_type": "amr_regrid",
+        "mode": "frozen",
+    }
+    assert _regrid_every({"regrid": AMRRegrid.frozen().to_data()}) == 0
+    scheduled = AMRRegrid(schedule=every(3, clock=Clock("macro")))
+    assert _regrid_every({"regrid": scheduled.to_data()}) == 3
+
+
+def test_frozen_capacity_installs_exact_materialized_prefix() -> None:
+    class NativeHierarchyProbe:
+        @staticmethod
+        def n_levels() -> int:
+            return 3
+
+    class ResolvedHierarchyProbe:
+        level_count = 4
+
+    assert _materialized_shared_interface_levels(
+        NativeHierarchyProbe(), ResolvedHierarchyProbe()) == (0, 1, 2)
+
+
+def test_refined_shared_interface_bind_accepts_exact_mpi_world() -> None:
+    mpi = {"communicator_identity": "MPI_COMM_WORLD"}
+    _validate_refined_shared_interface_execution((0,), mpi, 2)
+    _validate_refined_shared_interface_execution((0, 1), mpi, 1)
+    _validate_refined_shared_interface_execution((0, 1), mpi, 2)
+    _validate_refined_shared_interface_execution((0, 1, 2), mpi, 1)
+    _validate_refined_shared_interface_execution((0, 1, 2), mpi, 2)
+
+
+def test_dynamic_refined_shared_interface_bind_accepts_serial_and_exact_mpi_world() -> None:
+    _validate_refined_shared_interface_execution(
+        (0, 1, 2),
+        {"communicator_identity": "serial"},
+        1,
+        dynamic_regrid=True,
+    )
+    _validate_refined_shared_interface_execution(
+        (0, 1, 2),
+        {"communicator_identity": "MPI_COMM_WORLD"},
+        2,
+        dynamic_regrid=True,
+    )
+
+
+def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> None:
+    with pytest.raises(ValueError, match="contiguous L0 prefix"):
+        _validate_refined_shared_interface_execution((), {}, 1)
+    with pytest.raises(ValueError, match="contiguous L0 prefix"):
+        _validate_refined_shared_interface_execution((0, 2), {}, 1)
+    with pytest.raises(TypeError, match="exact bool"):
+        _validate_refined_shared_interface_execution(
+            (0, 1), {"communicator_identity": "serial"}, 1, dynamic_regrid=1
+        )
+    with pytest.raises(TypeError, match="serial or exact MPI_COMM_WORLD"):
+        _validate_refined_shared_interface_execution(
+            (0, 1), {"communicator_identity": "MPI_COMM_SELF"}, 1)
 
 
 def test_native_amr_grid_preserves_none_or_all_periodic_axes() -> None:

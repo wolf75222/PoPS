@@ -35,6 +35,7 @@ from pops.mesh.boundaries import (
     InterfaceGhost,
     InterfacePermutation,
     InterfaceSide,
+    InterfaceTraceOperation,
     MultiBlockInterface,
     NumericalClosure,
     PeriodicGhost,
@@ -70,6 +71,21 @@ class _ExecutableBoundaryAuthority:
             "schema_version": 1,
             "authority_type": "prepared_boundary_plan",
             "identity": "test-plan",
+        }
+
+
+class _TraceBoundaryAuthority(_ExecutableBoundaryAuthority):
+    def __init__(self, required_depth):
+        super().__init__()
+        self.required_depth = required_depth
+
+    def compile_boundary_data(self):
+        self.compile_calls += 1
+        return {
+            "schema_version": 1,
+            "authority_type": "prepared_boundary_plan_compile",
+            "required_depth": self.required_depth,
+            "ncomp": 1,
         }
 
 
@@ -334,7 +350,9 @@ def _physical_provider(boundary, name):
         dependencies=_none_dependencies())
 
 
-def _interface(topology):
+def _interface(
+        topology, *, trace_provider="limiter.none",
+        trace_operation=InterfaceTraceOperation.CELL_AVERAGE, required_depth=1):
     # BoundaryTopology canonicalizes its sets, so tuple position is not geometric meaning.  Select
     # the authenticated lower face explicitly and pair it with the peer block's upper face.
     left_boundary = next(
@@ -349,11 +367,13 @@ def _interface(topology):
     left = InterfaceSide(
         left_boundary, _h("left_layout", "layout", CASE),
         _h("fv", "discretization"), left_boundary.orientation,
-        _h("left_projection", "interface_projection"))
+        _h("left_projection", "interface_projection"), trace_provider,
+        trace_operation, required_depth)
     right = InterfaceSide(
         right_boundary, _h("right_layout", "layout", CASE),
         _h("dg", "discretization"), right_boundary.orientation,
-        _h("right_projection", "interface_projection"))
+        _h("right_projection", "interface_projection"), trace_provider,
+        trace_operation, required_depth)
     return MultiBlockInterface(
         _h("coupling", "multiblock_interface", CASE), left, right,
         _h("shared_flux", "conservative_flux", CASE),
@@ -392,6 +412,9 @@ def test_all_explicit_producer_protocols_and_shared_interface_flux():
     assert payload["shared_conservative_flux"]["qualified_id"] \
         == interface.shared_conservative_flux.qualified_id
     assert payload["left"]["projection"] != payload["right"]["projection"]
+    assert payload["left"]["trace_provider"] == "limiter.none"
+    assert payload["left"]["trace_operation"] == "cell_average"
+    assert payload["left"]["required_depth"] == 1
 
     same_boundary = next(
         row for row in topology.boundaries
@@ -400,7 +423,8 @@ def test_all_explicit_producer_protocols_and_shared_interface_flux():
     same_direction = InterfaceSide(
         same_boundary, _h("other_layout", "layout", CASE),
         _h("other_disc", "discretization"), same_boundary.orientation,
-        _h("other_projection", "interface_projection"))
+        _h("other_projection", "interface_projection"), "limiter.none",
+        InterfaceTraceOperation.CELL_AVERAGE, 1)
     with pytest.raises(ValueError, match="opposite orientations"):
         MultiBlockInterface(
             _h("bad", "multiblock_interface", CASE), interface.left, same_direction,
@@ -413,6 +437,65 @@ def test_all_explicit_producer_protocols_and_shared_interface_flux():
         GhostProducerRegistry(physical).resolve(
             topology, _coverage(wrong_region), (wrong_region,),
             (GhostProduction(wrong_region, physical),))
+
+
+@pytest.mark.parametrize(
+    ("trace_provider", "required_depth"),
+    (("limiter.minmod", 2), ("limiter.weno5", 3)),
+)
+def test_interface_trace_depth_is_provider_derived_and_higher_order_fails_closed(
+        trace_provider, required_depth):
+    topology = _topology()
+    interface = _interface(
+        topology, trace_provider=trace_provider,
+        trace_operation=InterfaceTraceOperation.RECONSTRUCTED_FACE,
+        required_depth=required_depth)
+    producer = InterfaceGhost(
+        handle=_producer_handle("deep_interface"), protocol=_protocol("interface"),
+        interface=interface)
+    region = _region(
+        "deep_interface", boundary=interface.left.boundary, layout=interface.left.layout)
+    plan = GhostProducerRegistry(producer).resolve(
+        topology, _coverage(region), (region,), (GhostProduction(region, producer),),
+        interfaces=(interface,),
+        execution_authority=_TraceBoundaryAuthority(required_depth))
+
+    with pytest.raises(
+            NotImplementedError, match="no executable reconstruction/mapped-halo provider"):
+        plan.compile_boundary_data()
+
+
+def test_first_order_cell_average_trace_reaches_numerical_flux_binding_preflight():
+    topology = _topology()
+    interface = _interface(topology)
+    producer = InterfaceGhost(
+        handle=_producer_handle("first_order_interface"), protocol=_protocol("interface"),
+        interface=interface)
+    region = _region(
+        "first_order_interface", boundary=interface.left.boundary, layout=interface.left.layout)
+    plan = GhostProducerRegistry(producer).resolve(
+        topology, _coverage(region), (region,), (GhostProduction(region, producer),),
+        interfaces=(interface,), execution_authority=_TraceBoundaryAuthority(1))
+
+    with pytest.raises(
+            NotImplementedError, match="require qualified NumericalFlux components"):
+        plan.compile_boundary_data()
+
+
+def test_interface_trace_depth_must_be_covered_by_selected_boundary_provider():
+    topology = _topology()
+    interface = _interface(topology, required_depth=3)
+    producer = InterfaceGhost(
+        handle=_producer_handle("mismatched_interface"), protocol=_protocol("interface"),
+        interface=interface)
+    region = _region(
+        "mismatched_interface", boundary=interface.left.boundary, layout=interface.left.layout)
+    plan = GhostProducerRegistry(producer).resolve(
+        topology, _coverage(region), (region,), (GhostProduction(region, producer),),
+        interfaces=(interface,), execution_authority=_TraceBoundaryAuthority(2))
+
+    with pytest.raises(ValueError, match="does not cover shared-interface trace depth"):
+        plan.compile_boundary_data()
 
 
 def test_incompatible_dirichlet_corner_diagnostic_names_both_sources():
