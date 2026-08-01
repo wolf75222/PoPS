@@ -125,6 +125,8 @@ class ScalarRuntimeSnapshot:
     macro_step: int
     states: tuple[np.ndarray, ...]
     patch_boxes: tuple[tuple[int, ...], ...]
+    regrid_count: int
+    topology_epoch: int
     program_hash: str
     program_transaction_state: str
     consumer_graph_identity: str
@@ -586,6 +588,7 @@ def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
     level_count = int(simulation.n_levels())
     if level_count <= 0:
         raise RuntimeError("scalar acceptance installed no AMR hierarchy levels")
+    regrid = simulation.amr.explain_regrid()
     return ScalarRuntimeSnapshot(
         time=float(simulation.time()),
         macro_step=int(simulation.macro_step()),
@@ -600,6 +603,8 @@ def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
             tuple(int(value) for value in row)
             for row in simulation.patch_boxes()
         ),
+        regrid_count=int(regrid.regrid_count),
+        topology_epoch=int(regrid.topology_epoch),
         program_hash=str(simulation.installed_program_hash()),
         program_transaction_state=_program_transaction_state(simulation),
         consumer_graph_identity=simulation.consumer_graph.identity.token,
@@ -619,6 +624,8 @@ def _require_same_snapshot(
         "time": (left.time, right.time),
         "macro_step": (left.macro_step, right.macro_step),
         "patch_boxes": (left.patch_boxes, right.patch_boxes),
+        "regrid_count": (left.regrid_count, right.regrid_count),
+        "topology_epoch": (left.topology_epoch, right.topology_epoch),
         "program_hash": (left.program_hash, right.program_hash),
         "program_transaction_state": (
             left.program_transaction_state,
@@ -652,6 +659,37 @@ def _require_refined_hierarchy(snapshot: ScalarRuntimeSnapshot, *, where: str) -
         raise RuntimeError(
             "%s did not execute the requested refined AMR hierarchy: expected=%r, actual=%r"
             % (where, expected_levels, actual_levels)
+        )
+    if snapshot.regrid_count <= 0 or snapshot.topology_epoch <= 0:
+        raise RuntimeError(
+            "%s exposes refined patches but no completed dynamic topology replacement: "
+            "regrid_count=%d, topology_epoch=%d"
+            % (where, snapshot.regrid_count, snapshot.topology_epoch)
+        )
+
+
+def _require_regrid_progress(
+    before: ScalarRuntimeSnapshot,
+    after: ScalarRuntimeSnapshot,
+    *,
+    where: str,
+) -> None:
+    """Require continuation to cross a completed topology-changing regrid window."""
+
+    if after.macro_step <= before.macro_step:
+        raise RuntimeError(
+            "%s did not advance the accepted macro-step (%d -> %d)"
+            % (where, before.macro_step, after.macro_step)
+        )
+    if after.regrid_count <= before.regrid_count:
+        raise RuntimeError(
+            "%s did not complete a dynamic regrid (%d -> %d)"
+            % (where, before.regrid_count, after.regrid_count)
+        )
+    if after.topology_epoch <= before.topology_epoch:
+        raise RuntimeError(
+            "%s did not replace the accepted topology (%d -> %d)"
+            % (where, before.topology_epoch, after.topology_epoch)
         )
 
 
@@ -864,6 +902,12 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
 
     hdf5_path, paraview_path, hdf5_identity, paraview_identity, error_norms = \
         _reopen_scientific_outputs(accepted_root)
+    checkpoint_contract = simulation.amr.explain_checkpoint()
+    if not checkpoint_contract.restartable or checkpoint_contract.violations:
+        raise RuntimeError(
+            "scalar AMR runtime does not expose a strict restart contract: %r"
+            % (tuple(checkpoint_contract.violations),)
+        )
     checkpoint_path = Path(simulation.checkpoint(root / "accepted_restart"))
     accepted = _snapshot(simulation)
     _require_refined_hierarchy(accepted, where="accepted scalar run")
@@ -893,6 +937,8 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
     )
     continuous, restarted = _snapshot(simulation), _snapshot(resumed)
     _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
+    _require_regrid_progress(accepted, continuous, where="uninterrupted continuation")
+    _require_regrid_progress(restored, restarted, where="restarted continuation")
     expected_levels = tuple(range(len(continuous.states)))
     continuous_report = simulation.program_report()
     restarted_report = resumed.program_report()
@@ -1003,6 +1049,15 @@ def main() -> None:
             evidence.program_evidence.flux_ledger_levels,
             evidence.program_evidence.synchronization_relations,
             evidence.program_evidence.synchronization_phases,
+        )
+    )
+    print(
+        "  AMR regrid: count=%d -> %d topology-epoch=%d -> %d"
+        % (
+            evidence.accepted.regrid_count,
+            evidence.restarted.regrid_count,
+            evidence.accepted.topology_epoch,
+            evidence.restarted.topology_epoch,
         )
     )
     print("  checkpoint: %s" % evidence.checkpoint_path)

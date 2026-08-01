@@ -7,6 +7,7 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -138,6 +139,8 @@ def test_target_has_one_authority_per_concern_and_no_legacy_path():
     assert "read_paraview(" in source
     assert "_scalar_error_norms(paraview)" in source
     assert "simulation.program_report()" in source
+    assert "simulation.amr.explain_regrid()" in source
+    assert "simulation.amr.explain_checkpoint()" in source
     assert "simulation.checkpoint(" in source
     assert "resumed.restart(" in source
 
@@ -232,3 +235,27 @@ def test_program_evidence_requires_every_level_and_ordered_amr_synchronization()
     assert evidence.flux_ledger_levels == (0, 1, 2)
     assert evidence.synchronization_relations == ((0, 1), (1, 2))
     assert evidence.synchronization_phases == ("reflux", "average_down")
+
+
+def test_regrid_progress_requires_a_completed_topology_replacement():
+    module = _load_example()
+    before = SimpleNamespace(macro_step=5, regrid_count=2, topology_epoch=3)
+
+    with pytest.raises(RuntimeError, match="did not complete a dynamic regrid"):
+        module._require_regrid_progress(
+            before,
+            SimpleNamespace(macro_step=10, regrid_count=2, topology_epoch=3),
+            where="unit continuation",
+        )
+    with pytest.raises(RuntimeError, match="did not replace the accepted topology"):
+        module._require_regrid_progress(
+            before,
+            SimpleNamespace(macro_step=10, regrid_count=3, topology_epoch=3),
+            where="unit continuation",
+        )
+
+    module._require_regrid_progress(
+        before,
+        SimpleNamespace(macro_step=10, regrid_count=3, topology_epoch=4),
+        where="unit continuation",
+    )
