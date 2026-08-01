@@ -141,6 +141,18 @@ test_regex = "^test_muscl_limiters\\.mc_and_superbee_match_reference_formulas$"
 
 [[check]]
 requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiter_qualification\\.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiter_qualification\\.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
 polarity = "refusal"
 target = "test_dispatch_tags"
 test_regex = "^test_dispatch_tags\\.validate_limiter_accepts_and_rejects$"
