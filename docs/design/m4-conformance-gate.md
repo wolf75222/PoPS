@@ -91,11 +91,13 @@ fault marker makes its solve report convergence while returning non-finite
 values, so the production field validation fails inside the native Program
 step. RuntimeInstance must restore
 the conservative state, field potential, accepted clock, macro-step, temporal
-authority, consumer cursors, reports, and provider evidence exactly. The
-component's prepared state is not mutated by this failure. After the external
-fault is removed, the same prepared component returns a finite result and the
-unchanged RuntimeInstance accepts the retry. The selected test defines no step
-wrapper and never replaces a native engine or step target.
+authority, consumer cursors, reports, and accepted provider evidence exactly.
+The immutable prepared component stays installed and may reuse its private
+topology cache, but that provisional cache is not published as accepted
+materialization. After the external fault is removed, the same prepared
+component returns a finite result and the unchanged RuntimeInstance accepts the
+retry. The selected test defines no step wrapper and never replaces a native
+engine or step target.
 
 That installed proof uses the MPI-enabled module with a one-rank
 `MPI_COMM_WORLD`. The System adapter authenticates and accepts this singleton

@@ -1680,8 +1680,6 @@ class SystemFieldSolver {
       program_boundary_baselines_;
   std::set<std::string> candidate_program_boundary_slots_;
   bool program_boundary_install_active_ = false;
-  std::map<std::string, std::shared_ptr<runtime::field::PreparedFieldSolverComponent>>
-      external_field_components_;
   EllipticBackendRegistry elliptic_registry_;
   std::shared_ptr<FieldNullspaceProviderRegistry> nullspace_provider_registry_;
 
@@ -1942,7 +1940,6 @@ class SystemFieldSolver {
     auto component = std::make_shared<runtime::field::PreparedFieldSolverComponent>(
         std::move(spec), std::move(topology), std::move(solver));
     register_elliptic_provider(slot, std::make_unique<ExternalComponentBackendProvider>(component));
-    external_field_components_[slot] = component;
     if (found == named_field_plans_.end())
       return std::string(component->provider_identity());
     found->second.backend_provider_identity = slot;
@@ -1963,11 +1960,12 @@ class SystemFieldSolver {
     auto field = named_fields_.find(slot);
     if (field != named_fields_.end() && field->second.backend)
       return field->second.backend->topology_report();
-    auto external = external_field_components_.find(slot);
-    if (external != external_field_components_.end())
-      return external->second->topology_report();
     if (named_field_plans_.find(slot) == named_field_plans_.end())
       throw std::runtime_error("unknown qualified field provider slot");
+    // A failed attempt may leave an immutable prepared component's private topology cache warm
+    // for retry, while restore_step_snapshot() correctly removes the provisional backend from the
+    // accepted runtime.  Inspection reports accepted materialization only: never leak that private
+    // cache as published provider evidence before a backend belongs to the accepted state.
     return {};
   }
 
