@@ -852,6 +852,9 @@ class AmrSystem {
   /// Human/audit-readable qualification rows decoded from the same accepted image persisted as bytes.
   POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_clock_manifest() const;
+  /// Accepted temporal-partition provider, synchronization tick and per-rung cell counts. The rows
+  /// are decoded from the same opaque image used by strict restart, never a capability ledger.
+  POPS_EXPORT std::vector<std::vector<std::string>> program_temporal_partition_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_flux_ledger_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_interface_flux_ledger_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_sync_manifest() const;
