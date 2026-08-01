@@ -42,6 +42,7 @@ from pops.params import ConstParam
 from pops.solvers import DenseLU
 from pops.solvers.elliptic import GeometricMG
 from pops.time import (
+    ALL_PROVISIONAL_STORES,
     AdaptiveCFL,
     Dense,
     LocalLinear,
@@ -156,6 +157,7 @@ class RuntimeSnapshot:
     fields: dict[str, np.ndarray]
     histories: dict[str, tuple[np.ndarray, ...]]
     program_hash: str
+    transaction_stores: tuple[str, ...]
     consumer_graph_identity: str
     consumer_cursors: dict[str, Any]
 
@@ -457,6 +459,16 @@ def compile_final_case(
 
 
 def _snapshot(simulation: Any) -> RuntimeSnapshot:
+    program_report = simulation.program_report()
+    if not program_report.installed:
+        raise RuntimeError("HyQMOM15 runtime has no installed Program report")
+    transaction_stores = tuple(program_report.step_transaction.get("stores", ()))
+    expected_stores = tuple(store.value for store in ALL_PROVISIONAL_STORES)
+    if transaction_stores != expected_stores:
+        raise RuntimeError(
+            "HyQMOM15 transaction does not own every provisional store: %r"
+            % (transaction_stores,)
+        )
     fields = {
         slot: np.asarray(simulation.field_potential_global(slot), dtype=np.float64).copy()
         for slot in simulation.field_provider_slots()
@@ -475,6 +487,7 @@ def _snapshot(simulation: Any) -> RuntimeSnapshot:
         fields=fields,
         histories=histories,
         program_hash=str(simulation.installed_program_hash()),
+        transaction_stores=transaction_stores,
         consumer_graph_identity=simulation.consumer_graph.identity.token,
         consumer_cursors=simulation.consumer_cursors.to_data(),
     )
@@ -482,7 +495,8 @@ def _snapshot(simulation: Any) -> RuntimeSnapshot:
 
 def _require_same_snapshot(left: RuntimeSnapshot, right: RuntimeSnapshot, *, where: str) -> bool:
     for name in (
-        "time", "macro_step", "program_hash", "consumer_graph_identity", "consumer_cursors",
+        "time", "macro_step", "program_hash", "transaction_stores",
+        "consumer_graph_identity", "consumer_cursors",
     ):
         if getattr(left, name) != getattr(right, name):
             raise RuntimeError("%s changed %s across restart" % (where, name))
@@ -668,6 +682,7 @@ def main(argv: list[str] | None = None) -> None:
         "particle_number_relative_tolerance": PARTICLE_NUMBER_RELATIVE_TOLERANCE,
         "runtime_steps": evidence.restarted.macro_step,
         "runtime_time": evidence.restarted.time,
+        "rollback_stores": list(evidence.restarted.transaction_stores),
         "rejection_reason": evidence.rejection_reason,
         "nonrealizable_rollback": rollback,
         "scheduled_checkpoint": str(evidence.scheduled_checkpoint_path),
