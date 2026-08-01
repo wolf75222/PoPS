@@ -109,7 +109,8 @@ def test_m3_gate_pins_qualified_field_warm_start_restart_and_rollback():
         ROOT / "tests/python/integration/amr/test_amr_composite_field_carrier.py"
     ).read_text(encoding="utf-8")
     assert "accepted_warm_starts = _field_warm_starts(simulation, slot)" in source
-    assert 'restarted.restart(checkpoint, bit_identical=True)' in source
+    assert "resolved = _resolve(solver, strict_restart=True)" in source
+    assert "restarted.restart(checkpoint)" in source
     assert "injected post-field-restore validation failure" in source
     assert "np.testing.assert_array_equal(actual, expected)" in source
 

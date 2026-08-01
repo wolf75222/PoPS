@@ -61,7 +61,7 @@ def _field_program(state, rate, field):
     return program
 
 
-def _resolve(solver: GeometricMG):
+def _resolve(solver: GeometricMG, *, strict_restart: bool = False):
     model = scalar_advection_field_model("native-composite-fac-carrier-model")
     x_axis, y_axis = model.frame.axes
     center_x, center_y = 0.35, 0.55
@@ -98,6 +98,7 @@ def _resolve(solver: GeometricMG):
             amplitude=amplitude,
             inverse_width=inverse_width,
         ),
+        strict_restart=strict_restart,
     )
 
 
@@ -205,7 +206,7 @@ def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
     solver = GeometricMG(
         fac=CompositeFAC(**_FAC_CONFIGURED)
     )
-    resolved = _resolve(solver)
+    resolved = _resolve(solver, strict_restart=True)
     artifact = pops.compile(resolved)
 
     simulation = pops.bind(
@@ -258,7 +259,7 @@ def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
         fail_after_exact_field_restore,
     )
     with pytest.raises(RuntimeError, match="post-field-restore validation failure"):
-        restarted.restart(checkpoint, bit_identical=True)
+        restarted.restart(checkpoint)
     for actual, expected in zip(
         _field_warm_starts(restarted, restarted_slot),
         rollback_warm_starts,
@@ -271,7 +272,7 @@ def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
         "validate_restored_contract",
         validate_restored_contract,
     )
-    restarted.restart(checkpoint, bit_identical=True)
+    restarted.restart(checkpoint)
     for actual, expected in zip(
         _field_warm_starts(restarted, restarted_slot),
         accepted_warm_starts,
