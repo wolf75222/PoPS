@@ -171,6 +171,20 @@ concept HasPrimitiveVars =
       { m.to_conservative(p) } -> std::same_as<typename M::State>;
     };
 
+/// OPTIONAL physical admissibility contract for conservative-to-primitive recovery.
+///
+/// The conversion formula and the admissibility policy are deliberately separate: a finite
+/// primitive candidate may still be physically invalid (for example non-positive density or
+/// pressure).  When present, the prepared recovery service invokes this device-callable predicate
+/// before publication.  `failing_component` identifies the primitive component whose declared
+/// constraint failed; implementations set it to -1 on success.
+template <class M>
+concept HasRecoveryAdmissibility =
+    HasPrimitiveVars<M> &&
+    requires(const M m, const typename M::Prim p, int* failing_component) {
+      { m.recovery_admissible(p, failing_component) } -> std::same_as<bool>;
+    };
+
 /// Hyperbolic brick of a model: flux + wave speed + variables + cons<->prim conversions.
 ///
 /// Variables, conversions and flux are physically LINKED (a flux is written for a given layout

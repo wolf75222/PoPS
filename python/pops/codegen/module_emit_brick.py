@@ -474,6 +474,26 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         S += ["    Up[%d] = %s;" % (i, c) for i, c in enumerate(pcpps)]
         S += ["    return Up;", "  }", ""]
 
+    recovery_constraints = getattr(model, "_recovery_admissibility", {})
+    if recovery_constraints:
+        S.append("  POPS_HD bool recovery_admissible(const Prim& P, int* failing_component_) const {")
+        S += ["    const pops::Real %s = P[%d];" % (name, index)
+              for index, name in enumerate(model.prim_state)]
+        for component, name in enumerate(model.prim_state):
+            predicate = recovery_constraints.get(name)
+            if predicate is None:
+                continue
+            S.append("    if (!(%s)) {" % predicate.to_cpp())
+            S.append("      if (failing_component_ != nullptr) *failing_component_ = %d;" % component)
+            S.append("      return false;")
+            S.append("    }")
+        S += [
+            "    if (failing_component_ != nullptr) *failing_component_ = -1;",
+            "    return true;",
+            "  }",
+            "",
+        ]
+
     S.append("  POPS_HD Prim to_primitive(const State& U) const {")
     S += cons_locals() + prim_locals(_live_prims(model, [], seed=model.prim_state))
     S.append("    Prim P{};")
