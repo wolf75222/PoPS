@@ -98,10 +98,11 @@ class _AmrSystemEquation(_AmrSystem):
 
         Dispatch:
 
-        - a private ``ModelSpec`` -> add_block (native bricks composed on the hierarchy);
+        - a private ``ModelSpec`` -> the native ``AmrSystem::add_block`` ABI (bricks composed on
+          the hierarchy);
         - a CompiledModel(backend='production', target='amr_system') installs a package whose loader
           inlines add_compiled_model(AmrSystem&), so the block runs
-          the SAME AMR hierarchy as add_block (conservative reflux, regrid), ZERO-COPY.
+          the same AMR hierarchy as the native-brick ABI (conservative reflux, regrid), ZERO-COPY.
 
         The ``time`` value carried by a block is immutable Program-authoring metadata, not an
         executable method in the AMR spatial runtime. The compiled ``pops.Program`` installed after
@@ -110,7 +111,7 @@ class _AmrSystemEquation(_AmrSystem):
         Newton controls, or diagnostics fails closed until a typed implicit Program primitive exists.
         It never reaches a private backward-Euler/Newton engine.
         ``recon="primitive"`` and fluxes ``roe`` / ``hllc`` use the same compiled spatial dispatch as
-        ``add_block``. The low-level dispatch also contains the WENO5-Z stencil and its three-cell
+        the native-brick branch. The low-level dispatch also contains the WENO5-Z stencil and its three-cell
         halo, but the resolved Case route accepts it only when the owner-qualified coarse/fine
         provider certifies order 5 and ghost depth 3. The native catalogue resolves that provider
         from the reconstruction requirements and never lowers the coarse/fine interface order
@@ -118,7 +119,7 @@ class _AmrSystemEquation(_AmrSystem):
 
         MULTIRATE CADENCE (stride) and PARTIAL IMEX MASK (implicit_vars / implicit_roles):
 
-        - private ``ModelSpec`` path: FORWARDED to ``AmrSystem::add_block``. Cadence remains part of
+        - private ``ModelSpec`` path: forwarded to ``AmrSystem::add_block``. Cadence remains part of
           Program/CFL normalization; non-empty masks and non-default Newton requests fail closed
           until the AMR target exposes their typed Program primitive;
         - CompiledModel production path (.so): explicitly REJECTED (ValueError). The flat ABI of the
@@ -150,7 +151,7 @@ class _AmrSystemEquation(_AmrSystem):
             where="AmrSystem.add_equation.substeps",
         )
 
-        # --- ModelSpec: native bricks composed -> add_block (existing path) ---
+        # --- ModelSpec: native bricks composed through the sole Python dispatch seam ---
         # Forward the complete authoring request to the native contract. Unsupported masks and
         # Newton controls are rejected there rather than retained by the spatial runtime.
         if isinstance(model, ModelSpec):
