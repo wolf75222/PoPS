@@ -344,7 +344,6 @@ def test_post_riemann_flux_has_one_exact_typed_component_route():
     state, _, _ = _model_values()
     _, conservative = _representations()
     flux = NumericalFlux(boundary, state, conservative)
-    ghost = GhostState(boundary, state, conservative)
     provider = PostRiemannFlux(
         handle=_flux_provider_handle("wall_flux"),
         output=flux,
@@ -356,6 +355,14 @@ def test_post_riemann_flux_has_one_exact_typed_component_route():
     assert provider.handle.kind == "boundary_flux_provider"
     assert provider.canonical_identity()["provider_kind"] == "post_riemann_flux"
     assert BoundaryProviderRegistry(provider).resolve(_topology(), (flux,)).bindings
+
+
+def test_post_riemann_flux_refuses_wrong_component_route_or_output():
+    boundary = _topology().physical[0]
+    state, _, _ = _model_values()
+    _, conservative = _representations()
+    flux = NumericalFlux(boundary, state, conservative)
+    ghost = GhostState(boundary, state, conservative)
 
     with pytest.raises(TypeError, match="boundary_flux_provider"):
         PostRiemannFlux(

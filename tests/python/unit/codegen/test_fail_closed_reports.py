@@ -148,6 +148,14 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert "outward-normal face flux" in post_riemann.limitation
     assert "Riemann solve and divergence/reflux" in post_riemann.limitation
     assert "2D Cartesian host-batch" in post_riemann.limitation
+    gpu_report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": True, "supports_amr": True},
+        source="test-gpu-manifest",
+    )
+    gpu_post_riemann = {
+        row.feature: row for row in gpu_report.routes
+    }["boundary:post_riemann_flux"]
+    assert gpu_post_riemann.gpu is False
 
 
 def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy():

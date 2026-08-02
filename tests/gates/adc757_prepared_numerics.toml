@@ -87,6 +87,19 @@ target = "test_prepared_boundary_plan"
 test_regex = "^test_prepared_boundary_plan\\.analytic_inflow_preflights_nonfinite_values_before_any_mutation$"
 
 [[check]]
+requirement = "post_riemann_boundary_flux"
+polarity = "positive"
+target = "test_amr_native_loader"
+test_regex = "^test_amr_native_loader\\.PostRiemannBoundaryFluxUsesOutwardOrientationAndPreservesCanonicalFaceStorage$"
+
+[[check]]
+requirement = "post_riemann_boundary_flux"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/mesh/test_boundary_topology_ports.py"
+test = "test_post_riemann_flux_refuses_wrong_component_route_or_output"
+
+[[check]]
 requirement = "mpi_collective_execution"
 polarity = "positive"
 kind = "mpi_ctest"

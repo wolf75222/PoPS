@@ -187,19 +187,14 @@ struct BlockRhsEval {
   Real weno_eps =
       kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical, bit-identical)
   void operator()(MultiFab& U, MultiFab& R) const {
+    if (ctx->boundary_plan && ctx->boundary_plan->has_flux_transformations())
+      throw std::logic_error(
+          "post-Riemann boundary flux transformation requires a BoundaryEvaluationPoint");
+    if (ctx->boundary_plan && ctx->boundary_plan->has_omitted_faces())
+      throw std::logic_error(
+          "prepared shared-interface flux requires BoundaryEvaluationPoint group authority");
     fill_grid_ghosts(U, *ctx);
-    if constexpr (std::is_same_v<Flux, HLLFlux>) {
-      if (ws_cache) {
-        // Re-allocate the scratch at the current layout (4 components, 1 ghost): covers an AMR regrid
-        // or a first call (shared_ptr to an empty MultiFab). Otherwise reuse the existing allocation.
-        if (!detail::wave_speed_cache_matches(*ws_cache, U))
-          *ws_cache = MultiFab(U.box_array(), U.dmap(), 4, 1);
-        assemble_rhs_hll_cached<Limiter>(model, U, *ctx->aux, ctx->geom, R, *ws_cache, recon_prim,
-                                         pos_floor, weno_eps);
-        return;
-      }
-    }
-    assemble_rhs<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, pos_floor, weno_eps);
+    eval_core_filled(U, R);
   }
 
   void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,

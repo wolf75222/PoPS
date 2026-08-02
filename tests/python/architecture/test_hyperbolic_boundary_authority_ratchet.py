@@ -183,6 +183,17 @@ def test_post_riemann_flux_is_one_typed_outward_oriented_pipeline_stage() -> Non
     assert uniform_stage.index("compute_face_fluxes") < uniform_stage.index(
         "transform_grid_boundary_fluxes"
     ) < uniform_stage.index("mf_eval_rhs")
+    unqualified = uniform[
+        uniform.index("void operator()(MultiFab& U, MultiFab& R) const"):
+        uniform.index(
+            "void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point",
+        )
+    ]
+    assert "has_flux_transformations()" in unqualified
+    assert "requires a BoundaryEvaluationPoint" in unqualified
+    assert "has_omitted_faces()" in unqualified
+    assert "shared-interface flux requires BoundaryEvaluationPoint group authority" in unqualified
+    assert "eval_core_filled(U, R);" in unqualified
 
     amr = (
         ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"

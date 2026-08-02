@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 37
+    assert len(data["check"]) == 39
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-682",
@@ -62,6 +62,31 @@ def test_adc757_slice_executes_qualified_flux_provider_pack_proofs():
             "kind": "pytest",
             "path": "tests/python/unit/codegen/test_compiler_model_provider.py",
             "test": "test_field_dependent_flux_without_provider_fails_before_native_source",
+        },
+    ]
+
+
+def test_adc757_slice_executes_post_riemann_boundary_flux_proofs():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    assert [
+        row for row in data["check"]
+        if row["requirement"] == "post_riemann_boundary_flux"
+    ] == [
+        {
+            "requirement": "post_riemann_boundary_flux",
+            "polarity": "positive",
+            "target": "test_amr_native_loader",
+            "test_regex": "^test_amr_native_loader\\."
+            "PostRiemannBoundaryFluxUsesOutwardOrientationAndPreservesCanonicalFaceStorage$",
+        },
+        {
+            "requirement": "post_riemann_boundary_flux",
+            "polarity": "refusal",
+            "kind": "pytest",
+            "path": "tests/python/unit/mesh/test_boundary_topology_ports.py",
+            "test": "test_post_riemann_flux_refuses_wrong_component_route_or_output",
         },
     ]
 
@@ -269,6 +294,8 @@ def test_adc757_runner_executes_one_exact_pytest(monkeypatch):
     calls = []
 
     def capture_pytest(command, **kwargs):
+        report = Path(command[command.index("--junitxml") + 1])
+        report.write_text("<testsuites><testsuite/></testsuites>", encoding="utf-8")
         calls.append((command, kwargs))
         return SimpleNamespace(returncode=0)
 
@@ -277,16 +304,33 @@ def test_adc757_runner_executes_one_exact_pytest(monkeypatch):
         "tests/python/unit/codegen/test_recovery_admissibility_codegen.py",
         "test_recovery_admissibility_is_emitted_and_hashed",
     )
-    assert calls == [
-        (
-            [
-                runner.sys.executable,
-                "-m",
-                "pytest",
-                "-q",
-                "tests/python/unit/codegen/test_recovery_admissibility_codegen.py::"
-                "test_recovery_admissibility_is_emitted_and_hashed",
-            ],
-            {"cwd": runner.ROOT, "check": True},
+    [(command, kwargs)] = calls
+    assert command[:4] == [runner.sys.executable, "-m", "pytest", "-q"]
+    assert command[4:8] == ["--strict-markers", "-o", "xfail_strict=true", "--junitxml"]
+    assert command[-1] == (
+        "tests/python/unit/codegen/test_recovery_admissibility_codegen.py::"
+        "test_recovery_admissibility_is_emitted_and_hashed"
+    )
+    assert kwargs["cwd"] == runner.ROOT
+    assert kwargs["check"] is False
+    assert kwargs["env"]["POPS_REQUIRE_MPI_TESTS"] == "1"
+    assert kwargs["env"]["POPS_REQUIRE_NATIVE_TESTS"] == "1"
+
+
+def test_adc757_runner_refuses_a_runtime_skip(monkeypatch):
+    runner = _load_runner()
+
+    def skipped_pytest(command, **kwargs):
+        report = Path(command[command.index("--junitxml") + 1])
+        report.write_text(
+            "<testsuites><testsuite><testcase><skipped/></testcase></testsuite></testsuites>",
+            encoding="utf-8",
         )
-    ]
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, "run", skipped_pytest)
+    with pytest.raises(RuntimeError, match="skipped/xfail proof"):
+        runner._run_pytest(
+            "tests/python/unit/codegen/test_recovery_admissibility_codegen.py",
+            "test_recovery_admissibility_is_emitted_and_hashed",
+        )

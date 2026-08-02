@@ -6,11 +6,14 @@ from __future__ import annotations
 import argparse
 import ast
 from collections import Counter, defaultdict
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,7 @@ EXPECTED_REQUIREMENTS = {
     "transactional_recovery_publication",
     "allocation_aware_cell_hot_path",
     "prepared_boundary_publication",
+    "post_riemann_boundary_flux",
     "qualified_flux_provider_pack",
     "capability_driven_riemann",
     "mpi_collective_execution",
@@ -309,16 +313,53 @@ def _run_ctest(build_dir: Path, target: str, selector: str) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
+def _pytest_skip_count(report: Path) -> int:
+    if not report.is_file():
+        raise RuntimeError("ADC-757 pytest did not produce its mandatory JUnit report")
+    try:
+        root = ET.parse(report).getroot()
+    except ET.ParseError as exc:
+        raise RuntimeError("ADC-757 pytest produced an invalid JUnit report") from exc
+    return len(root.findall(".//skipped"))
+
+
 def _run_pytest(relative: str, test_name: str) -> None:
-    command = [
-        sys.executable,
-        "-m",
-        "pytest",
-        "-q",
-        "%s::%s" % (relative, test_name),
-    ]
-    print("+", " ".join(command), flush=True)
-    subprocess.run(command, cwd=ROOT, check=True)
+    environment = os.environ.copy()
+    environment["POPS_REQUIRE_MPI_TESTS"] = "1"
+    environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
+    with tempfile.TemporaryDirectory(prefix="pops-adc757-gate-") as temporary:
+        report = Path(temporary) / "pytest.xml"
+        command = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--strict-markers",
+            "-o",
+            "xfail_strict=true",
+            "--junitxml",
+            str(report),
+            "%s::%s" % (relative, test_name),
+        ]
+        print(
+            "+ POPS_REQUIRE_MPI_TESTS=1 POPS_REQUIRE_NATIVE_TESTS=1",
+            " ".join(command),
+            flush=True,
+        )
+        completed = subprocess.run(
+            command,
+            cwd=ROOT,
+            env=environment,
+            check=False,
+        )
+        skipped = _pytest_skip_count(report)
+        if skipped:
+            raise RuntimeError(
+                "ADC-757 pytest reported %d skipped/xfail proof(s); every proof is mandatory"
+                % skipped
+            )
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(completed.returncode, command)
 
 
 def main(argv: list[str] | None = None) -> int:

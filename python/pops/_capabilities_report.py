@@ -452,7 +452,7 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             backend="production",
             platform="host",
             mpi=mpi,
-            gpu=gpu,
+            gpu=False,
             status="partial",
             limitation=(
                 "one typed BoundaryFlux component transforms the already evaluated outward-normal "
