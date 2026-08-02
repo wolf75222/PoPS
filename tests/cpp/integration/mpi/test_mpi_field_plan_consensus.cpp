@@ -3,13 +3,15 @@
 // canonical std::map-ordered sequence of (provider_slot, plan_identity). The stage-pack scenario
 // drives distributed L0/L1 storage and proves successful publication, while a second supported
 // replicated-L0/distributed-L1 scenario proves the composite field-coupled residual JVP against an
-// independent finite difference. It also proves a level-local solved-field physical-boundary JVP
-// and pre-solve rejection when provider, evaluation point, or pack presence differs between ranks.
+// independent finite difference before and after a collective regrid/provider rematerialization.
+// It also proves a level-local solved-field physical-boundary JVP and pre-solve rejection when
+// provider, evaluation point, or pack presence differs between ranks.
 // The deliberately unsupported distributed-L0 composite topology is rejected collectively before
 // RHS assembly, solve, publication, or mutation of already accepted field/provider state.
 
 #include <gtest/gtest.h>
 
+#include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
 #include "gtest_compat.hpp"
 #include "load_balance_test_authority.hpp"
@@ -564,6 +566,34 @@ bool mapping_is_distributed_across_two_ranks(const DistributionMapping& mapping)
          std::find(owners.begin(), owners.end(), 1) != owners.end();
 }
 
+std::string exact_runtime_layout_contract(const AmrRuntime& runtime, std::size_t block_index) {
+  ExactContractBuilder contract;
+  contract.text("tests.mpi.amr-runtime-layout")
+      .scalar(std::uint32_t{1})
+      .scalar(static_cast<std::int64_t>(runtime.nlev()));
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    const MultiFab& state = runtime.level_state(block_index, level);
+    const bool replicated = runtime.level_is_replicated(level);
+    contract.scalar(static_cast<std::int64_t>(level))
+        .scalar(replicated)
+        .sequence(state.box_array().boxes(), [](ExactContractBuilder& item, const Box2D& box) {
+          item.scalar(static_cast<std::int64_t>(box.lo[0]))
+              .scalar(static_cast<std::int64_t>(box.lo[1]))
+              .scalar(static_cast<std::int64_t>(box.hi[0]))
+              .scalar(static_cast<std::int64_t>(box.hi[1]));
+        });
+    // A replicated level intentionally records every owner as the current rank. Encode that
+    // semantic ownership once; only distributed levels have rank-independent raw owner arrays.
+    if (replicated)
+      contract.scalar(static_cast<std::int64_t>(state.box_array().size()));
+    else
+      contract.sequence(state.dmap().ranks(), [](ExactContractBuilder& item, int owner) {
+        item.scalar(static_cast<std::int64_t>(owner));
+      });
+  }
+  return std::move(contract).release();
+}
+
 DistributionMapping split_xlow_face_across_ranks(const BoxArray& boxes, const Box2D& domain) {
   if (n_ranks() <= 0)
     throw std::logic_error("physical-boundary distribution requires an active communicator");
@@ -645,7 +675,8 @@ bool duplicate_rejected(System& system) {
 long prove_field_jacvec_route(AmrRuntime& runtime, const std::string& jacvec_field,
                               const std::string& block_name, int block_index,
                               const AmrFieldHierarchyPolicyAuthority& hierarchy_policy,
-                              std::string_view topology_digest, std::string_view route_label) {
+                              std::string_view topology_digest, std::string_view route_label,
+                              int tick_base = 31, bool install_plan = true) {
   constexpr Real c_dt = Real(0.01);
   constexpr Real h = Real(2e-4);
   long failures = 0;
@@ -675,46 +706,50 @@ long prove_field_jacvec_route(AmrRuntime& runtime, const std::string& jacvec_fie
     return outcome.consume(SolveConsumption::kAccept);
   };
 
-  AmrFieldSolveConfig jacvec_plan;
-  CompositeFacOptions fac_options;
-  // Preserve the production tolerance while giving the distributed partial-refinement FAC route
-  // enough outer cycles to reach it; the default 30 cycles stops near 2e-7 on this tiny hierarchy.
-  fac_options.max_iters = 80;
-  jacvec_plan.solver_options =
-      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, fac_options);
-  jacvec_plan.plan_identity = "tests.mpi." + jacvec_field + ".plan@1";
-  jacvec_plan.provider_identity = "tests.mpi." + jacvec_field;
-  jacvec_plan.topology_provider_kind = "structured";
-  jacvec_plan.topology_provenance = "tests.mpi.periodic-cartesian";
-  jacvec_plan.topology_digest = std::string(topology_digest);
-  jacvec_plan.output_owner_identity = "tests.mpi.stage-pack." + block_name;
-  jacvec_plan.output_block = block_name;
-  jacvec_plan.output_key = jacvec_field;
-  jacvec_plan.hierarchy_policy = hierarchy_policy;
-  jacvec_plan.nullspace = operator_topology_zero_mean_nullspace();
-  jacvec_plan.has_reaction = true;
-  jacvec_plan.reaction = Real(2);
-  jacvec_plan.providers.push_back(FieldProviderBinding{"tests.mpi." + jacvec_field + "/rhs",
-                                                       block_name, jacvec_field, Real(1)});
-  runtime.install_field_plan(jacvec_field, jacvec_plan);
-  runtime.register_named_field(block_name, jacvec_field, 0, 1, 2,
-                               /*gradient_sign=*/-1);
-  runtime.set_block_named_elliptic_rhs(
-      block_index, jacvec_field,
-      [](const MultiFab& state, MultiFab& rhs) { add_scaled_component(state, Real(1), 0, rhs); });
+  if (install_plan) {
+    AmrFieldSolveConfig jacvec_plan;
+    CompositeFacOptions fac_options;
+    // Preserve the production tolerance while giving the distributed partial-refinement FAC route
+    // enough outer cycles to reach it; the default 30 cycles stops near 2e-7 on this tiny hierarchy.
+    fac_options.max_iters = 80;
+    jacvec_plan.solver_options =
+        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, fac_options);
+    jacvec_plan.plan_identity = "tests.mpi." + jacvec_field + ".plan@1";
+    jacvec_plan.provider_identity = "tests.mpi." + jacvec_field;
+    jacvec_plan.topology_provider_kind = "structured";
+    jacvec_plan.topology_provenance = "tests.mpi.periodic-cartesian";
+    jacvec_plan.topology_digest = std::string(topology_digest);
+    jacvec_plan.output_owner_identity = "tests.mpi.stage-pack." + block_name;
+    jacvec_plan.output_block = block_name;
+    jacvec_plan.output_key = jacvec_field;
+    jacvec_plan.hierarchy_policy = hierarchy_policy;
+    jacvec_plan.nullspace = operator_topology_zero_mean_nullspace();
+    jacvec_plan.has_reaction = true;
+    jacvec_plan.reaction = Real(2);
+    jacvec_plan.providers.push_back(FieldProviderBinding{"tests.mpi." + jacvec_field + "/rhs",
+                                                         block_name, jacvec_field, Real(1)});
+    runtime.install_field_plan(jacvec_field, jacvec_plan);
+    runtime.register_named_field(block_name, jacvec_field, 0, 1, 2,
+                                 /*gradient_sign=*/-1);
+    runtime.set_block_named_elliptic_rhs(
+        block_index, jacvec_field,
+        [](const MultiFab& state, MultiFab& rhs) { add_scaled_component(state, Real(1), 0, rhs); });
+  }
 
-  require(consume_solved(runtime.solve_named_fields(&jacvec_field), "baseline").solved(),
-          "baseline consumption");
+  if (install_plan)
+    require(consume_solved(runtime.solve_named_fields(&jacvec_field), "baseline").solved(),
+            "baseline consumption");
   for (int level = 0; level < runtime.nlev(); ++level) {
     const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
         "main",
-        31 + 10 * block_index + level,
+        tick_base + 10 * block_index + level,
         level,
         level,
         13,
         ::pops::amr::Rational(1, 2),
         0.01 / static_cast<double>(1 << level),
         0.305};
+    const MultiFab live_before = runtime.level_state(block_index, level);
     MultiFab iterate = runtime.level_state(block_index, level);
     MultiFab direction = iterate;
     scale(direction, Real(0.75));
@@ -729,35 +764,40 @@ long prove_field_jacvec_route(AmrRuntime& runtime, const std::string& jacvec_fie
     for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level)
       base_phi.emplace_back(runtime.provider_potential_level(jacvec_field, provider_level));
 
-    auto residual_at = [&](Real shift, bool coupled) {
+    const auto residual_with_visible_provider = [&](Real shift) {
       MultiFab state = iterate;
       saxpy(state, shift, direction);
       MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
       residual.set_val(Real(0));
-      if (coupled) {
-        require(consume_solved(runtime.solve_named_fields_from_state_at(point, jacvec_field,
-                                                                        block_index, state),
-                               "perturbed")
-                    .solved(),
-                "perturbed consumption");
-      }
       runtime.level_rhs_core_into_at(block_index, level, point, state, residual,
                                      /*flux_only=*/false);
-      if (coupled) {
-        require(consume_solved(runtime.solve_named_fields_from_state_at(point, jacvec_field,
-                                                                        block_index, iterate),
-                               "restore")
-                    .solved(),
-                "restore consumption");
-      }
       return residual;
     };
 
-    const MultiFab r0 = residual_at(Real(0), /*coupled=*/false);
-    const MultiFab plus = residual_at(h, /*coupled=*/true);
-    const MultiFab minus = residual_at(-h, /*coupled=*/true);
-    const MultiFab stale_plus = residual_at(h, /*coupled=*/false);
-    const MultiFab restored_r0 = residual_at(Real(0), /*coupled=*/false);
+    const MultiFab r0 = residual_with_visible_provider(Real(0));
+    const MultiFab stale_plus = residual_with_visible_provider(h);
+    MultiFab plus_state = iterate;
+    saxpy(plus_state, h, direction);
+    require(consume_solved(runtime.solve_named_fields_from_state_at(point, jacvec_field,
+                                                                    block_index, plus_state),
+                           "positive perturbation")
+                .solved(),
+            "positive perturbation consumption");
+    const MultiFab plus = residual_with_visible_provider(h);
+    MultiFab minus_state = iterate;
+    saxpy(minus_state, -h, direction);
+    require(consume_solved(runtime.solve_named_fields_from_state_at(point, jacvec_field,
+                                                                    block_index, minus_state),
+                           "negative perturbation")
+                .solved(),
+            "negative perturbation consumption");
+    const MultiFab minus = residual_with_visible_provider(-h);
+    require(consume_solved(
+                runtime.solve_named_fields_from_state_at(point, jacvec_field, block_index, iterate),
+                "restore")
+                .solved(),
+            "restore consumption");
+    const MultiFab restored_r0 = residual_with_visible_provider(Real(0));
 
     MultiFab generated = direction;
     saxpy(generated, -c_dt / h, plus);
@@ -782,7 +822,11 @@ long prove_field_jacvec_route(AmrRuntime& runtime, const std::string& jacvec_fie
               "restores its complete provider hierarchy");
     require(global_max_valid_scalar_diff(restored_r0, r0) < Real(1e-8),
             "restores its residual carrier");
+    require(
+        global_max_allocated_diff(runtime.level_state(block_index, level), live_before) == Real(0),
+        "restores its live stage carrier");
   }
+  require(!runtime.field_solve_transaction_active(), "leaves no field transaction");
   return failures;
 }
 
@@ -1109,11 +1153,22 @@ long prove_replicated_coarse_composite_jvp() {
     require(layout.replicated_coarse, "coarse ownership is explicitly replicated");
     require(mapping_is_distributed_across_two_ranks(layout.dm[1]), "L1 mapping is distributed");
 
+    // regrid() first solves the default periodic Poisson field. Keep that independent precondition
+    // compatible with its constant nullspace so the oracle reaches named-provider rematerialization.
+    std::vector<double> composite_density = stage_pack_density(n, 0.5);
+    double density_mean = 0.0;
+    for (double value : composite_density)
+      density_mean += value;
+    density_mean /= static_cast<double>(composite_density.size());
+    for (double& value : composite_density)
+      value -= density_mean;
+
     std::vector<AmrRuntimeBlock> blocks;
     blocks.push_back(detail::dispatch_amr_block(stage_pack_model(), "minmod", "rusanov", layout,
-                                                "composite", stage_pack_density(n, 0.5),
+                                                "composite", composite_density,
                                                 /*has_density=*/true, 1.4, 1, false));
     blocks.back().aux_ncomp = kAuxNamedBase + 1;
+    blocks.back().state_identity = "tests://mpi/composite-regrid/state/U";
 
     AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                        std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
@@ -1125,10 +1180,72 @@ long prove_replicated_coarse_composite_jvp() {
     require(runtime.level_state(0, 0).local_size() > 0,
             "each rank owns its replicated coarse copy");
     require(runtime.level_state(0, 1).local_size() > 0, "each rank owns a fine piece");
-    failures += prove_field_jacvec_route(runtime, "replicated_coarse_composite_jacvec", "composite",
-                                         0, composite_hierarchy_policy(),
-                                         "tests.mpi.periodic-cartesian.central-refinement@1",
-                                         "replicated-coarse distributed-fine composite JVP");
+    const std::string field = "replicated_coarse_composite_jacvec";
+    failures += prove_field_jacvec_route(
+        runtime, field, "composite", 0, composite_hierarchy_policy(),
+        "tests.mpi.periodic-cartesian.central-refinement@1",
+        "replicated-coarse distributed-fine composite JVP before regrid", /*tick_base=*/31);
+
+    const std::vector<PatchBox> layout_before = runtime.output_geometry_boxes();
+    const auto provider_layout_before = runtime.field_topology_patches(field);
+    require(provider_layout_before.has_value(), "provider publishes its initial topology");
+    if (provider_layout_before.has_value())
+      require(*provider_layout_before == layout_before,
+              "provider initially matches the complete runtime topology");
+    const std::string exact_layout_before = exact_runtime_layout_contract(runtime, 0);
+    require(all_ranks_agree_exact_ordered_byte_pairs(
+                {{"tests.mpi.composite-regrid-layout", exact_layout_before}}),
+            "initial topology and ownership have exact cross-rank consensus");
+    const std::uint64_t epoch_before = runtime.topology_epoch();
+    const std::uint64_t materialization_before = runtime.topology_materialization_generation();
+
+    // Replace the bootstrap L1 seed with a clustered central refinement. Small boxes retain genuine
+    // rank-local fine ownership while uncovered L0 cells keep the composite coarse path active.
+    // The first JVP populated both (block, level) stage-scratch entries on the retired hierarchy.
+    runtime.set_regrid(/*every=*/1, /*grow=*/1, /*margin=*/1);
+    runtime.set_clustering(/*min_efficiency=*/0.7, /*min_box_size=*/1, /*max_box_size=*/4);
+    test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.05)}},
+                                           "tests.mpi.composite-regrid-tagger@1");
+    runtime.regrid();
+
+    require(runtime.nlev() == 2, "regrid retains the composite L0/L1 hierarchy");
+    require(runtime.topology_epoch() > epoch_before, "regrid advances the topology epoch");
+    require(runtime.topology_materialization_generation() > materialization_before,
+            "regrid advances topology materialization");
+    const std::vector<PatchBox> layout_after = runtime.output_geometry_boxes();
+    require(layout_after != layout_before, "regrid replaces the L1 box topology");
+    const std::string exact_layout_after = exact_runtime_layout_contract(runtime, 0);
+    require(exact_layout_after != exact_layout_before, "regrid replaces topology or ownership");
+    require(all_ranks_agree_exact_ordered_byte_pairs(
+                {{"tests.mpi.composite-regrid-layout", exact_layout_after}}),
+            "replacement topology and ownership have exact cross-rank consensus");
+    require(runtime.level_state(0, 0).local_size() > 0,
+            "each rank retains its replicated coarse copy");
+    require(mapping_is_distributed_across_two_ranks(runtime.level_state(0, 1).dmap()),
+            "replacement L1 ownership spans both ranks");
+    require(runtime.level_state(0, 1).local_size() > 0, "each rank owns a replacement fine piece");
+    const auto provider_layout_after_regrid = runtime.field_topology_patches(field);
+    require(provider_layout_after_regrid.has_value(),
+            "regrid rematerializes the provider before returning");
+    if (provider_layout_after_regrid.has_value()) {
+      require(*provider_layout_after_regrid == layout_after,
+              "provider matches the exact replacement hierarchy");
+      if (provider_layout_before.has_value())
+        require(*provider_layout_after_regrid != *provider_layout_before,
+                "provider drops the retired hierarchy");
+    }
+
+    failures += prove_field_jacvec_route(
+        runtime, field, "composite", 0, composite_hierarchy_policy(),
+        "tests.mpi.periodic-cartesian.central-refinement@1",
+        "replicated-coarse distributed-fine composite JVP after regrid", /*tick_base=*/71,
+        /*install_plan=*/false);
+    const auto provider_layout_after_jvp = runtime.field_topology_patches(field);
+    require(provider_layout_after_jvp.has_value(),
+            "post-regrid JVP retains a materialized provider");
+    if (provider_layout_after_jvp.has_value())
+      require(*provider_layout_after_jvp == layout_after,
+              "post-regrid JVP uses no stale provider topology");
   } catch (const std::exception& error) {
     if (my_rank() == 0)
       std::fprintf(stderr, "replicated-coarse composite JVP proof failed: %s\n", error.what());

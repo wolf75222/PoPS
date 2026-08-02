@@ -896,7 +896,9 @@ if(POPS_HAS_MPI)
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     RESOURCE_LOCK native_loader
     TIMEOUT 180)
-  set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
+  set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
   set_tests_properties(test_mpi_system_analytic_level_set_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
     TIMEOUT 30)
