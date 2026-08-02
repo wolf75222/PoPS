@@ -601,10 +601,10 @@ void expect_shared_install_and_field_services(Context& context) {
   context.evaluate_with_field_state_at(point, "field", 0, state, state,
                                        [&]() { ++evaluated_bodies; });
   EXPECT_EQ(evaluated_bodies, 1);
-  EXPECT_EQ(context.field_solve_dispatches(),
-            std::vector<std::string>(
-                {"default", "default-state", "qualified-state-at", "named-state", "default-blocks",
-                 "named-blocks", "generated-blocks", "qualified-state-at", "qualified-state-at"}));
+  EXPECT_EQ(
+      context.field_solve_dispatches(),
+      std::vector<std::string>({"default", "default-state", "qualified-state-at", "default-blocks",
+                                "generated-blocks", "qualified-state-at", "qualified-state-at"}));
 
   auto mismatched_point = point;
   ++mismatched_point.level;

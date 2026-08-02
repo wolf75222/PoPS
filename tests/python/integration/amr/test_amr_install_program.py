@@ -155,9 +155,12 @@ def test_field_coupled_jacvec_is_materialized_inside_every_amr_level_bundle() ->
     materialization = source.split("auto _make_level_program", 1)[1]
     factory_source, refresh_source = materialization.split("auto _refresh_level_programs", 1)
     assert "ctx.evaluate_with_field_state_at(" in factory_source
-    assert refresh_source.index("ctx.set_level(level);") < refresh_source.index(
+    level_iteration = refresh_source.index("ctx.for_each_program_resource_level([&](int) {")
+    bundle_insert = refresh_source.index(
         "_level_programs->emplace_back(_make_level_program());"
     )
+    assert level_iteration < bundle_insert
+    assert "ctx.set_level(" not in refresh_source
     assert "ctx.solve_default_field_on_coarse_level(" not in materialization
     assert (
         "ctx.solve_fields_from_state_at("
