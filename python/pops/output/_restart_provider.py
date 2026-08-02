@@ -16,6 +16,28 @@ from ._checkpoint_collective import (
 )
 
 
+def _checkpoint_path_inode(path: Path) -> tuple[int, int]:
+    """Return the exact non-following filesystem identity of one checkpoint path."""
+    status = path.stat(follow_symlinks=False)
+    return int(status.st_dev), int(status.st_ino)
+
+
+def _unlink_checkpoint_path_if_owned(
+    path: Path,
+    inode: tuple[int, int],
+    *,
+    phase: str,
+) -> None:
+    """Remove only the exact checkpoint inode previously created by this transaction."""
+    try:
+        current = _checkpoint_path_inode(path)
+    except FileNotFoundError:
+        return
+    if current != inode:
+        raise RuntimeError("checkpoint %s refuses to delete replaced path %s" % (phase, path))
+    path.unlink()
+
+
 def _recorded_hierarchy() -> Any:
     from .restart import RestoreRecordedHierarchy
 
@@ -44,24 +66,16 @@ class _RestartSnapshot:
 
     @staticmethod
     def _inode(path: Path) -> tuple[int, int]:
-        status = path.stat(follow_symlinks=False)
-        return int(status.st_dev), int(status.st_ino)
+        return _checkpoint_path_inode(path)
 
-    @classmethod
+    @staticmethod
     def _unlink_owned(
-        cls,
         path: Path,
         inode: tuple[int, int],
         *,
         phase: str,
     ) -> None:
-        try:
-            current = cls._inode(path)
-        except FileNotFoundError:
-            return
-        if current != inode:
-            raise RuntimeError("checkpoint %s refuses to delete replaced path %s" % (phase, path))
-        path.unlink()
+        _unlink_checkpoint_path_if_owned(path, inode, phase=phase)
 
     def __init__(self, runtime: Any, directory: Any) -> None:
         self._runtime = runtime

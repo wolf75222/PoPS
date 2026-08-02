@@ -1671,6 +1671,26 @@ class RuntimeInstance:
         if any(row["value"] != str(expected) for row in rows):
             raise RuntimeError("native checkpoint ranks returned different staged paths")
 
+        from pops.output._restart_provider import (
+            _checkpoint_path_inode,
+            _unlink_checkpoint_path_if_owned,
+        )
+
+        native_inode_data = root_value(
+            topology,
+            "native staging inode",
+            lambda: list(_checkpoint_path_inode(expected)),
+        )
+        if (
+            not isinstance(native_inode_data, list)
+            or len(native_inode_data) != 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) for value in native_inode_data
+            )
+        ):
+            raise RuntimeError("rank zero returned an invalid native checkpoint staging inode")
+        staging_authority = {"inode": (int(native_inode_data[0]), int(native_inode_data[1]))}
+
         import numpy as np
         from ._checkpoint_manifest import (
             IDENTITY_KEY,
@@ -1712,7 +1732,24 @@ class RuntimeInstance:
             try:
                 with open(temporary, "wb") as stream:
                     np.savez_compressed(stream, **payload)
-                os.replace(temporary, expected)
+                resealed_inode = _checkpoint_path_inode(temporary)
+                _unlink_checkpoint_path_if_owned(
+                    expected,
+                    staging_authority["inode"],
+                    phase="runtime envelope replacement",
+                )
+                # Once the native staging inode is released, publish the resealed inode with
+                # no-clobber semantics.  A concurrent creator wins the path and is never replaced.
+                staging_authority["inode"] = resealed_inode
+                try:
+                    os.link(temporary, expected)
+                except FileExistsError as error:
+                    raise FileExistsError(
+                        "runtime checkpoint staging path was replaced during envelope sealing: %s"
+                        % expected
+                    ) from error
+                if _checkpoint_path_inode(expected) != resealed_inode:
+                    raise RuntimeError("runtime checkpoint reseal published a different inode")
             finally:
                 temporary.unlink(missing_ok=True)
             # A staged checkpoint is not publishable until its final envelope has been read back
@@ -1720,7 +1757,26 @@ class RuntimeInstance:
             self._inspect_checkpoint_file(expected)
             return str(expected)
 
-        sealed = Path(root_value(topology, "runtime envelope sealing", seal_root))
+        try:
+            sealed = Path(root_value(topology, "runtime envelope sealing", seal_root))
+        except BaseException as error:
+            cleanup_error = None
+            try:
+                root_value(
+                    topology,
+                    "runtime envelope staging cleanup",
+                    lambda: _unlink_checkpoint_path_if_owned(
+                        expected,
+                        staging_authority["inode"],
+                        phase="failed runtime envelope sealing",
+                    ),
+                )
+            except BaseException as caught:
+                cleanup_error = caught
+            add_note = getattr(error, "add_note", None)
+            if cleanup_error is not None and callable(add_note):
+                add_note("failed runtime checkpoint staging cleanup: %s" % cleanup_error)
+            raise
         if sealed != expected:
             raise RuntimeError("rank zero sealed a different checkpoint staging path")
         return str(expected)

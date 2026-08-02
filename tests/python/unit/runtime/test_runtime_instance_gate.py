@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -513,6 +514,95 @@ def test_checkpoint_graph_provider_is_the_resolved_restart_authority(tmp_path):
     assert authority.to_data()["operation"] == dict(manifest.operation_data)
     assert runtime._restart_operation() is authority.operation
     assert graph.to_data()["identity"] == runtime.consumer_graph.to_data()["identity"]
+
+
+def test_checkpoint_reseal_failure_removes_its_owned_native_staging(monkeypatch, tmp_path):
+    from pops.runtime import _checkpoint_manifest
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-reseal-cleanup"}
+    )
+    original_seal = _checkpoint_manifest.seal_checkpoint_payload
+    calls = 0
+
+    def fail_runtime_envelope(owner, payload, *, runtime_kind):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected RuntimeInstance envelope reseal failure")
+        return original_seal(owner, payload, runtime_kind=runtime_kind)
+
+    monkeypatch.setattr(_checkpoint_manifest, "seal_checkpoint_payload", fail_runtime_envelope)
+
+    with pytest.raises(RuntimeError, match="injected RuntimeInstance envelope reseal failure"):
+        runtime.checkpoint(tmp_path / "restart")
+
+    assert calls == 2
+    assert not (tmp_path / "restart.npz").exists()
+    assert not tuple(tmp_path.glob(".pops-restart-snapshot.*"))
+    assert not tuple(tmp_path.glob("*.runtime-instance.tmp"))
+
+
+def test_checkpoint_reseal_failure_never_deletes_a_replaced_staging_inode(monkeypatch, tmp_path):
+    from pops.output._restart_provider import _checkpoint_path_inode
+    from pops.runtime import _checkpoint_manifest
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-reseal-replacement"}
+    )
+    original_seal = _checkpoint_manifest.seal_checkpoint_payload
+    calls = 0
+    replacement = b"third-party checkpoint staging replacement"
+    evidence = {}
+
+    def replace_staging_and_fail(owner, payload, *, runtime_kind):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            (staging,) = tuple(tmp_path.glob(".pops-restart-snapshot.*.npz"))
+            owned_inode = _checkpoint_path_inode(staging)
+            third_party = tmp_path / "third-party-replacement.npz"
+            third_party.write_bytes(replacement)
+            replacement_inode = _checkpoint_path_inode(third_party)
+            assert replacement_inode != owned_inode
+            os.replace(third_party, staging)
+            evidence.update(path=staging, inode=replacement_inode)
+            raise RuntimeError("injected reseal failure after staging replacement")
+        return original_seal(owner, payload, runtime_kind=runtime_kind)
+
+    monkeypatch.setattr(
+        _checkpoint_manifest,
+        "seal_checkpoint_payload",
+        replace_staging_and_fail,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="injected reseal failure after staging replacement",
+    ) as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    staging = evidence["path"]
+    assert staging.read_bytes() == replacement
+    assert _checkpoint_path_inode(staging) == evidence["inode"]
+    assert any(
+        "refuses to delete replaced path" in note for note in getattr(caught.value, "__notes__", ())
+    )
+    assert not (tmp_path / "restart.npz").exists()
 
 
 def test_runtime_instance_has_one_authored_execution_route():
