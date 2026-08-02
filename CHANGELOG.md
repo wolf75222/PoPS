@@ -32,6 +32,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   plan. Uniform scalar layouts execute mapped periodic halos (including cross-axis maps); mapped
   vector/axial component transforms and AMR mapped periodic fill-patch/regrid remain explicit
   fail-closed capabilities until their model-aware component and hierarchy contracts are available.
+- ADC-749 now makes numerical resolution the fail-closed acceptance boundary for built-in transport
+  descriptors. Characteristic closures without a prepared eigenstructure, forged representation
+  converters, unsupported analytic dependencies, and mixed logical clocks can no longer survive as
+  inert metadata and fail only during compile or bind.
 - Strict AMR checkpoint payload v7 now persists the accepted shared-interface flux audit together
   with Program clocks, histories, tagging state, conservative ledger and synchronization report.
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved

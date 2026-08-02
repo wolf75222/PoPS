@@ -618,6 +618,12 @@ class ResolvedTransportBoundarySet:
             raise TypeError("resolved transport conditions must be a non-empty tuple")
         if not isinstance(self.plan, ResolvedBoundaryPlan):
             raise TypeError("resolved transport plan must be a ResolvedBoundaryPlan")
+        # Resolution is the public acceptance boundary for a transport descriptor.  Reusing the
+        # executable contract here prevents a characteristic, representation, analytic, or
+        # multi-state descriptor from surviving as inert metadata and failing only later during
+        # compile/bind.  compile_boundary_data() and runtime_boundary_data() intentionally call the
+        # same pure validator again so detached/tampered resolved values remain fail-closed.
+        self._native_contract()
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
@@ -651,7 +657,10 @@ class ResolvedTransportBoundarySet:
         return compose_transport_boundary(self, context=context)
 
     def _native_contract(self) -> tuple[Handle, int, tuple[ResolvedTransportCondition, ...], int]:
-        """Validate the complete compile-time shape of the built-in native provider."""
+        """Validate the complete executable shape of the built-in native provider.
+
+        This is the sole acceptance contract used at numerical resolution, compile, and bind.
+        """
         from pops.mesh.boundaries import ClosureMode
 
         states = {row.state for row in self.conditions}
