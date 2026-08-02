@@ -220,10 +220,15 @@ requires `m.wave_speeds`). `HLLCFlux` requires `HasHLLCStructure` (`pressure`, `
 `hllc_star_state`) and `RoeFlux` requires `HasRoeDissipation` (`roe_dissipation`). Euler conforms
 through those same capabilities. A missing capability is rejected during route resolution; there
 is no component-count inference and no implicit HLL/Rusanov substitution. The
-compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to `RusanovFlux{}` for serial
-references. The flux is passed by template: `compute_face_fluxes<Limiter, NumericalFlux, Model>` and
-`assemble_rhs<Limiter, NumericalFlux, Model>` are templated on the flux policy, chosen
-independently of the limiter. The `SourceFreeModel` adapter (explicit IMEX half-step) forwards
+four built-ins return the common device-copyable `FluxEvaluation`. Built-in rejection reasons use
+the typed `RiemannFailureCause` vocabulary before device/MPI reduction. In particular, Roe rejects
+a non-finite dissipation or final candidate flux instead of publishing a successful NaN result; the
+runtime then rolls the owning step transaction back without selecting another solver.
+The compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to
+`RusanovFlux{}` for serial references. The flux is passed by template:
+`compute_face_fluxes<Limiter, NumericalFlux, Model>` and
+`assemble_rhs<Limiter, NumericalFlux, Model>` are templated on the flux policy, chosen independently
+of the limiter. The `SourceFreeModel` adapter (explicit IMEX half-step) forwards
 `pressure`, `wave_speeds`, and the optional HLLC/Roe structural hooks only when the wrapped model
 exposes them (`requires` clauses), so the explicit half-step keeps the selected Riemann provider.
 A moment hierarchy (no fluid roles, no primitive `p`) can also

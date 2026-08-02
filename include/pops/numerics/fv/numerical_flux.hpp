@@ -53,6 +53,14 @@ POPS_HD inline bool valid_hll_speed_interval(Real lower, Real upper) {
   return Kokkos::isfinite(lower) && Kokkos::isfinite(upper) && lower <= upper;
 }
 
+template <class State>
+POPS_HD inline bool finite_state(const State& state) {
+  for (int component = 0; component < State::size(); ++component)
+    if (!Kokkos::isfinite(state[component]))
+      return false;
+  return true;
+}
+
 /// Union two independently certified signed-wave-speed intervals.  Validate both traces before
 /// min/max: IEEE comparisons with NaN are false, so taking the union first could silently discard
 /// an invalid left or right trace and manufacture a plausible finite HLL interval.
@@ -81,7 +89,8 @@ struct RusanovFlux {
     StabilityBound bound{};
     if (!detail::max_normal_stability_bound(physical.stability(left, face),
                                             physical.stability(right, face), bound))
-      return FluxEvaluation<typename Physical::State>::reject(0x53544201u);
+      return FluxEvaluation<typename Physical::State>::reject(
+          RiemannFailureCause::kRusanovInvalidStability);
     const auto left_density = physical.evaluate(left, face);
     const auto right_density = physical.evaluate(right, face);
     typename Physical::State density{};
@@ -113,11 +122,13 @@ POPS_HD FluxEvaluation<typename Physical::State> hll_flux_with_speeds(
     const Physical& physical, const typename Physical::Trace& left,
     const typename Physical::Trace& right, const FaceContext& face, Real lower, Real upper) {
   if (!detail::valid_hll_speed_interval(lower, upper))
-    return FluxEvaluation<typename Physical::State>::reject(0x484c4c01u);
+    return FluxEvaluation<typename Physical::State>::reject(
+        RiemannFailureCause::kHllInvalidWaveInterval);
   StabilityBound bound{};
   if (!detail::max_normal_stability_bound(physical.stability(left, face),
                                           physical.stability(right, face), bound))
-    return FluxEvaluation<typename Physical::State>::reject(0x53544202u);
+    return FluxEvaluation<typename Physical::State>::reject(
+        RiemannFailureCause::kHllInvalidStability);
   const auto left_density = physical.evaluate(left, face);
   const auto right_density = physical.evaluate(right, face);
   if (lower >= Real(0))
@@ -186,11 +197,13 @@ struct HLLCFlux {
       Real lower, upper;
       hll_speeds(physical, left, right, face, lower, upper);
       if (!detail::valid_hll_speed_interval(lower, upper))
-        return FluxEvaluation<typename Physical::State>::reject(0x484c4c02u);
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kHllcInvalidWaveInterval);
       StabilityBound bound{};
       if (!detail::max_normal_stability_bound(physical.stability(left, face),
                                               physical.stability(right, face), bound))
-        return FluxEvaluation<typename Physical::State>::reject(0x53544203u);
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kHllcInvalidStability);
       const auto left_density = physical.evaluate(left, face);
       const auto right_density = physical.evaluate(right, face);
       if (lower >= Real(0))
@@ -243,16 +256,23 @@ struct RoeFlux {
       StabilityBound bound{};
       if (!detail::max_normal_stability_bound(physical.stability(left, face),
                                               physical.stability(right, face), bound))
-        return FluxEvaluation<typename Physical::State>::reject(0x53544204u);
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kRoeInvalidStability);
       const auto left_density = physical.evaluate(left, face);
       const auto right_density = physical.evaluate(right, face);
       const auto dissipation = physical.roe_dissipation(left, right, face);
+      if (!detail::finite_state(dissipation))
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kRoeNonFiniteDissipation);
       typename Physical::State density{};
       for (int component = 0; component < Physical::n_vars; ++component) {
         density[component] =
             Real(0.5) * (left_density.value[component] + right_density.value[component]) -
             Real(0.5) * dissipation[component];
       }
+      if (!detail::finite_state(density))
+        return FluxEvaluation<typename Physical::State>::reject(
+            RiemannFailureCause::kRoeNonFiniteFlux);
       return FluxEvaluation<typename Physical::State>::ok(density, bound);
     } else {
       static_assert(detail::dependent_false<Physical>,
