@@ -151,7 +151,10 @@ Every conservative-to-primitive stencil sample is evaluated through
 and its `RecoveryReport`. Cartesian, cached-HLL, masked, polar and embedded-boundary kernels consume
 that report before calling the numerical flux. A refused candidate therefore writes only finite
 transactional scratch, joins the same device/MPI failure reduction as a fallible flux, and cannot be
-published. The pointwise route is fixed-size, `POPS_HD`, allocation-free and callback-free.
+published. The type-erased report preserves the selected and last-attempted method kinds in addition
+to their chain indices; diagnostics can therefore name the actual closed-form, nonlinear, bracketed,
+repair, or custom route without reconstructing policy from an erased plan. The pointwise route is
+fixed-size, `POPS_HD`, allocation-free and callback-free.
 
 **Constraints / remarks.** CFL condition: $\Delta t \le C\,\dfrac{\min(\Delta x,\Delta y)}{\max|\lambda|}$,
 where $\lambda$ is the local wave speed and $C \le 1$ at order 1; `max_wave_speed_mf` provides

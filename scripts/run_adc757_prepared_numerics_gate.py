@@ -27,6 +27,7 @@ EXPECTED_REQUIREMENTS = {
     "mpi_collective_execution",
     "typed_flux_recovery_consumption",
     "runtime_recovery_consumer_publication",
+    "type_erased_recovery_method_identity",
     "model_declared_admissibility",
     "prepared_limiter_provider",
     "cell_local_temporal_partition_authority",

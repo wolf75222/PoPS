@@ -186,6 +186,7 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert prepared.gpu is False
     assert "one block-prepared closed-form method" in prepared.limitation
     assert "device-copyable RecoveryOutcome/RecoveryReport" in prepared.limitation
+    assert "selected and last-attempted method kinds" in prepared.limitation
     assert "consume publication permission" in prepared.limitation
     assert "no implicit repair, fallback, or mutable cache" in prepared.limitation
 

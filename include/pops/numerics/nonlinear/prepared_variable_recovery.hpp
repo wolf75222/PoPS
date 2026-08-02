@@ -134,6 +134,8 @@ struct RecoveryOutcome {
   int attempted_methods = 0;
   int selected_method = -1;
   int last_method = -1;
+  RecoveryMethodKind selected_method_kind = RecoveryMethodKind::kUnknown;
+  RecoveryMethodKind last_method_kind = RecoveryMethodKind::kUnknown;
   int total_iterations = 0;
   int total_evaluations = 0;
   Real residual_norm = std::numeric_limits<Real>::max();
@@ -155,6 +157,8 @@ struct RecoveryReport {
   int attempted_methods = 0;
   int selected_method = -1;
   int last_method = -1;
+  RecoveryMethodKind selected_method_kind = RecoveryMethodKind::kUnknown;
+  RecoveryMethodKind last_method_kind = RecoveryMethodKind::kUnknown;
   int total_iterations = 0;
   int total_evaluations = 0;
   Real residual_norm = std::numeric_limits<Real>::max();
@@ -175,6 +179,8 @@ POPS_HD inline RecoveryReport recovery_report(const RecoveryOutcome<N>& outcome)
                         outcome.attempted_methods,
                         outcome.selected_method,
                         outcome.last_method,
+                        outcome.selected_method_kind,
+                        outcome.last_method_kind,
                         outcome.total_iterations,
                         outcome.total_evaluations,
                         outcome.residual_norm,
@@ -192,6 +198,24 @@ inline constexpr const char* recovery_status_name(RecoveryStatus status) {
       return "rejected";
     case RecoveryStatus::kInvalidContract:
       return "invalid_contract";
+  }
+  return "unknown";
+}
+
+inline constexpr const char* recovery_method_kind_name(RecoveryMethodKind kind) {
+  switch (kind) {
+    case RecoveryMethodKind::kUnknown:
+      return "unknown";
+    case RecoveryMethodKind::kClosedForm:
+      return "closed_form";
+    case RecoveryMethodKind::kPreparedLocalNonlinear:
+      return "prepared_local_nonlinear";
+    case RecoveryMethodKind::kBracketed:
+      return "bracketed";
+    case RecoveryMethodKind::kRepair:
+      return "repair";
+    case RecoveryMethodKind::kCustom:
+      return "custom";
   }
   return "unknown";
 }
@@ -322,6 +346,7 @@ POPS_HD inline void execute_recovery_chain(const RecoveryMethodList<Head, Tail>&
   const RecoveryMethodResult<N> method_result = methods.head(conserved, initial_guess);
   ++outcome.attempted_methods;
   outcome.last_method = MethodIndex;
+  outcome.last_method_kind = Head::kind;
   outcome.total_iterations += method_result.iterations;
   outcome.total_evaluations += method_result.evaluations;
   outcome.residual_norm = method_result.residual_norm;
@@ -378,6 +403,7 @@ POPS_HD inline void execute_recovery_chain(const RecoveryMethodList<Head, Tail>&
   outcome.status = RecoveryStatus::kRecovered;
   outcome.cause = RecoveryCause::kNone;
   outcome.selected_method = MethodIndex;
+  outcome.selected_method_kind = Head::kind;
   outcome.failing_component = -1;
 }
 

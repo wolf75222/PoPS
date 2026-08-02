@@ -164,6 +164,8 @@ TEST(test_block_builder, cell_primitive_conversion_consumes_prepared_recovery_ou
   EXPECT_EQ(success.cause, RecoveryCause::kNone);
   EXPECT_EQ(success.attempted_methods, 1);
   EXPECT_EQ(success.selected_method, 0);
+  EXPECT_EQ(success.selected_method_kind, RecoveryMethodKind::kClosedForm);
+  EXPECT_EQ(success.last_method_kind, RecoveryMethodKind::kClosedForm);
   EXPECT_DOUBLE_EQ(primitive[0], 1.0);
   EXPECT_DOUBLE_EQ(primitive[1], 0.2);
   EXPECT_DOUBLE_EQ(primitive[2], -0.1);
@@ -179,6 +181,8 @@ TEST(test_block_builder, cell_primitive_conversion_consumes_prepared_recovery_ou
   EXPECT_EQ(failure.status, RecoveryStatus::kInvalidContract);
   EXPECT_EQ(failure.cause, RecoveryCause::kNonFiniteCandidate);
   EXPECT_EQ(failure.attempted_methods, 1);
+  EXPECT_EQ(failure.selected_method_kind, RecoveryMethodKind::kUnknown);
+  EXPECT_EQ(failure.last_method_kind, RecoveryMethodKind::kClosedForm);
   EXPECT_GE(failure.failing_component, 1);
   EXPECT_EQ(primitive, sentinel);
 }

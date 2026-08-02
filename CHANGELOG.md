@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Type-erased variable-recovery reports now retain the selected and last-attempted method kinds.
+  Runtime failures name the actual recovery route instead of exposing only a plan-local integer,
+  while rejected outcomes keep the selected method explicitly unknown.
 - Capability reports now distinguish the delivered typed Riemann rejection path from an unavailable
   prepared recovery policy. Rusanov, HLL, HLLC, and Roe advertise their common device-copyable
   `FluxEvaluation` and transactional rejection, while ordered fallback chains,

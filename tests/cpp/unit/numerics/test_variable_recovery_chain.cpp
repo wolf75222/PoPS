@@ -145,8 +145,29 @@ TEST(PreparedVariableRecovery, ordered_chain_uses_common_prepared_solver) {
   EXPECT_EQ(outcome.attempted_methods, 2);
   EXPECT_EQ(outcome.selected_method, 1);
   EXPECT_EQ(outcome.last_method, 1);
+  EXPECT_EQ(outcome.selected_method_kind, pops::RecoveryMethodKind::kPreparedLocalNonlinear);
+  EXPECT_EQ(outcome.last_method_kind, pops::RecoveryMethodKind::kPreparedLocalNonlinear);
   EXPECT_GT(outcome.total_iterations, 0);
   EXPECT_NEAR(outcome.value[0], Real(2), Real(1e-10));
+}
+
+TEST(PreparedVariableRecovery, type_erased_report_preserves_selected_method_kind) {
+  const auto methods = pops::recovery_methods(
+      UnavailableClosedForm{}, pops::prepared_local_nonlinear_recovery<1>(SquareProblemFactory{}));
+  const auto plan = pops::prepare_variable_recovery<1>(AcceptPositive<1>{}, methods);
+  const Real conserved[1] = {Real(4)};
+  const Real initial_guess[1] = {Real(1)};
+
+  const auto report =
+      pops::recovery_report(pops::recover_prepared_variable(plan, conserved, initial_guess));
+
+  ASSERT_TRUE(report.publication_permitted());
+  EXPECT_EQ(report.selected_method, 1);
+  EXPECT_EQ(report.last_method, 1);
+  EXPECT_EQ(report.selected_method_kind, pops::RecoveryMethodKind::kPreparedLocalNonlinear);
+  EXPECT_EQ(report.last_method_kind, pops::RecoveryMethodKind::kPreparedLocalNonlinear);
+  EXPECT_STREQ(pops::recovery_method_kind_name(report.selected_method_kind),
+               "prepared_local_nonlinear");
 }
 
 TEST(PreparedVariableRecovery, rejected_chain_never_changes_solution_or_cache) {
@@ -159,6 +180,10 @@ TEST(PreparedVariableRecovery, rejected_chain_never_changes_solution_or_cache) {
   EXPECT_EQ(outcome.status, pops::RecoveryStatus::kRejected);
   EXPECT_EQ(outcome.cause, pops::RecoveryCause::kExplicitRejection);
   EXPECT_EQ(outcome.attempted_methods, 2);
+  EXPECT_EQ(outcome.selected_method, -1);
+  EXPECT_EQ(outcome.selected_method_kind, pops::RecoveryMethodKind::kUnknown);
+  EXPECT_EQ(outcome.last_method, 1);
+  EXPECT_EQ(outcome.last_method_kind, pops::RecoveryMethodKind::kCustom);
   EXPECT_FALSE(outcome.publication_permitted());
 
   Real accepted[1] = {Real(9)};
@@ -175,6 +200,23 @@ TEST(PreparedVariableRecovery, rejected_chain_never_changes_solution_or_cache) {
   EXPECT_TRUE(transaction.rollback());
   EXPECT_EQ(accepted[0], Real(9));
   EXPECT_EQ(cache.value[0], Real(8));
+}
+
+TEST(PreparedVariableRecovery, rejected_report_names_last_method_without_forging_selection) {
+  const auto plan = pops::prepare_variable_recovery<1>(
+      AcceptPositive<1>{}, pops::recovery_methods(NegativeCandidate{}, ExplicitReject{}));
+  const Real conserved[1] = {Real(4)};
+  const Real initial_guess[1] = {Real(1)};
+
+  const auto report =
+      pops::recovery_report(pops::recover_prepared_variable(plan, conserved, initial_guess));
+
+  EXPECT_EQ(report.status, pops::RecoveryStatus::kRejected);
+  EXPECT_EQ(report.selected_method, -1);
+  EXPECT_EQ(report.selected_method_kind, pops::RecoveryMethodKind::kUnknown);
+  EXPECT_EQ(report.last_method, 1);
+  EXPECT_EQ(report.last_method_kind, pops::RecoveryMethodKind::kCustom);
+  EXPECT_STREQ(pops::recovery_method_kind_name(report.last_method_kind), "custom");
 }
 
 TEST(PreparedVariableRecovery, tentative_publication_rolls_back_solution_and_warm_start) {
