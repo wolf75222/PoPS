@@ -2980,15 +2980,21 @@ class SystemFieldSolver {
 
   template <class Phase>
   void require_collective_named_phase_(std::string_view phase, Phase&& action) const {
-    bool failed = false;
+    std::exception_ptr local_failure;
     try {
       std::forward<Phase>(action)();
     } catch (...) {
-      failed = true;
+      local_failure = std::current_exception();
     }
-    if (all_reduce_max(failed ? 1L : 0L) != 0)
+    if (all_reduce_max(local_failure ? 1L : 0L) != 0) {
+      // A singleton execution has no remote failure to hide. Preserve the provider's exact
+      // diagnostic instead of replacing it with a collective summary; multi-rank execution still
+      // reports one rank-independent error after every participant reaches the reduction.
+      if (n_ranks() == 1 && local_failure)
+        std::rethrow_exception(local_failure);
       throw std::runtime_error("System: named field " + std::string(phase) +
                                " failed on at least one communicator rank");
+    }
   }
 
   void require_collective_field_providers_(NamedField& field) {
