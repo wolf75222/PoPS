@@ -244,7 +244,7 @@ def _accepted_tagging_hysteresis(payload):
         cursor += 8
         return value
 
-    assert encoded[:8] == b"POPSAST4"
+    assert encoded[:8] == b"POPSAST5"
     cursor = 8
     level_count = read_size()
     cursor += level_count * 40
@@ -254,6 +254,13 @@ def _accepted_tagging_hysteresis(payload):
         name_size = read_size()
         cursor += name_size + 8
         assert cursor <= len(encoded), "accepted-state logical clocks are truncated"
+    cursor += 8  # CellTemporalPartitionKind
+    provider_size = read_size()
+    cursor += provider_size
+    cursor += 3 * 8  # topology epoch, synchronization tick, tick denominator
+    cell_count = read_size()
+    cursor += cell_count * 24  # level, cell id, rung, accepted tick
+    assert cursor <= len(encoded), "accepted-state temporal partition is truncated"
     tagging_size = read_size()
     assert cursor + tagging_size <= len(encoded), "accepted-state tagging image is truncated"
     return encoded[cursor : cursor + tagging_size]
