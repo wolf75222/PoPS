@@ -153,9 +153,9 @@ class ProgramExecutionServices {
  protected:
   /// Scope one mutable prepared workspace to a single synchronous Program operation.
   ///
-  /// Uniform and AMR providers own different workspace storage, but they share the same
-  /// fail-before-mutation and release-on-exit policy.  Keeping that policy here prevents a provider
-  /// from silently forgetting the exceptional-exit release path.
+  /// ProgramExecutionServices owns the topology-independent workspace storage and the common
+  /// fail-before-mutation/release-on-exit policy. Providers receive only authenticated packs, so
+  /// exceptional-exit release cannot drift between Uniform and AMR implementations.
   class ExclusiveUseGuard {
    public:
     ExclusiveUseGuard(bool& in_use, std::string_view conflict_message) : in_use_(&in_use) {
@@ -235,8 +235,26 @@ class ProgramExecutionServices {
     if (field.empty())
       throw std::invalid_argument("Program field solve requires an exact provider slot");
     require_field_evaluation_point_(point, "Program simultaneous field solve");
+    if (value_id < 0)
+      throw std::invalid_argument(
+          "generated simultaneous field solve requires a non-negative IR identity");
+    if (overrides.size() == 0)
+      throw std::invalid_argument(
+          "generated simultaneous field solve requires at least one stage override");
+
+    auto [entry, inserted] = generated_field_solve_workspaces_.try_emplace(value_id);
+    GeneratedFieldSolveWorkspace& workspace = entry->second;
+    if (inserted)
+      workspace.field_identity.assign(field.data(), field.size());
+    else if (std::string_view(workspace.field_identity) != field)
+      throw std::logic_error(
+          "generated simultaneous field solve IR identity was reused for a different field");
+
+    ExclusiveUseGuard use(workspace.in_use,
+                          "Program simultaneous field-solve workspace is already in use");
+    prepare_generated_field_solve_workspace_(workspace, overrides);
     return provider_().program_execution_solve_generated_field_from_blocks_outcome_(
-        point, value_id, field, overrides);
+        point, workspace.field_identity, workspace.runtime_stages);
   }
 
   /// One topology-independent subdivision of the active logical interval.
@@ -1277,14 +1295,9 @@ class ProgramExecutionServices {
                                 std::initializer_list<CouplingStateOverride> candidates) const {
     if (!std::isfinite(static_cast<double>(dt)) || dt < Real(0))
       throw std::invalid_argument("Program coupling application requires a finite non-negative dt");
-    if (coupling_workspace_.in_use)
-      throw std::logic_error("Program coupling workspace is already in use");
+    ExclusiveUseGuard use(coupling_workspace_.in_use,
+                          "Program coupling workspace is already in use");
     prepare_coupling_workspace_(candidates);
-    struct WorkspaceUse {
-      bool& flag;
-      explicit WorkspaceUse(bool& value) : flag(value) { flag = true; }
-      ~WorkspaceUse() { flag = false; }
-    } use(coupling_workspace_.in_use);
     const std::size_t applied =
         provider_().program_execution_apply_coupling_(dt, coupling_workspace_.runtime_states);
     count_kernel(static_cast<std::int64_t>(applied));
@@ -1602,6 +1615,15 @@ class ProgramExecutionServices {
     bool in_use = false;
   };
 
+  struct GeneratedFieldSolveWorkspace {
+    std::string field_identity;
+    std::vector<int> program_to_runtime;
+    std::vector<const MultiFab*> runtime_stages;
+    std::vector<int> expected_program_blocks;
+    bool expected_program_blocks_initialized = false;
+    bool in_use = false;
+  };
+
   const Provider& provider_() const { return static_cast<const Provider&>(*this); }
 
   /// Acquire one generated persistent field from the common resource registry.
@@ -1773,6 +1795,85 @@ class ProgramExecutionServices {
     provider_().program_execution_select_resource_level_(selected);
   }
 
+  void prepare_generated_field_solve_workspace_(
+      GeneratedFieldSolveWorkspace& workspace,
+      std::initializer_list<FieldStageOverride> overrides) const {
+    const std::vector<int>& block_map = program_runtime_state_().block_map();
+    const std::size_t runtime_blocks = static_cast<std::size_t>(program_resource_topology().blocks);
+    if (block_map.empty())
+      throw block_map_error_(
+          "Program simultaneous field solve has no explicit program-to-runtime block map");
+
+    const bool structure_changed = workspace.program_to_runtime != block_map ||
+                                   workspace.runtime_stages.size() != runtime_blocks;
+    if (structure_changed) {
+      std::vector<int> authenticated_map;
+      authenticated_map.reserve(block_map.size());
+      std::vector<const MultiFab*> authenticated_runtime(runtime_blocks, nullptr);
+      for (std::size_t program_block = 0; program_block < block_map.size(); ++program_block) {
+        const int runtime_block = sys_block(static_cast<int>(program_block));
+        const std::size_t runtime_slot = static_cast<std::size_t>(runtime_block);
+        if (authenticated_runtime[runtime_slot] != nullptr)
+          throw block_map_error_("Program simultaneous field solve block map is not injective");
+        authenticated_map.push_back(runtime_block);
+        authenticated_runtime[runtime_slot] = &provider_().program_execution_state_(runtime_block);
+      }
+      workspace.program_to_runtime = std::move(authenticated_map);
+      workspace.runtime_stages.assign(runtime_blocks, nullptr);
+      workspace.expected_program_blocks.clear();
+      workspace.expected_program_blocks_initialized = false;
+    }
+
+    const bool learn_blocks = !workspace.expected_program_blocks_initialized;
+    if (learn_blocks) {
+      workspace.expected_program_blocks.clear();
+      workspace.expected_program_blocks.reserve(overrides.size());
+    } else if (workspace.expected_program_blocks.size() != overrides.size()) {
+      throw std::logic_error(
+          "generated simultaneous field solve IR identity changed its block pack");
+    }
+
+    std::fill(workspace.runtime_stages.begin(), workspace.runtime_stages.end(), nullptr);
+    std::size_t ordinal = 0;
+    for (const FieldStageOverride& override_value : overrides) {
+      if (override_value.program_block < 0 ||
+          static_cast<std::size_t>(override_value.program_block) >=
+              workspace.program_to_runtime.size())
+        throw std::out_of_range("generated simultaneous field solve Program block is out of range");
+      if (override_value.state == nullptr)
+        throw std::invalid_argument(
+            "generated simultaneous field solve stage override cannot be null");
+
+      const std::size_t program_slot = static_cast<std::size_t>(override_value.program_block);
+      const std::size_t runtime_slot =
+          static_cast<std::size_t>(workspace.program_to_runtime[program_slot]);
+      if (workspace.runtime_stages[runtime_slot] != nullptr)
+        throw std::invalid_argument(
+            "generated simultaneous field solve contains a duplicate Program block");
+      if (learn_blocks)
+        workspace.expected_program_blocks.push_back(override_value.program_block);
+      else if (workspace.expected_program_blocks[ordinal] != override_value.program_block)
+        throw std::logic_error(
+            "generated simultaneous field solve IR identity changed its ordered block pack");
+
+      const MultiFab& live =
+          provider_().program_execution_state_(workspace.program_to_runtime[program_slot]);
+      const MultiFab& stage = *override_value.state;
+      if (!field_layout_matches_(stage, live, live.ncomp(), live.n_grow()))
+        throw std::invalid_argument(
+            "generated field-solve stage does not match its exact runtime-block layout");
+      for (std::size_t other = 0; other < runtime_blocks; ++other)
+        if (other != runtime_slot &&
+            &stage == &provider_().program_execution_state_(static_cast<int>(other)))
+          throw std::invalid_argument(
+              "generated field-solve stage cannot alias another block's live state");
+
+      workspace.runtime_stages[runtime_slot] = override_value.state;
+      ++ordinal;
+    }
+    workspace.expected_program_blocks_initialized = true;
+  }
+
   void prepare_coupling_workspace_(std::initializer_list<CouplingStateOverride> candidates) const {
     const std::vector<int>& block_map = program_runtime_state_().block_map();
     const std::size_t runtime_blocks = static_cast<std::size_t>(program_resource_topology().blocks);
@@ -1851,6 +1952,7 @@ class ProgramExecutionServices {
   }
 
   mutable CouplingWorkspace coupling_workspace_;
+  mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
   mutable std::shared_ptr<ProgramScratchRegistry> scratch_registry_ =
       std::make_shared<ProgramScratchRegistry>();
   mutable std::map<std::string, HistoryBinding> history_bindings_;
