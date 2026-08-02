@@ -12,6 +12,7 @@ import pytest
 from pops.codegen._interface_validation import validate_shared_interface_program
 from pops.codegen.program_emit_control import _emit_contiguous_rhs_group
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.program_emit_solve import _rhs_evaluation_identity
 from pops.numerics.terms import Flux
 from pops.time import EventHandle, Program, TimePoint, every
 from typed_program_support import typed_state
@@ -96,6 +97,39 @@ def _paired_flux_program() -> Program:
     return program
 
 
+def _implicit_interface_program(
+    *, paired: bool = True, operator_components: int | None = None
+) -> Program:
+    program = Program("implicit_shared_interface")
+    left = typed_state(program, "left", state_name="U")
+    right = typed_state(program, "right", state_name="U")
+    left_r0 = program.rhs("left_r0", state=left.n, terms=[Flux()])
+    right_r0 = program.rhs("right_r0", state=right.n, terms=[Flux()])
+    ncomp = operator_components if operator_components is not None else (2 if paired else 1)
+    operator = program.matrix_free_operator(
+        "coupled_jacobian", domain="state", range_="state", ncomp=ncomp
+    )
+
+    def apply(builder: Program, out: object, direction: object) -> object:
+        result = builder.rhs_jacvec(
+            out, direction, iterate=left.n, r0=left_r0, c_dt=1,
+            sources=(), field_coupled=False,
+        )
+        if paired:
+            result = builder.rhs_jacvec(
+                out, direction, iterate=right.n, r0=right_r0, c_dt=1,
+                sources=(), field_coupled=False,
+            )
+        return result
+
+    program.set_apply(operator, apply)
+    left_next = program.value("left_next", left.n + program.dt * left_r0, at=left.next.point)
+    right_next = program.value("right_next", right.n + program.dt * right_r0, at=right.next.point)
+    program.commit(left.next, left_next)
+    program.commit(right.next, right_next)
+    return program
+
+
 def _resolved_amr_hierarchy(
     *, levels: int, program: Program, frozen: bool = True
 ) -> object:
@@ -129,6 +163,59 @@ def test_amr_shared_interface_accepts_two_frozen_levels() -> None:
         target="amr_system",
         resolved_hierarchy=_resolved_amr_hierarchy(levels=2, program=program),
     )
+
+
+def test_amr_shared_interface_accepts_and_emits_one_packed_two_sided_jacvec() -> None:
+    program = _implicit_interface_program()
+    hierarchy = _resolved_amr_hierarchy(levels=2, program=program)
+    _validate(program, target="amr_system", resolved_hierarchy=hierarchy)
+
+    source = emit_cpp_program(program, target="amr_system")
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    assert source.count("ctx.copy_component_span(") >= 7
+    assert "ctx.rhs_core_into_at(" not in source
+    assert "PreparedOperatorConcurrency::Exclusive" in source
+    group_identity = re.search(r"ctx\.rhs_group\((\d+),", source)
+    assert group_identity is not None
+    left_r0 = next(value for value in program._values if value.name == "left_r0")
+    assert str(_rhs_evaluation_identity(program, left_r0)) == group_identity.group(1)
+
+
+@pytest.mark.parametrize(
+    ("target", "levels", "frozen", "match"),
+    [
+        ("system", 2, True, "only on a frozen two-level AMR"),
+        ("amr_system", 1, True, "exactly one frozen two-level"),
+        ("amr_system", 3, True, "exactly one frozen two-level"),
+        ("amr_system", 2, False, "exactly one frozen two-level"),
+    ],
+)
+def test_shared_interface_jacvec_rejects_unproved_topologies(
+    target: str, levels: int, frozen: bool, match: str
+) -> None:
+    program = _implicit_interface_program()
+    hierarchy = (
+        None if target == "system" else
+        _resolved_amr_hierarchy(levels=levels, program=program, frozen=frozen)
+    )
+    with pytest.raises(NotImplementedError, match=match):
+        _validate(program, target=target, resolved_hierarchy=hierarchy)
+
+
+def test_shared_interface_jacvec_rejects_one_sided_or_wrong_packed_width() -> None:
+    one_sided = _implicit_interface_program(paired=False)
+    with pytest.raises(NotImplementedError, match="exactly two rhs_jacvec"):
+        _validate(
+            one_sided, target="amr_system",
+            resolved_hierarchy=_resolved_amr_hierarchy(levels=2, program=one_sided),
+        )
+
+    wrong_width = _implicit_interface_program(operator_components=3)
+    with pytest.raises(ValueError, match="component count must equal the sum"):
+        _validate(
+            wrong_width, target="amr_system",
+            resolved_hierarchy=_resolved_amr_hierarchy(levels=2, program=wrong_width),
+        )
 
 
 @pytest.mark.parametrize("levels", [2, 3, 4])

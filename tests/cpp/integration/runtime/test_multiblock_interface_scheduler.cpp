@@ -1513,6 +1513,113 @@ TEST(test_multiblock_interface_scheduler,
     EXPECT_EQ(left_result(box.hi[0], j, 0) + right_result(box.lo[0], j, 0), Real(0));
 }
 
+TEST(test_multiblock_interface_scheduler,
+     FrozenTwoLevelImplicitPairFiniteDifferencesBothFineInterfaceTracesAtomically) {
+  ensure_runtime();
+  constexpr int cells = 4;
+  AmrBuildParams params;
+  params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+  params.mesh.periodicity = Periodicity{true, true};
+  params.mesh.n = cells;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc = BCRec{};
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout_levels(params, 2);
+  layout.ba[1] = BoxArray(std::vector<Box2D>{layout.geom.domain.refine(kAmrRefRatio)});
+  layout.dm[1] = layout.load_balance->distribute(layout.ba[1], n_ranks());
+
+  std::vector<AmrRuntimeBlock> blocks;
+  for (const char* name : {"left", "right"}) {
+    AmrRuntimeBlock block = detail::dispatch_amr_block(
+        scalar_model(), "none", "rusanov", layout, name,
+        std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1);
+    block.state_identity = std::string("test://implicit-pair/") + name + "/U";
+    block.level_rhs_without_prepared_interfaces =
+        [](const BoundaryEvaluationPoint&, MultiFab&, const MultiFab&, const Geometry&,
+           MultiFab& rhs) { rhs.set_val(Real(0)); };
+    block.level_neg_div_flux_without_prepared_interfaces =
+        block.level_rhs_without_prepared_interfaces;
+    blocks.push_back(std::move(block));
+  }
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  test::install_second_order_amr_transfer_authorities(runtime, 2);
+  runtime.set_parent_child_temporal_relations({amr::ParentChildClockRelation(
+      0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly)});
+
+  std::array<int, 2> evaluator_calls{0, 0};
+  for (int level = 0; level < 2; ++level) {
+    AxisAlignedInterface route = aligned_x_route("amr.implicit-pair.shared-flux");
+    route.level = level;
+    route.affine_mapping_identity = "periodic-x-translation";
+    route.right_normal_translation = Real(1);
+    runtime.install_level_interface_flux(
+        level, route, serial_interface_execution(),
+        [&, level](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+          ++evaluator_calls[static_cast<std::size_t>(level)];
+          for (int face = 0; face < batch.face_count; ++face) {
+            const Real left = batch.left_state[face];
+            const Real right = batch.right_state[face];
+            batch.shared_flux[face] =
+                left * left + Real(3) * left * right + Real(2) * right * right;
+          }
+        });
+  }
+  runtime.require_complete_active_level_interfaces();
+
+  constexpr int fine = 1;
+  const BoundaryEvaluationPoint point{
+      "clock.implicit-pair", 7, fine, 1, 2, amr::Rational(1, 2), 0.01, 0.07};
+  MultiFab base_left = runtime.level_state(0, fine);
+  MultiFab base_right = runtime.level_state(1, fine);
+  base_left.set_val(Real(1.25));
+  base_right.set_val(Real(-0.5));
+  MultiFab base_left_rhs(base_left.box_array(), base_left.dmap(), 1, 0);
+  MultiFab base_right_rhs(base_right.box_array(), base_right.dmap(), 1, 0);
+  runtime.level_rhs_jacvec_pair(fine, point, 0, base_left, base_left_rhs, false,
+                                1, base_right, base_right_rhs, false);
+
+  constexpr Real h = Real(1.0e-6);
+  constexpr Real left_direction = Real(0.3);
+  constexpr Real right_direction = Real(-0.7);
+  MultiFab perturbed_left = base_left;
+  MultiFab perturbed_right = base_right;
+  perturbed_left.set_val(Real(1.25) + h * left_direction);
+  perturbed_right.set_val(Real(-0.5) + h * right_direction);
+  MultiFab perturbed_left_rhs(perturbed_left.box_array(), perturbed_left.dmap(), 1, 0);
+  MultiFab perturbed_right_rhs(perturbed_right.box_array(), perturbed_right.dmap(), 1, 0);
+  runtime.level_rhs_jacvec_pair(fine, point, 0, perturbed_left, perturbed_left_rhs, false,
+                                1, perturbed_right, perturbed_right_rhs, false);
+
+  EXPECT_EQ(evaluator_calls[0], 0);
+  EXPECT_EQ(evaluator_calls[1], 2)
+      << "one base and one perturbed grouped residual must each evaluate the shared flux once";
+  EXPECT_EQ(runtime.interface_evaluation_count("amr.implicit-pair.shared-flux", fine), 2u);
+  const Box2D fine_box = perturbed_left.box(0);
+  const int j = fine_box.lo[1];
+  const Real left_fd =
+      (get_cell(perturbed_left_rhs, fine_box.hi[0], j, 0) -
+       get_cell(base_left_rhs, fine_box.hi[0], j, 0)) /
+      h;
+  const Real right_fd =
+      (get_cell(perturbed_right_rhs, fine_box.lo[0], j, 0) -
+       get_cell(base_right_rhs, fine_box.lo[0], j, 0)) /
+      h;
+  const Real directional_flux =
+      (Real(2) * Real(1.25) + Real(3) * Real(-0.5)) * left_direction +
+      (Real(3) * Real(1.25) + Real(4) * Real(-0.5)) * right_direction;
+  const Real expected_left = -directional_flux / runtime.level_geom(fine).dx();
+  EXPECT_NEAR(left_fd, expected_left, Real(2.0e-5));
+  EXPECT_NEAR(right_fd, -expected_left, Real(2.0e-5));
+  EXPECT_NE(left_fd, Real(0)) << "the left residual must include the right-state direction";
+
+  runtime.set_regrid(/*every=*/1, /*grow=*/0, /*margin=*/0);
+  EXPECT_THROW(runtime.level_rhs_jacvec_pair(
+                   fine, point, 0, perturbed_left, perturbed_left_rhs, false,
+                   1, perturbed_right, perturbed_right_rhs, false),
+               std::runtime_error);
+}
+
 TEST(test_multiblock_interface_scheduler, AmrBoundaryRegistryUsesOtherBlocksProvisionalStageState) {
   ensure_runtime();
   AmrBuildParams params;

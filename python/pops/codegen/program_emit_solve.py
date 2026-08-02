@@ -39,6 +39,7 @@ from pops.codegen.krylov_contract import (
     validated_krylov_footprint,
     validated_prepared_problem_contract,
 )
+from pops.codegen._rhs_coherence import plan_rhs_coherence
 
 
 def _program_nodes(program: Any) -> Any:
@@ -251,6 +252,19 @@ def _rhs_stage_fraction(value: Any) -> Fraction:
             "rhs_jacvec r0 carries no exact stage fraction") from exc
 
 
+def _rhs_evaluation_identity(program: Any, value: Any) -> int:
+    """Return the exact rate or compiler-reserved atomic-group identity for one RHS."""
+    grouped = sorted(
+        (round_.barrier_index, round_.values)
+        for round_ in plan_rhs_coherence(program, list(program._values)).rounds
+        if len(round_.values) > 1
+    )
+    for offset, (_barrier, values) in enumerate(grouped):
+        if any(candidate.id == value.id for candidate in values):
+            return int(program._next_id) + offset
+    return int(value.id)
+
+
 def _solve_stage_fraction(value: Any) -> Fraction:
     """Return the exact solve evaluation coordinate, preferring the implicit partition."""
     point = getattr(value, "point", None)
@@ -297,8 +311,50 @@ def _rhs_jacvec_field_slot(r0: Any, field_plans: Any) -> str:
     return slot
 
 
+def _coupled_interface_jacvec_plan(v: Any, block: Any, *, target: str) -> Any:
+    jac_ops = [value for value in block if value.op == "rhs_jacvec"]
+    if target != "amr_system" or len(jac_ops) != 2:
+        return None
+    if jac_ops[0].inputs[2].block == jac_ops[1].inputs[2].block:
+        return None
+    unsupported = [
+        value.op for value in block
+        if value.op not in {"apply_in", "apply_out", "rhs_jacvec"}
+    ]
+    if unsupported:
+        raise NotImplementedError(
+            "coupled shared-interface rhs_jacvec apply cannot mix operators %s"
+            % sorted(set(unsupported)))
+    first, second = jac_ops
+    if first.inputs[0] is not second.inputs[0] or first.inputs[1] is not second.inputs[1]:
+        raise ValueError("coupled shared-interface rhs_jacvec must share packed apply in/out")
+    if first.point != second.point:
+        raise ValueError("coupled shared-interface rhs_jacvec must share one exact point")
+    if any(bool(value.attrs.get("field_coupled")) for value in jac_ops):
+        raise NotImplementedError(
+            "coupled shared-interface rhs_jacvec does not support field-coupled boundaries")
+    exact_attrs = ("c_dt", "eps", "flux", "sources", "field_coupled")
+    changed = [name for name in exact_attrs if first.attrs.get(name) != second.attrs.get(name)]
+    if changed:
+        raise ValueError(
+            "coupled shared-interface rhs_jacvec changed coefficient contract %s"
+            % sorted(changed))
+    widths = []
+    for value in jac_ops:
+        components = getattr(getattr(value.inputs[2], "space", None), "components", None)
+        if not isinstance(components, tuple) or not components:
+            raise TypeError(
+                "coupled shared-interface rhs_jacvec requires complete StateSpace metadata")
+        widths.append(len(components))
+    if int(v.attrs["ncomp"]) != sum(widths):
+        raise ValueError(
+            "coupled shared-interface packed width differs from endpoint StateSpaces")
+    return tuple(jac_ops), tuple(widths)
+
+
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
-                               lines: Any = None, *, field_plans: Any = None) -> None:
+                               lines: Any = None, *, field_plans: Any = None,
+                               target: str = "system") -> None:
     """Lower a matrix_free_operator to an authenticated factory of C++ execution sessions. Each
     session owns a fresh ``ApplyFn`` and deep-copied scratch snapshot; its body re-emits the apply
     sub-block:
@@ -313,7 +369,9 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         that point even if later operators advance the shared context stage.  A field-coupled apply
         instead finite-differences the complete boundary residual before restoring its perturbed
         provider publication. Boundary-only scratch is allocated once and only when that block has
-        an installed boundary linearization;
+        an installed boundary linearization.  On the proved frozen two-level shared-interface AMR
+        route, exactly two endpoint nodes instead gather one packed direction, perturb both states,
+        and execute one atomic two-sided residual before scattering the packed JVP;
       - the apply RESULT (the affine the body returned, e.g. ``in - alpha*Lap(in)``) is written into
         ``out`` via the same accumulate-then-lincomb idiom as a linear_combine commit.
 
@@ -331,6 +389,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     out_sf = v.attrs["apply_out"]
     block = v.attrs["apply_block"]
     result = v.attrs["apply_result"]
+    coupled_jacvec = _coupled_interface_jacvec_plan(v, block, target=target)
     # Sub-scope token map: the lambda params + persistent scratch. `in` is the const lambda param;
     # `out` is the (non-const) lambda param the result is written into.
     sub = {in_sf.id: "in", out_sf.id: "out"}
@@ -427,10 +486,46 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # iteration, so -- like schur_coeffs -- they become PERSISTENT shared_ptr scratch (jac_uk / jac_r0)
     # captured by value (shared pointee), refreshed from the live iterate / r0 in the step body BEFORE
     # the solve. Plus a perturbed-state scratch (jac_up) and a perturbed-rhs scratch (jac_rp) the
-    # lambda fills per matvec. All carry the operator's component count (= the block n_cons).  The
-    # exact BoundaryEvaluationPoint is a shared pointee because it must remain frozen at r0's stage
-    # while other operator nodes may advance the shared context to a later stage.
+    # lambda fills per matvec. A single-block route carries the operator component count; a proved
+    # two-block route gives each endpoint its exact StateSpace width and owns one additional packed
+    # iterate. The exact BoundaryEvaluationPoint is a shared pointee because it must remain frozen
+    # at r0's stage while other operator nodes may advance the shared context to a later stage.
     jac_ops = [w for w in block if w.op == "rhs_jacvec"]
+    coupled_pair = () if coupled_jacvec is None else coupled_jacvec[0]
+    coupled_widths = () if coupled_jacvec is None else coupled_jacvec[1]
+    coupled_width_by_id = {
+        value.id: width for value, width in zip(coupled_pair, coupled_widths, strict=True)
+    }
+    coupled_packed_uk = None
+    coupled_point = None
+    coupled_cdt = None
+    coupled_metric_scratch = None
+    if coupled_jacvec is not None:
+        coupled_packed_uk = "jac_packed_uk%d" % apply_id
+        prelude.append(
+            "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
+            % (coupled_packed_uk, op_ncomp))
+        captures.append(coupled_packed_uk)
+        session_fields.append(coupled_packed_uk)
+        coupled_point = "jac_pair_point%d" % apply_id
+        prelude.append(
+            "auto %s = std::make_shared<"
+            "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % coupled_point)
+        captures.append(coupled_point)
+        session_points.append(coupled_point)
+        coupled_cdt = "jac_pair_cdt%d" % apply_id
+        prelude.append(
+            "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));"
+            % coupled_cdt)
+        captures.append(coupled_cdt)
+        session_scalars.append(coupled_cdt)
+        coupled_metric_scratch = "jac_pair_metric_scratch%d" % apply_id
+        session_dynamic.append(
+            (coupled_metric_scratch,
+             "std::make_shared<std::vector<double>>("
+             "ctx_owner->program_resource_vector_distribution()."
+             "reduction_scratch_value_count("
+             "pops::detail::PreparedFieldAlgebra::kRobustDotPayloadWidth), 0.0)"))
     jac_scratch = {}
     # jacvec op id -> (uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
     #                  field_slot, cdt, block_idx) names/provenance
@@ -447,38 +542,44 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         r0 = "jac_r0%d_%d" % (apply_id, w.id)
         up = "jac_up%d_%d" % (apply_id, w.id)
         rp = "jac_rp%d_%d" % (apply_id, w.id)
+        jac_ncomp = coupled_width_by_id.get(w.id, op_ncomp)
         for sp in (uk, r0, up, rp):
             prelude.append(
                 "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, %s));"
-                % (sp, op_ncomp, ng_state))
+                % (sp, jac_ncomp, ng_state))
             captures.append(sp)
             session_fields.append(sp)
-        point = "jac_point%d_%d" % (apply_id, w.id)
-        prelude.append(
-            "auto %s = std::make_shared<"
-            "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % point)
-        captures.append(point)
-        session_points.append(point)
-        has_boundary = "jac_has_boundary%d_%d" % (apply_id, w.id)
-        prelude.append(
-            "const bool %s = ctx.has_boundary_linearization(%d);"
-            % (has_boundary, block_idx))
-        captures.append(has_boundary)
-        session_direct.append(has_boundary)
+        if coupled_jacvec is None:
+            point = "jac_point%d_%d" % (apply_id, w.id)
+            prelude.append(
+                "auto %s = std::make_shared<"
+                "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % point)
+            captures.append(point)
+            session_points.append(point)
+            has_boundary = "jac_has_boundary%d_%d" % (apply_id, w.id)
+            prelude.append(
+                "const bool %s = ctx.has_boundary_linearization(%d);"
+                % (has_boundary, block_idx))
+            captures.append(has_boundary)
+            session_direct.append(has_boundary)
+        else:
+            point = coupled_point
+            has_boundary = "false"
         # Krylov invokes this ApplyFn sequentially.  Reuse one boundary buffer first for C(U^k) in
         # the step-body refresh, then for C'(U^k)v in each matvec.  Both conditional allocations are
         # skipped entirely for the ordinary no-boundary-linearization path.
         r0_core = None
-        boundary_work = "jac_boundary_work%d_%d" % (apply_id, w.id)
-        optional_boundary_scratch = [boundary_work]
-        if not w.attrs["field_coupled"]:
+        boundary_work = None if coupled_jacvec is not None else (
+            "jac_boundary_work%d_%d" % (apply_id, w.id))
+        optional_boundary_scratch = [] if boundary_work is None else [boundary_work]
+        if not w.attrs["field_coupled"] and coupled_jacvec is None:
             r0_core = "jac_r0_core%d_%d" % (apply_id, w.id)
             optional_boundary_scratch.insert(0, r0_core)
         for sp in optional_boundary_scratch:
             prelude.append(
                 "auto %s = %s ? std::make_shared<pops::MultiFab>("
                 "ctx.alloc_scalar_field(%d, %s)) : std::shared_ptr<pops::MultiFab>{};"
-                % (sp, has_boundary, op_ncomp, ng_state))
+                % (sp, has_boundary, jac_ncomp, ng_state))
             captures.append(sp)
             session_optional_fields.append(sp)
         field_slot = None
@@ -492,17 +593,22 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         # The BDF coefficient c*dt depends on the step's dt (the step-closure parameter), which the
         # install-time lambda cannot see; carry it through a captured shared_ptr<Real> the step body
         # sets to its dt value before the solve (the same persistent-scratch idiom as jac_uk).
-        cdt = "jac_cdt%d_%d" % (apply_id, w.id)
-        prelude.append("auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % cdt)
-        captures.append(cdt)
-        session_scalars.append(cdt)
-        metric_scratch = "jac_metric_scratch%d_%d" % (apply_id, w.id)
-        session_dynamic.append(
-            (metric_scratch,
-             "std::make_shared<std::vector<double>>("
-             "ctx_owner->program_resource_vector_distribution()."
-             "reduction_scratch_value_count("
-             "pops::detail::PreparedFieldAlgebra::kRobustDotPayloadWidth), 0.0)"))
+        if coupled_jacvec is None:
+            cdt = "jac_cdt%d_%d" % (apply_id, w.id)
+            prelude.append(
+                "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % cdt)
+            captures.append(cdt)
+            session_scalars.append(cdt)
+            metric_scratch = "jac_metric_scratch%d_%d" % (apply_id, w.id)
+            session_dynamic.append(
+                (metric_scratch,
+                 "std::make_shared<std::vector<double>>("
+                 "ctx_owner->program_resource_vector_distribution()."
+                 "reduction_scratch_value_count("
+                 "pops::detail::PreparedFieldAlgebra::kRobustDotPayloadWidth), 0.0)"))
+        else:
+            cdt = coupled_cdt
+            metric_scratch = coupled_metric_scratch
         jac_scratch[w.id] = (
             uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
             field_slot, cdt, block_idx, metric_scratch)
@@ -511,17 +617,24 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         # removed from the frozen base so the finite difference covers only the core residual; their
         # derivative is supplied separately by boundary_jvp_into_at in the ApplyFn.
         stage = _rhs_stage_fraction(r0_in)
-        prepare_refresh.append(
-            "ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
-        prepare_refresh.append(
-            "*%s = ctx.boundary_evaluation_point(%d);" % (point, int(r0_in.id)))
+        if coupled_jacvec is None or w is coupled_pair[0]:
+            evaluation_identity = (
+                _rhs_evaluation_identity(program, r0_in)
+                if coupled_jacvec is not None else int(r0_in.id)
+            )
+            prepare_refresh.append(
+                "ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+            prepare_refresh.append(
+                "*%s = ctx.boundary_evaluation_point(%d);" % (point, evaluation_identity))
         prepare_refresh.append(
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (uk, var[iterate_in.id]))
         prepare_refresh.append(
             "pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
-        prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
+        if coupled_jacvec is None or w is coupled_pair[0]:
+            prepare_refresh.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
     boundary_sessions = {}
-    for block_idx in sorted({entry[-2] for entry in jac_scratch.values()}):
+    for block_idx in (() if coupled_jacvec is not None else
+                      sorted({entry[-2] for entry in jac_scratch.values()})):
         prototype_entry = next(
             entry for entry in jac_scratch.values() if entry[-2] == block_idx)
         prototype = prototype_entry[2]
@@ -588,6 +701,87 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                         % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx,
                            stencil_boundary, point_arg))
         elif w.op == "rhs_jacvec":
+            if coupled_jacvec is not None:
+                sub[w.id] = sub[w.inputs[0].id]
+                if w is coupled_pair[0]:
+                    continue
+                first, second = coupled_pair
+                first_width, second_width = coupled_widths
+                first_entry = jac_scratch[first.id]
+                second_entry = jac_scratch[second.id]
+                (first_uk, first_r0, first_up, first_rp, _first_r0_core,
+                 _first_boundary_work, point, _first_has_boundary, _first_field_slot, cdt,
+                 first_block_idx, metric_scratch) = first_entry
+                (second_uk, second_r0, second_up, second_rp, _second_r0_core,
+                 _second_boundary_work, _second_point, _second_has_boundary, _second_field_slot,
+                 _second_cdt, second_block_idx, _second_metric_scratch) = second_entry
+                eps = scalar_cpp(first.attrs["eps"])
+                first_default = first.attrs.get("sources")
+                first_default = first_default is None or "default" in first_default
+                second_default = second.attrs.get("sources")
+                second_default = second_default is None or "default" in second_default
+                first_flux_only = "false" if first_default else "true"
+                second_flux_only = "false" if second_default else "true"
+                body.append("{")
+                body.append(
+                    "  const pops::Real jvn = std::sqrt("
+                    "pops::detail::PreparedFieldAlgebra::dot("
+                    "in, in, ctx.program_resource_vector_distribution(), "
+                    "*%s, *execution_lane));" % metric_scratch)
+                body.append(
+                    "  const pops::Real jukn = std::sqrt("
+                    "pops::detail::PreparedFieldAlgebra::dot("
+                    "*%s, *%s, ctx.program_resource_vector_distribution(), "
+                    "*%s, *execution_lane));"
+                    % (coupled_packed_uk, coupled_packed_uk, metric_scratch))
+                body.append(
+                    "  const pops::Real jh = jvn > pops::Real(0) ? "
+                    "static_cast<pops::Real>(%s) * (pops::Real(1) + jukn) / jvn "
+                    ": static_cast<pops::Real>(%s);" % (eps, eps))
+                body.append(
+                    "  ctx.copy_component_span(*%s, 0, in, 0, %d);"
+                    % (first_rp, first_width))
+                body.append(
+                    "  ctx.copy_component_span(*%s, 0, in, %d, %d);"
+                    % (second_rp, first_width, second_width))
+                body.append(
+                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, *%s);"
+                    % (first_up, first_uk, first_rp))
+                body.append(
+                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, *%s);"
+                    % (second_up, second_uk, second_rp))
+                body.append(
+                    "  ctx.rhs_jacvec_pair_into_at(*%s, %d, *%s, *%s, %s, "
+                    "%d, *%s, *%s, %s);"
+                    % (point, first_block_idx, first_up, first_rp, first_flux_only,
+                       second_block_idx, second_up, second_rp, second_flux_only))
+                body.append("  const pops::Real jc = *%s / jh;" % cdt)
+                body.append(
+                    "  ctx.copy_component_span(*%s, 0, in, 0, %d);"
+                    % (first_up, first_width))
+                body.append(
+                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, -jc, *%s);"
+                    % (first_up, first_up, first_rp))
+                body.append(
+                    "  pops::PureFieldAlgebra::axpy(*%s, jc, *%s);"
+                    % (first_up, first_r0))
+                body.append(
+                    "  ctx.copy_component_span(*%s, 0, in, %d, %d);"
+                    % (second_up, first_width, second_width))
+                body.append(
+                    "  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, -jc, *%s);"
+                    % (second_up, second_up, second_rp))
+                body.append(
+                    "  pops::PureFieldAlgebra::axpy(*%s, jc, *%s);"
+                    % (second_up, second_r0))
+                body.append(
+                    "  ctx.copy_component_span(out, 0, *%s, 0, %d);"
+                    % (first_up, first_width))
+                body.append(
+                    "  ctx.copy_component_span(out, %d, *%s, 0, %d);"
+                    % (first_width, second_up, second_width))
+                body.append("}")
+                continue
             # out = J(U^k) in = in - (c*dt/h)(rhs(U^k + h*in) - rhs(U^k)), the finite-difference
             # Jacobian-vector product of the implicit-flux BDF residual (ADC-431). h is a relatively
             # scaled FD step (Brown-Saad / WP: h = eps*(1+||U^k||)/||in||, eps the relative step). The
@@ -738,7 +932,15 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                    % ", ".join(prepare_captures))
     prelude.append("    auto& ctx = *ctx_owner;")
     prelude += ["    " + statement for statement in session_refresh]
-    for w in jac_ops:
+    if coupled_jacvec is not None:
+        offset = 0
+        for value, width in zip(coupled_pair, coupled_widths, strict=True):
+            endpoint_uk = jac_scratch[value.id][0]
+            prelude.append(
+                "    ctx.copy_component_span(*%s, %d, *%s, 0, %d);"
+                % (coupled_packed_uk, offset, endpoint_uk, width))
+            offset += width
+    for w in (() if coupled_jacvec is not None else jac_ops):
         (uk, r0, _up, _rp, r0_core, boundary_work, point, has_boundary,
          _field_slot, _cdt, block_idx, _metric_scratch) = jac_scratch[w.id]
         boundary_session = boundary_sessions[block_idx]
@@ -770,6 +972,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     exact_parameters = "%s:%d" % (program._ir_hash(), apply_id)
     exclusive_context = any(
         w.op == "rhs_jacvec" and bool(w.attrs["field_coupled"]) for w in block)
+    exclusive_context = exclusive_context or coupled_jacvec is not None
     concurrency = (
         "pops::PreparedOperatorConcurrency::Exclusive"
         if exclusive_context

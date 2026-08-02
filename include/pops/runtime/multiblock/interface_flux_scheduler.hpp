@@ -17,6 +17,7 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -420,6 +421,13 @@ class InterfaceFluxScheduler {
   void apply(const BoundaryEvaluationPoint& point, const std::vector<MultiFab*>& states,
              const std::vector<MultiFab*>& rhs,
              InterfaceFluxFragmentPublication* publication = nullptr) {
+    apply(point, std::span<MultiFab* const>(states.data(), states.size()),
+          std::span<MultiFab* const>(rhs.data(), rhs.size()), publication);
+  }
+
+  void apply(const BoundaryEvaluationPoint& point, std::span<MultiFab* const> states,
+             std::span<MultiFab* const> rhs,
+             InterfaceFluxFragmentPublication* publication = nullptr) {
     if (interfaces_.empty()) {
       validate_point_(point);
       if (publication != nullptr)
@@ -534,6 +542,30 @@ class InterfaceFluxScheduler {
       if (prepared.route.level == level)
         return true;
     return false;
+  }
+
+  /// Authenticate the deliberately narrow implicit two-block route before a Krylov matvec mutates
+  /// either endpoint scratch.  One and only one prepared interface must connect the requested pair
+  /// on this level; otherwise a packed two-sided direction would have ambiguous trace ownership.
+  void require_exact_jacvec_pair(int level, std::size_t first_block,
+                                 std::size_t second_block) const {
+    if (level < 0 || first_block == second_block)
+      throw std::invalid_argument("multi-block implicit JVP pair is invalid");
+    std::size_t level_routes = 0;
+    bool matched = false;
+    for (const PreparedInterface& prepared : interfaces_) {
+      if (prepared.route.level != level)
+        continue;
+      ++level_routes;
+      matched = matched ||
+                ((prepared.route.left_block == first_block &&
+                  prepared.route.right_block == second_block) ||
+                 (prepared.route.left_block == second_block &&
+                  prepared.route.right_block == first_block));
+    }
+    if (level_routes != 1 || !matched)
+      throw std::runtime_error(
+          "multi-block implicit JVP requires one exact prepared two-block interface route");
   }
 
   /// Rebuild every layout-bound trace plan against a replacement AMR hierarchy.  The numerical

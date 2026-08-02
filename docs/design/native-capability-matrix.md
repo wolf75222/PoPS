@@ -113,9 +113,15 @@ Supported native routes include:
   before that level becomes the parent of the next transition; only those exact routes can authorize
   proper-nesting support across an omitted physical-boundary face. This route does not mirror one
   endpoint's AMR tags through the interface mapping.
-  Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
-  dynamic active-depth changes, non-finest dynamic replacements at depth greater than two, and
-  historical shared-interface rates remain unavailable. Frozen and depth-preserving dynamic
+  One narrow shared implicit JVP route is executable: exactly two runtime blocks connected by one
+  interface on a fully materialized frozen two-level hierarchy, two state-only `rhs_jacvec` nodes
+  in one packed matrix-free apply, and both base residuals in the same top-level atomic RHS round.
+  The packed direction perturbs both endpoint states before one shared-flux evaluation, so the
+  finite difference includes both cross-interface derivatives. Field-coupled boundaries, dynamic
+  hierarchy mutation, additional blocks/interfaces and mixed apply operators fail closed.
+  Cross-layout interfaces without an explicit Mapping/Transfer provider, dynamic active-depth
+  changes, non-finest dynamic replacements at depth greater than two, and historical
+  shared-interface rates remain unavailable. Frozen and depth-preserving dynamic
   refined interfaces use the same exact `MPI_COMM_WORLD` trace and replacement-registry consensus
   as the flat route. Dynamic rematerialization stages a detached collective candidate; a
   rank-local failure restores the accepted layout, topology epoch, evaluator audit count and

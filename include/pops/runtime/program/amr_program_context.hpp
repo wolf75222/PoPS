@@ -2926,6 +2926,19 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       eng_->level_rhs_core_into_at(static_cast<std::size_t>(runtime_block), point.level, point,
                                    state, rhs, flux_only, *boundary);
   }
+  void program_execution_rhs_jacvec_pair_into_at_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int first_runtime_block, MultiFab& first_state, MultiFab& first_rhs,
+      bool first_flux_only, int second_runtime_block, MultiFab& second_state,
+      MultiFab& second_rhs, bool second_flux_only) const {
+    if (point.level != level_)
+      throw std::runtime_error(
+          "AMR Program implicit interface JVP point differs from its active level");
+    eng_->level_rhs_jacvec_pair(
+        level_, point, static_cast<std::size_t>(first_runtime_block), first_state, first_rhs,
+        first_flux_only, static_cast<std::size_t>(second_runtime_block), second_state, second_rhs,
+        second_flux_only);
+  }
   void program_execution_boundary_residual_into_at_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int runtime_block, MultiFab& state,
       MultiFab& residual, const PreparedGridBoundarySession* boundary) const {

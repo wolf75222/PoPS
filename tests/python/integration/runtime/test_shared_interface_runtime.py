@@ -21,6 +21,7 @@ from pops.mesh.boundaries import (
 from pops.model import ComponentManifest
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
+from pops.numerics.terms import Flux
 from pops.output import Checkpoint, ConsumerGraph, RegridOnRestart
 from pops.time import FixedDt, StagePoint, TimePoint, every
 
@@ -200,6 +201,39 @@ def _ssprk2_program(left_state, right_state, rate):
     return program
 
 
+def _implicit_pair_program(left_state, right_state, rate):
+    del rate
+    program = pops.Program("shared_interface_implicit_pair")
+    left = program.state(left_state)
+    right = program.state(right_state)
+    stage = StagePoint("shared_implicit_stage", {"main": TimePoint(program.clock, 0)})
+    left_iterate = program.value("left_iterate", left.n, at=stage)
+    right_iterate = program.value("right_iterate", right.n, at=stage)
+    left_r0 = program.rhs("left_r0", state=left_iterate, terms=(Flux(),))
+    right_r0 = program.rhs("right_r0", state=right_iterate, terms=(Flux(),))
+    operator = program.matrix_free_operator(
+        "shared_interface_jacobian", domain="state", range_="state", ncomp=2
+    )
+
+    def apply(builder, out, direction):
+        builder.rhs_jacvec(
+            out, direction, iterate=left_iterate, r0=left_r0, c_dt=1,
+            sources=(), field_coupled=False,
+        )
+        return builder.rhs_jacvec(
+            out, direction, iterate=right_iterate, r0=right_r0, c_dt=1,
+            sources=(), field_coupled=False,
+        )
+
+    program.set_apply(operator, apply)
+    left_next = program.value("left_next", left.n + program.dt * left_r0, at=left.next.point)
+    right_next = program.value("right_next", right.n + program.dt * right_r0, at=right.next.point)
+    program.commit(left.next, left_next)
+    program.commit(right.next, right_next)
+    program.step_strategy(FixedDt(1.0e-3))
+    return program
+
+
 def _shared_interface_accepted_image(runtime):
     native = runtime._executor._s
     levels = int(runtime.n_levels())
@@ -346,7 +380,14 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     )
 
 
-def _shared_interface_amr_authoring(tmp_path, *, component_root=None, component=None):
+def _shared_interface_amr_authoring(
+    tmp_path,
+    *,
+    component_root=None,
+    component=None,
+    program_factory=_ssprk2_program,
+    with_checkpoint=True,
+):
     from pops.amr import (
         AMRTagging,
         AMRTransfer,
@@ -413,19 +454,20 @@ def _shared_interface_amr_authoring(tmp_path, *, component_root=None, component=
         value=BindArray(),
         projection=ConservativeCellAverage(),
     ))
-    program = _ssprk2_program(core.tracer_state, right_state, core.rate)
+    program = program_factory(core.tracer_state, right_state, core.rate)
     core.case.program(program)
-    core.case.consumers(
-        ConsumerGraph.from_consumers(
-            (
-                Checkpoint(
-                    schedule=every(10_000, clock=program.clock),
-                    target="unused/shared-interface-restart",
-                    hierarchy=RegridOnRestart(),
-                ),
+    if with_checkpoint:
+        core.case.consumers(
+            ConsumerGraph.from_consumers(
+                (
+                    Checkpoint(
+                        schedule=every(10_000, clock=program.clock),
+                        target="unused/shared-interface-restart",
+                        hierarchy=RegridOnRestart(),
+                    ),
+                )
             )
         )
-    )
 
     transfer = AMRTransfer()
     transfer.state(core.tracer_state, StateTransfer())
@@ -478,7 +520,9 @@ def _shared_interface_amr_authoring(tmp_path, *, component_root=None, component=
     )
 
 
-def _resolve_shared_interface_amr(authoring, *, max_levels, patch_layout=None):
+def _resolve_shared_interface_amr(
+    authoring, *, max_levels, patch_layout=None, frozen=False
+):
     from pops.amr import (
         AMRClockRelation,
         AMRExecution,
@@ -498,7 +542,10 @@ def _resolve_shared_interface_amr(authoring, *, max_levels, patch_layout=None):
                 ratios=tuple(2 for _ in range(max_levels - 1)),
             ),
             tagging=authoring.tagging,
-            regrid=AMRRegrid(schedule=every(100, clock=authoring.program.clock)),
+            regrid=(
+                AMRRegrid.frozen() if frozen else
+                AMRRegrid(schedule=every(100, clock=authoring.program.clock))
+            ),
             transfer=authoring.transfer,
             execution=AMRExecution.subcycled(
                 tuple(
@@ -511,6 +558,19 @@ def _resolve_shared_interface_amr(authoring, *, max_levels, patch_layout=None):
         components=(authoring.component,),
         compile_options={"include": str(ROOT / "include")},
     )
+
+
+def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(tmp_path):
+    authoring = _shared_interface_amr_authoring(
+        tmp_path,
+        program_factory=_implicit_pair_program,
+        with_checkpoint=False,
+    )
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
+    assert resolved.resolved_hierarchy.plan.level_count == 2
+    artifact = pops.compile(resolved)
+
+    assert artifact.target == "amr_system"
 
 
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
