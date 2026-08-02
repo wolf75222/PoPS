@@ -14,6 +14,7 @@
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
 #include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
 #include <pops/runtime/amr/amr_program_reflux.hpp>
+#include <pops/runtime/program/cell_temporal_partition.hpp>
 
 namespace pops::runtime::program {
 
@@ -52,6 +53,7 @@ struct AmrProgramSyncEvent {
 struct AmrProgramAcceptedState {
   std::vector<amr::ClockStamp> level_clocks;
   std::map<std::string, std::int64_t> logical_clock_ticks;
+  CellTemporalPartitionAcceptedState temporal_partition;
   /// Rank-independent canonical image of the runtime-owned AMR tagging hysteresis.
   std::vector<std::uint8_t> tagging_hysteresis_state;
   std::map<std::string, int> history_owners;
@@ -448,12 +450,25 @@ Map read_map(Reader& in, ReadValue&& read_value) {
 inline std::vector<std::uint8_t> serialize_amr_program_accepted_state(
     const AmrProgramAcceptedState& state) {
   using namespace checkpoint_detail;
+  validate_cell_temporal_partition_state(state.temporal_partition);
   Writer out;
-  out.u64(0x3454534153504f50ULL);  // "POPSAST4", little-endian bytes
+  out.u64(0x3554534153504f50ULL);  // "POPSAST5", little-endian bytes
   out.size(state.level_clocks.size());
   for (const auto& clock : state.level_clocks)
     write_clock(out, clock);
   write_map(out, state.logical_clock_ticks, [](Writer& w, std::int64_t value) { w.i64(value); });
+  out.u64(static_cast<std::uint64_t>(state.temporal_partition.kind));
+  out.string(state.temporal_partition.provider_identity);
+  out.u64(state.temporal_partition.topology_epoch);
+  out.i64(state.temporal_partition.synchronization_tick);
+  out.i64(state.temporal_partition.tick_denominator);
+  out.size(state.temporal_partition.cells.size());
+  for (const CellTemporalPartitionRecord& cell : state.temporal_partition.cells) {
+    out.i32(cell.level);
+    out.u64(cell.cell);
+    out.i32(cell.rung);
+    out.i64(cell.accepted_tick);
+  }
   out.bytes(state.tagging_hysteresis_state);
   write_map(out, state.history_owners, [](Writer& w, int v) { w.i32(v); });
   write_map(out, state.history_states, [](Writer& w, const std::string& v) { w.string(v); });
@@ -520,7 +535,9 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     const std::vector<std::uint8_t>& bytes) {
   using namespace checkpoint_detail;
   Reader in(bytes);
-  if (in.u64() != 0x3454534153504f50ULL)
+  const std::uint64_t magic = in.u64();
+  const bool carries_temporal_partition = magic == 0x3554534153504f50ULL;
+  if (!carries_temporal_partition && magic != 0x3454534153504f50ULL)
     throw std::runtime_error(
         "invalid AMR Program accepted-state payload: unsupported magic/version");
   AmrProgramAcceptedState state;
@@ -529,6 +546,30 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     clock = read_clock(in);
   state.logical_clock_ticks =
       read_map<decltype(state.logical_clock_ticks)>(in, [](Reader& r) { return r.i64(); });
+  if (carries_temporal_partition) {
+    const std::uint64_t kind = in.u64();
+    if (kind > static_cast<std::uint64_t>(TemporalPartitionKind::CellLocal))
+      throw std::runtime_error(
+          "invalid AMR Program accepted-state payload: unsupported temporal partition kind");
+    state.temporal_partition.kind = static_cast<TemporalPartitionKind>(kind);
+    state.temporal_partition.provider_identity = in.string();
+    state.temporal_partition.topology_epoch = in.u64();
+    state.temporal_partition.synchronization_tick = in.i64();
+    state.temporal_partition.tick_denominator = in.i64();
+    state.temporal_partition.cells.resize(in.size());
+    for (CellTemporalPartitionRecord& cell : state.temporal_partition.cells) {
+      cell.level = in.i32();
+      cell.cell = in.u64();
+      cell.rung = in.i32();
+      cell.accepted_tick = in.i64();
+    }
+    try {
+      validate_cell_temporal_partition_state(state.temporal_partition);
+    } catch (const std::exception& error) {
+      throw std::runtime_error(std::string("invalid AMR Program accepted-state payload: ") +
+                               error.what());
+    }
+  }
   state.tagging_hysteresis_state = in.bytes();
   state.history_owners =
       read_map<std::map<std::string, int>>(in, [](Reader& r) { return r.i32(); });
