@@ -138,8 +138,8 @@ class Spatial:
       ``pops.numerics.reconstruction.FirstOrder()`` -> none, ``.limiters.Minmod()`` /
       ``.VanLeer()``, ``.WENO5()`` / ``.WENO5Z()`` -> weno5, ``.MUSCL(limiter=...)`` -> its limiter.
       weno5 = WENO5-Z, order 5 in smooth regions, 5-point stencil (3 ghosts), oscillation-free
-      capture near a front; only the native ``add_block`` path exposes it (the compiled .so paths
-      allocate 2 ghosts -> explicit rejection).
+      capture near a front; only the private native-``ModelSpec`` branch of ``add_equation``
+      exposes it (the compiled .so paths allocate 2 ghosts -> explicit rejection).
     - ``flux``: a ``pops.numerics.riemann`` descriptor lowering to "rusanov" | "hll" | "hllc" |
       "roe".
       Rusanov() = minimal generic (requires only max_wave_speed, any model).
