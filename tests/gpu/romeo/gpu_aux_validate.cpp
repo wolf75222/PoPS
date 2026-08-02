@@ -49,8 +49,8 @@ struct TeProbe {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
   static constexpr int n_aux = 5;  // phi, grad_x, grad_y, B_z, T_e
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
   POPS_HD State source(const State& u, const Aux& a) const {
     State s{};
     s[0] = a.T_e * u[0];  // lit la composante aux 4 (T_e)

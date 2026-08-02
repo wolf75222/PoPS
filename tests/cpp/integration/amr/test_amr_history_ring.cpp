@@ -65,8 +65,8 @@ struct QuadraticGrowthModel {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
   POPS_HD State source(const State& u, const Aux&) const { return State{u[0] * u[0]}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
   POPS_HD Prim to_primitive(const State& state) const { return state; }

@@ -33,8 +33,8 @@ struct StiffModel {
   using Aux = pops::Aux;
   static constexpr int n_vars = 3;
   Real k = 200.0;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
   POPS_HD State source(const State& u, const Aux&) const {
     State s{};
     s[0] = -k * (u[0] - u[1] * u[2]);
@@ -67,8 +67,8 @@ struct NanModel {
   using State = pops::StateVec<3>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 3;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
   POPS_HD State source(const State& u, const Aux&) const {
     State s{};
     s[0] = -u[0];
@@ -85,8 +85,8 @@ struct SingularModel {
   using State = pops::StateVec<3>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 3;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
   POPS_HD State source(const State& u, const Aux&) const {
     State s{};
     s[0] = Real(8) * u[0] + Real(1);
@@ -132,8 +132,8 @@ struct FallibleSourceModel {
   pops::ImplicitEvaluationStatus evaluation = pops::ImplicitEvaluationStatus::kOk;
   std::uint32_t reason = 0;
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return 0; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return 0; }
   POPS_HD State source(const State&, const Aux&) const {
     return State{Real(1e6), Real(1e6), Real(1e6)};
   }

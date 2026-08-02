@@ -30,10 +30,10 @@ struct AdvectX {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
   Real a = Real(1);
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     return State{dir == 0 ? a * u[0] : Real(0)};
   }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return a < 0 ? -a : a; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return a < 0 ? -a : a; }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
 };
@@ -44,8 +44,8 @@ struct NanSpeed {
   using State = StateVec<1>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const {
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const {
     return std::numeric_limits<Real>::quiet_NaN();
   }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
@@ -63,7 +63,7 @@ struct BoundProbe {
   Real frequency = Real(0);
   Real direct_dt = std::numeric_limits<Real>::infinity();
 
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int direction) const {
+  POPS_HD Real max_wave_speed(const State&, const auto&, int direction) const {
     return direction == 0 ? wave_x : wave_y;
   }
   POPS_HD Real stability_speed(const State&, const Aux&, int direction) const {

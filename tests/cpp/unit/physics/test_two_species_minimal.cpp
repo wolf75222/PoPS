@@ -37,8 +37,8 @@ struct ElectronRelax {
   Real k = Real(1000);  // raideur
   Real neq = Real(1);   // densite d'equilibre
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
   POPS_HD State source(const State& u, const Aux&) const { return State{-k * (u[0] - neq)}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return -u[0]; }
 };
@@ -51,8 +51,8 @@ struct IonProduction {
 
   Real rate = Real(3);
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
   POPS_HD State source(const State&, const Aux&) const { return State{rate}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
 };

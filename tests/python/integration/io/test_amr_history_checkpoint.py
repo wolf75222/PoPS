@@ -159,7 +159,7 @@ def _state3_program(
             BalanceDueRoute,
         )
 
-        total = P.sum(U)
+        total = P.sum(U.n)
         ledger = BalanceLedger("amr-selective-replay")
         P.record_balance(
             ledger,

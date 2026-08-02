@@ -50,8 +50,8 @@ struct BzGrowPop {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
   static constexpr int n_aux = 4;  // phi, grad_x, grad_y, B_z
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
   POPS_HD State source(const State& u, const Aux& a) const { return State{a.B_z * u[0]}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
 };
@@ -62,10 +62,10 @@ struct AdvectXPop {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
   Real v = Real(1);
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     return State{dir == 0 ? v * u[0] : Real(0)};
   }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return std::fabs(v); }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return std::fabs(v); }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
 };

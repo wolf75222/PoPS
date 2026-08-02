@@ -39,10 +39,10 @@ struct DensityAdvection {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
 
-  POPS_HD State flux(const State& state, const Aux&, int direction) const {
+  POPS_HD State flux(const State& state, const auto&, int direction) const {
     return direction == 0 ? state : State{Real(0)};
   }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int direction) const {
+  POPS_HD Real max_wave_speed(const State&, const auto&, int direction) const {
     return direction == 0 ? Real(1) : Real(0);
   }
   POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
