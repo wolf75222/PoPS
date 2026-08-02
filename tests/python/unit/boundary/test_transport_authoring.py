@@ -179,15 +179,14 @@ def test_primitive_fixed_state_lowers_only_through_the_exact_block_model_convert
         converted_condition,
         provider=replace(converted_condition.provider, dependencies=forged_dependencies),
     )
-    forged_authority = replace(
-        authority,
-        conditions=tuple(
-            forged_condition if row is converted_condition else row
-            for row in authority.conditions
-        ),
-    )
     with pytest.raises(NotImplementedError, match="exact model_primitive_to_conservative"):
-        forged_authority.compile_boundary_data()
+        replace(
+            authority,
+            conditions=tuple(
+                forged_condition if row is converted_condition else row
+                for row in authority.conditions
+            ),
+        )
 
 
 def test_analytic_inflow_lowers_typed_x_time_and_bound_parameters_without_callback():
@@ -272,9 +271,8 @@ def test_analytic_inflow_fails_closed_for_primitive_per_point_conversion():
     )
     case.numerics(numerics, block=block)
 
-    authority = case._resolved_numerics_for("tracer").boundaries[0]
     with pytest.raises(NotImplementedError, match="analytic primitive inflow"):
-        authority.compile_boundary_data()
+        case._resolved_numerics_for("tracer")
 
 
 def test_analytic_inflow_fails_closed_for_discrete_setup_inputs():
@@ -294,9 +292,8 @@ def test_analytic_inflow_fails_closed_for_discrete_setup_inputs():
     )
     case.numerics(numerics, block=block)
 
-    authority = case._resolved_numerics_for("tracer").boundaries[0]
     with pytest.raises(NotImplementedError, match="setup-program discrete inputs"):
-        authority.compile_boundary_data()
+        case._resolved_numerics_for("tracer")
 
 
 def test_analytic_inflow_fails_closed_when_one_plan_mixes_logical_clocks():
@@ -319,9 +316,8 @@ def test_analytic_inflow_fails_closed_when_one_plan_mixes_logical_clocks():
     )
     case.numerics(numerics, block=block)
 
-    authority = case._resolved_numerics_for("tracer").boundaries[0]
     with pytest.raises(ValueError, match="plan cannot mix several logical Clocks"):
-        authority.compile_boundary_data()
+        case._resolved_numerics_for("tracer")
 
 
 def test_transport_set_rejects_incomplete_geometry_at_resolution():
@@ -404,12 +400,11 @@ def test_directional_characteristic_provider_cannot_fall_back_to_native_inflow()
     }))
     case.numerics(numerics, block=block)
 
-    authority = case._resolved_numerics_for("tracer").boundaries[0]
     with pytest.raises(
         NotImplementedError,
         match="prepared model eigenstructure.*cannot fall back",
     ):
-        authority.compile_boundary_data()
+        case._resolved_numerics_for("tracer")
 
 
 def test_slip_wall_requires_roles_and_lowers_one_model_aware_face_law():

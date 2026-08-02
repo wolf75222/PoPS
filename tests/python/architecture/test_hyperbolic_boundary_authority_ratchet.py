@@ -9,6 +9,7 @@ transport-boundary engine before that cutover is complete.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -89,4 +90,29 @@ def test_legacy_transport_boundary_authorities_can_only_shrink() -> None:
     assert not violations, (
         "legacy transport-boundary authority expanded; lower the route to "
         "PreparedBoundaryPlan instead:\n  " + "\n  ".join(violations)
+    )
+
+
+def test_resolved_transport_authority_accepts_only_executable_descriptors() -> None:
+    """Numerical resolution, rather than a later compile/bind phase, owns acceptance."""
+    source = ROOT / "python/pops/boundary/transport.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    authority = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ResolvedTransportBoundarySet"
+    )
+    post_init = next(
+        node for node in authority.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "__post_init__"
+    )
+    calls = {
+        node.func.attr
+        for node in ast.walk(post_init)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+    }
+    assert "_native_contract" in calls, (
+        "ResolvedTransportBoundarySet must authenticate the complete executable boundary "
+        "contract during numerical resolution; do not defer unsupported descriptors to compile"
     )
