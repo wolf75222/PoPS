@@ -1932,7 +1932,13 @@ def test_balance_diagnostic_accepts_only_the_exact_native_five_term_tuple():
             }
 
     terms = RuntimeConsumerPublisher._native_balance_terms(
-        _Provider(), "pops.balance-ledger-route.v1:sha256:" + "1" * 64)
+        _Provider(),
+        "pops.balance-ledger-route.v1:sha256:" + "1" * 64,
+        block="fluid",
+        component=0,
+        levels=(0,),
+        automatic_terms=(),
+    )
     assert terms.residual == 4.0
     assert terms.reflux == 3.0
 
@@ -1941,7 +1947,14 @@ def test_balance_diagnostic_accepts_only_the_exact_native_five_term_tuple():
             return {"storage_change": 1.0}
 
     with pytest.raises(TypeError, match="exactly storage_change"):
-        RuntimeConsumerPublisher._native_balance_terms(_Incomplete(), "route")
+        RuntimeConsumerPublisher._native_balance_terms(
+            _Incomplete(),
+            "route",
+            block="fluid",
+            component=0,
+            levels=(0,),
+            automatic_terms=(),
+        )
 
     class _Coerced:
         def _accepted_balance_terms(self, _route):
@@ -1954,7 +1967,14 @@ def test_balance_diagnostic_accepts_only_the_exact_native_five_term_tuple():
             }
 
     with pytest.raises(TypeError, match="exact floating-point"):
-        RuntimeConsumerPublisher._native_balance_terms(_Coerced(), "route")
+        RuntimeConsumerPublisher._native_balance_terms(
+            _Coerced(),
+            "route",
+            block="fluid",
+            component=0,
+            levels=(0,),
+            automatic_terms=(),
+        )
 
 
 def test_diagnostic_restart_restores_payload_terms_and_native_inspection_registry():
