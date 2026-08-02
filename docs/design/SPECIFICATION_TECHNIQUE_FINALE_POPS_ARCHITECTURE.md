@@ -1536,6 +1536,15 @@ dans `examples/final/`. Chaque script doit :
 
 ## 14. Gate de conformance finale
 
+Le job de release commence par
+`scripts/prove_public_api_parity.py --wheel <wheel> --evidence <chemin-hors-checkout>`.
+Cette preuve compare octet par octet tous les fichiers Python et de typage (`*.py`, `*.pyi`,
+`py.typed`) du checkout et du wheel retenu, puis importe séparément les deux arbres dans des
+interpréteurs isolés. Les deux snapshots doivent exposer la même racine publique, les mêmes
+signatures et annotations, un `Case` explicite, des handles qualifiés distincts et
+authoring/validation/inspection sans chargement de `_pops`. Un ancien nom public, un fichier de
+typage absent ou une divergence source/wheel bloque la publication.
+
 Une release ne peut être déclarée conforme que par
 `scripts/run_final_gate.py --evidence <chemin-hors-checkout>`. La commande exige un checkout propre,
 refuse d'écraser une evidence existante et produit une evidence JSON liée au commit, à la version du

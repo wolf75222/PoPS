@@ -84,6 +84,8 @@ depends_on = [
   "python/pops/physics/board.py",
   "python/pops/problem/problem.py",
   "python/pops/time/_program/api.py",
+  "scripts/prove_public_api_parity.py",
+  ".github/workflows/release.yml",
   "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
   "examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py",
   "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py",
@@ -91,6 +93,7 @@ depends_on = [
 ]
 tested_by = [
   "tests/python/architecture/test_final_public_api.py",
+  "tests/python/architecture/test_public_api_parity_proof.py",
   "tests/python/architecture/test_release_contract.py",
 ]
 testable = true
