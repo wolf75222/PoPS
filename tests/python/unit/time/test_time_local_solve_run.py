@@ -82,7 +82,7 @@ def lorentz_model(name="lorentz_local"):
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.primitive_vars(rho=rho, u=u, v=v)
     m.conservative_from([rho, rho * u, rho * v])
     m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
     cs = sqrt(cs2)

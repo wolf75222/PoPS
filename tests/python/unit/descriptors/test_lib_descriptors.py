@@ -59,13 +59,19 @@ def test_unwired_placeholder_bricks_are_absent_from_final_catalogs():
     for catalog, name in (
         (lib.fields, "Poisson"),
         (lib.preconditioners, "Jacobi"),
-        (lib.limiters, "MC"),
     ):
         assert not hasattr(catalog, name)
 
     newton = lib.solvers.Newton()
     assert newton.available().ok is True
     assert newton.native_id == "pops::FieldNewtonSolver"
+
+
+def test_mc_limiter_is_an_executable_native_descriptor():
+    descriptor = lib.limiters.MC()
+    assert descriptor.available().ok is True
+    assert descriptor.native_id == "pops::MC"
+    assert descriptor.scheme == "mc"
 
 
 def test_available_native_ids_exist_and_are_namespaced():
