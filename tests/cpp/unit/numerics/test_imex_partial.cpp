@@ -29,8 +29,8 @@ struct TwoVarRelax {
   using State = StateVec<2>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 2;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
   POPS_HD State source(const State& u, const Aux&) const {
     return State{-Real(100) * (u[0] - Real(1)), -Real(1) * (u[1] - Real(2))};
   }

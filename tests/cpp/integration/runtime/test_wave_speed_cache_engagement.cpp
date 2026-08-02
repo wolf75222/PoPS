@@ -46,7 +46,7 @@ struct CountingIsothermal {
   int busy = 0;
   Counter calls;  // handle capture par valeur dans le kernel (donnees partagees)
 
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     const Real rho = u[0];
     const Real vx = u[1] / rho, vy = u[2] / rho;
     const Real p = c0 * c0 * rho;
@@ -62,12 +62,12 @@ struct CountingIsothermal {
     }
     return F;
   }
-  POPS_HD Real max_wave_speed(const State& u, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const State& u, const auto&, int dir) const {
     const Real v = (dir == 0 ? u[1] : u[2]) / u[0];
     const Real av = v < 0 ? -v : v;
     return av + c0;
   }
-  POPS_HD void wave_speeds(const State& u, const Aux&, int dir, Real& lo, Real& hi) const {
+  POPS_HD void wave_speeds(const State& u, const auto&, int dir, Real& lo, Real& hi) const {
     Kokkos::atomic_add(&calls(), 1LL);
     const Real v = (dir == 0 ? u[1] : u[2]) / u[0];
     Real acc = Real(0);

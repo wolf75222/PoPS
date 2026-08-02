@@ -141,8 +141,8 @@ struct PassiveScalar {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(1); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(1); }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
   POPS_HD Prim to_primitive(const State& state) const { return state; }

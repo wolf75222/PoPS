@@ -54,12 +54,13 @@ struct DiagnosticWaveModel {
   static constexpr int n_vars = 1;
   Real B0 = Real(2);
 
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{Real(0)}; }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
-  POPS_HD Real max_wave_speed(const State& state, const Aux& aux, int direction) const {
+  POPS_HD Real max_wave_speed(const State& state, const auto& providers, int direction) const {
     const Real state_magnitude = state[0] < Real(0) ? -state[0] : state[0];
-    const Real gradient = direction == 0 ? aux.grad_x : aux.grad_y;
+    const Real gradient = direction == 0 ? providers.template flux_provider<1>()
+                                         : providers.template flux_provider<2>();
     const Real gradient_magnitude = gradient < Real(0) ? -gradient : gradient;
     return Real(direction + 1) * state_magnitude + gradient_magnitude;
   }

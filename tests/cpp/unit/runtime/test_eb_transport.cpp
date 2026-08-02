@@ -63,10 +63,10 @@ struct Advect {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
   Real vx = 0.0, vy = 0.0;
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     return State{(dir == 0 ? vx : vy) * u[0]};
   }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const State&, const auto&, int dir) const {
     return std::fabs(dir == 0 ? vx : vy);
   }
   POPS_HD State source(const State&, const Aux&) const { return State{Real(0)}; }
@@ -74,7 +74,7 @@ struct Advect {
 };
 
 struct FailedRoeAdvect : Advect {
-  POPS_HD State roe_dissipation(const State&, const Aux&, const State&, const Aux&, int) const {
+  POPS_HD State roe_dissipation(const State&, const auto&, const State&, const auto&, int) const {
     return State{std::numeric_limits<Real>::quiet_NaN()};
   }
 };
