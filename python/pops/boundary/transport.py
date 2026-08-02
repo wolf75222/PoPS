@@ -258,7 +258,7 @@ class ResolvedTransportCondition:
     provider: Any
 
     def __post_init__(self) -> None:
-        from pops.mesh.boundaries import BoundaryProvider
+        from pops.mesh.boundaries import BoundaryProvider, BoundaryProviderKind
 
         if not isinstance(self.geometry, DomainBoundary):
             raise TypeError("ResolvedTransportCondition.geometry must be a DomainBoundary")
@@ -274,6 +274,22 @@ class ResolvedTransportCondition:
             raise ValueError("transport condition and stencil requirement refer to different states")
         if not isinstance(self.provider, BoundaryProvider):
             raise TypeError("ResolvedTransportCondition.provider must be a BoundaryProvider")
+        allowed_kinds = {
+            "inflow": frozenset((
+                BoundaryProviderKind.INFLOW,
+                BoundaryProviderKind.DIRECTIONAL_TRANSPORT,
+            )),
+            "outflow": frozenset((
+                BoundaryProviderKind.OUTFLOW,
+                BoundaryProviderKind.DIRECTIONAL_TRANSPORT,
+            )),
+            "slip_wall": frozenset((BoundaryProviderKind.GHOST_FORMULA,)),
+        }[self.condition_type]
+        if self.provider.kind not in allowed_kinds:
+            raise ValueError(
+                "transport condition %r cannot use boundary provider law %r"
+                % (self.condition_type, self.provider.kind.value)
+            )
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
