@@ -536,8 +536,7 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
   using namespace checkpoint_detail;
   Reader in(bytes);
   const std::uint64_t magic = in.u64();
-  const bool carries_temporal_partition = magic == 0x3554534153504f50ULL;
-  if (!carries_temporal_partition && magic != 0x3454534153504f50ULL)
+  if (magic != 0x3554534153504f50ULL)
     throw std::runtime_error(
         "invalid AMR Program accepted-state payload: unsupported magic/version");
   AmrProgramAcceptedState state;
@@ -546,29 +545,27 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     clock = read_clock(in);
   state.logical_clock_ticks =
       read_map<decltype(state.logical_clock_ticks)>(in, [](Reader& r) { return r.i64(); });
-  if (carries_temporal_partition) {
-    const std::uint64_t kind = in.u64();
-    if (kind > static_cast<std::uint64_t>(TemporalPartitionKind::CellLocal))
-      throw std::runtime_error(
-          "invalid AMR Program accepted-state payload: unsupported temporal partition kind");
-    state.temporal_partition.kind = static_cast<TemporalPartitionKind>(kind);
-    state.temporal_partition.provider_identity = in.string();
-    state.temporal_partition.topology_epoch = in.u64();
-    state.temporal_partition.synchronization_tick = in.i64();
-    state.temporal_partition.tick_denominator = in.i64();
-    state.temporal_partition.cells.resize(in.size());
-    for (CellTemporalPartitionRecord& cell : state.temporal_partition.cells) {
-      cell.level = in.i32();
-      cell.cell = in.u64();
-      cell.rung = in.i32();
-      cell.accepted_tick = in.i64();
-    }
-    try {
-      validate_cell_temporal_partition_state(state.temporal_partition);
-    } catch (const std::exception& error) {
-      throw std::runtime_error(std::string("invalid AMR Program accepted-state payload: ") +
-                               error.what());
-    }
+  const std::uint64_t kind = in.u64();
+  if (kind > static_cast<std::uint64_t>(TemporalPartitionKind::CellLocal))
+    throw std::runtime_error(
+        "invalid AMR Program accepted-state payload: unsupported temporal partition kind");
+  state.temporal_partition.kind = static_cast<TemporalPartitionKind>(kind);
+  state.temporal_partition.provider_identity = in.string();
+  state.temporal_partition.topology_epoch = in.u64();
+  state.temporal_partition.synchronization_tick = in.i64();
+  state.temporal_partition.tick_denominator = in.i64();
+  state.temporal_partition.cells.resize(in.size());
+  for (CellTemporalPartitionRecord& cell : state.temporal_partition.cells) {
+    cell.level = in.i32();
+    cell.cell = in.u64();
+    cell.rung = in.i32();
+    cell.accepted_tick = in.i64();
+  }
+  try {
+    validate_cell_temporal_partition_state(state.temporal_partition);
+  } catch (const std::exception& error) {
+    throw std::runtime_error(std::string("invalid AMR Program accepted-state payload: ") +
+                             error.what());
   }
   state.tagging_hysteresis_state = in.bytes();
   state.history_owners =

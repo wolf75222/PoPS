@@ -115,6 +115,19 @@ TEST(test_temporal_partition_restart, accepted_image_round_trips_canonically) {
   EXPECT_THROW(serialize_amr_program_accepted_state(accepted), std::invalid_argument);
 }
 
+TEST(test_temporal_partition_restart, legacy_image_without_temporal_authority_is_refused) {
+  std::vector<std::uint8_t> legacy = {'P', 'O', 'P', 'S', 'A', 'S', 'T', '4'};
+  legacy.resize(17 * sizeof(std::uint64_t), 0);
+
+  try {
+    static_cast<void>(deserialize_amr_program_accepted_state(legacy));
+    FAIL() << "accepted-state v4 silently invents a global temporal partition";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(),
+                 "invalid AMR Program accepted-state payload: unsupported magic/version");
+  }
+}
+
 TEST(test_temporal_partition_restart,
      strict_amr_restore_consumes_manifest_and_refuses_global_step_bypass) {
 #if defined(POPS_HAS_KOKKOS)
