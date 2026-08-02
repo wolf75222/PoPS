@@ -23,6 +23,7 @@ from pops.numerics.spatial import FiniteVolume
 from pops.projection import ConservativeCellAverage
 from pops.solvers import LocalNewton
 from pops.time import CoupledImplicitEuler, FixedDt, RejectAttempt
+from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.requirements import repo_include
 
 
@@ -273,7 +274,10 @@ def test_generated_native_multiblock_implicit_phase_uses_exact_name_routes(
     assert 'ctx.require_cartesian_generated_operator(0, "named_source");' in generated
     assert 'ctx.require_cartesian_generated_operator(1, "named_source");' in generated
 
-    simulation = pops.bind(artifact)
+    simulation = pops.bind(
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
     pops.run(simulation, t_end=DT, max_steps=1)
     electron = np.asarray(simulation.get_state("electrons"))
     ion = np.asarray(simulation.get_state("ions"))
