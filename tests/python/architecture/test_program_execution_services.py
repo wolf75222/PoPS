@@ -715,6 +715,10 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
     assert projection.count("const int runtime_block = sys_block(block);") == 1
     assert "program_execution_apply_projection_(runtime_block, state)" in projection
     assert "program_execution_apply_projection_(sys_block(block), state)" not in projection
+    assert projection.count(
+        "program_execution_projection_balance_integrals_(runtime_block, state)"
+    ) == 2
+    assert "program_execution_projection_balance_integrals_(block, state)" not in projection
     assert "sys_->block_project(runtime_block, state);" in uniform
     assert (
         "eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);" in amr
@@ -724,6 +728,10 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
             0
         ]
         assert "sys_block(" not in projection_hook
+        balance_hook = provider.split(
+            "program_execution_projection_balance_integrals_", 1
+        )[1].split("Real program_execution_hmin_", 1)[0]
+        assert "sys_block(" not in balance_hook
 
 
 def test_shared_cfl_dispatch_maps_the_program_block_once_and_leaves_topology_to_providers():

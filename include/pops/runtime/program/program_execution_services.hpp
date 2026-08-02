@@ -515,18 +515,18 @@ class ProgramExecutionServices {
   /// their signed delta stays qualified by runtime block/level/component in the attempt mailbox.
   void apply_projection(int block, MultiFab& state) const {
     ProgramRuntimeState& runtime = program_runtime_state_();
+    const int runtime_block = sys_block(block);
     if (!runtime.automatic_balance_capture_due()) {
-      provider_().program_execution_apply_projection_(sys_block(block), state);
+      provider_().program_execution_apply_projection_(runtime_block, state);
       return;
     }
-    const int runtime_block = sys_block(block);
     const std::optional<std::vector<Real>> before =
-        provider_().program_execution_projection_balance_integrals_(block, state);
+        provider_().program_execution_projection_balance_integrals_(runtime_block, state);
     provider_().program_execution_apply_projection_(runtime_block, state);
     if (!before)
       return;
     const std::optional<std::vector<Real>> after =
-        provider_().program_execution_projection_balance_integrals_(block, state);
+        provider_().program_execution_projection_balance_integrals_(runtime_block, state);
     if (!after || before->size() != after->size() ||
         before->size() != static_cast<std::size_t>(state.ncomp()))
       throw std::runtime_error(
