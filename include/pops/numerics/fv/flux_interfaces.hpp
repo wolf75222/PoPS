@@ -10,9 +10,11 @@
 #include <pops/core/state/state.hpp>
 
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <utility>
 
 namespace pops {
 
@@ -96,6 +98,7 @@ struct QualifiedProviderRequirement {
   const char* layout;
   const char* value_kind;
   const char* producer;
+  bool available;
   int storage_slot;
 };
 
@@ -126,6 +129,46 @@ inline constexpr int flux_provider_count = [] {
   return kAuxBaseComps;
 }();
 
+template <class Model>
+inline constexpr bool has_qualified_flux_provider_requirements = requires {
+  Model::n_flux_providers;
+  Model::flux_provider_requirements;
+};
+
+/// Authenticate the generated logical provider ABI before a device pack can be instantiated.
+///
+/// Hand-written C++ test models may omit both members. Generated models must provide both, and
+/// every selected provider must be available, fully qualified, and backed by one in-range native
+/// storage slot. The binder consumes exactly these rows; they are not inspection-only metadata.
+template <class Model>
+consteval bool qualified_flux_provider_requirements_valid() {
+  constexpr bool has_count = requires { Model::n_flux_providers; };
+  constexpr bool has_rows = requires { Model::flux_provider_requirements; };
+  if constexpr (has_count != has_rows) {
+    return false;
+  } else if constexpr (!has_count) {
+    return true;
+  } else {
+    if (Model::n_flux_providers < 0 || static_cast<std::size_t>(Model::n_flux_providers) !=
+                                           Model::flux_provider_requirements.size())
+      return false;
+    const auto nonempty = [](const char* value) { return value != nullptr && value[0] != '\0'; };
+    for (std::size_t index = 0; index < Model::flux_provider_requirements.size(); ++index) {
+      const auto& row = Model::flux_provider_requirements[index];
+      if (!row.available || row.storage_slot < 0 ||
+          row.storage_slot >= flux_provider_count<Model> || !nonempty(row.owner_qid) ||
+          !nonempty(row.space_kind) || !nonempty(row.space_name) || !nonempty(row.component) ||
+          !nonempty(row.representation) || !nonempty(row.centering) || !nonempty(row.layout) ||
+          !nonempty(row.producer))
+        return false;
+      for (std::size_t previous = 0; previous < index; ++previous)
+        if (Model::flux_provider_requirements[previous].storage_slot == row.storage_slot)
+          return false;
+    }
+    return true;
+  }
+}
+
 /// Exact, model-qualified values before they are sealed into a bound device pack.
 ///
 /// Unlike the historical global Aux object this type has exactly the width requested by Model.
@@ -135,6 +178,8 @@ inline constexpr int flux_provider_count = [] {
 template <class Model>
 struct FluxProviderValues {
   static constexpr int size = flux_provider_count<Model>;
+  static_assert(qualified_flux_provider_requirements_valid<Model>(),
+                "generated physical flux provider requirements are invalid");
   static_assert(size >= kAuxBaseComps,
                 "physical flux provider packs must declare the required base providers");
   static_assert(size <= kAuxMaxComps,
@@ -175,15 +220,43 @@ POPS_HD BoundFluxProviders<Model> bind_flux_providers(const FluxProviderValues<M
   return BoundFluxProviders<Model>(values);
 }
 
+namespace detail {
+
+template <class Model, std::size_t Index>
+inline constexpr int qualified_flux_provider_storage_slot =
+    Model::flux_provider_requirements[Index].storage_slot;
+
+template <class Model, class Storage, std::size_t... Indices>
+POPS_HD BoundFluxProviders<Model> bind_qualified_flux_providers_at(
+    const Storage& storage, int i, int j, std::index_sequence<Indices...>) {
+  FluxProviderValues<Model> values{};
+  ((values[qualified_flux_provider_storage_slot<Model, Indices>] =
+        storage(i, j, qualified_flux_provider_storage_slot<Model, Indices>)),
+   ...);
+  return bind_flux_providers<Model>(values);
+}
+
+}  // namespace detail
+
 /// Bind one exact provider pack directly from native field storage.  The caller supplies a
 /// model-qualified component count at compile time; there is no global Aux object, truncation, or
 /// zero-on-missing branch on this path.
 template <class Model, class Storage>
 POPS_HD BoundFluxProviders<Model> bind_flux_providers_at(const Storage& storage, int i, int j) {
-  FluxProviderValues<Model> values{};
-  for (int component = 0; component < FluxProviderValues<Model>::size; ++component)
-    values[component] = storage(i, j, component);
-  return bind_flux_providers<Model>(values);
+  if constexpr (has_qualified_flux_provider_requirements<Model>) {
+    static_assert(qualified_flux_provider_requirements_valid<Model>(),
+                  "generated physical flux provider requirements are invalid");
+    constexpr std::size_t count = qualified_flux_provider_requirements_valid<Model>()
+                                      ? static_cast<std::size_t>(Model::n_flux_providers)
+                                      : 0;
+    return detail::bind_qualified_flux_providers_at<Model>(storage, i, j,
+                                                           std::make_index_sequence<count>{});
+  } else {
+    FluxProviderValues<Model> values{};
+    for (int component = 0; component < FluxProviderValues<Model>::size; ++component)
+      values[component] = storage(i, j, component);
+    return bind_flux_providers<Model>(values);
+  }
 }
 
 template <class State, class ProviderPack>
