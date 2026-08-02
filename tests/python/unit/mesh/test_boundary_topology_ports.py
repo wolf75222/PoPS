@@ -10,6 +10,7 @@ from pops.mesh.boundaries import (
     BoundaryHandle,
     BoundaryOrientation,
     BoundaryProvider,
+    BoundaryProviderKind,
     BoundaryProviderRegistry,
     BoundarySide,
     BoundaryTopology,
@@ -289,6 +290,17 @@ def test_named_provider_factories_are_data_only_and_port_typed():
               dependencies=dependencies),
     )
     assert all(type(row) is BoundaryProvider for row in providers)
+    assert [row.kind for row in providers] == [
+        BoundaryProviderKind.INFLOW,
+        BoundaryProviderKind.OUTFLOW,
+        BoundaryProviderKind.GHOST_FORMULA,
+        BoundaryProviderKind.DIRICHLET,
+        BoundaryProviderKind.NEUMANN,
+        BoundaryProviderKind.MIXED,
+    ]
+    assert [row.canonical_identity()["provider_kind"] for row in providers] == [
+        row.kind.value for row in providers
+    ]
     assert all(not hasattr(row, "callback") for row in providers)
     with pytest.raises(TypeError, match="typed ConstraintResidual"):
         Mixed(handle=_provider_handle("bad_mixed"), outputs=(ghost,),
@@ -304,12 +316,22 @@ def test_noflux_satisfies_numerical_flux_only():
     provider = NoFlux(
         handle=_provider_handle("no_flux"), output=flux, dependencies=_dependencies())
     assert provider.outputs == (flux,)
+    assert provider.kind is BoundaryProviderKind.NO_FLUX
+    assert provider.canonical_identity()["provider_kind"] == "no_flux"
     assert BoundaryProviderRegistry(provider).resolve(_topology(), (flux,)).bindings
     with pytest.raises(TypeError, match="NumericalFlux only"):
         NoFlux(handle=_provider_handle("bad_no_flux"), output=ghost,
                dependencies=_dependencies())
     with pytest.raises(ValueError, match="missing boundary provider"):
         BoundaryProviderRegistry().resolve(_topology(), (ghost,))
+
+    with pytest.raises(TypeError, match="BoundaryProviderKind"):
+        BoundaryProvider(
+            _provider_handle("untyped_flux"), (flux,), _dependencies(), "no_flux")
+    with pytest.raises(TypeError, match="typed NumericalFlux"):
+        BoundaryProvider(
+            _provider_handle("forged_flux"), (ghost,), _dependencies(),
+            BoundaryProviderKind.NO_FLUX)
 
 
 def test_resolution_diagnostics_cover_missing_double_extra_ambiguous_and_periodic_physical():
@@ -414,6 +436,7 @@ def test_every_semantic_field_is_immutable():
         (dependencies, "time", ()), (dependencies, "runtime_params", ()),
         (dependencies, "representation", _dependencies().representation),
         (dependencies, "characteristic", _none_closure()),
+        (provider, "kind", BoundaryProviderKind.INFLOW),
         (provider, "handle", _provider_handle("other")), (provider, "outputs", ()),
         (provider, "dependencies", _dependencies()), (registry, "providers", ()),
         (plan.bindings[0], "need", port), (plan.bindings[0], "provider", provider),
