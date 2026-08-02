@@ -3,8 +3,8 @@ from __future__ import annotations
 
 NATIVE_COMPONENT_ABI_VERSION = 1
 NATIVE_COMPONENT_COMMON_ABI_VERSION = 1
-NATIVE_COMPONENT_CATALOG_SHA256 = '5c67c081cf1808138583ed00856e6601c12384ae28e9c0f8cc7b8ce004c3b0f6'
-NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'adbb3693dc17eff5aa7b78415df35f011dfd2c64fc26eb9a98200923e52c47ea'
+NATIVE_COMPONENT_CATALOG_SHA256 = '651f858030d8a17d2d9f0b7c5e4ef0ba4c20799f996be99ee94f75e37023b76b'
+NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = '47c3a146c9d7e20d0786fa703fe5e6b9ba27f063065e39646f4a20bb4b0e97ec'
 NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
  'execution_modes': {'native_backend': 1, 'host': 2},
  'collective_scopes': {'none': 0},
@@ -72,6 +72,14 @@ NATIVE_COMPONENT_INTERFACES = ({'id': 0,
   'hot_path': True,
   'facets': ('stencil', 'lowering'),
   'operations': ('apply',)},
+ {'id': 6,
+  'name': 'reflux',
+  'uri': 'pops://interfaces/reflux',
+  'version': 1,
+  'cpp_table': 'PopsRefluxApiV1',
+  'hot_path': True,
+  'facets': ('stencil', 'lowering', 'effects'),
+  'operations': ('apply_interface_batch',)},
  {'id': 7,
   'name': 'field_solver',
   'uri': 'pops://interfaces/field-solver',

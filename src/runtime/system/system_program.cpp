@@ -374,10 +374,10 @@ void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
   for (std::size_t program = 0; program < prog_to_sys.size(); ++program) {
     for (std::size_t previous = 0; previous < program; ++previous) {
       if (prog_to_sys[program] == prog_to_sys[previous])
-        throw std::invalid_argument(
-            "System::set_program_block_map: Program blocks " + std::to_string(previous) +
-            " and " + std::to_string(program) + " both map to System block " +
-            std::to_string(prog_to_sys[program]));
+        throw std::invalid_argument("System::set_program_block_map: Program blocks " +
+                                    std::to_string(previous) + " and " + std::to_string(program) +
+                                    " both map to System block " +
+                                    std::to_string(prog_to_sys[program]));
     }
   }
   p_->program_.block_map_ = prog_to_sys;
@@ -415,11 +415,42 @@ void System::block_project(int b, MultiFab& u) {
 void System::record_program_diagnostic(const std::string& name, Real value) {
   p_->program_.record_diagnostic(name, value);
 }
+void System::record_program_balance_term(const std::string& route, const std::string& term,
+                                         Real value) {
+  p_->program_.record_balance_term(route, term, value, "System");
+}
+bool System::program_balance_consumer_is_due(const std::string& contract, const std::string& route,
+                                             int every_n) const {
+  return p_->program_.balance_consumer_is_due(contract, route, every_n, "System");
+}
 Real System::program_diagnostic(const std::string& name) const {
   return p_->program_.diagnostic(name, "System");
 }
 std::map<std::string, Real> System::program_diagnostics() const {
   return p_->program_.diagnostics();
+}
+std::map<std::string, Real> System::accepted_balance_terms(const std::string& route) const {
+  if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "System::_accepted_balance_terms requires an active uncommitted external step transaction");
+  return p_->program_.accepted_balance_terms(route, "System");
+}
+std::map<std::string, Real> System::selected_accepted_balance_terms(
+    const std::string& route, const std::string& block, int component,
+    const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const {
+  if (!p_->external_step_transaction_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "System::_selected_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  const int runtime_block = p_->index(block);
+  const auto& state = p_->find(block);
+  if (component < 0 || component >= state.ncomp)
+    throw std::out_of_range("System::_selected_accepted_balance_terms component is out of range");
+  if (levels != std::vector<int>{0})
+    throw std::invalid_argument(
+        "System::_selected_accepted_balance_terms requires exactly uniform level 0");
+  return p_->program_.selected_accepted_balance_terms(route, runtime_block, component, levels,
+                                                      automatic_terms, "System");
 }
 void System::begin_step_projection_report() {
   p_->program_.begin_step_projection_report();

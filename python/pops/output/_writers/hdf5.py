@@ -177,7 +177,7 @@ def _parallel_snapshot_data(
         if request.parallel_mode is not ParallelMode.COLLECTIVE:
             raise ValueError(
                 "a resolved communicator is valid only for HDF5 COLLECTIVE output")
-        require_communicator(communicator)
+        require_communicator(communicator, allow_world=False)
         if request.rank != rank(communicator):
             raise ValueError("collective HDF5 request rank differs from its native communicator")
         native, capability = _require_native_parallel_hdf5()

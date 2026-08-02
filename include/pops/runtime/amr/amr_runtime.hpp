@@ -37,6 +37,7 @@
 #include <pops/runtime/analytic/initial_materialization.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>  // n_ranks() / comm_active(): MPI message+reduction counts (Spec 5 criterion 43)
+#include <pops/parallel/prepared_provider_consensus.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
@@ -1533,6 +1534,65 @@ class AmrRuntime {
           "AmrRuntime external Clustering requires one pre-bootstrap provider");
     clustering_provider_ = provider;
     external_clustering_ = std::move(provider);
+  }
+
+  void install_external_reflux(std::shared_ptr<runtime::amr::PreparedRefluxComponent> provider) {
+    const CommunicatorView communicator = world_communicator_view();
+    std::exception_ptr local_failure;
+    try {
+      if (external_reflux_configured_ || bootstrap_pending_)
+        throw std::runtime_error(
+            "AmrRuntime external Reflux must be configured exactly once before bootstrap");
+    } catch (...) {
+      local_failure = std::current_exception();
+    }
+    if (all_reduce_max(local_failure ? std::uint64_t{1} : std::uint64_t{0}, communicator) != 0) {
+      if (communicator.size() == 1 && local_failure)
+        std::rethrow_exception(local_failure);
+      throw std::runtime_error(
+          "AmrRuntime external Reflux configuration failed on another communicator rank");
+    }
+
+    struct OptionalRefluxSelection {
+      const runtime::amr::PreparedRefluxComponent* provider = nullptr;
+      explicit operator bool() const noexcept { return provider != nullptr; }
+      [[nodiscard]] std::string_view collective_contract() const noexcept {
+        return provider == nullptr ? std::string_view{} : provider->collective_contract();
+      }
+    };
+    require_prepared_provider_collective_consensus(OptionalRefluxSelection{provider.get()});
+    external_reflux_configured_ = true;
+    if (!provider)
+      return;
+
+    external_reflux_ = std::move(provider);
+    local_failure = nullptr;
+    try {
+      rematerialize_persistent_topology_resources_(topology_materialization_generation_);
+    } catch (...) {
+      local_failure = std::current_exception();
+    }
+    if (all_reduce_max(local_failure ? std::uint64_t{1} : std::uint64_t{0}, communicator) == 0)
+      return;
+
+    external_reflux_.reset();
+    std::exception_ptr rollback_failure;
+    try {
+      rematerialize_persistent_topology_resources_(topology_materialization_generation_);
+    } catch (...) {
+      rollback_failure = std::current_exception();
+    }
+    external_reflux_configured_ = false;
+    if (all_reduce_max(rollback_failure ? std::uint64_t{1} : std::uint64_t{0}, communicator) != 0) {
+      if (communicator.size() == 1 && rollback_failure)
+        std::rethrow_exception(rollback_failure);
+      throw std::runtime_error(
+          "AmrRuntime external Reflux rollback failed on another communicator rank");
+    }
+    if (communicator.size() == 1 && local_failure)
+      std::rethrow_exception(local_failure);
+    throw std::runtime_error(
+        "AmrRuntime external Reflux preparation failed on another communicator rank");
   }
 
   /// Inject the current Program evaluation coordinate used by external Tagger/boundary component
@@ -5946,6 +6006,8 @@ class AmrRuntime {
       cluster_{};  ///< ADC-616: Berger-Rigoutsos params; default {0.7,1,32} (bit-identical).
   std::shared_ptr<runtime::amr::PreparedTaggerComponent> external_tagger_;
   std::shared_ptr<runtime::amr::PreparedClusteringComponent> external_clustering_;
+  std::shared_ptr<runtime::amr::PreparedRefluxComponent> external_reflux_;
+  bool external_reflux_configured_ = false;
   std::shared_ptr<const amr::ClusteringProvider> clustering_provider_ =
       std::make_shared<const amr::BergerRigoutsosProvider>(ClusterParams{});
   // Ephemeral Program evaluation metadata required by the prepared component ABI.  These values
@@ -6116,6 +6178,13 @@ class AmrRuntime {
     coarse_fine_spatial_candidate.reserve(blocks_.size());
     average_down_candidate.reserve(blocks_.size());
     program_reflux_candidate.reserve(blocks_.size());
+    PreparedAmrRefluxLocalKernel external_reflux_kernel;
+    if (external_reflux_) {
+      const std::shared_ptr<runtime::amr::PreparedRefluxComponent> provider = external_reflux_;
+      external_reflux_kernel = [provider](const PreparedAmrRefluxLocalRequest& request) {
+        provider->apply(request);
+      };
+    }
     for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
       const AmrRuntimeBlock& block = blocks_[block_index];
       const auto& authority = block_transfer_authorities_[block_index];
@@ -6145,7 +6214,8 @@ class AmrRuntime {
       average_down_candidate.push_back(
           PreparedAmrAverageDownPlan::prepare(*block.levels, generation));
       program_reflux_candidate.push_back(PreparedAmrProgramRefluxPlan::prepare(
-          *block.levels, dom_, base_per_, generation, world_communicator_view()));
+          *block.levels, dom_, base_per_, generation, world_communicator_view(),
+          external_reflux_kernel, block.state_identity));
     }
     auto tagging_candidate = make_tagging_execution_plan_(tagging_program_, generation);
     auto interface_candidate = interface_scheduler_.rematerialized(

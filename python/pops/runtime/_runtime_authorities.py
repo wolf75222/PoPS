@@ -643,8 +643,10 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
     """Install every AMR provider through its authority-carried runtime protocol."""
 
     providers = install_plan.amr_providers
-    if not isinstance(providers, Mapping) or tuple(providers) != ("clustering", "tagger"):
-        raise ValueError("adaptive runtime requires exact clustering and tagger providers")
+    if not isinstance(providers, Mapping) \
+            or tuple(providers) != ("clustering", "tagger", "reflux"):
+        raise ValueError(
+            "adaptive runtime requires exact clustering, tagger and reflux providers")
     native = getattr(engine, "_s", None)
     from pops.amr.providers import prepare_amr_provider_installation
     from pops.runtime._component_execution_context import component_execution_data

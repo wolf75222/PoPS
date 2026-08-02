@@ -1,6 +1,7 @@
 """Source-only contract checks for the final release gate (ADC-695)."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import json
@@ -387,6 +388,133 @@ def test_final_gate_pins_one_conda_environment_and_native_headers(
     assert "bash" not in command
 
 
+def test_installed_component_lane_clears_checkout_headers(monkeypatch, tmp_path):
+    executable = tmp_path / "conda"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    monkeypatch.setenv("POPS_CONDA_EXE", str(executable))
+    command = gate._conda_command(
+        [
+            "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1",
+            "python",
+            "-m",
+            "pytest",
+            contract.INSTALLED_COMPONENT_PACKAGE_NODEID,
+        ],
+        pops_include=None,
+    )
+
+    assert [
+        argument for argument in command if argument.startswith("POPS_INCLUDE=")
+    ] == ["POPS_INCLUDE="]
+    assert "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1" in command
+    assert str((ROOT / "include").resolve()) not in command
+
+
+def test_installed_component_node_is_real_and_rejects_mock_native_routes():
+    relative, node = contract.INSTALLED_COMPONENT_PACKAGE_NODEID.split("::", 1)
+    source = (ROOT / relative).read_text(encoding="utf-8")
+    assert "def %s(" % node in source
+    helper = source.split("def _require_installed_component_package_proof()", 1)[1].split(
+        "\ndef ", 1
+    )[0]
+    assert "Path(_pops.__file__).resolve()" in helper
+    assert "importlib.machinery.EXTENSION_SUFFIXES" in helper
+    assert "_pops.__has_kokkos__ is True" in helper
+    assert '["schema_version"] == 1' in helper
+    test_body = source.split("def %s(" % node, 1)[1].split("\ndef ", 1)[0]
+    assert test_body.index("_require_installed_component_package_proof()") \
+        < test_body.index("compile_component(component)")
+
+
+def test_preflight_authenticates_exact_installed_component_lane(tmp_path):
+    relative, function_name = contract.INSTALLED_COMPONENT_PACKAGE_NODEID.split("::", 1)
+    classname = str(Path(relative).with_suffix("")).replace("/", ".")
+    report = tmp_path / "reports" / "installed-component-package.xml"
+    report.parent.mkdir()
+    report.write_text(
+        '<testsuite tests="1"><testcase classname="%s" name="%s"/></testsuite>'
+        % (classname, function_name),
+        encoding="utf-8",
+    )
+    lane = {
+        "path": str(report),
+        "sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+        "tests": 1,
+        "failures": 0,
+        "skips_or_xfails": 0,
+    }
+    argv = [
+        "/proof/conda",
+        "run",
+        "--no-capture-output",
+        "-n",
+        "pops",
+        "/usr/bin/env",
+        "PYTHONPATH=",
+        "PYTHONNOUSERSITE=1",
+        "POPS_REQUIRE_NATIVE_TESTS=1",
+        "POPS_INCLUDE=",
+        "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-s",
+        "-o",
+        "xfail_strict=true",
+        contract.INSTALLED_COMPONENT_PACKAGE_NODEID,
+        "--junitxml",
+        str(report),
+    ]
+    row = {
+        "commands": [{"argv": argv}],
+        "evidence": {
+            "installed_component_package": {
+                "nodeid": contract.INSTALLED_COMPONENT_PACKAGE_NODEID,
+                "headers": "installed-wheel",
+                "lane": lane,
+            },
+        },
+    }
+    preflight._installed_component_package_evidence(tmp_path, row)
+
+    source_headers = copy.deepcopy(row)
+    source_headers["commands"][0]["argv"][
+        source_headers["commands"][0]["argv"].index("POPS_INCLUDE=")
+    ] = "POPS_INCLUDE=/checkout/include"
+    with pytest.raises(preflight.PreflightError, match="wheel-owned headers"):
+        preflight._installed_component_package_evidence(tmp_path, source_headers)
+
+    skipped = copy.deepcopy(row)
+    skipped["evidence"]["installed_component_package"]["lane"]["skips_or_xfails"] = 1
+    with pytest.raises(preflight.PreflightError, match="not all-pass"):
+        preflight._installed_component_package_evidence(tmp_path, skipped)
+
+    renamed = copy.deepcopy(row)
+    report.write_text(
+        '<testsuite tests="1"><testcase classname="%s" name="renamed"/></testsuite>'
+        % classname,
+        encoding="utf-8",
+    )
+    renamed["evidence"]["installed_component_package"]["lane"]["sha256"] = (
+        hashlib.sha256(report.read_bytes()).hexdigest()
+    )
+    with pytest.raises(preflight.PreflightError, match="appears 0 times"):
+        preflight._installed_component_package_evidence(tmp_path, renamed)
+
+    report.write_text(
+        '<testsuite tests="1"><testcase classname="%s" name="%s"/></testsuite>'
+        % (classname, function_name),
+        encoding="utf-8",
+    )
+
+    duplicate = copy.deepcopy(row)
+    duplicate["commands"].append(copy.deepcopy(duplicate["commands"][0]))
+    with pytest.raises(preflight.PreflightError, match="exactly once"):
+        preflight._installed_component_package_evidence(tmp_path, duplicate)
+
+
 def test_final_gate_honours_explicit_conda_executable(monkeypatch, tmp_path):
     executable = tmp_path / "conda"
     executable.write_text("#!/bin/sh\nexit 0\n")
@@ -438,6 +566,80 @@ def test_release_evidence_authenticates_the_exact_retained_wheel(tmp_path):
     gates["official_build"]["evidence"]["wheel"]["size"] += 1
     with pytest.raises(preflight.PreflightError, match="size drifted"):
         preflight._wheel_evidence(tmp_path, gates, release)
+
+
+def _write_public_api_evidence(tmp_path: Path) -> tuple[Path, dict, object]:
+    package = tmp_path / "site-packages" / "pops"
+    wheel_sha256 = "a" * 64
+    typed_sha256 = "b" * 64
+    public_sha256 = "c" * 64
+    metadata_sha256 = "d" * 64
+    payload = {
+        "schema_version": preflight.PUBLIC_API_EVIDENCE_SCHEMA_VERSION,
+        "producer": {
+            "script": "scripts/prove_public_api_parity.py",
+            "sha256": hashlib.sha256(
+                (SCRIPTS / "prove_public_api_parity.py").read_bytes()
+            ).hexdigest(),
+        },
+        "wheel_path": str(tmp_path / "pops.whl"),
+        "wheel_sha256": wheel_sha256,
+        "distribution": {
+            "name": "PoPS",
+            "version": "1.0.0",
+            "metadata_sha256": metadata_sha256,
+        },
+        "typed_payload_files": 3,
+        "typed_payload_sha256": typed_sha256,
+        "public_api_sha256": public_sha256,
+        "public_names": ["Model", "Program", "Case"],
+        "pure_authoring": True,
+        "qualified_handles": True,
+        "py_typed": True,
+        "installed": True,
+        "installed_distribution": {
+            "name": "PoPS",
+            "version": "1.0.0",
+            "metadata_sha256": metadata_sha256,
+        },
+        "installed_package": str(package),
+        "installed_typed_payload_sha256": typed_sha256,
+        "installed_public_api_sha256": public_sha256,
+    }
+    path = tmp_path / "public-api-evidence.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    release_evidence = {
+        "runtime": {"pops_file": str(package / "__init__.py")},
+        "gates": {
+            "official_build": {
+                "evidence": {"wheel": {"sha256": wheel_sha256}},
+            },
+        },
+    }
+    release = type("ReleaseContract", (), {"PACKAGE_VERSION": "1.0.0"})
+    return path, release_evidence, release
+
+
+def test_release_preflight_binds_installed_public_api_to_wheel_and_runtime(tmp_path):
+    evidence, release_evidence, release = _write_public_api_evidence(tmp_path)
+
+    preflight._public_api_evidence(evidence, release_evidence, release)
+
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    payload["wheel_sha256"] = "e" * 64
+    evidence.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(preflight.PreflightError, match="another wheel"):
+        preflight._public_api_evidence(evidence, release_evidence, release)
+
+
+def test_release_preflight_rejects_public_api_proven_on_another_install(tmp_path):
+    evidence, release_evidence, release = _write_public_api_evidence(tmp_path)
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    payload["installed_package"] = str(tmp_path / "other" / "pops")
+    evidence.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(preflight.PreflightError, match="authenticated installed runtime"):
+        preflight._public_api_evidence(evidence, release_evidence, release)
 
 
 @pytest.mark.parametrize(
@@ -883,8 +1085,6 @@ def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_pat
     commands[0]["argv"][commands[0]["argv"].index(runtime["native_sha256"])] = "d" * 64
     with pytest.raises(preflight.PreflightError, match="command drifted"):
         preflight._examples_evidence(tmp_path, gates, runtime)
-
-
 def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate():
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text()
     wheels = (ROOT / ".github" / "workflows" / "wheels.yml").read_text()

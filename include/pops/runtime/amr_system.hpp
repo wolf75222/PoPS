@@ -58,7 +58,7 @@
 
 namespace pops {
 
-class WorldCommunicator;
+class ObserverMpiLane;
 namespace runtime::program {
 class AmrProgramContext;
 }
@@ -384,6 +384,8 @@ class AmrSystem {
   POPS_EXPORT void install_amr_clustering_component(
       runtime::amr::PreparedClusteringSpec spec,
       std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_amr_reflux_component(
+      runtime::amr::PreparedRefluxSpec spec, std::shared_ptr<component::LoadedComponent> component);
   POPS_EXPORT void discard_amr_provider_components();
   /// Materialize one exact shared NumericalFlux route on a frozen AMR level.  This seam is called
   /// only after the lazy AmrRuntime has been built and before bind freezes composition.
@@ -672,7 +674,7 @@ class AmrSystem {
   /// Exact rank-local valid-cell pieces for one qualified field provider.  The returned metadata
   /// explicitly marks replicated level-zero ownership so output modes never infer it from box counts.
   std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
-  std::vector<OutputPiece> output_field_root_pieces(const WorldCommunicator& world,
+  std::vector<OutputPiece> output_field_root_pieces(const ObserverMpiLane& lane,
                                                     const std::string& provider_slot, int level);
   /// Transaction bracket used by the accepted-state reader after complete payload preflight. Every
   /// hierarchy,
@@ -909,6 +911,13 @@ class AmrSystem {
   /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
   POPS_EXPORT double program_diagnostic(const std::string& name) const;
   POPS_EXPORT std::map<std::string, double> program_diagnostics() const;
+  /// Five current-attempt scalars for one typed balance route. RuntimeInstance calls this only
+  /// inside its active outer accepted-step transaction; missing/stale/non-finite evidence fails.
+  POPS_EXPORT std::map<std::string, double> accepted_balance_terms(const std::string& route) const;
+  /// The same accepted route with selected attempt-local native reflux/projection producers.
+  POPS_EXPORT std::map<std::string, double> selected_accepted_balance_terms(
+      const std::string& route, const std::string& block, int component,
+      const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const;
   POPS_EXPORT void begin_step_projection_report();
   POPS_EXPORT void note_step_projection(const std::string& name);
   POPS_EXPORT std::vector<std::string> consume_step_projections();
@@ -1048,7 +1057,7 @@ class AmrSystem {
   /// without allocating a global level buffer.
   std::vector<OutputPiece> output_state_local_pieces(const std::string& name, int k);
   std::vector<PatchBox> output_geometry_boxes();
-  std::vector<OutputPiece> output_state_root_pieces(const WorldCommunicator& world,
+  std::vector<OutputPiece> output_state_root_pieces(const ObserverMpiLane& lane,
                                                     const std::string& name, int k);
   /// Owner rank per box of level @p k (the shared layout's DistributionMapping), aligned with the
   /// level-@p k rows of patch_boxes(). The v3 checkpoint (ADC-542) serializes it so a restart
@@ -1101,6 +1110,12 @@ class AmrSystem {
 
  private:
   friend class runtime::program::AmrProgramContext;
+  /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
+  /// private to AmrProgramContext and is deliberately absent from Python bindings.
+  POPS_EXPORT void record_program_balance_term(const std::string& route, const std::string& term,
+                                               double value);
+  POPS_EXPORT bool program_balance_consumer_is_due(const std::string& contract,
+                                                   const std::string& route, int every_n) const;
   POPS_EXPORT runtime::program::ProgramRuntimeState& program_runtime_state_();
   /// Read-only compiled-artifact capability check; artifact authority installation is private to
   /// AmrSystem::install_program and cannot be injected through the public facade.

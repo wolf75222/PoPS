@@ -1,5 +1,5 @@
 #include "../bindings_detail.hpp"
-#include <pops/parallel/world_communicator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include "boundary_component_install.hpp"
 #include "output_geometry_binding.hpp"
 
@@ -354,6 +354,10 @@ void bind_system_program(py::class_<System>& cls) {
       // program_diagnostics() returns the whole name -> value dict.
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &System::program_diagnostics)
+      .def("_accepted_balance_terms", &System::accepted_balance_terms, py::arg("route"))
+      .def("_selected_accepted_balance_terms", &System::selected_accepted_balance_terms,
+           py::arg("route"), py::arg("block"), py::arg("component"), py::arg("levels"),
+           py::arg("automatic_terms"))
       .def("_consume_step_projections", &System::consume_step_projections)
       // ADC-542: the native collective reduction over a named block the diagnostics driver drives to
       // fire a declared typed measure (Norm / Integral / MinMax) each cadence tick, and the sink the
@@ -921,28 +925,27 @@ void bind_system_data(py::class_<System>& cls) {
           "Exact compact valid-cell field pieces owned by this rank.")
       .def(
           "output_state_root_pieces",
-          [](const System& s, const WorldCommunicator& world, const std::string& block, int level) {
+          [](const System& s, const ObserverMpiLane& lane, const std::string& block, int level) {
             std::vector<OutputPiece> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_state_root_pieces(world, block, level);
+              pieces = s.output_state_root_pieces(lane, block, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("block"), py::arg("level"),
+          py::arg("lane"), py::arg("block"), py::arg("level"),
           "Collectively gather compact state pieces in C++; complete only on MPI rank zero.")
       .def(
           "output_field_root_pieces",
-          [](System& s, const WorldCommunicator& world, const std::string& provider_slot,
-             int level) {
+          [](System& s, const ObserverMpiLane& lane, const std::string& provider_slot, int level) {
             std::vector<OutputPiece> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_field_root_pieces(world, provider_slot, level);
+              pieces = s.output_field_root_pieces(lane, provider_slot, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("provider_slot"), py::arg("level"),
+          py::arg("lane"), py::arg("provider_slot"), py::arg("level"),
           "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",

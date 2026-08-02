@@ -119,15 +119,15 @@ def _snapshots(communicator):
     return snapshot((local_piece,)), snapshot(serial_pieces), key, global_values
 
 
-def _parallel_hdf5_world(test_name: str):
+def _parallel_hdf5_lane(test_name: str):
     try:
         import h5py  # noqa: F401 -- serial native reopen verification
     except ImportError:
         _missing_mpi_requirement("collective HDF5 requires h5py")
     if getattr(_pops, "__has_parallel_hdf5__", False) is not True:
         _missing_mpi_requirement("collective HDF5 requires the compiled C++ parallel-HDF5 route")
-    communicator = _pops.mpi_world()
-    if world_size(communicator) == 1 and os.environ.get(_MPI_CHILD) != "1":
+    world = _pops.mpi_world()
+    if world_size(world) == 1 and os.environ.get(_MPI_CHILD) != "1":
         mpiexec = shutil.which("mpiexec") or shutil.which("mpirun")
         if mpiexec is None:
             _missing_mpi_requirement(
@@ -154,12 +154,24 @@ def _parallel_hdf5_world(test_name: str):
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return None
-    assert world_size(communicator) >= 2, "MPI child did not start with two ranks"
-    return communicator
+    assert world_size(world) >= 2, "MPI child did not start with two ranks"
+    return world.duplicate_observer_lane("pytest-hdf5-" + test_name)
 
 
-def test_collective_hdf5_roundtrip_matches_serial(tmp_path):
-    communicator = _parallel_hdf5_world(test_collective_hdf5_roundtrip_matches_serial.__name__)
+@pytest.fixture
+def parallel_hdf5_lane(request):
+    lane = _parallel_hdf5_lane(request.node.name)
+    if lane is None:
+        yield None
+        return
+    try:
+        yield lane
+    finally:
+        lane.close_collectively()
+
+
+def test_collective_hdf5_roundtrip_matches_serial(tmp_path, parallel_hdf5_lane):
+    communicator = parallel_hdf5_lane
     if communicator is None:
         return
     rank = world_rank(communicator)
@@ -237,10 +249,10 @@ def test_collective_hdf5_roundtrip_matches_serial(tmp_path):
     assert failure is None, failure
 
 
-def test_collective_hdf5_refuses_rank_local_metadata_before_write(tmp_path):
-    communicator = _parallel_hdf5_world(
-        test_collective_hdf5_refuses_rank_local_metadata_before_write.__name__
-    )
+def test_collective_hdf5_refuses_rank_local_metadata_before_write(
+    tmp_path, parallel_hdf5_lane,
+):
+    communicator = parallel_hdf5_lane
     if communicator is None:
         return
     rank = world_rank(communicator)
@@ -265,10 +277,10 @@ def test_collective_hdf5_refuses_rank_local_metadata_before_write(tmp_path):
     assert not tuple(shared_root.glob(".*must-not-exist*.tmp"))
 
 
-def test_collective_hdf5_refuses_divergent_target_before_write(tmp_path):
-    communicator = _parallel_hdf5_world(
-        test_collective_hdf5_refuses_divergent_target_before_write.__name__
-    )
+def test_collective_hdf5_refuses_divergent_target_before_write(
+    tmp_path, parallel_hdf5_lane,
+):
+    communicator = parallel_hdf5_lane
     if communicator is None:
         return
     rank = world_rank(communicator)
@@ -290,10 +302,10 @@ def test_collective_hdf5_refuses_divergent_target_before_write(tmp_path):
     assert not tuple(shared_root.glob("*must-not-exist.h5"))
 
 
-def test_native_collective_hdf5_binding_failure_is_all_rank_consensus(tmp_path):
-    communicator = _parallel_hdf5_world(
-        test_native_collective_hdf5_binding_failure_is_all_rank_consensus.__name__
-    )
+def test_native_collective_hdf5_binding_failure_is_all_rank_consensus(
+    tmp_path, parallel_hdf5_lane,
+):
+    communicator = parallel_hdf5_lane
     if communicator is None:
         return
     rank = world_rank(communicator)

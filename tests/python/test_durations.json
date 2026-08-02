@@ -233,6 +233,7 @@
   "tests/python/unit/numerics/test_finite_volume_composite.py": 1.0,
   "tests/python/unit/numerics/test_indicator_stencils.py": 1.0,
   "tests/python/unit/output/test_async_scientific_output.py": 2.0,
+  "tests/python/unit/output/test_async_scientific_output_diagnostics.py": 2.0,
   "tests/python/unit/output/test_durable_journal.py": 2.0,
   "tests/python/unit/output/test_durable_observer_integration.py": 2.0,
   "tests/python/unit/output/test_exact_writers.py": 1.0,
@@ -362,6 +363,7 @@
   "tests/python/unit/time/test_multirate_history_contract.py": 1.0,
   "tests/python/unit/time/test_operator_handle_resolution.py": 1.0,
   "tests/python/unit/time/test_program_authoring_atomicity.py": 1.0,
+  "tests/python/unit/time/test_program_cadence.py": 1.0,
   "tests/python/unit/time/test_program_deep_freeze.py": 1.0,
   "tests/python/unit/time/test_program_solve_final.py": 1.0,
   "tests/python/unit/time/test_program_to_graph.py": 1.0,
@@ -408,7 +410,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 223,
+    "estimated_count": 225,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -556,6 +558,7 @@
       "tests/python/unit/numerics/test_finite_volume_composite.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
       "tests/python/unit/output/test_async_scientific_output.py",
+      "tests/python/unit/output/test_async_scientific_output_diagnostics.py",
       "tests/python/unit/output/test_durable_journal.py",
       "tests/python/unit/output/test_durable_observer_integration.py",
       "tests/python/unit/output/test_exact_writers.py",
@@ -619,6 +622,7 @@
       "tests/python/unit/time/test_multirate_history_contract.py",
       "tests/python/unit/time/test_operator_handle_resolution.py",
       "tests/python/unit/time/test_program_authoring_atomicity.py",
+      "tests/python/unit/time/test_program_cadence.py",
       "tests/python/unit/time/test_program_deep_freeze.py",
       "tests/python/unit/time/test_program_solve_final.py",
       "tests/python/unit/time/test_program_to_graph.py",
@@ -634,6 +638,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 404
+    "total_files": 406
   }
 }

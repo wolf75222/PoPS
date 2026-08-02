@@ -347,6 +347,7 @@ def program_to_graph(program: Any) -> Any:
         detached.name,
         nodes,
         clocks=_declared_clocks(nodes, detached.clock),
+        cadence=detached.cadence_contract(),
     )
     # Detachment and graph conversion are read-only; authoring identity remains stable.
     if detached._ir_hash() != program._ir_hash():

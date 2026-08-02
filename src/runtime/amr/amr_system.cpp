@@ -246,6 +246,7 @@ struct AmrSystem::Impl {
   std::map<std::string, std::string> field_storage_routes_;
   std::shared_ptr<runtime::amr::PreparedTaggerComponent> amr_tagger_component_;
   std::shared_ptr<runtime::amr::PreparedClusteringComponent> amr_clustering_component_;
+  std::shared_ptr<runtime::amr::PreparedRefluxComponent> amr_reflux_component_;
   struct BootstrapArray {
     std::string centering;
     int ncomp = 0;
@@ -409,24 +410,27 @@ struct AmrSystem::Impl {
         throw std::logic_error("AmrSystem Program cadence window starts before macro-step zero");
       const int window_start_macro_step = accepted_macro_step - held_before_due;
       try {
-        for (int s = 0; s < program_.substeps_; ++s) {
-          const auto partition =
-              program_.prepare_cadence_substep(cadence, s, program_.substeps_, "AmrSystem");
-          // AmrProgramContext reads the facade clock at Program entry. Move it to the exact accepted
-          // start of this substep so stage/tagger coordinates cover the whole catch-up window instead
-          // of repeating the outer macro-step time.
-          t = partition.start;
-          // All internal calls belong to one public stride window. Publish the accepted start tick
-          // so schedules, regridding and AmrProgramContext never count Program substeps as facade
-          // macro-steps.
-          macro_step_ = window_start_macro_step;
-          // ADC-626/ADC-631: expose this interval before the Program stores its pre-commit history
-          // sample. The ring ledger then records the outgoing dt from that sample toward the next
-          // accepted sample (variable-dt replay). Parity with SystemProgramDriver::run_program_cadence.
-          program_.last_dt_ = static_cast<Real>(partition.dt);
-          program_.step_(partition.dt);
-          t = partition.end;
-        }
+        program_.run_balance_due_window(accepted_macro_step, "AmrSystem", [&] {
+          for (int s = 0; s < program_.substeps_; ++s) {
+            const auto partition =
+                program_.prepare_cadence_substep(cadence, s, program_.substeps_, "AmrSystem");
+            // AmrProgramContext reads the facade clock at Program entry. Move it to the exact
+            // accepted start of this substep so stage/tagger coordinates cover the whole catch-up
+            // window instead of repeating the outer macro-step time.
+            t = partition.start;
+            // All internal calls belong to one public stride window. Publish the accepted start tick
+            // so schedules, regridding and AmrProgramContext never count Program substeps as facade
+            // macro-steps.
+            macro_step_ = window_start_macro_step;
+            // ADC-626/ADC-631: expose this interval before the Program stores its pre-commit history
+            // sample. The ring ledger then records the outgoing dt from that sample toward the next
+            // accepted sample (variable-dt replay). Parity with
+            // SystemProgramDriver::run_program_cadence.
+            program_.last_dt_ = static_cast<Real>(partition.dt);
+            program_.step_(partition.dt);
+            t = partition.end;
+          }
+        });
       } catch (...) {
         t = accepted_time;
         macro_step_ = accepted_macro_step;
@@ -439,6 +443,7 @@ struct AmrSystem::Impl {
     // One prepared endpoint owns facade, stages and serialized AMR accepted clocks. Do not recompute
     // it as either accepted_time + dt or window_start + effective_dt after Program execution.
     t = cadence.window_end;
+    program_.complete_balance_step(cadence.due);
   }
 
   struct AcceptedSnapshot {
@@ -457,6 +462,11 @@ struct AmrSystem::Impl {
     double cadence_clock_restore_accepted_time = 0.0;
     int cadence_clock_restore_macro_step = 0;
     std::map<std::string, Real> program_diagnostics;
+    std::map<std::string, Real> step_balance_terms;
+    std::map<pops::runtime::program::AutomaticBalanceKey, Real> automatic_balance_terms;
+    bool automatic_balance_due = false;
+    bool balance_step_completed = false;
+    bool balance_program_was_due = false;
     pops::runtime::program::CacheManager cache;
     pops::runtime::program::HistoryManager history;
     pops::runtime::program::Profiler profiler;
@@ -501,6 +511,11 @@ struct AmrSystem::Impl {
       cadence_clock_restore_accepted_time = impl.program_.cadence_clock_restore_accepted_time_;
       cadence_clock_restore_macro_step = impl.program_.cadence_clock_restore_macro_step_;
       copy_value_map_into(program_diagnostics, impl.program_.diagnostics_);
+      copy_value_map_into(step_balance_terms, impl.program_.step_balance_terms_);
+      copy_value_map_into(automatic_balance_terms, impl.program_.automatic_balance_terms_);
+      automatic_balance_due = impl.program_.automatic_balance_due_;
+      balance_step_completed = impl.program_.balance_step_completed_;
+      balance_program_was_due = impl.program_.balance_program_was_due_;
       // AMR currently owns its native cache/history rings inside AmrRuntime.  These two shared
       // ProgramRuntimeState containers are therefore empty on the AMR path, but retain their value
       // contract so a future target can populate them without weakening rollback semantics.
@@ -531,6 +546,11 @@ struct AmrSystem::Impl {
       impl.program_.cadence_clock_restore_accepted_time_ = cadence_clock_restore_accepted_time;
       impl.program_.cadence_clock_restore_macro_step_ = cadence_clock_restore_macro_step;
       copy_value_map_into(impl.program_.diagnostics_, program_diagnostics);
+      copy_value_map_into(impl.program_.step_balance_terms_, step_balance_terms);
+      copy_value_map_into(impl.program_.automatic_balance_terms_, automatic_balance_terms);
+      impl.program_.automatic_balance_due_ = automatic_balance_due;
+      impl.program_.balance_step_completed_ = balance_step_completed;
+      impl.program_.balance_program_was_due_ = balance_program_was_due;
       impl.program_.cache_ = cache;
       impl.program_.hist_ = history;
       impl.program_.profiler_ = profiler;
@@ -890,6 +910,9 @@ struct AmrSystem::Impl {
       runtime->install_external_tagger(amr_tagger_component_);
     if (amr_clustering_component_)
       runtime->install_external_clustering(amr_clustering_component_);
+    // Reflux selection is a collective optional-provider contract: every rank enters this call,
+    // including ranks where no external provider was selected.
+    runtime->install_external_reflux(amr_reflux_component_);
     if (!boundary_plans_.empty())
       runtime->install_boundary_storage_routes(field_storage_routes_);
     // Low-level facade compatibility has no authored AMRTransfer object.  Resolve its exact
@@ -1490,6 +1513,17 @@ POPS_EXPORT void AmrSystem::install_amr_clustering_component(
       std::move(spec), std::move(component));
 }
 
+POPS_EXPORT void AmrSystem::install_amr_reflux_component(
+    runtime::amr::PreparedRefluxSpec spec, std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_amr_reflux_component");
+  if (P->built || P->amr_reflux_component_)
+    throw std::runtime_error(
+        "AmrSystem external Reflux requires one installation before runtime build");
+  P->amr_reflux_component_ = std::make_shared<runtime::amr::PreparedRefluxComponent>(
+      std::move(spec), std::move(component));
+}
+
 POPS_EXPORT void AmrSystem::discard_amr_provider_components() {
   Impl* P = p_.get();
   require_assembling_amr(P->bound_, "discard_amr_provider_components");
@@ -1497,6 +1531,7 @@ POPS_EXPORT void AmrSystem::discard_amr_provider_components() {
     throw std::runtime_error("AmrSystem cannot discard AMR providers after runtime build");
   P->amr_tagger_component_.reset();
   P->amr_clustering_component_.reset();
+  P->amr_reflux_component_.reset();
 }
 
 POPS_EXPORT void AmrSystem::install_interface_flux_component(
@@ -1767,11 +1802,11 @@ std::vector<OutputPiece> AmrSystem::output_field_local_pieces(const std::string&
   return p_->runtime->output_field_local_pieces(provider_slot, level);
 }
 
-std::vector<OutputPiece> AmrSystem::output_field_root_pieces(const WorldCommunicator& world,
+std::vector<OutputPiece> AmrSystem::output_field_root_pieces(const ObserverMpiLane& lane,
                                                              const std::string& provider_slot,
                                                              int level) {
   return output_pieces_to_root(
-      world, detail::output_collective_identity("AmrSystem", "field", provider_slot, level),
+      lane, detail::output_collective_identity("AmrSystem", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
 }
 
@@ -3622,6 +3657,14 @@ runtime::program::ProgramRuntimeState& AmrSystem::program_runtime_state_() {
 void AmrSystem::record_program_diagnostic(const std::string& name, double value) {
   p_->program_.record_diagnostic(name, value);  // shared subsystem (ADC-594)
 }
+void AmrSystem::record_program_balance_term(const std::string& route, const std::string& term,
+                                            double value) {
+  p_->program_.record_balance_term(route, term, value, "AmrSystem");
+}
+bool AmrSystem::program_balance_consumer_is_due(const std::string& contract,
+                                                const std::string& route, int every_n) const {
+  return p_->program_.balance_consumer_is_due(contract, route, every_n, "AmrSystem");
+}
 double AmrSystem::program_diagnostic(const std::string& name) const {
   // AMR keeps its historical LENIENT read (missing name -> 0.0), distinct from System's fail-loud
   // program_diagnostic; not routed through the struct's throwing diagnostic() helper.
@@ -3630,6 +3673,35 @@ double AmrSystem::program_diagnostic(const std::string& name) const {
 }
 std::map<std::string, double> AmrSystem::program_diagnostics() const {
   return p_->program_.diagnostics_;
+}
+std::map<std::string, double> AmrSystem::accepted_balance_terms(const std::string& route) const {
+  if (!p_->external_step_transaction_active_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "AmrSystem::_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  return p_->program_.accepted_balance_terms(route, "AmrSystem");
+}
+std::map<std::string, double> AmrSystem::selected_accepted_balance_terms(
+    const std::string& route, const std::string& block, int component,
+    const std::vector<int>& levels, const std::vector<std::string>& automatic_terms) const {
+  if (!p_->external_step_transaction_active_ || p_->external_step_transaction_committed_)
+    throw std::runtime_error(
+        "AmrSystem::_selected_accepted_balance_terms requires an active uncommitted external step "
+        "transaction");
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::_selected_accepted_balance_terms requires an installed AMR runtime");
+  const std::size_t runtime_block = p_->block_index_or_throw(block);
+  if (component < 0 || component >= p_->runtime->block_n_vars(runtime_block))
+    throw std::out_of_range(
+        "AmrSystem::_selected_accepted_balance_terms component is out of range");
+  if (levels.empty() || std::any_of(levels.begin(), levels.end(), [&](int level) {
+        return level < 0 || level >= p_->runtime->nlev();
+      }))
+    throw std::out_of_range(
+        "AmrSystem::_selected_accepted_balance_terms level is out of active hierarchy range");
+  return p_->program_.selected_accepted_balance_terms(
+      route, static_cast<int>(runtime_block), component, levels, automatic_terms, "AmrSystem");
 }
 void AmrSystem::begin_step_projection_report() {
   p_->program_.begin_step_projection_report();
@@ -4413,9 +4485,9 @@ std::vector<PatchBox> AmrSystem::output_geometry_boxes() {
   return p_->runtime->output_geometry_boxes();
 }
 
-std::vector<OutputPiece> AmrSystem::output_state_root_pieces(const WorldCommunicator& world,
+std::vector<OutputPiece> AmrSystem::output_state_root_pieces(const ObserverMpiLane& lane,
                                                              const std::string& name, int k) {
-  return output_pieces_to_root(world,
+  return output_pieces_to_root(lane,
                                detail::output_collective_identity("AmrSystem", "state", name, k),
                                [&] { return output_state_local_pieces(name, k); });
 }
@@ -4548,7 +4620,8 @@ int AmrSystem::rebuild_history_slots(const std::string& name,
         p_->program_.stride_, [imp](double dt, int cursor) {
           imp->macro_step_ = cursor;  // ctx.macro_step() -> facade cursor -> regrid_if_due schedule
           imp->program_.last_dt_ = static_cast<Real>(dt);
-          imp->program_.step_(dt);
+          imp->program_.run_balance_replay("AmrSystem::rebuild_history_slots",
+                                           [&] { imp->program_.step_(dt); });
         });
   } catch (...) {
     p_->macro_step_ = m;

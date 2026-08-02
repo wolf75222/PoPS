@@ -331,7 +331,9 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
       // value needs no Program execution. The interval from slot j+1 to j is dts[j+1].
       for (int j = older - 1; j > newer; --j) {
         p_->program_.last_dt_ = dts[static_cast<std::size_t>(j + 1)];
-        p_->program_.step_(static_cast<double>(dts[static_cast<std::size_t>(j + 1)]));
+        p_->program_.run_balance_replay("System::rebuild_history_slots", [&] {
+          p_->program_.step_(static_cast<double>(dts[static_cast<std::size_t>(j + 1)]));
+        });
         reconstructed[static_cast<std::size_t>(j)] =
             p_->sp[owner].U;  // deep copy the fresh owner state
       }

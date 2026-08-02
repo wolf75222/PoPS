@@ -40,6 +40,7 @@
 
 #include "amr_tagging_test_authority.hpp"
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/world_communicator.hpp>
 
 #include <cmath>
@@ -302,7 +303,10 @@ static Result run(int n, int nsteps, double dt, bool distribute) {
   // contract of level_{state,potential}_global(0).
   R.state = sys.level_state_global(0);
   R.output_local_pieces = sys.output_state_local_pieces("gas", 0);
-  R.output_root_pieces = sys.output_state_root_pieces(WorldCommunicator::world(), "gas", 0);
+  auto output_lane =
+      ObserverMpiLane::duplicate_world_collectively("test/amr-distributed-coarse/root-output");
+  R.output_root_pieces = sys.output_state_root_pieces(output_lane, "gas", 0);
+  output_lane.close_collectively();
   R.phi = sys.potential();
   R.phi_global = sys.level_potential_global(0);
   R.mass = sys.mass();

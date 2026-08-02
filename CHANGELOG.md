@@ -18,6 +18,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- `Program.cadence(substeps=..., stride=...)` now authors the native global cadence as immutable,
+  identity-bearing Program data and installs it before the Uniform or AMR runtime freezes.
+- `AsyncScientificOutput` now accepts fields, diagnostics, or both on one exact schedule. Diagnostic
+  reductions, including the five-term `Balance` ledger, are captured transactionally before the
+  accepted snapshot is detached; the asynchronous worker receives only immutable arrays and
+  scalars. Sparse Balance cadences elide off-cadence reductions, publish an exact zero ledger for
+  held Program strides, and replay accepted state without reopening the native mailbox.
+- ParaView output now has one collection-authoring keyword: `collection`. The deprecated
+  `ParaView(series=...)` compatibility route is deleted instead of being retained beside the
+  canonical PVD collection contract.
 - Release codesign now preserves an existing valid ad-hoc signature and refuses publication when
   post-install signing changes the retained wheel's native bytes, so the published wheel and the
   runtime exercised by conformance and final examples are byte-identical.
@@ -47,6 +57,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved
   rational stage weight, geometry and duration before publishing the image; rejected restart or
   Program attempts leave the previous accepted report byte-exact.
+- The final release gate now proves an external source component against the exact installed wheel:
+  its isolated AOT lane clears the checkout-owned `POPS_INCLUDE`, requires the wheel-owned signed
+  header tree and native Kokkos extension, compiles/installs/loads the component, and retains one
+  exact no-skip/no-xfail JUnit result whose node ID and command are reauthenticated by preflight.
+- External AMR `Reflux` components now use the normalized public provider route from
+  `AMR(..., reflux=...)` through resolve, compiled provenance and transactional native
+  installation; the builtin flux-register kernel follows the same reported contract.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
   `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one

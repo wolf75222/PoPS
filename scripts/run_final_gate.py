@@ -30,6 +30,7 @@ from final_release_contract import (
     FINAL_EXAMPLES,
     FINAL_EXAMPLE_REQUIRED_TESTS,
     FINAL_SPECIFICATION,
+    INSTALLED_COMPONENT_PACKAGE_NODEID,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
@@ -39,7 +40,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 9
+EVIDENCE_SCHEMA_VERSION = 10
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -94,7 +95,11 @@ def _outside_checkout(path: Path) -> Path:
     raise FinalGateError("--evidence must be outside the checkout: %s" % resolved)
 
 
-def _conda_command(arguments: Sequence[str]) -> list[str]:
+def _conda_command(
+    arguments: Sequence[str],
+    *,
+    pops_include: Path | None = ROOT / "include",
+) -> list[str]:
     """Run inside the same conda installation selected by the gate process.
 
     A login shell is deliberately forbidden here: user startup files may rewrite ``PATH`` and
@@ -143,7 +148,7 @@ def _conda_command(arguments: Sequence[str]) -> list[str]:
         "PYTHONPATH=",
         "PYTHONNOUSERSITE=1",
         "POPS_REQUIRE_NATIVE_TESTS=1",
-        "POPS_INCLUDE=" + str((ROOT / "include").resolve()),
+        "POPS_INCLUDE=" + ("" if pops_include is None else str(pops_include.resolve())),
         *arguments,
     ]
 
@@ -597,12 +602,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--junitxml", str(python_junit),
         ]))
         _require_no_hidden_skip(required_stdout)
+        installed_component_junit = (
+            evidence_root / "reports" / "installed-component-package.xml"
+        )
+        installed_component_stdout = recorder.run(
+            "python_conformance",
+            _conda_command(
+                [
+                    "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1",
+                    "python",
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "-s",
+                    "-o",
+                    "xfail_strict=true",
+                    INSTALLED_COMPONENT_PACKAGE_NODEID,
+                    "--junitxml",
+                    str(installed_component_junit),
+                ],
+                pops_include=None,
+            ),
+        )
+        _require_no_hidden_skip(installed_component_stdout)
         recorder.rows["python_conformance"]["evidence"] = {
             "required_lane": _junit_summary(python_junit),
             "selection": PYTHON_REQUIRED_SELECTION,
             "final_example_nodeids": _require_junit_nodeids(
                 python_junit, FINAL_EXAMPLE_REQUIRED_TESTS
             ),
+            "installed_component_package": {
+                "nodeid": INSTALLED_COMPONENT_PACKAGE_NODEID,
+                "headers": "installed-wheel",
+                "lane": _junit_summary(installed_component_junit),
+            },
         }
         signed_runtime_sha256 = _signed_runtime_sha256(
             recorder.rows["codesign"]["evidence"],

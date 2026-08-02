@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -660,6 +661,29 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   void program_execution_apply_projection_(int runtime_block, MultiFab& state) const {
     sys_->block_project(runtime_block, state);
   }
+  std::optional<std::vector<Real>> program_execution_projection_balance_integrals_(
+      int program_block, const MultiFab& state) const {
+    // The public polar diagnostic path has no exact per-cell volume provider yet. Keep automatic
+    // evidence absent instead of relabelling Cartesian dx*dy as a polar measure; authored balance
+    // terms remain available and the future selector must fail closed on this missing producer.
+    if (sys_->program_is_polar())
+      return std::nullopt;
+    const GridContext context = program_execution_block_grid_context_(program_block);
+    const Real cell_measure = context.geom.dx() * context.geom.dy();
+    if (!std::isfinite(static_cast<double>(cell_measure)) || cell_measure <= Real(0))
+      throw std::runtime_error(
+          "Uniform Program projection balance requires a positive finite cell measure");
+    RelativeCellMeasure measure;
+    if (context.domain_mask != nullptr) {
+      measure.active_cells = context.domain_mask;
+      measure.inverse_volume_fraction = context.eb_inverse_volume_fraction;
+    }
+    std::vector<Real> result(static_cast<std::size_t>(state.ncomp()), Real(0));
+    for (int component = 0; component < state.ncomp(); ++component)
+      result[static_cast<std::size_t>(component)] =
+          cell_measure * pops::reduce_sum(state, component, measure);
+    return result;
+  }
   Real program_execution_hmin_() const { return sys_->cfl_min_dx(); }
   Real program_execution_max_wave_speed_(int runtime_block, const MultiFab& state) const {
     return sys_->block_max_speed(runtime_block, state);
@@ -884,6 +908,14 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
   ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {static_cast<Real>(sys_->time()), sys_->macro_step(), -1};
+  }
+  void program_execution_record_balance_term_(const std::string& route, const std::string& term,
+                                              Real value) const {
+    sys_->record_program_balance_term(route, term, value);
+  }
+  bool program_execution_balance_consumer_is_due_(const std::string& contract,
+                                                  const std::string& route, int every_n) const {
+    return sys_->program_balance_consumer_is_due(contract, route, every_n);
   }
   void program_execution_set_field_timepoint_(const std::string& field,
                                               const FieldLogicalTimePoint& point) const {

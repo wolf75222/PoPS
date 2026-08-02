@@ -281,6 +281,10 @@ class _PreparedDiagnostic(PreparedPublication):
     def payload_identity(self) -> Identity:
         return self._effect.payload.identity
 
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        return ()
+
     def publish(self) -> PublicationReceipt:
         if self._discarded:
             raise RuntimeError("discarded diagnostic cannot be published")
@@ -464,7 +468,10 @@ class _PreparedScientificOutput(PreparedPublication):
 
     @property
     def recoveries(self) -> tuple[Any, ...]:
-        return self._output.recoveries
+        recoveries = getattr(self._output, "recoveries", ())
+        if not isinstance(recoveries, tuple):
+            raise TypeError("prepared output recoveries must be a tuple")
+        return recoveries
 
     def publish(self) -> PublicationReceipt:
         if self._discarded:
@@ -1288,6 +1295,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         self._rank, self._size, self._communicator = rank, size, communicator
         self._observer_queues: dict[tuple[str, str], PostCommitObserverQueue] = {}
         self._observer_lanes: dict[tuple[str, str], Any] = {}
+        self._root_output_lanes: dict[str, Any] = {}
         self._observer_workers: dict[str, PostCommitObserverWorker] = {}
         self._observer_journals: dict[tuple[str, str], Any] = {}
         self._observer_preflight_sessions: dict[str, Any] = {}
@@ -1321,6 +1329,14 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             )
         self._builtin_catalyst_consumers = tuple(sorted(builtin_catalyst))
         self._builtin_catalyst_run_started = False
+        self._root_output_consumers = tuple(
+            sorted(
+                candidate.qualified_id
+                for candidate in owner._consumer_graph.nodes
+                if candidate.kind is ConsumerKind.SCIENTIFIC_OUTPUT
+                and candidate.parallel_mode is ParallelMode.ROOT
+            )
+        )
         from pops import interfaces
 
         for manifest in owner._consumer_graph.nodes:
@@ -1789,6 +1805,21 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         """
 
         self._observer_key("run-begin", run_identity)
+        if run_identity.token in self._closed_observer_runs:
+            raise RuntimeError("post-commit consumers cannot reopen an already closed run")
+        if self._root_output_consumers:
+            if run_identity.token in self._root_output_lanes:
+                raise RuntimeError(
+                    "the ROOT scientific-output MPI lane is already active for this run"
+                )
+            if self._communicator is None:
+                raise RuntimeError(
+                    "ROOT scientific output lost its authenticated execution communicator"
+                )
+            lane_identity = "scientific-output/root/%s" % run_identity.token
+            self._root_output_lanes[run_identity.token] = (
+                self._communicator.duplicate_observer_lane(lane_identity)
+            )
         if self._builtin_catalyst_consumers:
             if self._builtin_catalyst_run_started:
                 raise RuntimeError(
@@ -2045,13 +2076,17 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             raise RuntimeError("post-commit consensus accepted no exact run identity")
         if submission is not None:
             submission.arm()
-        if manifest.parallel_mode is not ParallelMode.SERIAL:
+        if manifest.parallel_mode in (
+            ParallelMode.PER_RANK,
+            ParallelMode.COLLECTIVE,
+        ):
             # A Catalyst implementation may enter MPI from its worker thread even when PoPS gives
             # it a duplicated communicator.  Do not let the next AMR/native step concurrently
             # enter solver collectives on the main thread: MPICH and third-party VTK internals do
             # not guarantee progress for that cross-library ordering.  Drain the accepted live
             # frame locally, then prove every rank has left the worker lane before any rank returns
-            # to the solver.  Serial observers and asynchronous scientific writers remain async.
+            # to the solver.  SERIAL and gathered ROOT workers never enter MPI, so they remain
+            # asynchronous with the next numerical step.
             delivery_error = None
             try:
                 self._observer_queue(manifest, run_identity).flush()
@@ -2215,6 +2250,23 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                     self._observer_diagnostics.append(rendered)
                 failures.append(rendered)
         if close:
+            root_lane = self._root_output_lanes.pop(run_identity.token, None)
+            if self._root_output_consumers and root_lane is None:
+                rendered = "ROOT scientific-output MPI lane disappeared before close"
+                if rendered not in self._observer_diagnostics:
+                    self._observer_diagnostics.append(rendered)
+                failures.append(rendered)
+            elif root_lane is not None:
+                try:
+                    root_lane.close_collectively()
+                except BaseException as error:
+                    rendered = (
+                        "ROOT scientific-output MPI lane close failed: %s"
+                        % _exception_text(error)
+                    )
+                    if rendered not in self._observer_diagnostics:
+                        self._observer_diagnostics.append(rendered)
+                    failures.append(rendered)
             worker = self._observer_workers.pop(run_identity.token, None)
             if worker is not None:
                 try:
@@ -2254,6 +2306,20 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return self.flush_live_visualizations(
             run_identity, close=True, raise_on_failure=raise_on_failure
         )
+
+    def _root_output_communicator(self) -> Any:
+        """Return the one active duplicated lane used by native ROOT snapshot gathers."""
+
+        if not self._root_output_consumers:
+            raise RuntimeError("the ConsumerGraph declares no ROOT scientific output")
+        if len(self._root_output_lanes) != 1:
+            raise RuntimeError(
+                "ROOT scientific output requires exactly one active run-scoped MPI lane"
+            )
+        lane = next(iter(self._root_output_lanes.values()))
+        if lane.active is not True or lane.closed is not False:
+            raise RuntimeError("ROOT scientific-output MPI lane is not active")
+        return lane
 
     def diagnostic_restart_state(self) -> dict[str, Any]:
         """Return the complete last-accepted typed diagnostic registry."""
@@ -2411,6 +2477,65 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 reductions = {
                     operation["reduction"] for operation in quantity.execution["operations"]
                 }
+                layout = layouts.get(quantity.layout_id)
+                if layout is None:
+                    raise KeyError("diagnostic selected unknown layout %s" % quantity.layout_id)
+                engine = self._owner._executor_for_block(block)
+                if "accepted_balance" in reductions and reductions != {"accepted_balance"}:
+                    raise ValueError(
+                        "accepted balance evidence cannot be mixed with field reductions"
+                    )
+                if reductions == {"accepted_balance"}:
+                    if len(quantity.execution["operations"]) != 1:
+                        raise ValueError("accepted balance requires exactly one native evidence route")
+                    operation, = quantity.execution["operations"]
+                    automatic_terms = tuple(operation.get("automatic_terms", ()))
+                    if automatic_terms:
+                        if not callable(
+                            getattr(engine, "_selected_accepted_balance_terms", None)
+                        ):
+                            raise NotImplementedError(
+                                "automatic balance terms require native "
+                                "_selected_accepted_balance_terms(...)"
+                            )
+                        component = operation["balance_component"]
+                        if component >= len(names):
+                            raise ValueError(
+                                "automatic balance component %d is outside block %r width %d"
+                                % (component, block, len(names))
+                            )
+                        if quantity.execution["role"] is not None:
+                            role_component, _ = self._diagnostic_component(
+                                names, roles, quantity.execution["role"]
+                            )
+                            if role_component != component:
+                                raise ValueError(
+                                    "automatic balance role selects component %d but ledger "
+                                    "declares component %d" % (role_component, component)
+                                )
+                        if "reflux" in automatic_terms and not layout.adaptive:
+                            raise NotImplementedError(
+                                "automatic reflux balance requires an adaptive hierarchy"
+                            )
+                        if (
+                            "projection" in automatic_terms
+                            and layout.geometry.cell_measure != CARTESIAN_CELL_AREA
+                        ):
+                            raise NotImplementedError(
+                                "automatic projection balance requires exact Cartesian cell "
+                                "measure support"
+                            )
+                    elif not callable(getattr(engine, "_accepted_balance_terms", None)):
+                        raise NotImplementedError(
+                            "balance diagnostic requires native _accepted_balance_terms(route)"
+                        )
+                    configured_levels = tuple(level.index for level in layout.levels)
+                    if tuple(quantity.levels) != configured_levels:
+                        raise ValueError(
+                            "balance diagnostic must select the complete configured hierarchy; "
+                            "a subset cannot be reconciled with the accepted Program ledger"
+                        )
+                    continue
                 if reductions == {"step_change_l2"}:
                     if quantity.execution["role"] is not None:
                         raise ValueError("step-change norm is a whole-state diagnostic")
@@ -2422,10 +2547,6 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                         )
                 else:
                     self._diagnostic_component(names, roles, quantity.execution["role"])
-                layout = layouts.get(quantity.layout_id)
-                if layout is None:
-                    raise KeyError("diagnostic selected unknown layout %s" % quantity.layout_id)
-                engine = self._owner._executor_for_block(block)
                 if layout.adaptive:
                     if not callable(getattr(engine, "composite_reduce", None)):
                         raise NotImplementedError(
@@ -2524,6 +2645,50 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         kind = reduction + ("_all" if full_state else "")
         return float(cast(Any, native)(block, kind, component)), False
 
+    @staticmethod
+    def _native_balance_terms(
+        engine: Any,
+        route: str,
+        *,
+        block: str,
+        component: int,
+        levels: tuple[int, ...],
+        automatic_terms: tuple[str, ...],
+    ) -> Any:
+        """Read one current-attempt balance tuple from the native transaction mailbox."""
+        from pops.output.diagnostics import BalanceTerms
+
+        native_name = (
+            "_selected_accepted_balance_terms"
+            if automatic_terms
+            else "_accepted_balance_terms"
+        )
+        native = getattr(engine, native_name, None)
+        if not callable(native):
+            raise RuntimeError("installed runtime has no accepted balance evidence provider")
+        raw = (
+            native(route, block, component, list(levels), list(automatic_terms))
+            if automatic_terms
+            else native(route)
+        )
+        required = {
+            "storage_change",
+            "outward_boundary_flux",
+            "sources",
+            "reflux",
+            "projection",
+        }
+        if not isinstance(raw, Mapping) or set(raw) != required:
+            raise TypeError(
+                "native accepted balance provider must return exactly storage_change, "
+                "outward_boundary_flux, sources, reflux, and projection"
+            )
+        if any(type(raw[name]) is not float for name in required):
+            raise TypeError(
+                "native accepted balance provider terms must be exact floating-point scalars"
+            )
+        return BalanceTerms(**{name: raw[name] for name in sorted(required)})
+
     def _diagnostic_values(
         self,
         manifest: Any,
@@ -2550,6 +2715,38 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             variables, roles = _conservative_metadata(self._owner, block)
             execution = quantity.execution
             reductions = {operation["reduction"] for operation in execution["operations"]}
+            if reductions == {"accepted_balance"}:
+                if "accepted_balance" in skip_reductions:
+                    continue
+                operation, = execution["operations"]
+                automatic_terms = tuple(operation.get("automatic_terms", ()))
+                component = operation.get("balance_component", 0)
+                balance = self._native_balance_terms(
+                    engine,
+                    operation["balance_route"],
+                    block=block,
+                    component=component,
+                    levels=levels,
+                    automatic_terms=automatic_terms,
+                )
+                terms = {
+                    "storage_change": balance.storage_change,
+                    "outward_boundary_flux": balance.outward_boundary_flux,
+                    "sources": balance.sources,
+                    "reflux": balance.reflux,
+                    "projection": balance.projection,
+                }
+                key = DiagnosticKey(
+                    quantity.handle,
+                    self._owner._component_manifests[block].manifest_digest,
+                    self._owner.layout_identity(quantity.layout_id),
+                    min(levels),
+                    quantity.identity.token,
+                    "discrete_balance",
+                )
+                values.append(DiagnosticPayload(
+                    key, balance.residual, "unspecified", terms))
+                continue
             if reductions == {"step_change_l2"}:
                 component, full_state = 0, True
             else:
@@ -2781,13 +2978,27 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             effect, values, publish_callback, self._discard_diagnostics, rollback
         )
 
+    def _snapshot_for_effect(
+        self,
+        effect: AcceptedSideEffect,
+        manifest: Any,
+    ) -> tuple[OutputSnapshot, OutputRequest]:
+        if not getattr(manifest, "diagnostic_quantities", ()):
+            return self._owner._output_snapshot(manifest)
+        token = effect.identity.token
+        try:
+            diagnostics = self._pending[token]
+        except KeyError as error:
+            raise RuntimeError(
+                "scientific output diagnostics were not prepared for the accepted effect"
+            ) from error
+        return self._owner._output_snapshot(manifest, diagnostics)
+
     def _resolve_output(self, effect: AcceptedSideEffect) -> OutputPreparation:
         manifest = self._manifest(effect)
         if manifest.output_format_data["provider_id"] == "pops.output.hdf5.v1":
             self._drain_post_commit_before_hdf5()
-        snapshot, request = self._owner._output_snapshot(
-            manifest, self._pending.get(effect.identity.token, ())
-        )
+        snapshot, request = self._snapshot_for_effect(effect, manifest)
         fmt = manifest.output_format
         format_name = manifest.output_format_data["format_name"]
         target = _target(
@@ -2809,7 +3020,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         effect: AcceptedSideEffect,
         manifest: Any,
     ) -> _PreparedLiveVisualization:
-        snapshot, request = self._owner._output_snapshot(manifest)
+        snapshot, request = self._snapshot_for_effect(effect, manifest)
         frame = None
         journal = None
         journal_record = None
@@ -2869,7 +3080,18 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         if manifest.kind is ConsumerKind.DIAGNOSTIC:
             return self._prepare_diagnostic(effect, manifest)
         if manifest.kind is ConsumerKind.MONITOR:
-            return self._prepare_live_visualization(effect, manifest)
+            diagnostic = (
+                self._prepare_diagnostic(effect, manifest)
+                if manifest.diagnostic_quantities
+                else None
+            )
+            try:
+                live = self._prepare_live_visualization(effect, manifest)
+            except BaseException:
+                if diagnostic is not None:
+                    diagnostic.discard()
+                raise
+            return live if diagnostic is None else _PreparedScientificOutput(live, diagnostic)
         if manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
             diagnostic = (
                 self._prepare_diagnostic(effect, manifest)
@@ -3261,10 +3483,20 @@ class RuntimeOutputSnapshot:
             else method_name
         )
         try:
+            native_communicator = communicator
+            if mode is ParallelMode.ROOT:
+                lane_provider = getattr(
+                    self._owner._publisher, "_root_output_communicator", None
+                )
+                if not callable(lane_provider):
+                    raise RuntimeError(
+                        "ROOT scientific output has no run-scoped MPI lane provider"
+                    )
+                native_communicator = lane_provider()
             local = self._local_pieces(
                 native_engine,
                 selected_method,
-                (communicator, *args) if mode is ParallelMode.ROOT else args,
+                (native_communicator, *args) if mode is ParallelMode.ROOT else args,
                 mode=mode,
                 rank=rank,
                 require_local_owner=mode is not ParallelMode.ROOT,
