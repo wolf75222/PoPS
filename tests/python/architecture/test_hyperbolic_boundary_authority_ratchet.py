@@ -116,3 +116,31 @@ def test_resolved_transport_authority_accepts_only_executable_descriptors() -> N
         "ResolvedTransportBoundarySet must authenticate the complete executable boundary "
         "contract during numerical resolution; do not defer unsupported descriptors to compile"
     )
+
+
+def test_boundary_provider_identity_cannot_erase_its_selected_law() -> None:
+    """Every provider identity must retain the law selected by its public factory."""
+    source = ROOT / "python/pops/mesh/boundaries/providers.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    provider = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "BoundaryProvider"
+    )
+    annotations = {
+        node.target.id
+        for node in provider.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert "kind" in annotations, "BoundaryProvider must retain one immutable typed law"
+    canonical = next(
+        node for node in provider.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "canonical_identity"
+    )
+    keys = {
+        node.value for node in ast.walk(canonical)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert "provider_kind" in keys, (
+        "BoundaryProvider canonical identity must authenticate its selected law"
+    )
