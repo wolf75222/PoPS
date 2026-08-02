@@ -1415,6 +1415,100 @@ def test_collective_initialization_barrier_loss_seals_lane_without_agreement(
     assert agreement_calls == 0
 
 
+def test_local_seal_cancels_deferred_frame_without_provider_reentry_and_joins_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    class _CollectiveSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+        def __init__(self):
+            super().__init__()
+            self.initialize_calls = 0
+            self.finalize_calls = 0
+            self.abort_calls = 0
+
+        def initialize(self, _run):
+            self.initialize_calls += 1
+
+        def execute(self, frame):
+            self.calls += 1
+            return ObserverReceipt(frame.identity, "test.observer")
+
+        def finalize(self):
+            self.finalize_calls += 1
+
+        def abort(self):
+            self.abort_calls += 1
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/local-seal",
+        active=True,
+        rank=0,
+        size=2,
+    )
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+    monkeypatch.setattr(
+        native_collectives,
+        "allgather_value",
+        lambda _communicator, value: (value, dict(value, rank=1)),
+    )
+
+    run_identity = _identity("run", "collective-local-seal")
+    session = _CollectiveSession()
+    worker = PostCommitObserverWorker(
+        thread_name="test-collective-local-seal",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    queue = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="collective-local-seal",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    queue.complete_initialize()
+    queue._prepare_detached(
+        observer_runtime._detach_owned_observer_frame(
+            _frame(run_identity=run_identity, mode=ParallelMode.COLLECTIVE)
+        )
+    )
+
+    lost = RuntimeError("WORLD observer collective lost")
+    queue.seal_local(lost)
+    worker.seal_local(lost)
+    queue.seal_local(lost)
+    worker.seal_local(lost)
+
+    assert session.initialize_calls == 1
+    assert session.calls == 0
+    assert session.finalize_calls == 0
+    assert session.abort_calls == 0
+    assert queue.pending == 0
+    assert len(queue.reports) == 1
+    assert queue.reports[0].status == "skipped"
+    assert queue.worker_collective_lost is True
+    assert worker.close_succeeded is True
+
+
 @pytest.mark.parametrize("phase", ("initialize", "execute", "finalize"))
 @pytest.mark.parametrize("failure", ("transport", "malformed"))
 def test_catalyst_worker_collective_loss_seals_queue_without_a_second_lane_probe(
@@ -1504,6 +1598,89 @@ def test_catalyst_worker_collective_loss_seals_queue_without_a_second_lane_probe
     assert lost_collective_calls == 1
     assert queue.worker_collective_lost is True
     worker.close()
+
+
+def test_abort_collective_loss_marker_poisoned_queue_refuses_retry_and_seals_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+):
+    import pops._native_collectives as native_collectives
+
+    class _CollectiveSession(_RetrySession):
+        authority = dict(
+            _RetrySession.authority,
+            threading="dedicated_collective",
+            worker_mpi=True,
+        )
+
+        def __init__(self):
+            super().__init__()
+            self.abort_calls = 0
+
+        def abort(self):
+            self.abort_calls += 1
+            raise ObserverWorkerCollectiveLost("injected abort worker-lane loss")
+
+    lane = SimpleNamespace(
+        identity="MPI_COMM_WORLD/observer/abort-marker-loss",
+        active=True,
+        rank=0,
+        size=2,
+    )
+    agreement_calls = 0
+
+    def gathered(_communicator, value):
+        nonlocal agreement_calls
+        agreement_calls += 1
+        return value, dict(value, rank=1)
+
+    monkeypatch.setattr(
+        native_collectives,
+        "require_communicator",
+        lambda communicator, *, allow_world=True: communicator,
+    )
+    monkeypatch.setattr(native_collectives, "rank", lambda communicator: communicator.rank)
+    monkeypatch.setattr(native_collectives, "size", lambda communicator: communicator.size)
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+    monkeypatch.setattr(native_collectives, "allgather_value", gathered)
+
+    run_identity = _identity("run", "abort-marker-loss")
+    session = _CollectiveSession()
+    worker = PostCommitObserverWorker(
+        thread_name="test-abort-marker-loss",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(lambda: _close_worker_for_test(worker))
+    queue = PostCommitObserverQueue(
+        session,
+        ObserverRun(run_identity),
+        consumer_id="abort-marker-loss",
+        worker_communicator=lane,
+        shared_worker=worker,
+        defer_initialize=True,
+    )
+    request.addfinalizer(lambda: _cancel_prepared_queue_calls_for_test(queue))
+    queue.prepare_initialize()
+    queue.arm_initialize()
+    queue.complete_initialize()
+    queue.prepare_abort_close()
+    queue.prepare_complete_abort_close()
+    queue.arm_complete_abort_close()
+
+    with pytest.raises(RuntimeError, match="provider worker collective"):
+        queue.complete_abort_close()
+    with pytest.raises(RuntimeError, match="worker collective is lost"):
+        queue.prepare_complete_abort_close()
+
+    assert session.abort_calls == 1
+    assert agreement_calls == 1
+    assert queue.worker_collective_lost is True
+    assert queue.abort_required is False
+
+    lost = RuntimeError("WORLD observer collective lost after abort")
+    queue.seal_local(lost)
+    worker.seal_local(lost)
+    assert worker.close_succeeded is True
 
 
 def test_collective_frame_gate_reports_local_serialization_failure_before_provider_entry(

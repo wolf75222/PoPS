@@ -202,6 +202,19 @@ class _SubmissionGate:
             self._resolved = True
             self._event.set()
 
+    def cancel_if_pending(self, error: BaseException) -> bool:
+        """Resolve a still-blocked gate without racing an already admitted operation."""
+
+        if not isinstance(error, BaseException):
+            raise TypeError("observer submission cancellation requires an exception")
+        with self._lock:
+            if self._resolved:
+                return False
+            self._error = error
+            self._resolved = True
+            self._event.set()
+            return True
+
     def wait(self) -> BaseException | None:
         self._event.wait()
         return self._error
@@ -425,6 +438,29 @@ class PostCommitObserverWorker:
                     raise RuntimeError("post-commit worker lost its close request")
                 self._closed = True
 
+    def seal_local(self, error: BaseException) -> None:
+        """Poison and join this process-local worker without entering provider or MPI code."""
+
+        if not isinstance(error, BaseException):
+            raise TypeError("post-commit worker local seal requires an exception")
+        with self._close_lock:
+            with self._lock:
+                if self._terminal_error is None:
+                    self._terminal_error = error
+                if self._closed:
+                    return
+                self._close_requested = True
+                if not self._stop_enqueued:
+                    self._jobs.put(_STOP)
+                    self._stop_enqueued = True
+            self._thread.join()
+            if self._thread.is_alive():
+                raise RuntimeError("post-commit worker did not stop during local seal")
+            with self._lock:
+                if not self._stop_consumed:
+                    raise RuntimeError("post-commit worker lost its local seal request")
+                self._closed = True
+
     def _run(self) -> None:
         while True:
             item = self._jobs.get()
@@ -552,6 +588,7 @@ class PostCommitObserverQueue:
         self._initialize_succeeded = False
         self._finalize_attempt: _PreparedWorkerCall | None = None
         self._abort_attempt: _PreparedWorkerCall | None = None
+        self._deferred_submission_gates: dict[int, _SubmissionGate] = {}
         self._ready = threading.Event()
         self._thread: threading.Thread | None = None
         if shared_worker is None:
@@ -711,6 +748,9 @@ class PostCommitObserverQueue:
                 raise ValueError(
                     "durable observer record does not authenticate the submitted frame"
                 )
+        gate = _SubmissionGate()
+        if not deferred:
+            gate.arm()
         with self._condition:
             while (
                 self._shared_worker is not None
@@ -723,9 +763,8 @@ class PostCommitObserverQueue:
             sequence = self._next_sequence
             self._next_sequence += 1
             self._pending += 1
-        gate = _SubmissionGate()
-        if not deferred:
-            gate.arm()
+            if deferred:
+                self._deferred_submission_gates[sequence] = gate
         job = _Job(sequence, frame, journal, journal_record, gate)
         try:
             if self._shared_worker is None:
@@ -739,10 +778,43 @@ class PostCommitObserverQueue:
                 )
         except BaseException:
             with self._condition:
+                self._deferred_submission_gates.pop(sequence, None)
                 self._pending -= 1
                 self._condition.notify_all()
             raise
         return _PreparedObserverSubmission(sequence, gate)
+
+    def seal_local(self, error: BaseException) -> None:
+        """Poison one shared-worker queue and release every unresolved local gate.
+
+        This method deliberately performs no provider call, worker join, or MPI operation.  The
+        runtime can therefore seal every queue first and only then call ``worker.seal_local()``
+        once no queue can leave the shared FIFO blocked behind a local admission gate.
+        """
+
+        if not isinstance(error, BaseException):
+            raise TypeError("observer queue local seal requires an exception")
+        if self._shared_worker is None:
+            raise RuntimeError("observer queue local seal requires the shared worker")
+        with self._close_lock:
+            with self._condition:
+                self._close_requested = True
+                self._worker_collective_lost = True
+                if self._lifecycle_error is None:
+                    self._lifecycle_error = error
+                submission_gates = tuple(self._deferred_submission_gates.values())
+                initialize_attempt = self._initialize_attempt
+                finalize_attempt = self._finalize_attempt
+                abort_attempt = self._abort_attempt
+                self._initialize_attempt = None
+                self._finalize_attempt = None
+                self._abort_attempt = None
+                self._condition.notify_all()
+        for gate in submission_gates:
+            gate.cancel_if_pending(error)
+        for attempt in (initialize_attempt, finalize_attempt, abort_attempt):
+            if attempt is not None:
+                attempt._gate.cancel_if_pending(error)
 
     def flush(self) -> tuple[ObserverDeliveryReport, ...]:
         """Wait until every accepted frame submitted so far has a terminal report."""
@@ -904,6 +976,10 @@ class PostCommitObserverQueue:
         with self._close_lock:
             if self._finalize_succeeded:
                 return
+            if self.worker_collective_lost:
+                raise RuntimeError(
+                    "observer finalization refused because its MPI worker collective is lost"
+                )
             if not self._close_prepared:
                 raise RuntimeError("observer queue close was not prepared")
             if self._shared_worker is None:
@@ -1007,6 +1083,8 @@ class PostCommitObserverQueue:
                 try:
                     attempt.result()
                 except BaseException as error:
+                    if isinstance(error, _WorkerCollectiveLost):
+                        self._set_lifecycle_error(error)
                     raise RuntimeError(
                         "observer session abort failed: " + _reason(error)
                     ) from error
@@ -1096,6 +1174,7 @@ class PostCommitObserverQueue:
         )
 
     def _fail_job(self, job: _Job, error: BaseException) -> None:
+        self._forget_deferred_submission(job)
         self._set_lifecycle_error(error)
         try:
             self._record(self._skipped_job(job, error))
@@ -1108,6 +1187,7 @@ class PostCommitObserverQueue:
 
     def _process_job(self, job: _Job) -> None:
         gate_error = job.gate.wait()
+        self._forget_deferred_submission(job)
         if gate_error is not None:
             self._record(self._skipped_job(job, gate_error))
             return
@@ -1131,6 +1211,12 @@ class PostCommitObserverQueue:
                         add_note("observer abort also failed: %s" % _reason(abort_error))
             report = self._skipped_job(job, error)
         self._record(report)
+
+    def _forget_deferred_submission(self, job: _Job) -> None:
+        with self._condition:
+            tracked = self._deferred_submission_gates.get(job.sequence)
+            if tracked is job.gate:
+                self._deferred_submission_gates.pop(job.sequence, None)
 
     def _deliver(self, job: _Job) -> ObserverDeliveryReport:
         gate_error: BaseException | None = None
@@ -1410,7 +1496,10 @@ class PostCommitObserverQueue:
             raise finalization_error
 
     def _abort_session(self) -> None:
-        result = self._session.abort()
+        try:
+            result = self._session.abort()
+        except ObserverWorkerCollectiveLost as error:
+            raise _as_worker_collective_lost("abort", error) from error
         if result is not None:
             raise TypeError("observer abort() must return None")
 

@@ -1224,16 +1224,33 @@ def test_failed_run_keeps_identity_sealed_when_entry_rollback_fails():
     assert run_identity.token in runtime._publisher._closed_observer_runs
 
 
-def test_runtime_world_collective_loss_skips_post_commit_cleanup_and_stays_sealed(monkeypatch):
+def test_runtime_world_collective_loss_skips_post_commit_cleanup_and_stays_sealed(
+    monkeypatch, request
+):
     from pops.runtime import _runtime_consumers
+    from pops.runtime._observer_runtime import PostCommitObserverWorker
 
     plan = _install()
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
     publisher = runtime._publisher
     original_begin = publisher.begin_post_commit_consumers
     cleanup_calls = []
+    workers = []
 
-    def lose_world(_run_identity):
+    def cleanup_workers():
+        for worker in workers:
+            if worker.close_succeeded is not True:
+                worker.seal_local(RuntimeError("test cleanup"))
+
+    request.addfinalizer(cleanup_workers)
+
+    def lose_world(run_identity):
+        worker = PostCommitObserverWorker(
+            thread_name="test-runtime-world-loss-local-seal",
+            run_identity=run_identity,
+        )
+        workers.append(worker)
+        publisher._observer_workers[run_identity.token] = worker
         raise _runtime_consumers._ObserverCollectiveLost(
             "injected runtime MPI_COMM_WORLD proof loss"
         )
@@ -1253,6 +1270,9 @@ def test_runtime_world_collective_loss_skips_post_commit_cleanup_and_stays_seale
         runtime._run(t_end=0.0, max_steps=0, console=False)
 
     assert cleanup_calls == []
+    assert len(workers) == 1
+    assert workers[0].close_succeeded is True
+    assert publisher._observer_workers[runtime.last_run_identity.token] is workers[0]
     assert "cleanup was skipped" in "\n".join(caught.value.__notes__)
     assert "injected runtime MPI_COMM_WORLD proof loss" in (
         publisher._observer_world_collective_lost
@@ -2380,6 +2400,47 @@ def test_pending_observer_abort_retries_only_after_local_failure():
     assert session.abort_calls == 2
 
 
+def test_pending_observer_abort_marks_worker_collective_loss():
+    from pops.output.observers import ObserverWorkerCollectiveLost
+    from pops.runtime._runtime_consumers import _PendingObserverSession
+
+    class _Session:
+        authority = {
+            "schema_version": 1,
+            "provider_id": "test.pending-observer-lost-lane",
+            "delivery": "post_commit",
+            "threading": "dedicated_collective",
+            "worker_mpi": True,
+        }
+
+        def initialize(self, _run):
+            return None
+
+        def execute(self, _frame):
+            raise AssertionError("unused")
+
+        def finalize(self):
+            return None
+
+        def abort(self):
+            raise ObserverWorkerCollectiveLost("injected pending abort lane loss")
+
+    run_identity = make_identity("run", {"case": "pending-abort-lost-lane"})
+    session = _Session()
+    pending = _PendingObserverSession(
+        run_identity,
+        "monitor/pending-lost-lane",
+        session.authority["provider_id"],
+        True,
+        session,
+    )
+
+    with pytest.raises(ObserverWorkerCollectiveLost, match="pending abort lane loss"):
+        pending.abort()
+    assert pending.abort_succeeded is False
+    assert pending.worker_collective_lost is True
+
+
 def test_failed_pending_session_retains_worker_until_owner_thread_retry():
     from pops.runtime._observer_runtime import PostCommitObserverWorker
     from pops.runtime._runtime_consumers import (
@@ -2686,10 +2747,15 @@ def test_rank_divergent_collective_abort_is_retained_without_unsafe_retry(monkey
         peer["rank"] = 1
         if set(envelope) == {"rank", "lost"}:
             peer["lost"] = False
-        elif set(envelope) == {"rank", "owned", "ready"}:
+        elif set(envelope) in (
+            {"rank", "owned", "ready"},
+            {"rank", "owned", "ready", "worker_lane_lost"},
+        ):
             abort_phases += 1
             peer["owned"] = True
             peer["ready"] = abort_phases == 1
+            if "worker_lane_lost" in envelope:
+                peer["worker_lane_lost"] = False
         elif set(envelope) == {"rank", "owned", "error"}:
             peer["owned"] = True
             peer["error"] = None
@@ -2737,6 +2803,12 @@ def test_poisoned_worker_lane_refuses_provider_and_lane_cleanup(monkeypatch):
         close_succeeded = False
         reports = ()
 
+        def __init__(self):
+            self.seal_calls = 0
+
+        def seal_local(self, _error):
+            self.seal_calls += 1
+
         def __getattr__(self, name):
             if name.startswith(("prepare", "arm", "complete", "close", "abort", "flush")):
                 raise AssertionError("poisoned worker lane must not reenter queue lifecycle")
@@ -2753,12 +2825,12 @@ def test_poisoned_worker_lane_refuses_provider_and_lane_cleanup(monkeypatch):
 
     class _Worker:
         def __init__(self):
-            self.close_calls = 0
+            self.seal_calls = 0
             self.close_succeeded = False
             self.stopped = False
 
-        def close(self):
-            self.close_calls += 1
+        def seal_local(self, _error):
+            self.seal_calls += 1
             self.close_succeeded = True
             self.stopped = True
 
@@ -2806,7 +2878,8 @@ def test_poisoned_worker_lane_refuses_provider_and_lane_cleanup(monkeypatch):
         publisher._drain_observer_manifest(manifest, run_identity, close=True)
 
     assert collective_phases == ["health", "local-worker-seal"]
-    assert worker.close_calls == 1
+    assert queue.seal_calls == 1
+    assert worker.seal_calls == 1
     assert worker.close_succeeded is True
     assert worker.stopped is True
     assert publisher._observer_workers[run_identity.token] is worker
@@ -2814,6 +2887,132 @@ def test_poisoned_worker_lane_refuses_provider_and_lane_cleanup(monkeypatch):
     assert publisher._observer_lanes[key] is lane
     assert lane.close_calls == 0
     assert "worker lane lost collective proof" in publisher._observer_pending_failures[key][0]
+
+
+def test_pending_abort_worker_lane_loss_stops_worker_without_lane_reentry(monkeypatch, request):
+    from pops.output.observers import ObserverWorkerCollectiveLost
+    from pops.runtime import _runtime_consumers
+    from pops.runtime._observer_runtime import PostCommitObserverWorker
+    from pops.runtime._runtime_consumers import (
+        _PendingObserverSession,
+        RuntimeConsumerPublisher,
+    )
+
+    class _Session:
+        authority = {
+            "schema_version": 1,
+            "provider_id": "test.pending-abort-lost-worker-lane",
+            "delivery": "post_commit",
+            "threading": "dedicated_collective",
+            "worker_mpi": True,
+        }
+
+        def __init__(self):
+            self.abort_calls = 0
+
+        def initialize(self, _run):
+            return None
+
+        def execute(self, _frame):
+            raise AssertionError("unused")
+
+        def finalize(self):
+            return None
+
+        def abort(self):
+            self.abort_calls += 1
+            raise ObserverWorkerCollectiveLost("injected pending abort worker-lane loss")
+
+    class _Lane:
+        closed = False
+
+        def close_collectively(self):
+            raise AssertionError("a poisoned worker lane must remain retained")
+
+    run_identity = make_identity("run", {"case": "pending-abort-worker-lane-loss"})
+    manifest = SimpleNamespace(
+        kind=ConsumerKind.MONITOR,
+        qualified_id="monitor/pending-abort-worker-lane-loss",
+        parallel_mode=ParallelMode.COLLECTIVE,
+        operation_data={"on_failure": {"action": "raise_on_flush"}},
+    )
+    key = (manifest.qualified_id, run_identity.token)
+    session = _Session()
+    pending = _PendingObserverSession(
+        run_identity,
+        manifest.qualified_id,
+        session.authority["provider_id"],
+        True,
+        session,
+    )
+    worker = PostCommitObserverWorker(
+        thread_name="test-pending-abort-worker-lane-loss",
+        run_identity=run_identity,
+    )
+    request.addfinalizer(
+        lambda: None if worker.close_succeeded else worker.seal_local(RuntimeError("test cleanup"))
+    )
+    lane = _Lane()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._rank = 0
+    publisher._size = 2
+    publisher._communicator = SimpleNamespace(identity="MPI_COMM_WORLD")
+    publisher._observer_run_phases = {run_identity.token: "closing_opening"}
+    publisher._observer_pending_sessions = {key: pending}
+    publisher._observer_queues = {}
+    publisher._observer_lanes = {key: lane}
+    publisher._observer_workers = {run_identity.token: worker}
+    publisher._observer_pending_failures = {}
+    publisher._observer_abort_retry_blocked = set()
+    publisher._observer_finalize_retry_blocked = set()
+    publisher._observer_reports = {}
+    publisher._observer_diagnostics = []
+
+    phases = []
+
+    def gathered(_communicator, envelope):
+        peer = dict(envelope)
+        peer["rank"] = 1
+        keys = set(envelope)
+        if keys == {"rank", "lost"}:
+            phases.append("initial-health")
+            peer["lost"] = False
+        elif keys == {"rank", "owned", "ready"}:
+            phases.append("abort-preparation")
+        elif keys == {"rank", "owned", "error"}:
+            phases.append("abort-admission")
+        elif keys == {"rank", "owned", "ready", "worker_lane_lost"}:
+            phases.append("abort-completion")
+            assert envelope["worker_lane_lost"] is True
+            peer["worker_lane_lost"] = True
+        elif keys == {"rank", "error", "closed"}:
+            phases.append("local-worker-seal")
+            assert worker.close_succeeded is True
+        else:  # pragma: no cover - every phase is authenticated above
+            raise AssertionError("unexpected pending-abort collective envelope")
+        return envelope, peer
+
+    monkeypatch.setattr(_runtime_consumers, "allgather_value", gathered)
+
+    with pytest.raises(
+        _runtime_consumers._ObserverWorkerLaneLost,
+        match="abort lost worker-lane collective proof",
+    ):
+        publisher._drain_observer_manifest(manifest, run_identity, close=True)
+
+    assert phases == [
+        "initial-health",
+        "abort-preparation",
+        "abort-admission",
+        "abort-completion",
+        "local-worker-seal",
+    ]
+    assert session.abort_calls == 1
+    assert pending.worker_collective_lost is True
+    assert worker.close_succeeded is True
+    assert publisher._observer_pending_sessions[key] is pending
+    assert publisher._observer_workers[run_identity.token] is worker
+    assert publisher._observer_lanes[key] is lane
 
 
 def test_durable_journal_world_loss_is_not_downgraded_to_local_failure(monkeypatch):

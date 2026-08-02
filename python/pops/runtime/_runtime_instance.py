@@ -1526,6 +1526,26 @@ class RuntimeInstance:
                         "post-commit cleanup was skipped because MPI_COMM_WORLD lost its "
                         "collective proof"
                     )
+                local_seal = getattr(
+                    self._publisher, "seal_observer_workers_after_world_loss", None
+                )
+                if callable(local_seal):
+                    try:
+                        sealed = local_seal(error)
+                        if type(sealed) is not tuple or any(
+                            type(message) is not str or not message for message in sealed
+                        ):
+                            raise TypeError(
+                                "local post-commit worker sealing must return a tuple of "
+                                "non-empty diagnostics"
+                            )
+                        local_seal_failures = cast(tuple[str, ...], sealed)
+                    except BaseException as caught:
+                        local_seal_failures = (
+                            "local post-commit worker sealing failed: %s" % caught,
+                        )
+                    if local_seal_failures and callable(add_note):
+                        add_note("; ".join(local_seal_failures))
             # Prove restoration of the complete run-entry authority before a consumer-free serial
             # invocation is allowed to reuse its deterministic identity.  Cleanup still runs when
             # restoration fails, but the identity remains sealed fail-closed.

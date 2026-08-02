@@ -44,6 +44,7 @@ from pops.output.data import (
 from pops.output.observers import (
     ObserverFrame,
     ObserverRun,
+    ObserverWorkerCollectiveLost,
     authenticate_observer_session,
 )
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
@@ -115,6 +116,7 @@ class _PendingObserverSession:
     __slots__ = (
         "_abort_succeeded",
         "_authentication_error",
+        "_worker_collective_lost",
         "consumer_id",
         "provider_id",
         "run_identity",
@@ -144,6 +146,7 @@ class _PendingObserverSession:
         self.worker_mpi = worker_mpi
         self.session = session
         self._abort_succeeded = False
+        self._worker_collective_lost = False
         authentication_error = None
         try:
             authority = authenticate_observer_session(session)
@@ -169,6 +172,10 @@ class _PendingObserverSession:
         return self._abort_succeeded
 
     @property
+    def worker_collective_lost(self) -> bool:
+        return self._worker_collective_lost
+
+    @property
     def authenticated(self) -> bool:
         return self._authentication_error is None
 
@@ -187,7 +194,11 @@ class _PendingObserverSession:
     def abort(self) -> None:
         if self._abort_succeeded:
             return
-        result = self.session.abort()
+        try:
+            result = self.session.abort()
+        except ObserverWorkerCollectiveLost:
+            self._worker_collective_lost = True
+            raise
         if result is not None:
             raise TypeError("observer abort() must return None")
         self._abort_succeeded = True
@@ -1683,6 +1694,47 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 pending.append(current.__context__)
         return False
 
+    def seal_observer_workers_after_world_loss(self, error: BaseException) -> tuple[str, ...]:
+        """Stop local non-daemon workers without MPI or provider lifecycle re-entry."""
+
+        if not isinstance(error, BaseException):
+            raise TypeError("observer WORLD-loss sealing requires an exception")
+        if getattr(self, "_observer_world_collective_lost", None) is None:
+            raise RuntimeError("observer workers may be sealed only after WORLD proof loss")
+        local_error = RuntimeError(
+            "post-commit worker sealed locally after MPI_COMM_WORLD collective proof loss"
+        )
+        failures: list[str] = []
+        for key in sorted(getattr(self, "_observer_queues", {})):
+            observer_queue = self._observer_queues[key]
+            if observer_queue is None:
+                continue
+            seal_local = getattr(observer_queue, "seal_local", None)
+            if not callable(seal_local):
+                failures.append("observer queue %r has no local seal route" % (key,))
+                continue
+            try:
+                seal_local(local_error)
+            except BaseException as caught:
+                failures.append(
+                    "observer queue %r local seal failed: %s" % (key, _exception_text(caught))
+                )
+        for run_key in sorted(getattr(self, "_observer_workers", {})):
+            worker = self._observer_workers[run_key]
+            if worker is None:
+                continue
+            seal_local = getattr(worker, "seal_local", None)
+            if not callable(seal_local):
+                failures.append("observer worker %s has no local seal route" % run_key)
+                continue
+            try:
+                seal_local(local_error)
+            except BaseException as caught:
+                failures.append(
+                    "observer worker %s local seal failed: %s" % (run_key, _exception_text(caught))
+                )
+        return tuple(failures)
+
     def _refuse_lost_observer_world(self) -> None:
         reason = getattr(self, "_observer_world_collective_lost", None)
         if reason is not None:
@@ -2619,6 +2671,65 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             raise lost
         return tuple(rows)
 
+    def _seal_poisoned_observer_worker(
+        self,
+        run_identity: Identity,
+        message: str,
+    ) -> str:
+        """Stop one poisoned run worker locally, then prove that stop on WORLD."""
+
+        local_error = _ObserverWorkerLaneLost(message)
+        failures: list[str] = []
+        for key in sorted(getattr(self, "_observer_queues", {})):
+            if len(key) != 2 or key[1] != run_identity.token:
+                continue
+            observer_queue = self._observer_queues[key]
+            if observer_queue is None:
+                continue
+            seal_local = getattr(observer_queue, "seal_local", None)
+            if not callable(seal_local):
+                failures.append("observer queue %s has no local seal route" % (key[0],))
+                continue
+            try:
+                seal_local(local_error)
+            except BaseException as error:
+                failures.append(
+                    "observer queue %s local seal failed: %s" % (key[0], _exception_text(error))
+                )
+        worker = getattr(self, "_observer_workers", {}).get(run_identity.token)
+        if worker is not None:
+            seal_local = getattr(worker, "seal_local", None)
+            if not callable(seal_local):
+                failures.append("post-commit worker has no local seal route")
+            else:
+                try:
+                    seal_local(local_error)
+                except BaseException as error:
+                    failures.append(
+                        "post-commit worker local seal failed: %s" % _exception_text(error)
+                    )
+        rendered_error = "; ".join(failures) if failures else None
+        worker_rows = self._collective_close_rows(
+            "MPI observer poisoned worker local seal",
+            {
+                "rank": self._rank,
+                "error": rendered_error,
+                "closed": worker is None or worker.close_succeeded is True,
+            },
+        )
+        worker_failures = tuple(
+            "rank %d: %s"
+            % (
+                row["rank"],
+                row["error"] or "local worker did not authenticate closure",
+            )
+            for row in worker_rows
+            if row["error"] is not None or row["closed"] is not True
+        )
+        if worker_failures:
+            message += "; local worker seal failed: " + "; ".join(worker_failures)
+        return message
+
     def _preflight_observer_close(self, run_identity: Identity) -> bool:
         """Authenticate every retained close handle before entering its MPI lifecycle."""
 
@@ -2950,8 +3061,14 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             self._observer_finalize_retry_blocked = finalize_retry_blocked
         if close and worker_mpi:
             local_lane_lost = bool(
-                observer_queue is not None
-                and getattr(observer_queue, "worker_collective_lost", False)
+                (
+                    observer_queue is not None
+                    and getattr(observer_queue, "worker_collective_lost", False)
+                )
+                or (
+                    pending_session is not None
+                    and getattr(pending_session, "worker_collective_lost", False)
+                )
             )
             lane_health_rows = self._collective_close_rows(
                 "MPI observer worker lane health",
@@ -2965,28 +3082,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 )
                 if malformed_lane_health:
                     message += " (health evidence was malformed)"
-                worker = getattr(self, "_observer_workers", {}).get(run_identity.token)
-                worker_error = None
-                if worker is not None and worker.close_succeeded is not True:
-                    try:
-                        worker.close()
-                    except BaseException as error:
-                        worker_error = _exception_text(error)
-                worker_rows = self._collective_close_rows(
-                    "MPI observer poisoned worker local seal",
-                    {
-                        "rank": self._rank,
-                        "error": worker_error,
-                        "closed": worker is None or worker.close_succeeded is True,
-                    },
-                )
-                worker_failures = tuple(
-                    "rank %d: %s" % (row["rank"], row["error"])
-                    for row in worker_rows
-                    if row["error"] is not None or row["closed"] is not True
-                )
-                if worker_failures:
-                    message += "; local worker seal failed: " + "; ".join(worker_failures)
+                message = self._seal_poisoned_observer_worker(run_identity, message)
                 if message not in local_diagnostics:
                     local_diagnostics.append(message)
                 self._observer_pending_failures[key] = local_diagnostics
@@ -3106,10 +3202,25 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                         "observer failed-open abort failed: %s" % _exception_text(error)
                     )
             if worker_mpi:
+                local_abort_lane_lost = bool(
+                    (
+                        observer_queue is not None
+                        and getattr(observer_queue, "worker_collective_lost", False)
+                    )
+                    or (
+                        pending_session is not None
+                        and getattr(pending_session, "worker_collective_lost", False)
+                    )
+                )
                 try:
                     completion_rows = self._collective_close_rows(
                         "MPI failed-open observer abort completion",
-                        {"rank": self._rank, "owned": local_owner, "ready": completion_ready},
+                        {
+                            "rank": self._rank,
+                            "owned": local_owner,
+                            "ready": completion_ready,
+                            "worker_lane_lost": local_abort_lane_lost,
+                        },
                     )
                 except BaseException as error:
                     completion_ready = False
@@ -3136,6 +3247,23 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                             + (" on only a subset of MPI ranks" if owner_success else "")
                             + "; retry is unsafe"
                         )
+                    malformed_abort_health = any(
+                        type(row["worker_lane_lost"]) is not bool for row in completion_rows
+                    )
+                    if malformed_abort_health or any(
+                        row["worker_lane_lost"] is True for row in completion_rows
+                    ):
+                        message = (
+                            "MPI observer abort lost worker-lane collective proof; provider "
+                            "cleanup and lane reuse are sealed until process finalization"
+                        )
+                        if malformed_abort_health:
+                            message += " (abort health evidence was malformed)"
+                        message = self._seal_poisoned_observer_worker(run_identity, message)
+                        if message not in local_diagnostics:
+                            local_diagnostics.append(message)
+                        self._observer_pending_failures[key] = local_diagnostics
+                        raise _ObserverWorkerLaneLost(message)
                     completion_ready = all(row["ready"] is True for row in completion_rows)
             cleanup_ready = completion_ready
             queues_ready = completion_ready
