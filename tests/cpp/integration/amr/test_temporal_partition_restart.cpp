@@ -32,6 +32,13 @@ CellTemporalPartitionAcceptedState cell_local_state(std::uint64_t topology_epoch
   return state;
 }
 
+CellTemporalPartitionAcceptedState single_level_cell_local_state(std::uint64_t topology_epoch) {
+  CellTemporalPartitionAcceptedState state = cell_local_state(topology_epoch);
+  for (CellTemporalPartitionRecord& cell : state.cells)
+    cell.level = 0;
+  return state;
+}
+
 ModelSpec exb_spec() {
   ModelSpec spec;
   spec.transport = "exb";
@@ -123,10 +130,11 @@ TEST(test_temporal_partition_restart,
   system.add_block("tracer", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
   test::install_forward_euler_program(system);
   system.step(0.01);
+  ASSERT_EQ(system.engine()->nlev(), 1);
 
   AmrProgramAcceptedState accepted =
       deserialize_amr_program_accepted_state(system.program_accepted_state());
-  accepted.temporal_partition = cell_local_state(system.engine()->topology_epoch());
+  accepted.temporal_partition = single_level_cell_local_state(system.engine()->topology_epoch());
   const std::vector<std::uint8_t> cell_local_image = serialize_amr_program_accepted_state(accepted);
   system.restore_checkpoint_accepted_state(cell_local_image);
 
@@ -152,4 +160,12 @@ TEST(test_temporal_partition_restart,
                std::runtime_error);
   EXPECT_EQ(system.program_accepted_state(), bytes_before)
       << "rejected restore must not replace the accepted image";
+
+  AmrProgramAcceptedState wrong_level = accepted;
+  wrong_level.temporal_partition.cells.back().level = system.engine()->nlev();
+  EXPECT_THROW(
+      system.restore_checkpoint_accepted_state(serialize_amr_program_accepted_state(wrong_level)),
+      std::runtime_error);
+  EXPECT_EQ(system.program_accepted_state(), bytes_before)
+      << "an inactive-level partition must not replace the accepted image";
 }
