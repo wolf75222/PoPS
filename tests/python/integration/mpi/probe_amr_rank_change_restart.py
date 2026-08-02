@@ -333,8 +333,8 @@ def _assert_snapshot(
             )
 
 
-def _accepted_tagging_hysteresis(payload: Any) -> bytes:
-    """Extract the opaque persistent-tagging bytes from accepted-state v4."""
+def _accepted_tagging_hysteresis_span(payload: Any) -> tuple[bytes, int]:
+    """Extract the opaque persistent-tagging bytes and their authenticated offset."""
     encoded = (
         bytes(payload)
         if isinstance(payload, (bytes, bytearray, memoryview))
@@ -350,8 +350,8 @@ def _accepted_tagging_hysteresis(payload: Any) -> bytes:
         cursor += 8
         return value
 
-    if encoded[:8] != b"POPSAST4":
-        raise AssertionError("checkpoint does not contain accepted-state v4")
+    if encoded[:8] != b"POPSAST5":
+        raise AssertionError("checkpoint does not contain accepted-state v5")
     cursor = 8
     level_count = read_size()
     clock_bytes = level_count * 40
@@ -364,10 +364,24 @@ def _accepted_tagging_hysteresis(payload: Any) -> bytes:
         if cursor + name_size + 8 > len(encoded):
             raise AssertionError("accepted-state logical-clock map is truncated")
         cursor += name_size + 8
+    cursor += 8  # CellTemporalPartitionKind
+    provider_size = read_size()
+    cursor += provider_size
+    cursor += 3 * 8  # topology epoch, synchronization tick, tick denominator
+    cell_count = read_size()
+    cursor += cell_count * 32  # level, cell id, rung, accepted tick (four i64 words)
+    if cursor > len(encoded):
+        raise AssertionError("accepted-state temporal partition is truncated")
     tagging_size = read_size()
     if cursor + tagging_size > len(encoded):
         raise AssertionError("accepted-state persistent-tagging payload is truncated")
-    return encoded[cursor : cursor + tagging_size]
+    return encoded[cursor : cursor + tagging_size], cursor
+
+
+def _accepted_tagging_hysteresis(payload: Any) -> bytes:
+    """Extract the opaque persistent-tagging bytes from accepted-state v5."""
+    tagging, _ = _accepted_tagging_hysteresis_span(payload)
+    return tagging
 
 
 def _assert_active_tagging_hysteresis(encoded: bytes) -> None:
@@ -516,9 +530,32 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
     published = Path(runtime.checkpoint(checkpoint))
     barrier(_COMM)
     if int(_COMM.rank) == 0:
-        source_owners, tagging_hysteresis = _checkpoint_source_authorities(published)
+        try:
+            source_owners, tagging_hysteresis = _checkpoint_source_authorities(published)
+            authority_row = {
+                "ok": True,
+                "owners": list(source_owners),
+                "tagging_hex": tagging_hysteresis.hex(),
+                "error": "",
+            }
+        except Exception as exc:  # noqa: BLE001 -- publish the root refusal to every rank
+            authority_row = {
+                "ok": False,
+                "owners": [],
+                "tagging_hex": "",
+                "error": "%s: %s" % (type(exc).__name__, exc),
+            }
     else:
-        source_owners, tagging_hysteresis = (), b""
+        authority_row = {"ok": None, "owners": [], "tagging_hex": "", "error": ""}
+    authority_rows = allgather_value(_COMM, authority_row)
+    root_authority = authority_rows[0]
+    if root_authority.get("ok") is not True:
+        raise RuntimeError(
+            "rank-change checkpoint authority inspection failed collectively: %s"
+            % root_authority.get("error", "missing rank-0 status")
+        )
+    source_owners = tuple(int(owner) for owner in root_authority["owners"])
+    tagging_hysteresis = bytes.fromhex(root_authority["tagging_hex"])
 
     if not bit_identical:
         _advance(runtime, CONTINUATION_STEPS)
@@ -531,16 +568,27 @@ def _capture(checkpoint: Path, evidence: Path | None, *, bit_identical: bool) ->
             )
         if evidence is None:
             raise ValueError("relaxed rank-change capture requires an evidence path")
+        evidence_error = ""
         if int(_COMM.rank) == 0:
-            _write_evidence(
-                evidence,
-                checkpoint_metadata=checkpoint_metadata,
-                checkpoint_arrays=checkpoint_arrays,
-                final_metadata=final_metadata,
-                final_arrays=final_arrays,
-                source_owners=source_owners,
-                tagging_hysteresis=tagging_hysteresis,
-                initial_mass=initial_mass,
+            try:
+                _write_evidence(
+                    evidence,
+                    checkpoint_metadata=checkpoint_metadata,
+                    checkpoint_arrays=checkpoint_arrays,
+                    final_metadata=final_metadata,
+                    final_arrays=final_arrays,
+                    source_owners=source_owners,
+                    tagging_hysteresis=tagging_hysteresis,
+                    initial_mass=initial_mass,
+                )
+            except Exception as exc:  # noqa: BLE001 -- propagate root-only I/O failure
+                evidence_error = "%s: %s" % (type(exc).__name__, exc)
+        evidence_errors = allgather_value(_COMM, evidence_error)
+        root_evidence_error = str(evidence_errors[0])
+        if root_evidence_error:
+            raise RuntimeError(
+                "rank-change evidence publication failed collectively: %s"
+                % root_evidence_error
             )
     barrier(_COMM)
     if int(_COMM.rank) == 0:
@@ -667,16 +715,29 @@ def _capture_divergent(checkpoint: Path) -> None:
     native = getattr(executor, "_s", None)
     if native is None:
         raise AssertionError("rank-change probe cannot reach its bound native AMR engine")
-    original = bytes(native.program_accepted_state())
-    tagging = _accepted_tagging_hysteresis(original)
-    _assert_active_tagging_hysteresis(tagging)
-    tagging_offset = original.find(tagging)
-    if tagging_offset < 0:
-        raise AssertionError("accepted-state image lost its nested persistent-tagging payload")
-    if int(_COMM.rank) == 1:
-        divergent = bytearray(original)
-        divergent[tagging_offset + len(tagging) - 1] ^= 1
-        native.restore_program_accepted_state(bytes(divergent))
+    prepare_error = ""
+    try:
+        original = bytes(native.program_accepted_state())
+        tagging, tagging_offset = _accepted_tagging_hysteresis_span(original)
+        _assert_active_tagging_hysteresis(tagging)
+        if int(_COMM.rank) == 1:
+            divergent = bytearray(original)
+            divergent[tagging_offset + len(tagging) - 1] ^= 1
+            native.restore_program_accepted_state(bytes(divergent))
+    except Exception as exc:  # noqa: BLE001 -- coordinate local preparation failures
+        prepare_error = "%s: %s" % (type(exc).__name__, exc)
+    prepare_rows = allgather_value(
+        _COMM,
+        {"rank": int(_COMM.rank), "error": prepare_error},
+    )
+    prepare_failures = tuple(
+        row for row in prepare_rows if str(row.get("error", ""))
+    )
+    if prepare_failures:
+        raise RuntimeError(
+            "divergent accepted-state preparation failed collectively: %r"
+            % (prepare_failures,)
+        )
 
     caught = False
     message = ""
