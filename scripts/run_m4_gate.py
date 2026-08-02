@@ -136,7 +136,7 @@ def _forbidden_python_markers(node: ast.AST) -> list[str]:
             ):
                 markers.append(name)
         elif isinstance(child, (ast.Import, ast.ImportFrom)):
-            module = child.module if isinstance(child, ast.ImportFrom) else ""
+            module = (child.module or "") if isinstance(child, ast.ImportFrom) else ""
             names = [alias.name for alias in child.names]
             if module.startswith(("unittest.mock", "pytest_mock")) or any(
                 name.startswith(("unittest.mock", "pytest_mock")) for name in names
@@ -640,6 +640,15 @@ def _required_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["POPS_REQUIRE_MPI_TESTS"] = "1"
     environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
+    root = str(ROOT)
+    inherited = environment.get("PYTHONPATH", "")
+    python_path = [root]
+    python_path.extend(
+        entry
+        for entry in inherited.split(os.pathsep)
+        if entry and entry != root
+    )
+    environment["PYTHONPATH"] = os.pathsep.join(python_path)
     return environment
 
 

@@ -758,7 +758,9 @@ def test_m4_mpi_entrypoint_accepts_only_the_required_prerequisite_guard():
         "tests/python/integration/mpi/test_scientific_output_mpi.py::"
         "_validate_paraview"
     )
-    assert runner._required_environment()["POPS_REQUIRE_MPI_TESTS"] == "1"
+    environment = runner._required_environment()
+    assert environment["POPS_REQUIRE_MPI_TESTS"] == "1"
+    assert str(ROOT) in environment["PYTHONPATH"].split(runner.os.pathsep)
     trusted = ast.parse(
         "from tests.python.support.requirements import require_mpi_or_skip\n"
     )
