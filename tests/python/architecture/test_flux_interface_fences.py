@@ -48,6 +48,21 @@ def test_bound_native_flux_pack_is_exact_and_does_not_store_global_aux():
     assert "FluxDensity<State> checked_density() const" in header
 
 
+def test_physical_flux_consumes_the_exact_pack_without_reconstructing_aux():
+    header = _behavior(ROOT / "include/pops/numerics/fv/flux_interfaces.hpp")
+    physical = header.split("struct PhysicalFluxView", 2)[2].split("template <class T>", 1)[0]
+    assert "physical_providers" not in physical
+    assert "Aux result" not in physical
+    assert "const Aux" not in physical
+    assert "trace.providers" in physical
+    assert "left.providers" in physical
+    assert "right.providers" in physical
+
+    emitter = (ROOT / "python/pops/codegen/module_emit_brick.py").read_text(encoding="utf-8")
+    assert 'aux_param = "const auto& a"' in emitter
+    assert "_flux_provider_locals_lines" in emitter
+
+
 def test_generated_flux_pack_metadata_controls_native_storage_reads():
     header = _behavior(ROOT / "include/pops/numerics/fv/flux_interfaces.hpp")
     assert "qualified_flux_provider_requirements_valid" in header

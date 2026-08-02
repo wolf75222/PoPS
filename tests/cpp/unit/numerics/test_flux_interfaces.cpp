@@ -18,8 +18,8 @@ struct Advect {
   static constexpr int n_vars = 1;
   pops::Real speed = pops::Real(2);
 
-  POPS_HD State flux(const State& state, const Aux&, int) const { return State{state[0] * speed}; }
-  POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const {
+  POPS_HD State flux(const State& state, const auto&, int) const { return State{state[0] * speed}; }
+  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const {
     return speed < pops::Real(0) ? -speed : speed;
   }
 };
@@ -31,12 +31,12 @@ struct SelectiveInvalidAdvect {
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
 
-  POPS_HD State flux(const State& state, const Aux&, int) const { return State{state[0]}; }
-  POPS_HD pops::Real max_wave_speed(const State& state, const Aux&, int) const {
+  POPS_HD State flux(const State& state, const auto&, int) const { return State{state[0]}; }
+  POPS_HD pops::Real max_wave_speed(const State& state, const auto&, int) const {
     return state[0] == pops::Real(-1) ? std::numeric_limits<pops::Real>::quiet_NaN()
                                       : pops::Real(2);
   }
-  POPS_HD void wave_speeds(const State& state, const Aux&, int, pops::Real& lower,
+  POPS_HD void wave_speeds(const State& state, const auto&, int, pops::Real& lower,
                            pops::Real& upper) const {
     if (state[0] == pops::Real(-2)) {
       lower = upper = std::numeric_limits<pops::Real>::quiet_NaN();
@@ -53,11 +53,12 @@ struct ProviderAdvect {
   static constexpr int n_vars = 1;
   static constexpr int n_aux = 3;
 
-  POPS_HD State flux(const State& state, const Aux& providers, int) const {
-    return State{state[0] * providers.grad_x};
+  POPS_HD State flux(const State& state, const auto& providers, int) const {
+    return State{state[0] * providers.template flux_provider<1>()};
   }
-  POPS_HD pops::Real max_wave_speed(const State&, const Aux& providers, int) const {
-    return providers.grad_x < pops::Real(0) ? -providers.grad_x : providers.grad_x;
+  POPS_HD pops::Real max_wave_speed(const State&, const auto& providers, int) const {
+    const pops::Real gradient = providers.template flux_provider<1>();
+    return gradient < pops::Real(0) ? -gradient : gradient;
   }
 };
 

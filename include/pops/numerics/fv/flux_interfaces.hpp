@@ -206,6 +206,13 @@ class BoundFluxProviders {
   POPS_HD BoundFluxProviders(const BoundFluxProviders&) = default;
   BoundFluxProviders& operator=(const BoundFluxProviders&) = delete;
 
+  template <int Component>
+  POPS_HD Real flux_provider() const {
+    static_assert(Component >= 0 && Component < value_count,
+                  "physical law requested a provider outside its exact qualified pack");
+    return values_[Component];
+  }
+
  private:
   FluxProviderValues<Model> values_;
 
@@ -352,9 +359,8 @@ POPS_HD IntegratedFaceFlux<State> apply_face_measure(const FluxDensity<State>& d
 }
 
 /// Narrow physical constitutive interface over a bound provider pack.  Numerical-flux policies see
-/// this value, never the complete runtime Model.  The current native formulas still use Aux
-/// internally; that storage representation is sealed behind BoundFluxProviders and cannot leak
-/// into a numerical-flux signature.
+/// this value, never the complete runtime Model. Physical laws consume BoundFluxProviders directly;
+/// no global Aux value is reconstructed on the finite-volume path.
 template <class Model>
 struct PhysicalFluxView {
   using State = typename Model::State;
@@ -364,31 +370,8 @@ struct PhysicalFluxView {
 
   Model physical;
 
- private:
-  POPS_HD static Aux physical_providers(const ProviderPack& providers) {
-    Aux result{};
-    if constexpr (ProviderPack::value_count > 0)
-      result.phi = providers.values_[0];
-    if constexpr (ProviderPack::value_count > 1)
-      result.grad_x = providers.values_[1];
-    if constexpr (ProviderPack::value_count > 2)
-      result.grad_y = providers.values_[2];
-#define POPS_FLUX_PROVIDER_ASSIGN(name, index)     \
-  if constexpr (ProviderPack::value_count > index) \
-    result.name = providers.values_[index];
-    POPS_AUX_FIELDS(POPS_FLUX_PROVIDER_ASSIGN)
-#undef POPS_FLUX_PROVIDER_ASSIGN
-    if constexpr (ProviderPack::value_count > kAuxNamedBase) {
-      for (int component = kAuxNamedBase; component < ProviderPack::value_count; ++component)
-        result.extra[component - kAuxNamedBase] = providers.values_[component];
-    }
-    return result;
-  }
-
- public:
   POPS_HD FluxDensity<State> evaluate(const Trace& trace, const FaceContext& face) const {
-    const Aux providers = physical_providers(trace.providers);
-    State result = physical.flux(trace.state, providers, face.axis);
+    State result = physical.flux(trace.state, trace.providers, face.axis);
     const Real sign = face.orientation_sign();
     if (sign < Real(0)) {
       for (int component = 0; component < n_vars; ++component)
@@ -398,18 +381,17 @@ struct PhysicalFluxView {
   }
 
   POPS_HD StabilityBound stability(const Trace& trace, const FaceContext& face) const {
-    const Aux providers = physical_providers(trace.providers);
-    return {physical.max_wave_speed(trace.state, providers, face.axis),
+    return {physical.max_wave_speed(trace.state, trace.providers, face.axis),
             StabilityUnit::kLengthPerTime, StabilityConvention::kNormalSpectralRadius};
   }
 
   POPS_HD void signed_wave_speeds(const Trace& trace, const FaceContext& face, Real& lower,
                                   Real& upper) const
-    requires requires(const Model& model, const State& state, const Aux& providers, int axis,
-                      Real& lo, Real& hi) { model.wave_speeds(state, providers, axis, lo, hi); }
+    requires requires(const Model& model, const State& state, const ProviderPack& providers,
+                      int axis, Real& lo,
+                      Real& hi) { model.wave_speeds(state, providers, axis, lo, hi); }
   {
-    const Aux providers = physical_providers(trace.providers);
-    physical.wave_speeds(trace.state, providers, face.axis, lower, upper);
+    physical.wave_speeds(trace.state, trace.providers, face.axis, lower, upper);
     if (face.orientation == FaceOrientation::kNegative) {
       const Real old_lower = lower;
       lower = -upper;
@@ -444,12 +426,12 @@ struct PhysicalFluxView {
 
   POPS_HD State roe_dissipation(const Trace& left, const Trace& right,
                                 const FaceContext& face) const
-    requires requires(const Model& model, const State& l, const Aux& lp, const State& r,
-                      const Aux& rp, int axis) { model.roe_dissipation(l, lp, r, rp, axis); }
+    requires requires(const Model& model, const State& l, const ProviderPack& lp, const State& r,
+                      const ProviderPack& rp,
+                      int axis) { model.roe_dissipation(l, lp, r, rp, axis); }
   {
-    const Aux left_values = physical_providers(left.providers);
-    const Aux right_values = physical_providers(right.providers);
-    return physical.roe_dissipation(left.state, left_values, right.state, right_values, face.axis);
+    return physical.roe_dissipation(left.state, left.providers, right.state, right.providers,
+                                    face.axis);
   }
 };
 
@@ -476,9 +458,9 @@ concept NumericalFlux =
 /// Constitutive capability gates used only during route resolution.  NumericalFlux policies do not
 /// receive these Models; installation wraps a conforming value in the narrow PhysicalFluxView.
 template <class Model>
-concept HasHLLCStructure = requires(const Model& model, const typename Model::State& state,
-                                    const typename Model::State& other, const Aux& providers,
-                                    Real scalar, int axis, Real& lower, Real& upper) {
+concept HasHLLCStructure = requires(
+    const Model& model, const typename Model::State& state, const typename Model::State& other,
+    const BoundFluxProviders<Model>& providers, Real scalar, int axis, Real& lower, Real& upper) {
   { model.pressure(state) } -> std::convertible_to<Real>;
   model.wave_speeds(state, providers, axis, lower, upper);
   {
@@ -491,8 +473,9 @@ concept HasHLLCStructure = requires(const Model& model, const typename Model::St
 
 template <class Model>
 concept HasRoeDissipation =
-    requires(const Model& model, const typename Model::State& left, const Aux& left_providers,
-             const typename Model::State& right, const Aux& right_providers, int axis) {
+    requires(const Model& model, const typename Model::State& left,
+             const BoundFluxProviders<Model>& left_providers, const typename Model::State& right,
+             const BoundFluxProviders<Model>& right_providers, int axis) {
       {
         model.roe_dissipation(left, left_providers, right, right_providers, axis)
       } -> std::same_as<typename Model::State>;

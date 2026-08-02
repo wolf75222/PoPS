@@ -19,6 +19,7 @@ from typing import Any
 from pops._dense_spectral import is_exact_block_triangular
 from pops.codegen.cpp_writer import _cpp_roe
 from pops.codegen.module_emit_helpers import (
+    _AUX_CANONICAL,
     _codegen_exprs,
     _live_prims,
     _prim_block,
@@ -144,8 +145,8 @@ def _emit_roe_roles(model: Any, nc: Any) -> list:
     passives = [c for c in range(nc) if c not in (iD, iX, iY, iE)]
     out.append("  // CAPABILITY ROE generee depuis les ROLES (enable_roe) : dissipation")
     out.append("  // |A_roe| dU du coeur generique (HasRoeDissipation), aucun layout fige.")
-    out.append("  POPS_HD State roe_dissipation(const State& UL, const pops::Aux&, "
-               "const State& UR, const pops::Aux&, int dir) const {")
+    out.append("  POPS_HD State roe_dissipation(const State& UL, const auto&, "
+               "const State& UR, const auto&, int dir) const {")
     out.append("    const int in_ = dir == 0 ? %d : %d;" % (iX, iY))
     out.append("    const int it_ = dir == 0 ? %d : %d;" % (iY, iX))
     out.append("    const pops::Real rL = UL[%d], rR = UR[%d];" % (iD, iD))
@@ -212,8 +213,8 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
     (guard at declaration and in check())."""
     out = []
     has_aux = bool(model.aux_names)  # Aux parameters named aL/aR only if some aux exist
-    aL = "const pops::Aux& aL" if has_aux else "const pops::Aux&"
-    aR = "const pops::Aux& aR" if has_aux else "const pops::Aux&"
+    aL = "const auto& aL" if has_aux else "const auto&"
+    aR = "const auto& aR" if has_aux else "const auto&"
     out.append("  // CAPABILITY ROE FOURNIE (m.roe_dissipation) : dissipation d ecrite par")
     out.append("  // l'utilisateur via left()/right() des deux etats ; hook HasRoeDissipation.")
     out.append("  POPS_HD State roe_dissipation(const State& UL, %s, const State& UR, %s, "
@@ -225,7 +226,8 @@ def _emit_roe_provided(model: Any, nc: Any) -> list:
         out += ["    const pops::Real %s%s = %s;" % (side, p, _cpp_roe(e, side))
                 for p, e in model.prim_defs.items()]
         if has_aux:
-            out += ["    const pops::Real %s%s = %s.%s;" % (side, n, av, n)
+            out += ["    const pops::Real %s%s = %s.template flux_provider<%d>();"
+                    % (side, n, av, _AUX_CANONICAL[n])
                     for n in model.aux_names]
     out.append("    State d{};")
     out.append("    if (dir == 0) {")
@@ -260,8 +262,8 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
     else:
         out.append("  // Phi_delta(A), delta=%s ; spectre complexe/non converge refuse."
                    % scalar_cpp(entropy_fix))
-    out.append("  POPS_HD State roe_dissipation(const State& UL, const pops::Aux&, "
-               "const State& UR, const pops::Aux&, int dir) const {")
+    out.append("  POPS_HD State roe_dissipation(const State& UL, const auto&, "
+               "const State& UR, const auto&, int dir) const {")
     # conservatives at the ARITHMETIC-MEAN interface state Uavg = 1/2 (UL + UR)
     out += ["    const pops::Real %s = pops::Real(0.5) * (UL[%d] + UR[%d]);" % (c, i, i)
             for i, c in enumerate(model.cons_names)]
