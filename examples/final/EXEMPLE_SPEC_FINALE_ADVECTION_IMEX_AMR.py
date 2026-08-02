@@ -867,7 +867,10 @@ def run_rejected_attempt_rollback(output_dir: Any) -> IMEXRejectedAttemptEvidenc
         use_preset=False,
         relaxation_domain=Interval(-1.0e6, 1.0e6),
     )
-    first_dt = float(target.authoring.run_controls["t_end"])
+    # Keep the negative fixture exactly singular even when the compiler contracts ``1 - a * L``
+    # into one FMA.  A binary power-of-two duration makes both ``a`` and ``L = 1 / a`` exact;
+    # the ordinary production run retains its independently authored end time above.
+    first_dt = 2.0 ** -14
     diagonal = float(IMEX_CN_HEUN.implicit_A[1][1])
     singular_rate = -1.0 / (first_dt * diagonal)
     simulation = _bind_artifact(
