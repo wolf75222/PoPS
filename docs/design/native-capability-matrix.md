@@ -162,7 +162,9 @@ Supported native routes include:
   or restart metadata yet. Callers can therefore request the single-solver typed-rejection route
   explicitly, but cannot claim a configured fallback policy.
 - Prepared variable recovery is explicitly `partial`. One block-prepared closed-form method returns
-  a device-copyable `RecoveryOutcome`/`RecoveryReport`; System conservative-to-primitive
+  a device-copyable `RecoveryOutcome`/`RecoveryReport`. Type erasure retains both the selected and
+  last-attempted method kinds, so a successful fallback or a refusal cannot be reported as an opaque
+  chain index. System conservative-to-primitive
   materialization and Cartesian, polar, masked, and embedded-boundary face reconstruction consume
   publication permission before copying a candidate or evaluating a flux. This route adds no
   implicit repair, fallback, or mutable cache. The separate

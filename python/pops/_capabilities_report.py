@@ -515,7 +515,8 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             status="partial",
             limitation=(
                 "one block-prepared closed-form method returns a device-copyable "
-                "RecoveryOutcome/RecoveryReport; System conservative-to-primitive "
+                "RecoveryOutcome/RecoveryReport retaining selected and last-attempted method "
+                "kinds across type erasure; System conservative-to-primitive "
                 "materialization and Cartesian, polar, masked, and embedded-boundary face "
                 "reconstruction consume publication permission before copying or flux "
                 "evaluation, with no implicit repair, fallback, or mutable cache"

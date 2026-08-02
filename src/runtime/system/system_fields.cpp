@@ -170,7 +170,9 @@ std::vector<double> System::get_primitive_state(const std::string& name) {
           "' at local cell " + std::to_string(k) + " (status=" +
           recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
           ", failing_component=" + std::to_string(recovery.failing_component) +
-          ", attempted_methods=" + std::to_string(recovery.attempted_methods) + ")");
+          ", attempted_methods=" + std::to_string(recovery.attempted_methods) +
+          ", last_method=" + recovery_method_kind_name(recovery.last_method_kind) +
+          ", last_method_index=" + std::to_string(recovery.last_method) + ")");
     for (int c = 0; c < nc; ++c)
       prim[static_cast<std::size_t>(c) * nn + k] = cell_out[c];
   }

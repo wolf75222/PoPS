@@ -182,6 +182,18 @@ target = "test_facade_routing"
 test_regex = "^FacadeRouting\\.PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedState$"
 
 [[check]]
+requirement = "type_erased_recovery_method_identity"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.type_erased_report_preserves_selected_method_kind$"
+
+[[check]]
+requirement = "type_erased_recovery_method_identity"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.rejected_report_names_last_method_without_forging_selection$"
+
+[[check]]
 requirement = "cell_local_temporal_partition_authority"
 polarity = "positive"
 target = "test_temporal_partition_restart"

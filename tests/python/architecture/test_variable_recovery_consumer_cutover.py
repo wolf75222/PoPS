@@ -9,6 +9,7 @@ BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 SYSTEM_FIELDS = ROOT / "src/runtime/system/system_fields.cpp"
 FLUX_FAILURE = ROOT / "include/pops/numerics/fv/flux_failure.hpp"
 FACE_FLUX = ROOT / "include/pops/numerics/spatial/primitives/face_flux.hpp"
+RECOVERY = ROOT / "include/pops/numerics/nonlinear/prepared_variable_recovery.hpp"
 SPATIAL_RECOVERY_CONSUMERS = (
     FACE_FLUX,
     ROOT / "include/pops/numerics/spatial/operators/cartesian_operator.hpp",
@@ -48,6 +49,34 @@ def test_runtime_materialization_consumes_recovery_before_copying_candidate():
     publication = materialization.index("prim[static_cast<std::size_t>(c) * nn + k] = cell_out[c]")
     assert recovery < refusal < publication
     assert "variable recovery failed" in materialization
+
+
+def test_type_erased_recovery_report_preserves_actual_method_identity():
+    source = RECOVERY.read_text(encoding="utf-8")
+    report = _between(source, "struct RecoveryReport {", "\n};\n\nstatic_assert")
+    erasure = _between(
+        source,
+        "POPS_HD inline RecoveryReport recovery_report",
+        "\n}\n\ninline constexpr const char* recovery_status_name",
+    )
+
+    assert "RecoveryMethodKind selected_method_kind" in report
+    assert "RecoveryMethodKind last_method_kind" in report
+    assert "outcome.selected_method_kind" in erasure
+    assert "outcome.last_method_kind" in erasure
+
+
+def test_runtime_recovery_failure_names_last_attempted_method():
+    source = SYSTEM_FIELDS.read_text(encoding="utf-8")
+    materialization = _between(
+        source,
+        "std::vector<double> System::get_primitive_state",
+        "\nSolveReport System::solve_fields_in_place_",
+    )
+
+    assert "recovery_method_kind_name(recovery.last_method_kind)" in materialization
+    assert "last_method_index=" in materialization
+    assert "std::to_string(recovery.last_method)" in materialization
 
 
 def test_runtime_layer_has_no_independent_direct_primitive_recovery():
