@@ -130,15 +130,17 @@ struct MmsTransportPolar {
   static constexpr int n_aux = 4;  // lit phi, grad_r, grad_theta (0..2) + S au canal extra 3 (B_z)
   using State = StateVec<1>;
   Real B0 = 1;
-  POPS_HD Real velocity(const Aux& a, int dir) const {
-    return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
+  POPS_HD Real velocity(const auto& providers, int dir) const {
+    const Real grad_x = providers.template flux_provider<1>();
+    const Real grad_y = providers.template flux_provider<2>();
+    return (dir == 0) ? (-grad_y / B0) : (grad_x / B0);
   }
-  POPS_HD StateVec<1> flux(const StateVec<1>& u, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> flux(const StateVec<1>& u, const auto& a, int dir) const {
     StateVec<1> f{};
     f[0] = u[0] * velocity(a, dir);
     return f;
   }
-  POPS_HD Real max_wave_speed(const StateVec<1>&, const Aux& a, int dir) const {
+  POPS_HD Real max_wave_speed(const StateVec<1>&, const auto& a, int dir) const {
     const Real d = velocity(a, dir);
     return d < 0 ? -d : d;
   }

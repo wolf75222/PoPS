@@ -64,6 +64,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - External AMR `Reflux` components now use the normalized public provider route from
   `AMR(..., reflux=...)` through resolve, compiled provenance and transactional native
   installation; the builtin flux-register kernel follows the same reported contract.
+- Generated physical-flux bricks now make their qualified provider requirements executable native
+  ABI evidence: the binder validates every row at compile time and reads only its declared storage
+  slots instead of scanning the model's complete auxiliary width. Physical laws consume that exact
+  pack directly through compile-time provider reads; `PhysicalFluxView` no longer reconstructs a
+  process-wide `Aux` value.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
   `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one

@@ -35,8 +35,8 @@ std::string package_source() {
       using Aux = pops::Aux;
       static constexpr int n_vars = 1;
       static constexpr int n_aux = pops::kAuxNamedBase + 1;
-      POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-      POPS_HD pops::Real max_wave_speed(const State&, const Aux&, int) const { return pops::Real(0); }
+      POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+      POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const { return pops::Real(0); }
       POPS_HD State source(const State& u, const Aux& aux) const {
         return State{aux.extra_field(0) * u[0]};
       }

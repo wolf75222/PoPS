@@ -42,11 +42,11 @@ struct AdvectionDiffusion {
   Real nu = 0.0;  ///< diffusivity (0 = pure advection)
 
   /// Advection flux F = a u in direction dir.
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     return State{(dir == 0 ? ax : ay) * u[0]};  // F = a u
   }
   /// Maximum wave speed: magnitude of the advection velocity in direction dir.
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const State&, const auto&, int dir) const {
     const Real v = (dir == 0) ? ax : ay;
     return v < 0 ? -v : v;
   }

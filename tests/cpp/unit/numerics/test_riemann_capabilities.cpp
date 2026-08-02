@@ -48,7 +48,7 @@ struct HookedEuler : pops::Euler {
     Us[3] = fac * (U[3] / r + (sStar - un) * (sStar + p / (r * (s - un))));
     return Us;
   }
-  POPS_HD State roe_dissipation(const State& UL, const Aux&, const State& UR, const Aux&,
+  POPS_HD State roe_dissipation(const State& UL, const auto&, const State& UR, const auto&,
                                 int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const int it = (dir == 0) ? 2 : 1;
@@ -101,13 +101,13 @@ struct PermutedEuler {
     return State{value[3], value[2], value[0], value[1]};
   }
   POPS_HD Real pressure(const State& value) const { return canonical.pressure(unpack(value)); }
-  POPS_HD State flux(const State& value, const Aux& aux, int axis) const {
+  POPS_HD State flux(const State& value, const auto& aux, int axis) const {
     return pack(canonical.flux(unpack(value), aux, axis));
   }
-  POPS_HD Real max_wave_speed(const State& value, const Aux& aux, int axis) const {
+  POPS_HD Real max_wave_speed(const State& value, const auto& aux, int axis) const {
     return canonical.max_wave_speed(unpack(value), aux, axis);
   }
-  POPS_HD void wave_speeds(const State& value, const Aux& aux, int axis, Real& lower,
+  POPS_HD void wave_speeds(const State& value, const auto& aux, int axis, Real& lower,
                            Real& upper) const {
     canonical.wave_speeds(unpack(value), aux, axis, lower, upper);
   }
@@ -120,8 +120,8 @@ struct PermutedEuler {
                                 int axis) const {
     return pack(canonical.hllc_star_state(unpack(value), pressure_value, speed, contact, axis));
   }
-  POPS_HD State roe_dissipation(const State& left, const Aux& left_aux, const State& right,
-                                const Aux& right_aux, int axis) const {
+  POPS_HD State roe_dissipation(const State& left, const auto& left_aux, const State& right,
+                                const auto& right_aux, int axis) const {
     return pack(canonical.roe_dissipation(unpack(left), left_aux, unpack(right), right_aux, axis));
   }
 };
@@ -136,7 +136,7 @@ struct IsoHLLC {
   static constexpr int n_vars = 5;
   Real cs2 = 0.5;
 
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const int it = (dir == 0) ? 2 : 1;
     const Real un = u[in] / u[0];
@@ -148,14 +148,14 @@ struct IsoHLLC {
     F[4] = u[4] * un;
     return F;
   }
-  POPS_HD Real max_wave_speed(const State& u, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const State& u, const auto&, int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const Real un = u[in] / u[0];
     const Real c = std::sqrt(cs2);
     const Real a = un < 0 ? -un : un;
     return a + c;
   }
-  POPS_HD void wave_speeds(const State& u, const Aux&, int dir, Real& smin, Real& smax) const {
+  POPS_HD void wave_speeds(const State& u, const auto&, int dir, Real& smin, Real& smax) const {
     const int in = (dir == 0) ? 1 : 2;
     const Real un = u[in] / u[0];
     const Real c = std::sqrt(cs2);
@@ -197,7 +197,7 @@ struct DimensionalIsoHLLC {
   static constexpr int tracer_component = Dimension + 1;
   Real cs2 = Real(0.5);
 
-  POPS_HD State flux(const State& value, const Aux&, int axis) const {
+  POPS_HD State flux(const State& value, const auto&, int axis) const {
     const int normal = axis + 1;
     const Real normal_velocity = value[normal] / value[0];
     State result{};
@@ -209,13 +209,13 @@ struct DimensionalIsoHLLC {
     return result;
   }
 
-  POPS_HD Real max_wave_speed(const State& value, const Aux&, int axis) const {
+  POPS_HD Real max_wave_speed(const State& value, const auto&, int axis) const {
     const Real normal_velocity = value[axis + 1] / value[0];
     const Real absolute_velocity = normal_velocity < Real(0) ? -normal_velocity : normal_velocity;
     return absolute_velocity + std::sqrt(cs2);
   }
 
-  POPS_HD void wave_speeds(const State& value, const Aux&, int axis, Real& lower,
+  POPS_HD void wave_speeds(const State& value, const auto&, int axis, Real& lower,
                            Real& upper) const {
     const Real normal_velocity = value[axis + 1] / value[0];
     const Real sound_speed = std::sqrt(cs2);

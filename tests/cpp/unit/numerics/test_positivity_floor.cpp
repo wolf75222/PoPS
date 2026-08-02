@@ -47,8 +47,8 @@ struct EulerNoSrc {
   static constexpr int n_vars = Euler::n_vars;
   Euler e{};
   Real gamma = Real(1.4);
-  POPS_HD State flux(const State& u, const Aux& a, int dir) const { return e.flux(u, a, dir); }
-  POPS_HD Real max_wave_speed(const State& u, const Aux& a, int dir) const {
+  POPS_HD State flux(const State& u, const auto& a, int dir) const { return e.flux(u, a, dir); }
+  POPS_HD Real max_wave_speed(const State& u, const auto& a, int dir) const {
     return e.max_wave_speed(u, a, dir);
   }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }

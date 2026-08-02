@@ -12,6 +12,7 @@ class _CompilerEmitter(Protocol):
     """Minimal executable half of a compiler lowering."""
 
     def check(self) -> object: ...
+    def __pops_bind_component_provider_packs__(self, packs: Any) -> None: ...
     def __pops_native_loader_source__(
         self, *, name: Any = None, target: str = "system",
         hoist_reciprocals: bool = False,
@@ -25,6 +26,14 @@ class CompilerLowering:
     emit_model: _CompilerEmitter
     source_module: Module
     facade: object
+
+    def bind_component_provider_packs(self, packs: Any) -> None:
+        """Bind one resolved provider-pack authority before native source emission."""
+        result = self.emit_model.__pops_bind_component_provider_packs__(packs)
+        if result is not None:
+            raise TypeError(
+                "compiler provider-pack binding protocol must return None"
+            )
 
     def native_loader_source(
         self, *, name: Any = None, target: str = "system",

@@ -76,6 +76,8 @@ POPS_HD constexpr int aux_comps() {
 /// Requires: State, Aux == pops::Aux, n_vars, flux(u,a,dir), max_wave_speed(u,a,dir),
 /// source(u,a), elliptic_rhs(u). All these methods must be POPS_HD if called
 /// in kernels (not checked by the concept; responsibility of the author).
+/// Finite-volume execution additionally instantiates the hyperbolic methods with the exact
+/// BoundFluxProviders<Model> protocol; Aux remains the pointwise source/implicit carrier.
 /// Do not confuse with HyperbolicPhysicalModel which adds the variables and conversions.
 template <class M>
 concept PhysicalModel =

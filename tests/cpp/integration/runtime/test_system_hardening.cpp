@@ -25,8 +25,8 @@ struct Scalar {
   using State = StateVec<1>;
   using Aux = pops::Aux;
   static constexpr int n_vars = 1;
-  POPS_HD State flux(const State&, const Aux&, int) const { return State{}; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(0); }
+  POPS_HD State flux(const State&, const auto&, int) const { return State{}; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(0); }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return u[0]; }
 };

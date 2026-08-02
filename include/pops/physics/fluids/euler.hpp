@@ -81,7 +81,7 @@ struct Euler {
    * @param[out] smin leftmost wave speed v_dir - c
    * @param[out] smax rightmost wave speed v_dir + c
    */
-  POPS_HD void wave_speeds(const State& u, const Aux&, int dir, Real& smin, Real& smax) const {
+  POPS_HD void wave_speeds(const State& u, const auto&, int dir, Real& smin, Real& smax) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real c = std::sqrt(gamma * p[3] / p[0]);
@@ -90,7 +90,7 @@ struct Euler {
   }
 
   /// Compressible convective flux in direction dir.
-  POPS_HD State flux(const State& u, const Aux&, int dir) const {
+  POPS_HD State flux(const State& u, const auto&, int dir) const {
     const Real rho = u[0];
     const Real vn = (dir == 0 ? u[1] : u[2]) / rho;  // velocity normal to the face
     const Real p = pressure(u);
@@ -139,7 +139,7 @@ struct Euler {
   /// eigenwave decomposition (F_R - F_L = A_roe (U_R - U_L) exactly), sqrt(rho) Roe average, gamma-1
   /// from the ideal-gas EOS, and a typed Harten entropy policy on the acoustic waves. RoeFlux
   /// (HasRoeDissipation) then does F = 1/2 (F_L + F_R) - 1/2 d.
-  POPS_HD State roe_dissipation(const State& UL, const Aux&, const State& UR, const Aux&,
+  POPS_HD State roe_dissipation(const State& UL, const auto&, const State& UR, const auto&,
                                 int dir) const {
     const int in = (dir == 0) ? 1 : 2;  // normal momentum
     const int it = (dir == 0) ? 2 : 1;  // tangential
@@ -186,7 +186,7 @@ struct Euler {
 
   /// Full spectrum in direction dir: (v_dir - c, v_dir, v_dir, v_dir + c). Vector counterpart
   /// of wave_speeds (which only gives the signed extremes); useful for spectrum schemes (Roe).
-  POPS_HD State eigenvalues(const State& u, const Aux&, int dir) const {
+  POPS_HD State eigenvalues(const State& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real c = std::sqrt(gamma * p[3] / p[0]);
@@ -199,7 +199,7 @@ struct Euler {
   }
 
   /// Maximum wave speed |v_dir| + c (Rusanov estimate), computed in primitive variables.
-  POPS_HD Real max_wave_speed(const State& u, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const State& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real a = vn < 0 ? -vn : vn;  // |v_dir| device-safe

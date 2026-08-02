@@ -28,22 +28,24 @@ struct ExBVelocity {
   static constexpr int n_vars = 1;
   using State = StateVec<1>;
   Real B0 = 1;
-  POPS_HD Real velocity(const Aux& a, int dir) const {
-    return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
+  POPS_HD Real velocity(const auto& providers, int dir) const {
+    const Real grad_x = providers.template flux_provider<1>();
+    const Real grad_y = providers.template flux_provider<2>();
+    return (dir == 0) ? (-grad_y / B0) : (grad_x / B0);
   }
-  POPS_HD StateVec<1> flux(const StateVec<1>& u, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> flux(const StateVec<1>& u, const auto& providers, int dir) const {
     StateVec<1> f{};
-    f[0] = u[0] * velocity(a, dir);
+    f[0] = u[0] * velocity(providers, dir);
     return f;
   }
-  POPS_HD Real max_wave_speed(const StateVec<1>&, const Aux& a, int dir) const {
-    const Real d = velocity(a, dir);
+  POPS_HD Real max_wave_speed(const StateVec<1>&, const auto& providers, int dir) const {
+    const Real d = velocity(providers, dir);
     return d < 0 ? -d : d;
   }
   /// Spectrum: one wave, the drift speed in direction dir.
-  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const auto& providers, int dir) const {
     StateVec<1> e{};
-    e[0] = velocity(a, dir);
+    e[0] = velocity(providers, dir);
     return e;
   }
   // Scalar: primitive variables = conservative (transported density).
@@ -83,22 +85,24 @@ struct ExBVelocityPolar {
   using State = StateVec<1>;
   Real B0 = 1;
   /// PHYSICAL component of the drift velocity in direction index dir (0 = r, 1 = theta).
-  POPS_HD Real velocity(const Aux& a, int dir) const {
-    return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
+  POPS_HD Real velocity(const auto& providers, int dir) const {
+    const Real grad_x = providers.template flux_provider<1>();
+    const Real grad_y = providers.template flux_provider<2>();
+    return (dir == 0) ? (-grad_y / B0) : (grad_x / B0);
   }
-  POPS_HD StateVec<1> flux(const StateVec<1>& u, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> flux(const StateVec<1>& u, const auto& providers, int dir) const {
     StateVec<1> f{};
-    f[0] = u[0] * velocity(a, dir);
+    f[0] = u[0] * velocity(providers, dir);
     return f;
   }
-  POPS_HD Real max_wave_speed(const StateVec<1>&, const Aux& a, int dir) const {
-    const Real d = velocity(a, dir);
+  POPS_HD Real max_wave_speed(const StateVec<1>&, const auto& providers, int dir) const {
+    const Real d = velocity(providers, dir);
     return d < 0 ? -d : d;
   }
   /// Spectrum: one wave, the drift speed in direction dir.
-  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const Aux& a, int dir) const {
+  POPS_HD StateVec<1> eigenvalues(const StateVec<1>&, const auto& providers, int dir) const {
     StateVec<1> e{};
-    e[0] = velocity(a, dir);
+    e[0] = velocity(providers, dir);
     return e;
   }
   // Scalar: primitive variables = conservative (transported density).
@@ -141,7 +145,7 @@ struct IsothermalFlux {
   POPS_HD Real velocity_rho(Real rho) const {
     return (vacuum_floor > Real(0) && rho < vacuum_floor) ? vacuum_floor : rho;
   }
-  POPS_HD StateVec<3> flux(const StateVec<3>& u, const Aux&, int dir) const {
+  POPS_HD StateVec<3> flux(const StateVec<3>& u, const auto&, int dir) const {
     const Real rho = u[0];
     const Real vn = (dir == 0 ? u[1] : u[2]) / velocity_rho(rho);
     const Real p = cs2 * rho;
@@ -169,14 +173,14 @@ struct IsothermalFlux {
     u[2] = p[0] * p[2];
     return u;
   }
-  POPS_HD Real max_wave_speed(const StateVec<3>& u, const Aux&, int dir) const {
+  POPS_HD Real max_wave_speed(const StateVec<3>& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real a = vn < 0 ? -vn : vn;
     return a + std::sqrt(cs2);
   }
   /// Full spectrum: (v_dir - c, v_dir, v_dir + c), c = sqrt(cs2).
-  POPS_HD StateVec<3> eigenvalues(const StateVec<3>& u, const Aux&, int dir) const {
+  POPS_HD StateVec<3> eigenvalues(const StateVec<3>& u, const auto&, int dir) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
     const Real c = std::sqrt(cs2);
@@ -187,7 +191,7 @@ struct IsothermalFlux {
     return e;
   }
   /// Signed speeds (HLL/HLLC): v_dir -+ c_s.
-  POPS_HD void wave_speeds(const StateVec<3>& u, const Aux&, int dir, Real& smin,
+  POPS_HD void wave_speeds(const StateVec<3>& u, const auto&, int dir, Real& smin,
                            Real& smax) const {
     const Prim p = to_primitive(u);
     const Real vn = (dir == 0 ? p[1] : p[2]);
