@@ -387,6 +387,15 @@ def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retr
         initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
         resources={"execution_context": artifact_execution_context(artifact)},
     )
+    communicator = simulation._install_plan.execution_context.communicator
+    if communicator.identity == "MPI_COMM_WORLD":
+        from pops._native_collectives import size
+
+        assert size(communicator.handle) == 1
+    assert simulation._publisher._size == 1
+    assert not simulation.consumer_graph.nodes
+    entry_runtime_fence = simulation._failed_run_effect_fence()
+    entry_publisher_fence = simulation._publisher.failed_run_effect_fence()
     slot, = simulation.field_provider_slots()
     accepted_before = {
         "time": simulation.time(),
@@ -442,11 +451,19 @@ def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retr
     assert failed.committed_effects == ()
     assert failed.staged_effects
     assert failed.rolled_back_effects == failed.staged_effects
+    failed_identity = simulation.last_run_identity
+    assert failed_identity.domain == "run"
+    assert simulation._failed_run_effect_fence() == entry_runtime_fence
+    assert simulation._publisher.failed_run_effect_fence() == entry_publisher_fence
+    assert failed_identity.token not in simulation._publisher._closed_observer_runs
+    assert failed_identity.token not in simulation._publisher._observer_run_phases
 
     assert fault_marker.is_file()
     fault_marker.unlink()
     retry = pops.run(simulation, t_end=1.0e-4, max_steps=1)
     assert retry.accepted_steps == 1
+    assert retry.run_identity == failed_identity
+    assert simulation.last_run_identity == failed_identity
     assert simulation.time() == 1.0e-4
     assert simulation.macro_step() == 1
     np.testing.assert_array_equal(
