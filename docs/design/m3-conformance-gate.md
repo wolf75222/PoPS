@@ -58,8 +58,9 @@ coarse/fine patches, checkpoints a non-empty accepted interface audit, injects o
 rank divergence, proves exact rollback of owners/histories/ledgers/Program bytes, retries, then
 requires a new topology-qualified interface audit, exact all-rank audit/receipt consensus and
 conservative continuation.
-The source validator requires that exact Python entrypoint to remain in the manifest's
-`mpi_entrypoints` category with `nproc = 2`; removing or reclassifying it invalidates
+The source validator requires the rank-change pytest path to remain in the manifest's
+`mpi_orchestrators` category and the RegridOnRestart process to remain in the manifest's
+`mpi_entrypoints` category with `nproc = 2`; removing or reclassifying either invalidates
 `--check-only`.
 All Python checks run with native and MPI requirements forced on; a missing capability cannot turn
 this proof into an optional skip. Pytest also emits a mandatory JUnit report with strict xfail

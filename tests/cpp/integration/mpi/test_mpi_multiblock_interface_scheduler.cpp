@@ -2,7 +2,6 @@
 
 #include "amr_tagging_test_authority.hpp"
 #include "amr_transfer_test_authority.hpp"
-#include "amr_tagging_test_authority.hpp"
 #include "gtest_compat.hpp"
 #include <pops/parallel/comm.hpp>
 #include <pops/physics/bricks/bricks.hpp>
@@ -1023,8 +1022,6 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
       require(divergent_scheduler.evaluation_count(route.identity, 0) == 0u);
       require(field_is_zero(left_rhs) && field_is_zero(right_rhs));
 
-      failures += exercise_dynamic_refined_interface_rematerialization();
-
       // A rank-local incomplete active-level prefix must close its structural status reduction
       // before any rank enters exact registry consensus. Deliberately destroy the accepted L1 route
       // on rank one only; every rank must return from the same preflight rather than deadlocking.
@@ -1041,6 +1038,8 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
                 : message.find("preflight failed on another MPI rank") != std::string::npos;
       }
       require(incomplete_registry_rejected);
+
+      failures += exercise_dynamic_refined_interface_rematerialization();
     } catch (const std::exception& error) {
       ++failures;
       std::cerr << "rank " << my_rank()

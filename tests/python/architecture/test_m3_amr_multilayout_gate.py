@@ -145,6 +145,17 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         "issue": "ADC-678",
         "requirement": "accepted_state",
         "polarity": "refusal",
+        "kind": "pytest",
+        "target": "accepted_state",
+        "nodeid": (
+            "tests/python/unit/amr/test_external_amr_providers.py::"
+            "test_external_tagger_requires_exact_candidate_program_capability"
+        ),
+    } in checks
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "refusal",
         "kind": "ctest",
         "target": "test_amr_native_loader",
         "test_regex": (
@@ -152,6 +163,15 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         ),
     } in checks
 
+    provider_source = (
+        ROOT / "tests/python/unit/amr/test_external_amr_providers.py"
+    ).read_text(encoding="utf-8")
+    assert "external AMR Tagger persistent_hysteresis is not implemented" in provider_source
+    runtime_source = (
+        ROOT / "tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp"
+    ).read_text(encoding="utf-8")
+    assert "check_persistent_tagging_hysteresis_and_rollback()" in runtime_source
+    assert "check_persistent_tagging_equality_at_inclusive_boundary()" in runtime_source
     restart_source = (
         ROOT / "tests/python/integration/amr/test_amr_regrid_on_restart.py"
     ).read_text(encoding="utf-8")

@@ -115,9 +115,9 @@ Supported native routes include:
   refined interfaces use the same exact `MPI_COMM_WORLD` trace and replacement-registry consensus
   as the flat route. Dynamic rematerialization stages a detached collective candidate; a
   rank-local failure restores the accepted layout, topology epoch, evaluator audit count and
-  executable registry before retry. Rank-changing dynamic refined rematerialization remains
-  unavailable. Every rank evaluates the canonical shared flux and scatters only to its locally
-  owned endpoint cells.
+  executable registry before retry. Every rank evaluates the canonical shared flux and scatters
+  only to its locally owned endpoint cells. Rank-changing dynamic refined rematerialization remains
+  unavailable.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes

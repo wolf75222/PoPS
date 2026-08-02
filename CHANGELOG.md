@@ -84,8 +84,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Strict accepted-state checkpoints now use Uniform payload v5 and AMR payload v7. They persist the
   held Program cadence window, last accepted Program interval, and runtime-owned AMR tagging
   hysteresis; commit clock/tagging restoration transactionally; and allow selective history replay
-  only for the exact ring/depth authority exported by the installed artifact. AMR v5/v6 images are
-  rejected fail-closed rather than silently restarting without their missing accepted-state data.
+  only for the exact ring/depth authority exported by the installed artifact. AMR v6 and earlier
+  images are rejected fail-closed rather than silently restarting without current accepted-state
+  provenance.
   Explicit AMR bootstrap also republishes the Program's level-qualified accepted image before each
   hierarchy transition commits, so a checkpoint taken before the first accepted step (after the
   required zero-step `pops.run` establishes its controls identity) already covers every active level.
