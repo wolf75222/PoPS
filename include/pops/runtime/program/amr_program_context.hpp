@@ -316,14 +316,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   SolveOutcome program_execution_field_solve_from_state_at_outcome_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int b, MultiFab& u_stage) const {
-    if (point.level < 0 || point.level >= eng_->nlev())
-      throw std::out_of_range(
-          "AmrProgramContext::solve_fields_from_state_at level is out of range");
-    if (point.level != level_)
-      throw std::invalid_argument(
-          "AmrProgramContext::solve_fields_from_state_at point level differs from the active "
-          "Program level");
-    require_field_evaluation_point_(point, level_, "AMR Program single-state field solve");
     return eng_->solve_named_fields_from_state_at(point, provider_slot,
                                                   static_cast<std::size_t>(sys_block(b)), u_stage);
   }
@@ -343,11 +335,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
       const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
       std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
-    if (point.level != level_)
-      throw std::invalid_argument(
-          "AmrProgramContext::solve_fields_from_blocks_at point level differs from the active "
-          "Program level");
-    require_field_evaluation_point_(point, level_, "AMR Program simultaneous field solve");
     const std::vector<const MultiFab*>& stages =
         generated_field_solve_stages_(value_id, field, overrides);
     return eng_->solve_named_fields_from_states_at(
@@ -2092,17 +2079,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   static std::string interface_flux_group_identity_(int group_id) {
     require_group_identity_(group_id);
     return "program.group.node." + std::to_string(group_id);
-  }
-
-  static void require_field_evaluation_point_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int expected_level,
-      const char* route) {
-    if (point.clock.empty() || point.tick < 0 || point.level != expected_level ||
-        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
-        !std::isfinite(point.physical_time) || point.stage_fraction < amr::Rational(0, 1) ||
-        amr::Rational(1, 1) < point.stage_fraction)
-      throw std::invalid_argument(std::string(route) +
-                                  " requires a complete exact BoundaryEvaluationPoint");
   }
 
   void register_interface_flux_group_(int group_id, const std::vector<int>& runtime_blocks,

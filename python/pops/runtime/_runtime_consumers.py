@@ -3672,9 +3672,11 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         ``RunManifest`` identities intentionally describe execution semantics rather than an
         invocation nonce.  A run that fails before its first accepted step therefore receives the
         same identity when the caller fixes the external fault and retries from the restored entry
-        boundary.  Reuse is deliberately limited to a serial RuntimeInstance with an empty
-        ConsumerGraph and an unchanged publisher fence.  MPI, output and observer lifecycles stay
-        sealed because opening or closing their external resources is already observable.
+        boundary.  Reuse is deliberately limited to a single-rank RuntimeInstance with an empty
+        ConsumerGraph and an unchanged publisher fence.  A size-one MPI world has no cross-rank
+        observer lifecycle, so it is equivalent to the serial route here.  Multi-rank MPI, output
+        and observer lifecycles stay sealed because opening or closing their external resources is
+        already observable.
         """
 
         if type(release_identity) is not bool:
@@ -3690,8 +3692,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         nodes = tuple(getattr(graph, "nodes", ()))
         current_effect_fence = None
         if (
-            self._communicator is None
-            and self._size == 1
+            self._size == 1
             and not nodes
             and not self._root_output_consumers
             and not self._builtin_catalyst_consumers
@@ -3701,8 +3702,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             except BaseException:
                 current_effect_fence = None
         reusable = bool(
-            self._communicator is None
-            and self._size == 1
+            self._size == 1
             and release_identity
             and entry_effect_fence is not None
             and current_effect_fence == entry_effect_fence

@@ -93,6 +93,7 @@ class ExecutionServicesFixture
   pops::Real history_outgoing_dt() const { return history_outgoing_dt_; }
   const std::string& history_rotation_clock() const { return history_rotation_clock_; }
   int resource_level() const { return resource_level_; }
+  int resource_level_query_count() const { return resource_level_query_count_; }
   int resource_levels() const { return resource_levels_; }
   void set_scratch_resource_identity(std::uint64_t epoch, std::uint64_t generation, int levels,
                                      int level) {
@@ -373,7 +374,10 @@ class ExecutionServicesFixture
       const noexcept {
     return {resource_topology_epoch_, resource_materialization_generation_, resource_levels_, 2};
   }
-  int program_execution_resource_level_() const noexcept { return resource_level_; }
+  int program_execution_resource_level_() const noexcept {
+    ++resource_level_query_count_;
+    return resource_level_;
+  }
   void program_execution_select_resource_level_(int selected) const noexcept {
     resource_level_ = selected;
   }
@@ -395,6 +399,7 @@ class ExecutionServicesFixture
 
   int active_level_ = -1;
   mutable int resource_level_ = Amr ? 1 : 0;
+  mutable int resource_level_query_count_ = 0;
   mutable std::uint64_t resource_topology_epoch_ = 11;
   mutable std::uint64_t resource_materialization_generation_ = 17;
   mutable int resource_levels_ = Amr ? 3 : 1;
@@ -581,8 +586,8 @@ void expect_shared_install_and_field_services(Context& context) {
 
   pops::MultiFab state;
   const std::vector<const pops::MultiFab*> states{&state};
-  pops::runtime::multiblock::BoundaryEvaluationPoint point{};
-  point.level = context.level();
+  const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+      "fixture.clock", 4, context.level(), 0, 3, pops::amr::Rational(1, 2), 0.125, 3.5};
   auto accept = [](pops::SolveOutcome outcome) {
     return outcome.consume(pops::SolveConsumption::kAccept);
   };
@@ -624,6 +629,32 @@ void expect_shared_install_and_field_services(Context& context) {
                std::invalid_argument);
   EXPECT_EQ(context.field_solve_dispatch_count(), calls_before_invalid_provider)
       << "shared provider identity validation must run before topology dispatch";
+
+  auto expect_invalid_point_before_dispatch = [&](const auto& invalid_point) {
+    const int calls_before_invalid_point = context.field_solve_dispatch_count();
+    const int level_queries_before_invalid_point = context.resource_level_query_count();
+    EXPECT_THROW((void)context.solve_fields_from_state_at(invalid_point, "field", 0, state),
+                 std::invalid_argument);
+    EXPECT_THROW(
+        (void)context.solve_fields_from_blocks_at(invalid_point, 17, "field", {{0, &state}}),
+        std::invalid_argument);
+    EXPECT_EQ(context.field_solve_dispatch_count(), calls_before_invalid_point)
+        << "shared point validation must run before every topology provider hook";
+    EXPECT_EQ(context.resource_level_query_count(), level_queries_before_invalid_point)
+        << "invalid topology-independent point data must fail before querying the provider level";
+  };
+  auto invalid_point = point;
+  invalid_point.clock.clear();
+  expect_invalid_point_before_dispatch(invalid_point);
+  invalid_point = point;
+  invalid_point.dt = 0.0;
+  expect_invalid_point_before_dispatch(invalid_point);
+  invalid_point = point;
+  invalid_point.stage = -1;
+  expect_invalid_point_before_dispatch(invalid_point);
+  invalid_point = point;
+  invalid_point.stage_fraction = pops::amr::Rational(3, 2);
+  expect_invalid_point_before_dispatch(invalid_point);
 
   EXPECT_THROW(context.exercise_exclusive_workspace(true, false), std::logic_error);
   EXPECT_FALSE(context.exclusive_workspace_in_use())
