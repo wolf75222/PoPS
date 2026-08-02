@@ -586,6 +586,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         python_junit = evidence_root / "reports" / "python-required-conformance.xml"
         required_stdout = recorder.run("python_conformance", _conda_command([
             "python", "-m", "pytest", "-q", "-s", "-m", PYTHON_REQUIRED_SELECTION,
+            "-o", "xfail_strict=true",
             "--junitxml", str(python_junit),
         ]))
         _require_no_hidden_skip(required_stdout)

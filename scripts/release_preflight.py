@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tomllib
 from typing import Any
+import xml.etree.ElementTree as ET
 import zipfile
 
 from final_release_contract import (
@@ -494,6 +495,58 @@ def _final_example_test_evidence(evidence: dict[str, Any]) -> None:
         raise PreflightError("release evidence final-example test ledger drifted")
 
 
+def _junit_evidence(
+    report: Path,
+    lane: dict[str, Any],
+    *,
+    required_nodeids: tuple[str, ...] = (),
+) -> None:
+    """Re-authenticate one retained JUnit report instead of trusting its JSON summary."""
+
+    try:
+        root = ET.parse(report).getroot()
+    except (OSError, ET.ParseError) as exc:
+        raise PreflightError("release evidence JUnit report is invalid: %s" % exc) from exc
+    cases = tuple(root.iter("testcase"))
+    failed = tuple(
+        case
+        for case in cases
+        if case.find("failure") is not None or case.find("error") is not None
+    )
+    skipped = tuple(case for case in cases if case.find("skipped") is not None)
+    actual = {
+        "tests": len(cases),
+        "failures": len(failed),
+        "skips_or_xfails": len(skipped),
+    }
+    reported = {name: lane[name] for name in actual}
+    if actual != reported:
+        raise PreflightError(
+            "release evidence JUnit summary drifted: reported=%s actual=%s"
+            % (reported, actual)
+        )
+    if not cases or failed or skipped:
+        raise PreflightError(
+            "release evidence JUnit lane is not all-pass: "
+            "tests=%d failures=%d skips_or_xfails=%d"
+            % (len(cases), len(failed), len(skipped))
+        )
+    for nodeid in required_nodeids:
+        relative, function_name = nodeid.split("::", 1)
+        expected_class = str(Path(relative).with_suffix("")).replace("/", ".")
+        matches = [
+            case
+            for case in cases
+            if case.attrib.get("name", "").split("[", 1)[0] == function_name
+            and case.attrib.get("classname", "").endswith(expected_class)
+        ]
+        if len(matches) != 1:
+            raise PreflightError(
+                "release evidence required final-example test %s appears %d times in JUnit"
+                % (nodeid, len(matches))
+            )
+
+
 def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     expected = {"schema_version", "producer", "commit_sha", "package_version", "contract_sha256",
@@ -557,6 +610,13 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
             raise PreflightError("release evidence %s JUnit path escapes its directory" % name)
         _artifact_file(directory, report.relative_to(directory), lane["sha256"],
                        label="%s JUnit" % name)
+        _junit_evidence(
+            report,
+            lane,
+            required_nodeids=(
+                FINAL_EXAMPLE_REQUIRED_TESTS if name == "python_conformance" else ()
+            ),
+        )
     if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
         raise PreflightError("release evidence Python required-lane selection drifted")
     _final_example_test_evidence(gates["python_conformance"]["evidence"])

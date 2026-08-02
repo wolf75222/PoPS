@@ -456,13 +456,37 @@ def source_contract_errors(root: Path) -> list[str]:
                 text = ast.unparse(decorator)
                 if "skip" in text or "xfail" in text:
                     decorators.append(text)
-            if forbidden_calls or forbidden_imports or decorators:
+            module_markers = []
+            for statement in tree.body:
+                value = None
+                targets = ()
+                if isinstance(statement, ast.Assign):
+                    value = statement.value
+                    targets = statement.targets
+                elif isinstance(statement, ast.AnnAssign):
+                    value = statement.value
+                    targets = (statement.target,)
+                if value is not None and any(
+                    isinstance(target, ast.Name) and target.id == "pytestmark"
+                    for target in targets
+                ):
+                    text = ast.unparse(value)
+                    if "skip" in text or "xfail" in text:
+                        module_markers.append(text)
+            if forbidden_calls or forbidden_imports or decorators or module_markers:
                 errors.append(
                     "%s is optional: %s"
                     % (
                         nodeid,
                         sorted(
-                            set((*forbidden_calls, *forbidden_imports, *decorators))
+                            set(
+                                (
+                                    *forbidden_calls,
+                                    *forbidden_imports,
+                                    *decorators,
+                                    *module_markers,
+                                )
+                            )
                         ),
                     )
                 )

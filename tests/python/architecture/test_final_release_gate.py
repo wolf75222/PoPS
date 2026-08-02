@@ -176,6 +176,27 @@ def test_final_release_source_contract_refuses_duplicate_required_nodeids(
     assert "final-example required test nodeids must be unique" in errors
 
 
+@pytest.mark.parametrize(
+    "injected",
+    (
+        "\nfrom unittest.mock import patch\n",
+        "\npytestmark = pytest.mark.xfail(reason='optional')\n",
+    ),
+)
+def test_final_release_source_contract_refuses_mocked_or_optional_required_tests(
+    tmp_path, injected
+):
+    _write_final_source_tree(tmp_path)
+    nodeid = contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS[0]
+    relative, _function_name = nodeid.split("::", 1)
+    path = tmp_path / relative
+    path.write_text(path.read_text(encoding="utf-8") + injected, encoding="utf-8")
+
+    errors = contract.source_contract_errors(tmp_path)
+
+    assert any(nodeid in error and "optional" in error for error in errors)
+
+
 @pytest.mark.parametrize("module", ("pops.ir", "pops._ir"))
 def test_final_release_source_contract_refuses_internal_or_transitional_imports(
     tmp_path, module
@@ -239,6 +260,92 @@ def test_required_junit_lane_authenticates_exact_final_example_tests(tmp_path):
         gate._require_junit_nodeids(
             report, contract.FINAL_EXAMPLE_REQUIRED_TESTS
         )
+
+    report.write_text(
+        '<testsuite tests="%d">%s%s</testsuite>'
+        % (len(cases) + 1, "".join(cases), cases[0]),
+        encoding="utf-8",
+    )
+    with pytest.raises(gate.FinalGateError, match="appears 2 times"):
+        gate._require_junit_nodeids(
+            report, contract.FINAL_EXAMPLE_REQUIRED_TESTS
+        )
+
+
+def test_release_preflight_reauthenticates_junit_all_pass_and_exact_nodeids(tmp_path):
+    cases = []
+    for nodeid in contract.FINAL_EXAMPLE_REQUIRED_TESTS:
+        relative, function_name = nodeid.split("::", 1)
+        classname = str(Path(relative).with_suffix("")).replace("/", ".")
+        cases.append(
+            '<testcase classname="%s" name="%s"/>' % (classname, function_name)
+        )
+    report = tmp_path / "final-examples.xml"
+
+    def write_report(rows):
+        report.write_text(
+            '<testsuite tests="%d">%s</testsuite>'
+            % (len(rows), "".join(rows)),
+            encoding="utf-8",
+        )
+
+    def lane(*, tests, failures=0, skips=0):
+        return {
+            "path": str(report),
+            "sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+            "tests": tests,
+            "failures": failures,
+            "skips_or_xfails": skips,
+        }
+
+    write_report(cases)
+    preflight._junit_evidence(
+        report,
+        lane(tests=len(cases)),
+        required_nodeids=contract.FINAL_EXAMPLE_REQUIRED_TESTS,
+    )
+
+    write_report(cases[:-1])
+    with pytest.raises(preflight.PreflightError, match="appears 0 times"):
+        preflight._junit_evidence(
+            report,
+            lane(tests=len(cases) - 1),
+            required_nodeids=contract.FINAL_EXAMPLE_REQUIRED_TESTS,
+        )
+
+    write_report([*cases, cases[0]])
+    with pytest.raises(preflight.PreflightError, match="appears 2 times"):
+        preflight._junit_evidence(
+            report,
+            lane(tests=len(cases) + 1),
+            required_nodeids=contract.FINAL_EXAMPLE_REQUIRED_TESTS,
+        )
+
+    failed = cases[0].replace("/>", "><failure/></testcase>")
+    write_report([failed, *cases[1:]])
+    with pytest.raises(preflight.PreflightError, match="not all-pass"):
+        preflight._junit_evidence(
+            report,
+            lane(tests=len(cases), failures=1),
+            required_nodeids=contract.FINAL_EXAMPLE_REQUIRED_TESTS,
+        )
+
+    xfailed = cases[0].replace(
+        "/>", '><skipped type="pytest.xfail"/></testcase>'
+    )
+    write_report([xfailed, *cases[1:]])
+    with pytest.raises(preflight.PreflightError, match="not all-pass"):
+        preflight._junit_evidence(
+            report,
+            lane(tests=len(cases), skips=1),
+            required_nodeids=contract.FINAL_EXAMPLE_REQUIRED_TESTS,
+        )
+
+
+def test_required_python_lane_makes_xpass_fatal():
+    source = (SCRIPTS / "run_final_gate.py").read_text(encoding="utf-8")
+
+    assert '"-o", "xfail_strict=true"' in source
 
 
 def test_release_preflight_requires_the_exact_final_example_test_ledger():
