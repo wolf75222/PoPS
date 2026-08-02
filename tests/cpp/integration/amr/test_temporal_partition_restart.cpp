@@ -127,6 +127,9 @@ TEST(test_temporal_partition_restart,
   AmrProgramAcceptedState accepted =
       deserialize_amr_program_accepted_state(system.program_accepted_state());
   accepted.temporal_partition = cell_local_state(system.engine()->topology_epoch());
+  // This fixture materializes one active level. Keep the three canonical cells and their distinct
+  // rungs, but qualify every record with that real hierarchy instead of an inactive synthetic level.
+  accepted.temporal_partition.cells.back().level = 0;
   const std::vector<std::uint8_t> cell_local_image = serialize_amr_program_accepted_state(accepted);
   system.restore_checkpoint_accepted_state(cell_local_image);
 
