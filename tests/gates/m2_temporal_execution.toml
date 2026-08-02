@@ -288,6 +288,14 @@ nodeid = "tests/python/unit/time/test_multirate_history_contract.py::test_histor
 [[check]]
 issue = "ADC-667"
 requirement = "temporal_restart"
+polarity = "positive"
+kind = "pytest"
+target = "restart"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
 polarity = "refusal"
 kind = "pytest"
 target = "schedule"

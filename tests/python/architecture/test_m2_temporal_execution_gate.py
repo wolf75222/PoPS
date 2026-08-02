@@ -26,7 +26,7 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 38
+    assert len(data["check"]) == 39
 
 
 def test_m2_final_gate_has_no_deferred_requirement():
@@ -144,6 +144,12 @@ def test_m2_adc667_history_and_migration_routes_use_exact_proofs():
             "positive",
             "tests/python/unit/time/test_multirate_history_contract.py"
             "::test_history_interpolation_is_an_explicit_cross_clock_provider",
+        ),
+        (
+            "restart",
+            "positive",
+            "tests/python/unit/runtime/test_temporal_restart_state.py"
+            "::test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart",
         ),
         (
             "schedule",
