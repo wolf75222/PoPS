@@ -20,7 +20,6 @@ facade handles the user actually wrote via ``remap_lowering_error``.
 
 from __future__ import annotations
 
-from types import MappingProxyType
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
@@ -29,6 +28,36 @@ from .lowering_coverage import (
     LoweringCoverageRow,
     LoweringRejection,
 )
+
+_NATIVE_ROLE_ALIASES = {
+    "axial_x": "AxialX",
+    "axial_y": "AxialY",
+    "axial_z": "AxialZ",
+    "density": "Density",
+    "momentum_x": "MomentumX",
+    "momentum_y": "MomentumY",
+    "momentum_z": "MomentumZ",
+    "energy": "Energy",
+    "pressure": "Pressure",
+    "velocity_x": "VelocityX",
+    "velocity_y": "VelocityY",
+    "velocity_z": "VelocityZ",
+    "temperature": "Temperature",
+    "scalar": "Scalar",
+}
+_NATIVE_ROLE_TOKENS = frozenset(_NATIVE_ROLE_ALIASES.values())
+
+
+def _lower_native_role(value: Any) -> str | None:
+    from pops.physics.roles import ComponentRole, native_role_token
+
+    if isinstance(value, ComponentRole):
+        return native_role_token(value)
+    if isinstance(value, str):
+        if value in _NATIVE_ROLE_TOKENS:
+            return value
+        return _NATIVE_ROLE_ALIASES.get(value)
+    return None
 
 
 def _module_to_model(module: Any, state_space: Any = None) -> Any:
@@ -75,30 +104,12 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     # Preserve the canonical source-Module identity across the internal facade lowering. The
     # resulting CompiledModel authenticates this scalar hash; it never retains ``module`` itself.
     object.__setattr__(m, "_compile_source_module_hash", module.module_hash())
-    from pops.model.provider_pack import (  # noqa: PLC0415
-        build_operator_provider_pack,
-        build_provider_pack,
+    from pops.codegen.component_provider_packs import (  # noqa: PLC0415
+        resolve_component_provider_packs,
     )
 
-    provider_pack = build_provider_pack(module)
-    object.__setattr__(m, "_component_provider_pack", provider_pack)
-    object.__setattr__(m, "_component_provider_metadata", provider_pack.to_data())
-    operator_provider_packs = {
-        operator.name: build_operator_provider_pack(module, operator)
-        for operator in module.operator_registry()
-    }
-    object.__setattr__(m, "_component_operator_provider_packs",
-                       MappingProxyType(operator_provider_packs))
-    object.__setattr__(m, "_component_operator_provider_metadata", MappingProxyType({
-        name: pack.to_data() for name, pack in operator_provider_packs.items()
-    }))
-    flux_keys = []
-    for operator in module.operator_registry():
-        if operator.kind == "grid_operator":
-            flux_keys.extend(operator_provider_packs[operator.name])
-    flux_provider_pack = provider_pack.select(flux_keys)
-    object.__setattr__(m, "_component_flux_provider_pack", flux_provider_pack)
-    object.__setattr__(m, "_component_flux_provider_metadata", flux_provider_pack.to_data())
+    provider_packs = resolve_component_provider_packs(module)
+    m.__pops_bind_component_provider_packs__(provider_packs)
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
     # Module's exact authoring authority. Without this, owner-qualified Program nodes would be
@@ -112,13 +123,9 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     if registry.owner_path != module.owner_path:
         raise ValueError("compile_problem: Module ParamRegistry owner drift")
     object.__setattr__(m, "_param_registry", registry)
-    _spec_role = {"density": "Density", "momentum_x": "MomentumX", "momentum_y": "MomentumY",
-                  "momentum_z": "MomentumZ", "energy": "Energy", "pressure": "Pressure",
-                  "velocity_x": "VelocityX", "velocity_y": "VelocityY", "velocity_z": "VelocityZ",
-                  "temperature": "Temperature"}
     roles = None
     if state.roles:
-        roles = [_spec_role.get(state.roles.get(c)) for c in state.components]
+        roles = [_lower_native_role(state.roles.get(c)) for c in state.components]
         if all(r is None for r in roles):
             roles = None
     cvars = m.conservative_vars(*state.components, roles=roles)
@@ -191,7 +198,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "documentary"))
 
-    for key in provider_pack:
+    for key in provider_packs.complete:
         key_data = key.to_data()
         stable_key = "%s/%s/%s" % (
             key_data["space_kind"], key_data["space_name"], key_data["component"])
@@ -441,6 +448,11 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) 
         lowering = require_compiler_lowering(model)
         if diagnostic_facade is None:
             diagnostic_facade = lowering.facade
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        lowering.bind_component_provider_packs(
+            resolve_component_provider_packs(lowering.source_module)
+        )
         states = lowering.source_module.state_spaces()
         if len(states) > 1:
             emit_model = _module_to_model(

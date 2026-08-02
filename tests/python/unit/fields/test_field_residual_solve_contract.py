@@ -44,6 +44,7 @@ from pops.mesh.boundaries import (
     BoundaryHandle,
     BoundaryOrientation,
     BoundaryProvider,
+    BoundaryProviderKind,
     BoundarySide,
     BoundaryTopology,
     CharacteristicClosure,
@@ -109,7 +110,8 @@ def _provider(region, name, dependencies):
     return BoundaryProvider(
         _h("%s_provider" % name, "boundary_provider", CASE),
         (ConstraintResidual(boundary, dependencies.iterate, representation),),
-        provider_dependencies)
+        provider_dependencies,
+        BoundaryProviderKind.CONSTRAINT_RESIDUAL)
 
 
 def _contribution(cls, region, name, dependencies):

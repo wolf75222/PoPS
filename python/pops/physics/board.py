@@ -60,7 +60,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate",
         "field_provider", "local_transform", "projection", "wave_speeds", "wave_speeds_from_jacobian",
-        "roe_from_jacobian",
+        "roe_from_jacobian", "recovery_admissibility",
     })
 
     def __init__(self, name: Any, *, frame: Any = None) -> None:
@@ -513,6 +513,24 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             self._dsl.conservative_from(inverse)
             self._primitive_state_authored = True
         self._dsl._invalidate_authoring_views()
+        self._invalidate_authoring_views()
+
+    def recovery_admissibility(self, **constraints: Any) -> None:
+        """Declare physical constraints for native primitive-recovery candidates.
+
+        Each keyword names a component of the model's primitive coordinate system and maps it to a
+        symbolic Boolean expression over that coordinate system.  The single-state native route
+        compiles these predicates into the prepared recovery plan; multi-state recovery policies
+        require a species-qualified provider and are therefore rejected here.
+        """
+        if self._multi_module is not None:
+            raise ValueError(
+                "recovery_admissibility requires a single-state model; multi-species policies "
+                "must be supplied by a species-qualified recovery provider"
+            )
+        self._dsl.recovery_admissibility(
+            **{name: self._to_expr(predicate) for name, predicate in constraints.items()}
+        )
         self._invalidate_authoring_views()
 
     def scalar(self, name: Any, expr: Any) -> Any:

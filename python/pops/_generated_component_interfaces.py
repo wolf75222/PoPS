@@ -3,8 +3,8 @@ from __future__ import annotations
 
 NATIVE_COMPONENT_ABI_VERSION = 1
 NATIVE_COMPONENT_COMMON_ABI_VERSION = 1
-NATIVE_COMPONENT_CATALOG_SHA256 = '5c67c081cf1808138583ed00856e6601c12384ae28e9c0f8cc7b8ce004c3b0f6'
-NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'adbb3693dc17eff5aa7b78415df35f011dfd2c64fc26eb9a98200923e52c47ea'
+NATIVE_COMPONENT_CATALOG_SHA256 = 'a10653b4730d0e5a8d8b1c21d3bb4263f3ca8fc93ebdfb1af59b88c7cbce07f0'
+NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = '9d7d38624833a7a7d7462ac7113bbdc215e6bce145ad1150b8cc1decf2d297b1'
 NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
  'execution_modes': {'native_backend': 1, 'host': 2},
  'collective_scopes': {'none': 0},
@@ -72,6 +72,14 @@ NATIVE_COMPONENT_INTERFACES = ({'id': 0,
   'hot_path': True,
   'facets': ('stencil', 'lowering'),
   'operations': ('apply',)},
+ {'id': 6,
+  'name': 'boundary_flux',
+  'uri': 'pops://interfaces/boundary-flux',
+  'version': 1,
+  'cpp_table': 'PopsBoundaryFluxApiV1',
+  'hot_path': True,
+  'facets': ('provider', 'lowering', 'fallible_evaluation'),
+  'operations': ('transform_faces',)},
  {'id': 7,
   'name': 'field_solver',
   'uri': 'pops://interfaces/field-solver',
@@ -102,6 +110,7 @@ NATIVE_COMPONENT_BOUNDARY_HANDLE_ROUTES = {'boundary_provider': ('ghost_boundary
  'corner_resolver': ('ghost_boundary', 'apply_region_batch'),
  'numerical_closure': ('ghost_boundary', 'apply_region_batch'),
  'conservative_flux': ('numerical_flux', 'evaluate_faces'),
+ 'boundary_flux_provider': ('boundary_flux', 'transform_faces'),
  'residual_operator': ('field_boundary_closure', 'residual'),
  'linearization_operator': ('field_boundary_closure', 'jvp')}
 

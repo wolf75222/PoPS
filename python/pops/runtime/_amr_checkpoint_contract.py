@@ -8,7 +8,7 @@ import json
 from pops.identity import make_identity
 
 
-_SCHEMA = 4
+_SCHEMA = 5
 _GUARANTEE = "bit_identical_accepted_state"
 _CONTRACT_KEYS = {
     "schema_version",
@@ -17,6 +17,7 @@ _CONTRACT_KEYS = {
     "ledger",
     "interface_ledger",
     "clocks",
+    "temporal_partition",
     "synchronization",
     "history_qualifications",
     "level_relations",
@@ -39,9 +40,7 @@ def restart_topology_image(sim):
     """Return the compact identity of one accepted AMR hierarchy."""
     levels = int(sim.n_levels())
     boxes = [[int(value) for value in box] for box in sim.patch_boxes()]
-    owners = [
-        [int(rank) for rank in sim.level_owner_ranks(level)] for level in range(levels)
-    ]
+    owners = [[int(rank) for rank in sim.level_owner_ranks(level)] for level in range(levels)]
     topology_identity = make_identity(
         "restart-topology",
         {
@@ -94,6 +93,7 @@ def contract_for(sim):
             "entries": interface_flux_ledger,
         },
         "clocks": _rows(sim.program_clock_manifest()),
+        "temporal_partition": _rows(sim.program_temporal_partition_manifest()),
         "synchronization": _rows(sim.program_sync_manifest()),
         "history_qualifications": _rows(sim.program_accepted_state_manifest()),
         "level_relations": relations,
@@ -114,6 +114,25 @@ def _decode_contract(payload):
     if not isinstance(contract, dict) or set(contract) != _CONTRACT_KEYS:
         raise TypeError("restart: AMR accepted-state contract has an invalid exact schema")
     return contract
+
+
+def checkpoint_temporal_partition_kind(payload):
+    """Return the exact accepted temporal-partition kind before native restart mutation."""
+    contract = _decode_contract(payload)
+    rows = contract["temporal_partition"]
+    if (
+        not isinstance(rows, list)
+        or not rows
+        or not isinstance(rows[0], list)
+        or len(rows[0]) != 7
+        or rows[0][0] != "summary"
+        or rows[0][1] not in {"global", "cell_local"}
+    ):
+        raise ValueError("restart: AMR temporal-partition contract has an invalid summary")
+    for row in rows[1:]:
+        if not isinstance(row, list) or len(row) != 3 or row[0] != "rung":
+            raise ValueError("restart: AMR temporal-partition contract has an invalid rung row")
+    return rows[0][1]
 
 
 def preflight_contract(sim, payload):
@@ -159,9 +178,7 @@ def _validate_interface_ledger_against_live_hierarchy(sim, contract):
     blocks = int(sim.n_blocks())
     for row in contract["interface_ledger"]["entries"]:
         if len(row) != 28:
-            raise ValueError(
-                "restart: restored AMR interface-flux audit has an invalid native row"
-            )
+            raise ValueError("restart: restored AMR interface-flux audit has an invalid native row")
         coarse_level, fine_level = int(row[2]), int(row[3])
         left_block, right_block = int(row[21]), int(row[22])
         if (

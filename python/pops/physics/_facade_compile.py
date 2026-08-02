@@ -40,11 +40,27 @@ class _FacadeCompileMixin(_FacadeModel):
             facade=self,
         )
 
+    def __pops_bind_component_provider_packs__(self, packs: Any) -> None:
+        """Bind the exact Module provider resolution to both native-emitter carriers."""
+        from pops.codegen.component_provider_packs import ComponentProviderPacks
+
+        if type(packs) is not ComponentProviderPacks:
+            raise TypeError(
+                "compiler provider-pack binding requires exact ComponentProviderPacks"
+            )
+        packs.attach(self)
+        packs.attach(self._m)
+
     def __pops_native_loader_source__(
         self, *, name: Any = None, target: str = "system",
         hoist_reciprocals: bool = False,
     ) -> str:
         """Emit a native package without exposing the private formula carrier."""
+        from pops.codegen.component_provider_packs import resolve_component_provider_packs
+
+        self.__pops_bind_component_provider_packs__(
+            resolve_component_provider_packs(self.module)
+        )
         return self._m.emit_cpp_native_loader(
             name=name, target=target, hoist_reciprocals=hoist_reciprocals)
 

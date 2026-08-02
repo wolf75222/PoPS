@@ -17,7 +17,7 @@ from pops.runtime._threading import has_kokkos
 # descriptor catalogs (see _descriptor_tokens); this only pins the display order so the audit
 # table reads the same every run (and the test_capabilities contract keeps its ordered lists).
 _RIEMANN_ORDER = ("rusanov", "hll", "hllc", "roe")
-_LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5")
+_LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5", "mc", "superbee")
 # Riemann fluxes wired on the polar geometry: rusanov (any model) + hll (isothermal fluid declares
 # wave_speeds). hllc/roe have no polar energy-flux brick (make_block_polar rejects them), so the
 # polar row is the catalog intersected with this allow-list -- a removed flux cannot leave a phantom
@@ -40,8 +40,9 @@ def _descriptor_tokens() -> Any:
     the internal descriptor catalog report walks (riemann / limiter / reconstruction /
     elliptic solvers), so adding or retiring a descriptor cannot silently desync the doctor matrix
     from the introspectable capability matrix. Only descriptors that declare themselves available
-    are reported (a planned-but-not-native brick like ``mc`` / ``superbee`` is left out). Pure: no
-    ``_pops`` import, no numeric loop.
+    are reported; MC and Superbee are ordinary native limiter descriptors and therefore appear
+    through this same path without a doctor-specific allowlist. Pure: no ``_pops`` import, no
+    numeric loop.
     """
     from pops.numerics.reconstruction import reconstruction
     from pops.numerics.reconstruction.limiters import limiters

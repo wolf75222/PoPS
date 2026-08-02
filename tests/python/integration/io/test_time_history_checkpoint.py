@@ -668,8 +668,7 @@ def _passive_source_model(name):
 
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
+    m.primitive_vars(rho)
     m.conservative_from([rho])
     m.flux(x=[0.0 * rho], y=[0.0 * rho])
     m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])

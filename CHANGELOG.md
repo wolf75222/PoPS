@@ -18,11 +18,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Type-erased variable-recovery reports now retain the selected and last-attempted method kinds.
+  Runtime failures name the actual recovery route instead of exposing only a plan-local integer,
+  while rejected outcomes keep the selected method explicitly unknown.
+- Capability reports now distinguish the delivered typed Riemann rejection path from an unavailable
+  prepared recovery policy. Rusanov, HLL, HLLC, and Roe advertise their common device-copyable
+  `FluxEvaluation` and transactional rejection, while ordered fallback chains,
+  requested-versus-used solver diagnostics, counters, and restart metadata fail closed instead of
+  being inferred from the selected solver.
+- Variable-recovery capability reports now separate the delivered prepared closed-form consumers
+  from the complete ADC-755 deletion gate. System materialization and every production face route
+  advertise typed publication control, while the remaining source, AMR-transfer, boundary,
+  inverse-conversion, cache/restart, backend, and performance families fail closed as an unavailable
+  complete-consumer cutover.
+- ADC-749 carries exact periodic face identifications through the model-aware hyperbolic boundary
+  plan. Uniform scalar layouts execute mapped periodic halos (including cross-axis maps); mapped
+  vector/axial component transforms and AMR mapped periodic fill-patch/regrid remain explicit
+  fail-closed capabilities until their model-aware component and hierarchy contracts are available.
+- ADC-749 now makes numerical resolution the fail-closed acceptance boundary for built-in transport
+  descriptors. Characteristic closures without a prepared eigenstructure, forged representation
+  converters, unsupported analytic dependencies, and mixed logical clocks can no longer survive as
+  inert metadata and fail only during compile or bind.
+- Boundary provider identities now retain an immutable typed law such as inflow, ghost formula,
+  directional transport, or no-flux. Resolution no longer has to infer semantics from a handle name
+  or output port, while the still-missing post-Riemann execution ABI remains explicitly unavailable.
 - Strict AMR checkpoint payload v7 now persists the accepted shared-interface flux audit together
   with Program clocks, histories, tagging state, conservative ledger and synchronization report.
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved
   rational stage weight, geometry and duration before publishing the image; rejected restart or
   Program attempts leave the previous accepted report byte-exact.
+- Generated physical-flux bricks now make their qualified provider requirements executable native
+  ABI evidence: the binder validates every row at compile time and reads only its declared storage
+  slots instead of scanning the model's complete auxiliary width.
 - AMR checkpoint capability reports now distinguish same-rank bit-identical replay from
   non-bit-identical rank-count rematerialization with Dense persisted histories. The explicit
   `RegridOnRestart()` policy now restores and authenticates the recorded accepted state before one

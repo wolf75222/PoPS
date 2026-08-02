@@ -11,6 +11,7 @@ import sys
 
 import pytest
 
+import pops
 from pops.analytic import (
     AnalyticTruthValueError,
     PredicateExpr,
@@ -34,6 +35,7 @@ from pops.analytic import (
     radius,
     sin,
     sqrt,
+    time,
     where,
     x,
     y,
@@ -67,6 +69,30 @@ def test_coordinates_are_typed_and_bound_to_one_frame() -> None:
         coordinate(frame, "x")
     with pytest.raises(ValueError, match="different frames"):
         x_value + x(_frame("other"))
+
+
+def test_physical_time_is_bound_to_one_exact_owner_qualified_clock() -> None:
+    program = pops.Program("analytic-time-program")
+    value = time(program.clock)
+    payload = value.to_data()
+
+    assert value.time_clocks() == (program.clock,)
+    assert payload["root"] == {
+        "kind": "scalar",
+        "op": "time",
+        "clock": program.clock.to_data(),
+        "clock_id": program.clock.qualified_id,
+    }
+    assert ScalarExpr.from_data(payload).same_as(value)
+
+    from pops.time import Clock
+
+    with pytest.raises(TypeError, match="owner-qualified"):
+        time(Clock("unowned"))
+    forged = copy.deepcopy(payload)
+    forged["root"]["clock_id"] = "pops.clock.v1::sha256:forged"
+    with pytest.raises(ValueError, match="Clock identity"):
+        ScalarExpr.from_data(forged)
 
 
 def test_scalar_math_builds_a_data_only_canonical_tree() -> None:

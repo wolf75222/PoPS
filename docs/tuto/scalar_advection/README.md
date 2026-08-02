@@ -187,14 +187,16 @@ Les substitutions suivantes utilisent toutes des briques natives :
 reconstruction.FirstOrder()
 reconstruction.MUSCL(limiters.Minmod())
 reconstruction.MUSCL(limiters.VanLeer())
+reconstruction.MUSCL(limiters.MC())
+reconstruction.MUSCL(limiters.Superbee())
 reconstruction.WENO5()  # implementation native WENO5-Z
 ```
 
-Le document source cite aussi les limiteurs MC et Superbee. Leurs fonctions usuelles sont
+Les limiteurs MC et Superbee utilisent respectivement
 $\phi_{MC}(r)=\max(0,\min(2r,(1+r)/2,2))$ et
-$\phi_{SB}(r)=\max(0,\min(2r,1),\min(r,2))$. PoPS 1.0.0 ne fournit pas encore de descriptor
-natif pour ces deux limiteurs. Ils peuvent etre compares sur le papier, mais ne sont pas
-selectionnables dans ce tutoriel.
+$\phi_{SB}(r)=\max(0,\min(2r,1),\min(r,2))$. Ils passent par le meme registre prepare que Minmod
+et VanLeer, demandent exactement deux couches de cellules fantomes et sont selectionnables sans
+branche specifique Uniform, AMR, MPI ou backend.
 
 ## Tutoriel 1 : briques preimplementees
 

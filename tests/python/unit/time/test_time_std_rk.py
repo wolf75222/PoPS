@@ -127,8 +127,7 @@ def _passive_model(name):
     from pops.physics._facade import Model
     model = Model(name)
     (rho,) = model.conservative_vars("rho")
-    velocity = model.primitive("u", 0.0 * rho)
-    model.primitive_vars(rho=rho, u=velocity)
+    model.primitive_vars(rho)
     model.conservative_from([rho])
     model.flux(x=[0.0 * rho], y=[0.0 * rho])
     model.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])

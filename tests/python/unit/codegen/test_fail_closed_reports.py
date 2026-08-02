@@ -70,6 +70,15 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert weno.layout == "uniform|amr"
     assert "ratio-2 2D AMR" in weno.limitation
     assert "order-5" in weno.limitation
+    for feature in ("limiter:mc", "limiter:superbee"):
+        limiter = routes[feature]
+        assert limiter.status == "available"
+        assert limiter.backend == "production"
+        assert limiter.layout == "uniform|amr"
+        assert "formal_order=2" in limiter.limitation
+        assert "ghost_depth=2" in limiter.limitation
+        assert limiter.available_route == ""
+        assert limiter.alternative == ""
     amr_implicit = routes["amr:source_implicit_program"]
     assert amr_implicit.status == "unavailable"
     assert "no temporal fallback" in amr_implicit.limitation
@@ -82,6 +91,132 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert external_amr.available_route == (
         "external FieldSolver@2 on one uniform host/serial level"
     )
+
+
+def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_kernels():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    prepared = routes["boundary:prepared_transport"]
+    assert prepared.status == "partial"
+    assert prepared.layout == "uniform|amr"
+    assert prepared.backend == "production"
+    assert prepared.mpi is True
+    assert prepared.gpu is False
+    assert "one prepared 2D model-aware plan" in prepared.limitation
+    assert "typed-role slip wall" in prepared.limitation
+    assert "model primitive-to-conservative" in prepared.limitation
+    assert "coarse-fine ghosts under the prepared transfer authority" in prepared.limitation
+    assert "corners explicitly not required" in prepared.limitation
+
+    conversion = routes["boundary:representation_conversion"]
+    assert conversion.status == "partial"
+    assert conversion.layout == "uniform|amr"
+    assert conversion.backend == "production"
+    assert "to_conservative provider" in conversion.limitation
+    assert "recovery" in conversion.limitation
+
+    analytic = routes["boundary:analytic_xtp"]
+    assert analytic.status == "partial"
+    assert analytic.layout == "uniform|amr"
+    assert analytic.backend == "production"
+    assert "analytic ScalarExpr" in analytic.limitation
+    assert "exact logical Clock" in analytic.limitation
+    assert "state/field/input reads remain unavailable" in analytic.limitation
+    assert "axis-permuted periodic coordinates" in analytic.limitation
+
+    expected_unavailable = {
+        "boundary:characteristic_no_inflow": (
+            "executable model eigenstructure",
+            "prepared characteristic kernel",
+        ),
+    }
+    for feature, (limitation, alternative) in expected_unavailable.items():
+        route = routes[feature]
+        assert route.status == "unavailable"
+        assert route.layout == "uniform|amr"
+        assert limitation in route.limitation
+        assert alternative in route.alternative
+        assert route.error_message
+    post_riemann = routes["boundary:post_riemann_flux"]
+    assert post_riemann.status == "partial"
+    assert post_riemann.layout == "uniform|amr"
+    assert post_riemann.backend == "production"
+    assert "outward-normal face flux" in post_riemann.limitation
+    assert "Riemann solve and divergence/reflux" in post_riemann.limitation
+    assert "2D Cartesian host-batch" in post_riemann.limitation
+    gpu_report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": True, "supports_amr": True},
+        source="test-gpu-manifest",
+    )
+    gpu_post_riemann = {
+        row.feature: row for row in gpu_report.routes
+    }["boundary:post_riemann_flux"]
+    assert gpu_post_riemann.gpu is False
+
+
+def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    typed = routes["riemann:typed_failure_outcome"]
+    assert typed.status == "partial"
+    assert typed.layout == "uniform|amr"
+    assert typed.backend == "production"
+    assert typed.mpi is True
+    assert typed.gpu is False
+    assert "one device-copyable FluxEvaluation" in typed.limitation
+    assert "typed status, stability bound, and reason code" in typed.limitation
+    assert "reject the owning transaction" in typed.limitation
+    assert "no fallback solver can be selected" in typed.limitation
+
+    policy = routes["riemann:prepared_recovery_policy"]
+    assert policy.status == "unavailable"
+    assert policy.layout == "uniform|amr"
+    assert policy.backend == "none"
+    assert "no prepared ordered Riemann recovery chain" in policy.limitation
+    assert "requested-versus-used solver outcome" in policy.limitation
+    assert "never substitutes another solver" in policy.limitation
+    assert "typed rejection and transactional rollback" in policy.available_route
+    assert "consume rejection through the step retry/failure policy" in policy.alternative
+    assert policy.error_message
+
+
+def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cutover():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": True},
+        source="test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    prepared = routes["recovery:prepared_variable"]
+    assert prepared.status == "partial"
+    assert prepared.layout == "uniform|amr"
+    assert prepared.backend == "production"
+    assert prepared.mpi is True
+    assert prepared.gpu is False
+    assert "one block-prepared closed-form method" in prepared.limitation
+    assert "device-copyable RecoveryOutcome/RecoveryReport" in prepared.limitation
+    assert "selected and last-attempted method kinds" in prepared.limitation
+    assert "consume publication permission" in prepared.limitation
+    assert "no implicit repair, fallback, or mutable cache" in prepared.limitation
+
+    cutover = routes["recovery:complete_consumer_cutover"]
+    assert cutover.status == "unavailable"
+    assert cutover.layout == "uniform|amr"
+    assert cutover.backend == "none"
+    assert "initial and analytic materialization" in cutover.limitation
+    assert "AMR transfer/regrid" in cutover.limitation
+    assert "persistent warm starts" in cutover.limitation
+    assert "System materialization and spatial face reconstruction" in cutover.available_route
+    assert "missing fallible provider and cache/restart contracts" in cutover.alternative
+    assert cutover.error_message
 
 
 def test_defaults_source_only_is_not_used_for_a_loaded_broken_extension(monkeypatch):

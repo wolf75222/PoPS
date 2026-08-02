@@ -15,7 +15,7 @@ The sub-packages form a directed acyclic dependency stack:
     mesh      -> analytic, domain, frames, identity, model, params
     amr       -> _ir, identity, mesh, model, time
     layouts   -> amr, mesh
-    boundary  -> _ir, domain, identity, model, representations
+    boundary  -> _ir, analytic, domain, identity, model, representations
     numerics  -> identity, model, params
     linalg    -> (nothing)                       (Spec 5: abstract algebra descriptors)
     solvers   -> identity                        (typed solver descriptor sink)
@@ -63,7 +63,7 @@ ALLOWED = {
     "mesh": {"analytic", "domain", "frames", "identity", "model", "params"},
     "amr": {"_ir", "identity", "mesh", "model", "time"},
     "layouts": {"amr", "mesh"},
-    "boundary": {"_ir", "domain", "identity", "model", "representations"},
+    "boundary": {"_ir", "analytic", "domain", "identity", "model", "representations"},
     "numerics": {"identity", "model", "params"},
     "solvers": {"identity"},
     "fields": {"_ir", "identity", "model", "time"},

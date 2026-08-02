@@ -556,6 +556,8 @@ set(POPS_CPP_STANDARD_TESTS
   test_roe_flux
   test_riemann_capabilities
   test_newton_robustness
+  test_variable_recovery_chain
+  test_prepared_numerics_gate
   test_elliptic_interface
   test_field_nullspace
   test_field_context
@@ -692,6 +694,9 @@ pops_add_gtest_suite(
 pops_test_source(_src test_program_reflux_ledger)
 pops_add_gtest_suite(NAME test_program_reflux_ledger SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_temporal_partition_restart)
+pops_add_gtest_suite(NAME test_temporal_partition_restart SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_transfer_properties)
 pops_add_gtest_suite(NAME test_amr_transfer_properties SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -781,6 +786,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_amr_prepared_boundary_cf 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_analytic_level_set 2)
@@ -823,6 +829,7 @@ if(POPS_HAS_MPI)
     test_mpi_composite_fac
     test_amr_regrid_mpi_parity
     test_mpi_amr_dynamic_active_depth
+    test_mpi_amr_prepared_boundary_cf
     test_mpi_system_solve_fields
     test_mpi_system_fft
     test_mpi_system_analytic_level_set

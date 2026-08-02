@@ -193,7 +193,7 @@ def _block(m):
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
+    m.primitive_vars(rho=rho, u=u, v=v)
     m.conservative_from([rho, rho * u, rho * v])
     cs = sqrt(cs2)
     m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])

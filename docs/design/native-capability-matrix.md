@@ -126,7 +126,58 @@ Supported native routes include:
   interpolation are cell-centered on the supplied route. Derived fields use `elliptic_solve` and
   caches use `patch_topology`; unsupported provider contracts fail before artifact creation.
 - Finite-volume spatial discretisation on the 2D core.
+- One prepared, model-aware 2D transport-boundary plan shared by Uniform and AMR native/compiled
+  routes. The capability matrix marks this route `partial` and names its exact built-ins:
+  periodicity, extrapolation, constant or `RuntimeParam` fixed state, conservative device-side
+  analytic fixed state over typed `(x,y,t,params)`, fixed-state primitive inflow converted once
+  through the exact compiled block-model `to_conservative` provider, and typed-role slip wall.
+  Analytic programs are immutable postfix tables evaluated in native device kernels at the exact
+  `BoundaryEvaluationPoint`; no Python callback or hot-loop allocation is retained. The analytic
+  finite-value contract is strictly non-mutating: one device preflight and one communicator
+  reduction complete before any same-level, periodic, MPI or physical halo write. The commit kernel
+  then evaluates the program again; this deliberate two-pass route avoids a per-cell scratch field
+  but retains one blocking collective per analytic boundary fill.
+  The analytic route remains `partial`: primitive per-point conversion and discrete state/field/input reads are
+  rejected, as is an analytic ghost depth larger than the normal domain extent. Analytic faces with
+  axis-permuted periodic coordinates also fail closed until a prepared coordinate map exists. The
+  conversion route is explicitly `partial`: conservative-to-primitive recovery and arbitrary
+  representation components remain unavailable, and conversion does not invent a boundary
+  admissibility projection. A separate `unavailable` row exposes the missing characteristic
+  no-inflow kernel. Post-Riemann transformation is instead an explicit `partial` route: a typed
+  `BoundaryFlux` component receives the already evaluated outward-normal flux and executes between
+  the Riemann solve and divergence/reflux through the same prepared Uniform/AMR plan. The runtime
+  converts lower and upper faces to outward orientation before the call and converts the result
+  back to canonical positive-axis face storage afterwards. This route is currently 2D Cartesian
+  host-batch execution; it has no device-native or embedded/cut-cell metric ABI, and the ordinary
+  Uniform route materializes face fields when selected.
+  These requests fail during resolution or lowering; none silently degrades to component-wise
+  ghost filling. A native rank-1/2/4 regrid fixture removes and recreates the fine hierarchy, then
+  proves that uncovered internal fine ghosts retain the conservative coarse-fine transfer and are
+  never treated as physical faces by the rematerialized prepared boundary session. The explicit
+  public route is
+  `Inflow(state=U, value=primitive_values, representation=Primitive(),
+  converter=pops.boundary.model_primitive_to_conservative(U))`; the converter is derived from the
+  authenticated block state and cannot name an unrelated callback or kernel.
+  `primitive_values` follows the model's declared primitive-variable order.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
+  `riemann:typed_failure_outcome` is deliberately `partial`: every built-in returns the common
+  device-copyable `FluxEvaluation` with typed status, stability bound, and reason code, and a
+  reduced failure rejects the owning transaction instead of publishing a candidate or silently
+  selecting another solver. `riemann:prepared_recovery_policy` is separately `unavailable`:
+  there is no prepared ordered solver chain, requested-versus-used solver outcome, block counter,
+  or restart metadata yet. Callers can therefore request the single-solver typed-rejection route
+  explicitly, but cannot claim a configured fallback policy.
+- Prepared variable recovery is explicitly `partial`. One block-prepared closed-form method returns
+  a device-copyable `RecoveryOutcome`/`RecoveryReport`. Type erasure retains both the selected and
+  last-attempted method kinds, so a successful fallback or a refusal cannot be reported as an opaque
+  chain index. System conservative-to-primitive
+  materialization and Cartesian, polar, masked, and embedded-boundary face reconstruction consume
+  publication permission before copying a candidate or evaluating a flux. This route adds no
+  implicit repair, fallback, or mutable cache. The separate
+  `recovery:complete_consumer_cutover` capability remains `unavailable`: initial/analytic and
+  model/source conversion, AMR transfer/regrid, primitive boundary traces, fallible
+  primitive-to-conservative conversion, persistent warm starts, cache/restart, backend parity, and
+  performance evidence do not yet share that authority.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.
@@ -180,10 +231,12 @@ Supported native routes include:
   artifact creation until their adapter contract owns the same persistent-state route. MPI capture
   validates the rank-independent accepted-state image on every producer before sealing or
   publication; disagreement fails collectively and cannot leave a partial checkpoint.
+- The prepared limiter registry exposes native `Minmod`, `VanLeer`, `MC`, and `Superbee` MUSCL
+  policies. Each is a stateless `POPS_HD` compile-time provider with formal order 2 and exactly two
+  ghost layers; Uniform, AMR, MPI and supported device targets consume the same route identity.
 
 Explicit unsupported rows include:
 
-- `limiter:mc` and `limiter:superbee`: catalogued descriptors with no native C++ symbol.
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v5 or AMR

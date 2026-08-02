@@ -47,6 +47,7 @@ NUMERICAL_DEFAULTS = ROOT / "include/pops/runtime/numerical_defaults.hpp"
 IMPLICIT_STEPPER = ROOT / "include/pops/numerics/time/integrators/implicit_stepper.hpp"
 SYSTEM_IMPL = ROOT / "src/runtime/system/system_impl.hpp"
 SYSTEM_INSTALL = ROOT / "src/runtime/system/system_install.cpp"
+PYTHON_SYSTEM_INSTALL = ROOT / "python/pops/runtime/_system_install.py"
 BINDINGS_DETAIL = ROOT / "python/bindings/core/bindings_detail.hpp"
 AMR_BINDING = ROOT / "python/bindings/core/init/init_amr.cpp"
 LEGACY_AMR_ADVANCE_HEADER = ROOT / "include/pops/numerics/time/amr/advance/amr_advance.hpp"
@@ -350,6 +351,24 @@ def test_amr_spatial_runtime_does_not_carry_an_unexecuted_implicit_solve():
         assert "NewtonReport" not in source
         assert "resolve_implicit_components_amr" not in source
         assert "resolve_implicit_components_compiled" not in source
+
+
+def test_uniform_system_rejects_unpublished_newton_diagnostics_before_allocation():
+    native = _function_body(
+        SYSTEM_INSTALL.read_text(encoding="utf-8"),
+        "void System::add_block(",
+    )
+    python = PYTHON_SYSTEM_INSTALL.read_text(encoding="utf-8")
+    python_add_block = _python_function_source(python, "add_block")
+    python_add_equation = _python_function_source(python, "add_equation")
+
+    assert "newton_diagnostics=true is unavailable" in native
+    assert "no typed implicit Program consumer publishes that report" in native
+    assert "diagnostics_.newton_reports[name]" not in native
+    for entrypoint in (python_add_block, python_add_equation):
+        assert entrypoint.index("_reject_unpublished_newton_diagnostics(time") < entrypoint.index(
+            "native_block_scalars("
+        )
 
 
 def test_amr_runtime_and_builders_do_not_decode_a_second_time_method():

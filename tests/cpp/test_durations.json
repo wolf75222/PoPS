@@ -6,7 +6,8 @@
       "test_amr_program_diffusion",
       "test_amr_program_positivity_floor",
       "test_flux_failure_loader_transaction",
-      "test_interface_flux_fragment_ledger"
+      "test_interface_flux_fragment_ledger",
+      "test_temporal_partition_restart"
     ],
     "estimate_policy": "new unmeasured targets use a conservative analogous-target estimate, falling back to the catalog median until the next CTest timing refresh",
     "measured_refresh": {
@@ -16,7 +17,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 187,
+    "target_count": 188,
     "unit_seconds": "aggregate CTest wall time per build target"
   },
   "test_adaptive_multirate": 0.02,
@@ -161,6 +162,7 @@
   "test_polar_transport_mms": 2.56,
   "test_positivity_floor": 0.02,
   "test_prepared_boundary_plan": 0.02,
+  "test_prepared_numerics_gate": 0.02,
   "test_primitive_recon": 0.01,
   "test_pure_field_algebra_extreme_dot": 0.02,
   "test_profiler": 0.04,
@@ -191,6 +193,7 @@
   "test_step_attempt_rejected_header_only": 0.01,
   "test_structured_solver_diagnostics": 0.01,
   "test_sync_residence": 0.01,
+  "test_temporal_partition_restart": 0.05,
   "test_system_abstraction": 0.01,
   "test_system_coupler": 0.01,
   "test_system_hardening": 0.01,
@@ -199,6 +202,7 @@
   "test_two_species_minimal": 0.13,
   "test_user_time_integrator": 0.01,
   "test_variable_epsilon": 0.37,
+  "test_variable_recovery_chain": 0.02,
   "test_variable_role": 0.01,
   "test_variable_user_role": 0.01,
   "test_wave_speed_cache_engagement": 0.03,

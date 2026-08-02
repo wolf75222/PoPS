@@ -38,8 +38,9 @@ struct BuiltBlock {
   BlockClosures clo;
   std::function<Real(const MultiFab&)> max_speed;
   std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;
-  std::function<Real(const MultiFab&)> src_freq, stab_dt;  // optional step bounds (model traits)
-  std::function<void(const double*, double*)> prim_to_cons, cons_to_prim;  // System::CellConvert
+  std::function<Real(const MultiFab&)> src_freq, stab_dt;    // optional step bounds (model traits)
+  std::function<void(const double*, double*)> prim_to_cons;  // System::CellConvert
+  std::function<RecoveryReport(const double*, double*)> cons_to_prim;  // System::CellRecovery
   int aux_width =
       0;  // aux_comps<Model>() (Cartesian); unused on the polar path (no ensure_aux_width)
 };

@@ -24,8 +24,10 @@
 
 #include <gtest/gtest.h>
 
+#include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/allocator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
@@ -288,9 +290,14 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   sim.install_block_state_route("b", b_state);
   const std::vector<std::string> faces(4, "periodic");
   const std::vector<double> values(4, 0.0);
-  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state,
-                            PreparedBoundaryReadDependencies{{b_state}, {}});
-  sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, 1, {}, b_state);
+  const std::vector<std::string> a_faces = {"case::block::a::xlo", "case::block::a::xhi",
+                                            "case::block::a::ylo", "case::block::a::yhi"};
+  const std::vector<std::string> b_faces = {"case::block::b::xlo", "case::block::b::xhi",
+                                            "case::block::b::ylo", "case::block::b::yhi"};
+  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, a_faces, {"Scalar"},
+                            {}, a_state, PreparedBoundaryReadDependencies{{b_state}, {}});
+  sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, b_faces, {"Scalar"},
+                            {}, b_state);
   const auto a_plan = sim.grid_context("a").boundary_plan;
   ASSERT_NE(a_plan, nullptr);
   const auto b_read = a_plan->prepare_state_read(b_state);
@@ -349,6 +356,150 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   EXPECT_THROW(ctx.rhs_group(11, {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}}),
                std::invalid_argument)
       << "an atomic group identity must never alias one of its member rate nodes";
+}
+
+TEST(ProgramContextContract, SystemPreparedSlipWallFillsDeepPhysicalGhosts) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::fluid::state::U";
+  sim.install_block_state_route("fluid", state_identity);
+  sim.install_boundary_plan(
+      "fluid", "case::block::fluid::boundary", 2,
+      {"slip_wall", "slip_wall", "slip_wall", "slip_wall"}, std::vector<double>(20, 0.0),
+      {"case::block::fluid::xlo", "case::block::fluid::xhi", "case::block::fluid::ylo",
+       "case::block::fluid::yhi"},
+      {"Density", "MomentumX", "MomentumX", "MomentumY", "AxialZ"}, {}, state_identity);
+  sim.install_block("fluid", 5, VariableSet{}, VariableSet{}, 1.0, BlockClosures{}, {}, {}, 1, true,
+                    1);
+
+  MultiFab& state = sim.block_state(0);
+  ASSERT_GE(state.n_grow(), 2);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      values(i, j, 0) = Real(1);
+      values(i, j, 1) = Real(2);
+      values(i, j, 2) = Real(5);
+      values(i, j, 3) = Real(3);
+      values(i, j, 4) = Real(4);
+    });
+  }
+  device_fence();
+  const auto lane = ExecutionLane::world("test.system.deep-slip-wall");
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.system-slip", 0,   0,  0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("fluid"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  if (state.local_size() > 0) {
+    const ConstArray4 values = state.fab(0).const_array();
+    EXPECT_EQ(values(-2, 2, 1), Real(-2));
+    EXPECT_EQ(values(-2, 2, 2), Real(-5));
+    EXPECT_EQ(values(-2, 2, 4), Real(-4));
+    EXPECT_EQ(values(2, -2, 3), Real(-3));
+    EXPECT_EQ(values(2, -2, 4), Real(-4));
+  }
+}
+
+TEST(ProgramContextContract, SystemPreparesPrimitiveFixedStateWithExactCompiledModelConversion) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::fluid::state::U";
+  sim.install_block_state_route("fluid", state_identity);
+  std::vector<double> face_values;
+  for (const double primitive : {2.0, 3.0, -1.0, 4.0})
+    face_values.insert(face_values.end(), {0.0, primitive, 0.0, 0.0});
+  sim.install_boundary_plan("fluid", "case::block::fluid::boundary", 2,
+                            {"foextrap", "dirichlet", "foextrap", "foextrap"}, face_values,
+                            {"case::block::fluid::xlo", "case::block::fluid::xhi",
+                             "case::block::fluid::ylo", "case::block::fluid::yhi"},
+                            {"Density", "MomentumX", "MomentumY", "Energy"}, {}, state_identity, {},
+                            {}, {"conservative", "primitive", "conservative", "conservative"},
+                            {"", "case::block::fluid::model-p2c", "", ""});
+  ASSERT_TRUE(sim.grid_context("fluid").boundary_plan->requires_fixed_state_conversion());
+
+  add_compiled_model(sim, "fluid", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod",
+                     "rusanov", "conservative", "explicit", kGamma);
+  ASSERT_FALSE(sim.grid_context("fluid").boundary_plan->requires_fixed_state_conversion());
+
+  MultiFab& state = sim.block_state(0);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      for (int component = 0; component < kNcomp; ++component)
+        values(i, j, component) = Real(1);
+    });
+  }
+  device_fence();
+  const auto lane = ExecutionLane::world("test.system.primitive-fixed-state");
+  const runtime::multiblock::BoundaryEvaluationPoint point{
+      "clock.system-primitive-inflow", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("fluid"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  if (state.local_size() > 0) {
+    const ConstArray4 values = state.fab(0).const_array();
+    EXPECT_EQ(values(4, 2, 0), Real(3));
+    EXPECT_EQ(values(4, 2, 1), Real(11));
+    EXPECT_EQ(values(4, 2, 2), Real(-5));
+    EXPECT_NEAR(values(4, 2, 3), Real(39), Real(1e-12));
+  }
+}
+
+TEST(ProgramContextContract, SystemExecutesScalarAxisPermutedPeriodicPlan) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 6;
+  cfg.L = 1.0;
+  cfg.periodicity = {false, false};
+  System sim(cfg);
+  const std::string state_identity = "case::block::scalar::state::U";
+  sim.install_block_state_route("scalar", state_identity);
+  const PeriodicIdentification2D xlo_to_yhi{0, 3, std::array<int, 2>{{1, 0}},
+                                            std::array<int, 2>{{1, 1}}};
+  sim.install_boundary_plan(
+      "scalar", "case::block::scalar::boundary", 1,
+      {"periodic", "foextrap", "foextrap", "periodic"}, std::vector<double>(4, 0.0),
+      {"case::block::scalar::xlo", "case::block::scalar::xhi", "case::block::scalar::ylo",
+       "case::block::scalar::yhi"},
+      {"Scalar"}, {}, state_identity, PreparedBoundaryReadDependencies{}, {xlo_to_yhi});
+  sim.install_block("scalar", 1, VariableSet{}, VariableSet{}, 1.0, BlockClosures{}, {}, {}, 1,
+                    true, 1);
+  sim.mark_bound();
+
+  MultiFab& state = sim.block_state(0);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(i + 100 * j); });
+  }
+  const auto lane = ExecutionLane::world("test.system.axis-permuted-periodic");
+  const runtime::multiblock::BoundaryEvaluationPoint point{
+      "clock.system-axis-permuted", 0, 0, 0, 0, amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession boundary(sim.grid_context("scalar"), lane, state, point);
+  boundary.fill(state, point);
+  device_fence();
+
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& field = state.fab(local);
+    const Box2D grown = field.grown_box();
+    for (int j = 0; j < cfg.n; ++j)
+      if (grown.contains(-1, j))
+        EXPECT_EQ(field(-1, j, 0), Real(j + 100 * (cfg.n - 1)));
+    for (int i = 0; i < cfg.n; ++i)
+      if (grown.contains(i, cfg.n))
+        EXPECT_EQ(field(i, cfg.n, 0), Real(100 * i));
+  }
 }
 
 TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {

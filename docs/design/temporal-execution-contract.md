@@ -61,6 +61,34 @@ program schedule with the installed program before native state mutation and req
 checkpointed step strategy for the next attempt. Schema v1 and other historical payloads require an
 offline migration; runtime restart contains no compatibility branch.
 
+## Cell-local temporal-partition restart foundation
+
+The AMR Program accepted image now has an explicit temporal-partition section. Its cell-local form
+stores a prepared-provider identity, hierarchy topology epoch, integer synchronization tick and tick
+denominator, plus canonically ordered `(level, cell, rung, accepted_tick)` records. Floating-point
+cell clocks and rank-local addresses are not checkpoint authority. Every persisted cell must be at
+the same rung-aligned synchronization tick; a provisional attempt cannot be serialized.
+
+`BatchedCellTemporalPartition` supplies the execution-provider-independent transaction semantics:
+one attempt target, ordered same-rung batches, synchronization barriers, commit, rollback, strict
+restore and an accepted-state manifest. The AMR restart path decodes and validates this state before
+replacing accepted bytes. A malformed provider identity or topology/level mismatch leaves the
+previous image untouched.
+The public Program report consumes the same native image and exposes provider identity, accepted
+tick, denominator, cell count and per-rung counts.
+
+For this bounded slice, a cell-local checkpoint restarts only with the recorded MPI cardinality and
+`RestoreRecordedHierarchy`. Rank-change and `RegridOnRestart` are rejected during Python preflight,
+before the native restart transaction, because rematerializing canonical cell ids onto a new owner
+or topology is not implemented yet.
+
+This foundation deliberately does not pretend that the existing global AMR driver is cell-local
+stepping. If a cell-local image reaches that driver, execution fails before the Program body instead
+of silently falling back to a global `dt`. ADC-707/ADC-708 still own the prepared patch/task graph;
+ADC-756 still requires Kokkos rung batches, actual local-stage boundary evaluation, time-integrated
+same-level/MPI/coarse-fine flux ledgers, regrid/rank-change rematerialization, device determinism and
+performance evidence. None of those execution or conservation claims is made by this restart slice.
+
 Offline envelope inspection authenticates only the integrity of a canonical checkpoint; it is not
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
 identities, temporal state, consumer cursors, and field-provider state. The explicit

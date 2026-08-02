@@ -32,6 +32,15 @@ struct RecordOneFailure {
   }
 };
 
+struct RecordOneRecovery {
+  pops::FluxEvaluationRecorder recorder;
+  pops::RecoveryReport report;
+
+  POPS_HD void operator()(int, int, std::uint64_t& failure) const {
+    recorder.record_recovery(report, failure);
+  }
+};
+
 int run_mpi_flux_failure_collective(int argc, char** argv) {
   pops::comm_init(&argc, &argv);
   const int rank = pops::my_rank();
@@ -47,6 +56,21 @@ int run_mpi_flux_failure_collective(int argc, char** argv) {
         pops::Box2D{{0, 0}, {0, 0}}, RecordOneFailure{tracker.recorder(), status, reason}));
     const pops::FluxFailureReport report = tracker.collective_report();
     if (report.status != pops::EvaluationStatus::kReject || report.reason_code != 0x20u)
+      ++failures;
+  }
+
+  {
+    pops::FluxEvaluationTracker tracker{pops::process_world_flux_collective};
+    pops::RecoveryReport recovery;
+    recovery.status =
+        rank == 0 ? pops::RecoveryStatus::kRecovered : pops::RecoveryStatus::kRejected;
+    recovery.cause =
+        rank == 0 ? pops::RecoveryCause::kNone : pops::RecoveryCause::kExplicitRejection;
+    recovery.reason_code = rank == 0 ? 0u : 0x755u;
+    tracker.merge(pops::reduce_max_uint64_cell(pops::Box2D{{0, 0}, {0, 0}},
+                                               RecordOneRecovery{tracker.recorder(), recovery}));
+    const pops::FluxFailureReport report = tracker.collective_report();
+    if (report.status != pops::EvaluationStatus::kReject || report.reason_code != 0x755u)
       ++failures;
   }
 

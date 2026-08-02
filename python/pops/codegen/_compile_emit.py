@@ -93,6 +93,11 @@ def model_hash(model: Any, params: Any = None) -> str:
     parts.append("prim_state=%s" % ",".join(m.prim_state))
     parts.append("proles=%s" % ",".join(_roles_for(m.prim_state, m.prim_roles)))
     parts.append("prim=%s" % ";".join("%s=%r" % (k, m.prim_defs[k]) for k in m.prim_defs))
+    recovery_constraints = getattr(m, "_recovery_admissibility", None)
+    if recovery_constraints:
+        parts.append("recovery_admissibility=%s" % ";".join(
+            "%s=%r" % (name, recovery_constraints[name])
+            for name in m.prim_state if name in recovery_constraints))
     for d in ("x", "y"):
         parts.append("flux_%s=%s" % (d, ";".join(repr(e) for e in m._flux.get(d, []))))
         parts.append("eig_%s=%s" % (d, ";".join(repr(e) for e in m._eig.get(d, []))))

@@ -10,7 +10,7 @@ from .component_binding import BoundaryComponentBinding
 from .ghost_plan_types import (
     BoundaryLinearizationContribution, BoundaryResidualContribution, CornerPolicy,
     GhostCoverageManifest, GhostRegion, InterfaceTraceOperation, MultiBlockInterface)
-from .providers import BoundaryProvider
+from .providers import BoundaryProvider, BoundaryProviderKind
 from .topology import BoundaryTopology, PeriodicIdentification
 
 if TYPE_CHECKING:
@@ -133,10 +133,31 @@ def CoarseFineInterpolation(*, handle: Handle, protocol: Handle, interpolation: 
 
 
 def PhysicalGhost(*, handle: Handle, protocol: Handle, provider: BoundaryProvider,
+                  flux_provider: BoundaryProvider | None = None,
                   dependencies: tuple[Handle, ...] = ()) -> GhostProducer:
     if not isinstance(provider, BoundaryProvider):
         raise TypeError("PhysicalGhost.provider must be a BoundaryProvider")
-    return GhostProducer(handle, protocol, dependencies, boundary_providers=(provider,))
+    providers = (provider,)
+    if flux_provider is not None:
+        if not isinstance(flux_provider, BoundaryProvider) or \
+                flux_provider.kind is not BoundaryProviderKind.POST_RIEMANN_FLUX:
+            raise TypeError(
+                "PhysicalGhost.flux_provider must be a PostRiemannFlux BoundaryProvider")
+        if any(output.port_type == "numerical_flux" for output in provider.outputs):
+            raise ValueError(
+                "PhysicalGhost primary provider must produce the exterior/ghost trace before "
+                "a post-Riemann flux transformation")
+        primary_boundaries = {output.boundary for output in provider.outputs}
+        flux_boundaries = {output.boundary for output in flux_provider.outputs}
+        primary_subjects = {output.subject for output in provider.outputs}
+        flux_subjects = {output.subject for output in flux_provider.outputs}
+        if (len(primary_boundaries) != 1 or flux_boundaries != primary_boundaries or
+                len(primary_subjects) != 1 or flux_subjects != primary_subjects):
+            raise ValueError(
+                "PhysicalGhost trace and post-Riemann providers must own the same exact face and "
+                "state")
+        providers += (flux_provider,)
+    return GhostProducer(handle, protocol, dependencies, boundary_providers=providers)
 
 
 def InterfaceGhost(*, handle: Handle, protocol: Handle, interface: MultiBlockInterface,
@@ -580,6 +601,32 @@ class GhostProducerPlan:
                 raise NotImplementedError(
                     "explicit corner resolver Handle(s) require qualified GhostBoundary "
                     "components: %s" % sorted(row.qualified_id for row in missing)
+                )
+        flux_providers = [
+            (production.region, provider) for production in self.productions
+            for provider in production.producer.boundary_providers
+            if provider.kind is BoundaryProviderKind.POST_RIEMANN_FLUX
+        ]
+        if flux_providers:
+            invalid = [
+                provider for region, provider in flux_providers
+                if len(provider.outputs) != 1 or provider.outputs[0].subject != region.subject
+            ]
+            if invalid:
+                raise ValueError(
+                    "post-Riemann NumericalFlux provider must transform its production region's "
+                    "exact state: %s"
+                    % sorted(row.qualified_id for row in invalid)
+                )
+            missing = [
+                provider.handle for _, provider in flux_providers
+                if provider.handle not in self._binding_map()
+            ]
+            if missing:
+                raise NotImplementedError(
+                    "post-Riemann NumericalFlux provider Handle(s) require qualified "
+                    "BoundaryFlux components: %s"
+                    % sorted(row.qualified_id for row in missing)
                 )
         closures = [
             operator for production in self.productions

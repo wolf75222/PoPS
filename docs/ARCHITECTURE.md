@@ -813,6 +813,11 @@ model-qualified `FaceTrace` values plus `FaceContext` and returns a typed densit
 `SpatialOperator` alone applies face and cell measures. Provider packs are selected from exact
 `(owner, space kind, space name, component)` identities. Missing, unavailable or contract-mismatched
 providers fail during selection; homonymous components from different owners never alias.
+Generated physical models carry those qualified rows as `flux_provider_requirements`. The native
+binder validates their count, qualification, availability, unique in-range storage slots and then
+loads only those declared slots into the model-qualified device pack. Hand-written C++ test models
+that do not declare this generated ABI retain the full-width fixture path; generated PoPS models
+never use that route.
 
 ## Limitations
 

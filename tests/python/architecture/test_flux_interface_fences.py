@@ -48,6 +48,14 @@ def test_bound_native_flux_pack_is_exact_and_does_not_store_global_aux():
     assert "FluxDensity<State> checked_density() const" in header
 
 
+def test_generated_flux_pack_metadata_controls_native_storage_reads():
+    header = _behavior(ROOT / "include/pops/numerics/fv/flux_interfaces.hpp")
+    assert "qualified_flux_provider_requirements_valid" in header
+    assert "qualified_flux_provider_storage_slot<Model, Indices>" in header
+    assert "std::make_index_sequence<count>" in header
+    assert "generated physical flux provider requirements are invalid" in header
+
+
 def test_provider_selection_is_qualified_and_never_returns_a_neutral_value():
     source = (ROOT / "python/pops/model/provider_pack.py").read_text(encoding="utf-8")
     assert "def select(" in source
@@ -55,3 +63,43 @@ def test_provider_selection_is_qualified_and_never_returns_a_neutral_value():
     assert "owner_qid" in source
     assert "return 0" not in source
     assert "return 0.0" not in source
+
+
+def test_hllc_rejects_nonfinite_provider_stages_before_publication():
+    policy = _behavior(ROOT / "include/pops/numerics/fv/numerical_flux.hpp")
+    interface = _behavior(ROOT / "include/pops/numerics/fv/flux_interfaces.hpp")
+    hllc = policy.split("struct HLLCFlux", 1)[1].split(
+        "concept RoePhysicalFlux", 1
+    )[0]
+    causes = (
+        "kHllcNonFinitePhysicalFlux",
+        "kHllcNonFinitePressure",
+        "kHllcNonFiniteContact",
+        "kHllcNonFiniteStarState",
+        "kHllcNonFiniteFlux",
+    )
+
+    for cause in causes:
+        assert cause in interface
+        assert cause in hllc
+    assert hllc.count("detail::finite_state") >= 6
+    assert hllc.count("Kokkos::isfinite") >= 2
+
+
+def test_capability_driven_riemann_has_no_euler_specific_production_authority():
+    production_roots = (ROOT / "include/pops", ROOT / "src", ROOT / "python/pops")
+    sources = (
+        path
+        for root in production_roots
+        for path in root.rglob("*")
+        if path.suffix in {".hpp", ".cpp", ".py"}
+    )
+    production = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+
+    for retired_authority in (
+        "EulerHLLCFlux2D",
+        "EulerRoeFlux2D",
+        "euler_hllc",
+        "euler_roe",
+    ):
+        assert retired_authority not in production

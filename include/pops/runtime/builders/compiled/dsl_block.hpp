@@ -97,7 +97,8 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   // Scheme GHOSTS: WENO5 reads a 5-point stencil (3 ghosts) > the 2 allocated by install_block.
   // We reallocate the block state with block_n_ghost(limiter) -- SAME mechanism as add_block (PR #88) --
   // so that fill_boundary + assemble_rhs do not read out of bounds on the System's real MultiFab.
-  // none/minmod/vanleer (<= 2 ghosts): no-op, allocation and result bit-identical to before.
+  // Any catalogue limiter requiring <= 2 ghosts (none/MUSCL family): no-op; allocation and result
+  // stay bit-identical to the prepared route.
   sys.set_block_ghosts(name, block_n_ghost(limiter));
 }
 

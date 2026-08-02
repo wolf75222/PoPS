@@ -269,8 +269,9 @@ class AmrSystem {
   /// @param name    block name: INDEXES the block (set_density(name), mass(name), density(name)). In
   ///                multi-block the name must be unique; mono-block an empty name targets the single block.
   /// @param model   composition of bricks (transport/source/elliptic + parameters)
-  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 = WENO5-Z, 3 ghosts;
-  ///                native low-level stencil route). The resolved Case route derives its
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" | "mc" | "superbee"
+  ///                (weno5 = WENO5-Z, 3 ghosts; native low-level stencil route). The resolved
+  ///                Case route derives its
   ///                coarse/fine order and halo requirements from this spatial descriptor and
   ///                selects the minimum sufficient conservative provider.
   /// @param riemann "rusanov" | "hll" (generic signed-wave, requires model.wave_speeds) | "hllc"
@@ -350,17 +351,27 @@ class AmrSystem {
   POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
                                          int required_depth,
                                          const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values, int ncomp,
+                                         const std::vector<double>& face_values,
+                                         const std::vector<std::string>& face_identities,
+                                         const std::vector<std::string>& component_roles,
                                          const std::vector<int>& omitted_interface_faces = {},
                                          const std::string& state_identity = {},
                                          PreparedBoundaryReadDependencies read_dependencies = {});
-  /// Exact-topology overload; preserves the translation-only exported ABI above.
+  /// Exact-topology overload. Periodic endpoint maps remain topology metadata beside the sole
+  /// model-aware physical-law plan; they never restore component-wise BCRec transport semantics.
   POPS_EXPORT void install_boundary_plan(
       const std::string& name, const std::string& identity, int required_depth,
-      const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
+      const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+      const std::vector<std::string>& face_identities,
+      const std::vector<std::string>& component_roles,
       const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
       PreparedBoundaryReadDependencies read_dependencies,
-      std::vector<PeriodicIdentification2D> periodic_identifications);
+      std::vector<PeriodicIdentification2D> periodic_identifications,
+      const std::vector<std::string>& face_representations = {},
+      const std::vector<std::string>& face_converter_identities = {},
+      const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
+      const std::vector<std::vector<double>>& face_analytic_literals = {},
+      const std::vector<std::string>& face_analytic_clocks = {});
   /// Register the exact state Handle independently from physical-boundary ownership.
   POPS_EXPORT void install_block_state_route(const std::string& name,
                                              const std::string& state_identity);
@@ -371,6 +382,9 @@ class AmrSystem {
   /// Roll back a failed pre-build runtime-authority transaction.  Internal bind seam only.
   POPS_EXPORT void discard_boundary_plans();
   POPS_EXPORT void install_ghost_boundary_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_boundary_flux_component(
       const std::string& name, PreparedBoundaryComponentSpec spec,
       std::shared_ptr<component::LoadedComponent> component);
   POPS_EXPORT void install_field_boundary_residual_component(
@@ -852,6 +866,9 @@ class AmrSystem {
   /// Human/audit-readable qualification rows decoded from the same accepted image persisted as bytes.
   POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_clock_manifest() const;
+  /// Accepted temporal-partition provider, synchronization tick and per-rung cell counts. The rows
+  /// are decoded from the same opaque image used by strict restart, never a capability ledger.
+  POPS_EXPORT std::vector<std::vector<std::string>> program_temporal_partition_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_flux_ledger_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_interface_flux_ledger_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_sync_manifest() const;

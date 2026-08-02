@@ -2,12 +2,30 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from pops._platform_contracts import ExecutionContext, ExecutionResource, proven_serial_manifest
 from pops.runtime._runtime_authorities import install_runtime_authorities
+
+
+ROOT = Path(__file__).resolve().parents[4]
+
+
+def test_native_boundary_install_has_no_component_count_compatibility_abi():
+    old_scalar_adapter = "const std::vector<double>& face_values, int ncomp"
+    typed_roles = "const std::vector<std::string>& component_roles"
+    for relative in (
+        "include/pops/runtime/system.hpp",
+        "include/pops/runtime/amr_system.hpp",
+        "src/runtime/system/system_install.cpp",
+        "src/runtime/amr/amr_system.cpp",
+    ):
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        assert old_scalar_adapter not in source
+        assert typed_roles in source
 
 
 def _execution_context() -> ExecutionContext:
@@ -22,10 +40,19 @@ def _execution_context() -> ExecutionContext:
 
 
 @pytest.mark.parametrize("prepare_fails", (False, True))
-def test_boundary_component_install_is_transactional_and_preserves_prepare_json(prepare_fails):
+@pytest.mark.parametrize(
+    ("operation", "native_interface", "expected_installer"),
+    (
+        ("apply_region_batch", {"abi_id": 17, "version": 1,
+                                "cpp_table": "GhostBoundary"}, "ghost"),
+        ("transform_faces", {"abi_id": 6, "version": 1,
+                             "cpp_table": "BoundaryFlux"}, "flux"),
+    ),
+)
+def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
+        prepare_fails, operation, native_interface, expected_installer):
     component_id = "pops://external.test/boundary@1.0.0"
     manifest_identity = "component-manifest:boundary-test"
-    native_interface = {"abi_id": 17, "version": 1, "cpp_table": "GhostBoundary"}
     region = {
         "kind": "face", "dimension": 2, "codimension": 1,
         "axes": [0], "sides": [-1], "identity": "left-face",
@@ -38,7 +65,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         "interface_version": 1,
         "region": region,
         "parameters": [{"qualified_id": "case::inlet", "value": 2.0}],
-        "operation": "apply_region_batch",
+        "operation": operation,
         "state_identity": "case::block::state",
         "states": [], "directions": [], "fields": [],
         "outputs": ["case::block::state"],
@@ -50,7 +77,12 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         "state": {"qualified_id": "case::block::state"},
         "required_depth": 1,
         "faces": [
-            {"ordinal": ordinal, "type": "foextrap", "values": [0.0]}
+            {
+                "ordinal": ordinal,
+                "producer": "case::block::boundary::face::%d" % ordinal,
+                "type": "foextrap",
+                "values": [0.0],
+            }
             for ordinal in range(4)
         ],
         "omitted_interface_faces": [],
@@ -69,6 +101,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
             self.prepare_overrides = None
             self.discarded = False
             self.state_routes = []
+            self.installer = None
 
         def _install_block_state_route(self, block, identity):
             self.state_routes.append((block, identity))
@@ -81,10 +114,21 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
 
         def _install_ghost_boundary_component(
                 self, block, handle, row, parameters_json, target_json, execution):
+            self._install_component(
+                "ghost", block, handle, row, parameters_json, target_json, execution)
+
+        def _install_boundary_flux_component(
+                self, block, handle, row, parameters_json, target_json, execution):
+            self._install_component(
+                "flux", block, handle, row, parameters_json, target_json, execution)
+
+        def _install_component(
+                self, installer, block, handle, row, parameters_json, target_json, execution):
             assert block == "block"
             assert handle is native_handle
             assert row == component_row
             assert execution["communicator_identity"] == "serial"
+            self.installer = installer
             self.prepare_overrides = (parameters_json, target_json)
             if prepare_fails:
                 raise RuntimeError("component prepare rejected")
@@ -109,7 +153,8 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         interface=Interface(), native_handle=native_handle,
     )
     artifact = SimpleNamespace(
-        blocks=(SimpleNamespace(name="block", model=SimpleNamespace(n_vars=1)),),
+        blocks=(SimpleNamespace(
+            name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
         layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
     )
@@ -128,9 +173,20 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         assert native.state_routes == [("block", "case::block::state")]
         assert native.discarded is False
     assert native.prepare_overrides == ("", "")
+    assert native.installer == expected_installer
 
 
-def test_signed_periodic_identification_reaches_native_install_without_callback():
+@pytest.mark.parametrize(
+    ("target_axis", "target_face", "permutation", "signs", "face_types"),
+    (
+        (0, 1, [0, 1], [1, -1],
+         ["periodic", "periodic", "dirichlet", "foextrap"]),
+        (1, 3, [1, 0], [1, 1],
+         ["periodic", "foextrap", "dirichlet", "periodic"]),
+    ),
+)
+def test_signed_periodic_identification_reaches_native_install_without_callback(
+        target_axis, target_face, permutation, signs, face_types):
     def boundary_identity(name, axis, side):
         return {
             "qualified_id": "case::%s" % name,
@@ -143,7 +199,7 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         }
 
     source = boundary_identity("xlo", 0, "lower")
-    target = boundary_identity("xhi", 0, "upper")
+    target = boundary_identity("target", target_axis, "upper")
     runtime_data = {
         "schema_version": 1,
         "authority_type": "prepared_boundary_plan",
@@ -153,8 +209,15 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
         "faces": [
             {
                 "ordinal": ordinal,
-                "type": "periodic" if ordinal < 2 else "foextrap",
+                "producer": "case::block::reflected-periodic::face::%d" % ordinal,
+                "type": face_types[ordinal],
+                "representation": "conservative",
                 "values": [0.0],
+                "analytic_programs": (
+                    [{"opcodes": ["x", "input", "add"], "literals": [0.0, 0.0, 0.0]}]
+                    if ordinal == 2 else []
+                ),
+                "analytic_clock": "clock.analytic" if ordinal == 2 else None,
             }
             for ordinal in range(4)
         ],
@@ -163,9 +226,9 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
             "source": source,
             "target": target,
             "source_face": 0,
-            "target_face": 1,
-            "permutation": [0, 1],
-            "signs": [1, -1],
+            "target_face": target_face,
+            "permutation": permutation,
+            "signs": signs,
         }],
         "component_regions": [],
         "interface_component_bindings": [],
@@ -198,7 +261,8 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     native = Native()
     engine = SimpleNamespace(_s=native)
     artifact = SimpleNamespace(
-        blocks=(SimpleNamespace(name="block", model=SimpleNamespace(n_vars=1)),),
+        blocks=(SimpleNamespace(
+            name="block", model=SimpleNamespace(n_vars=1, cons_roles=("Scalar",))),),
         plan=SimpleNamespace(blocks=(BoundaryBlock(),), field_plans={}),
         layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=False),)),
     )
@@ -212,5 +276,17 @@ def test_signed_periodic_identification_reaches_native_install_without_callback(
     install_runtime_authorities(engine, install_plan)
 
     assert native.installed is not None
-    assert native.installed[3] == ["periodic", "periodic", "foextrap", "foextrap"]
-    assert native.installed[8] == [[0, 1, 0, 1, 1, -1]]
+    assert native.installed[3] == face_types
+    assert native.installed[5] == [
+        "case::block::reflected-periodic::face::0",
+        "case::block::reflected-periodic::face::1",
+        "case::block::reflected-periodic::face::2",
+        "case::block::reflected-periodic::face::3",
+    ]
+    assert native.installed[6] == ["Scalar"]
+    assert native.installed[9] == [[0, target_face, *permutation, *signs]]
+    assert native.installed[10] == ["conservative"] * 4
+    assert native.installed[11] == [""] * 4
+    assert native.installed[12] == [[], [], ["x", "input", "add"], []]
+    assert native.installed[13] == [[], [], [0.0, 0.0, 0.0], []]
+    assert native.installed[14] == ["", "", "clock.analytic", ""]

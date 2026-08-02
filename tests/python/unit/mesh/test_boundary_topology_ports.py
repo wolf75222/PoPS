@@ -10,6 +10,7 @@ from pops.mesh.boundaries import (
     BoundaryHandle,
     BoundaryOrientation,
     BoundaryProvider,
+    BoundaryProviderKind,
     BoundaryProviderRegistry,
     BoundarySide,
     BoundaryTopology,
@@ -30,6 +31,7 @@ from pops.mesh.boundaries import (
     Outflow,
     PeriodicIdentification,
     PeriodicOrientation,
+    PostRiemannFlux,
     RepresentationFlow,
     SignDependence,
     SonicPolicy,
@@ -104,6 +106,10 @@ def _provider_handle(name):
     return Handle(name, kind="boundary_provider", owner=OwnerPath.case("main"))
 
 
+def _flux_provider_handle(name):
+    return Handle(name, kind="boundary_flux_provider", owner=OwnerPath.case("main"))
+
+
 def _case_instance(case_name):
     return (OwnerPath.case(case_name)
             .child(OwnerKind.BLOCK, "transport")
@@ -141,6 +147,21 @@ def test_topology_serializes_explicit_periodic_identification_and_physical_parti
     assert topology.is_periodic(topology.boundaries[0])
     assert not topology.is_periodic(topology.physical[0])
     assert json.loads(json.dumps(topology.inspect())) == topology.inspect()
+
+
+def test_topology_serializes_axis_permuted_xlo_to_yhi_identification():
+    x_min, x_max, y_min, y_max = _boundaries()
+    periodic = PeriodicIdentification(
+        x_min, y_max, PeriodicOrientation((1, 0), (1, 1)))
+    topology = BoundaryTopology(
+        OwnerPath.case("main"), (x_min, x_max, y_min, y_max),
+        (periodic,), (x_max, y_min))
+
+    row = topology.canonical_identity()["periodic"][0]
+    assert row["source"]["orientation"]["axis"] == 0
+    assert row["target"]["orientation"]["axis"] == 1
+    assert row["orientation"] == {
+        "schema_version": 1, "permutation": [1, 0], "signs": [1, 1]}
 
 
 def test_topology_fails_loud_on_missing_double_extra_and_periodic_physical():
@@ -274,6 +295,17 @@ def test_named_provider_factories_are_data_only_and_port_typed():
               dependencies=dependencies),
     )
     assert all(type(row) is BoundaryProvider for row in providers)
+    assert [row.kind for row in providers] == [
+        BoundaryProviderKind.INFLOW,
+        BoundaryProviderKind.OUTFLOW,
+        BoundaryProviderKind.GHOST_FORMULA,
+        BoundaryProviderKind.DIRICHLET,
+        BoundaryProviderKind.NEUMANN,
+        BoundaryProviderKind.MIXED,
+    ]
+    assert [row.canonical_identity()["provider_kind"] for row in providers] == [
+        row.kind.value for row in providers
+    ]
     assert all(not hasattr(row, "callback") for row in providers)
     with pytest.raises(TypeError, match="typed ConstraintResidual"):
         Mixed(handle=_provider_handle("bad_mixed"), outputs=(ghost,),
@@ -289,12 +321,61 @@ def test_noflux_satisfies_numerical_flux_only():
     provider = NoFlux(
         handle=_provider_handle("no_flux"), output=flux, dependencies=_dependencies())
     assert provider.outputs == (flux,)
+    assert provider.kind is BoundaryProviderKind.NO_FLUX
+    assert provider.canonical_identity()["provider_kind"] == "no_flux"
     assert BoundaryProviderRegistry(provider).resolve(_topology(), (flux,)).bindings
     with pytest.raises(TypeError, match="NumericalFlux only"):
         NoFlux(handle=_provider_handle("bad_no_flux"), output=ghost,
                dependencies=_dependencies())
     with pytest.raises(ValueError, match="missing boundary provider"):
         BoundaryProviderRegistry().resolve(_topology(), (ghost,))
+
+    with pytest.raises(TypeError, match="BoundaryProviderKind"):
+        BoundaryProvider(
+            _provider_handle("untyped_flux"), (flux,), _dependencies(), "no_flux")
+    with pytest.raises(TypeError, match="typed NumericalFlux"):
+        BoundaryProvider(
+            _provider_handle("forged_flux"), (ghost,), _dependencies(),
+            BoundaryProviderKind.NO_FLUX)
+
+
+def test_post_riemann_flux_has_one_exact_typed_component_route():
+    boundary = _topology().physical[0]
+    state, _, _ = _model_values()
+    _, conservative = _representations()
+    flux = NumericalFlux(boundary, state, conservative)
+    provider = PostRiemannFlux(
+        handle=_flux_provider_handle("wall_flux"),
+        output=flux,
+        dependencies=_dependencies(),
+    )
+
+    assert provider.outputs == (flux,)
+    assert provider.kind is BoundaryProviderKind.POST_RIEMANN_FLUX
+    assert provider.handle.kind == "boundary_flux_provider"
+    assert provider.canonical_identity()["provider_kind"] == "post_riemann_flux"
+    assert BoundaryProviderRegistry(provider).resolve(_topology(), (flux,)).bindings
+
+
+def test_post_riemann_flux_refuses_wrong_component_route_or_output():
+    boundary = _topology().physical[0]
+    state, _, _ = _model_values()
+    _, conservative = _representations()
+    flux = NumericalFlux(boundary, state, conservative)
+    ghost = GhostState(boundary, state, conservative)
+
+    with pytest.raises(TypeError, match="boundary_flux_provider"):
+        PostRiemannFlux(
+            handle=_provider_handle("wrong_component_route"),
+            output=flux,
+            dependencies=_dependencies(),
+        )
+    with pytest.raises(TypeError, match="NumericalFlux only"):
+        PostRiemannFlux(
+            handle=_flux_provider_handle("wrong_output"),
+            output=ghost,
+            dependencies=_dependencies(),
+        )
 
 
 def test_resolution_diagnostics_cover_missing_double_extra_ambiguous_and_periodic_physical():
@@ -399,6 +480,7 @@ def test_every_semantic_field_is_immutable():
         (dependencies, "time", ()), (dependencies, "runtime_params", ()),
         (dependencies, "representation", _dependencies().representation),
         (dependencies, "characteristic", _none_closure()),
+        (provider, "kind", BoundaryProviderKind.INFLOW),
         (provider, "handle", _provider_handle("other")), (provider, "outputs", ()),
         (provider, "dependencies", _dependencies()), (registry, "providers", ()),
         (plan.bindings[0], "need", port), (plan.bindings[0], "provider", provider),

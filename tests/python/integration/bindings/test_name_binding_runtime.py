@@ -59,9 +59,7 @@ def passive_model(name):
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     a = 0.7
-    u = m.primitive("u", a + 0.0 * rho)
-    v = m.primitive("v", a + 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v)
+    m.primitive_vars(rho)
     m.conservative_from([rho])
     m.flux(x=[a * rho], y=[a * rho])
     m.eigenvalues(x=[a + 0.0 * rho], y=[a + 0.0 * rho])
