@@ -378,11 +378,11 @@ def test_native_named_field_solve_uses_exact_block_slots_not_a_representative():
         REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
     )
     assert "representative" not in context
-    assert "workspace.program_to_system[p]" in context
-    assert "solve_fields_from_blocks_at_in_place_(point, field, workspace.system_stages)" in context
+    assert "workspace.program_to_runtime[program_slot]" in services
+    assert "solve_fields_from_blocks_at_in_place_(point, field, runtime_stages)" in context
     assert "require_field_evaluation_point_" not in context
     assert 'require_field_evaluation_point_(point, "Program simultaneous field solve")' in services
-    assert "solve_fields_from_blocks_in_place_(field, workspace.system_stages)" not in context
+    assert "solve_fields_from_blocks_in_place_(field, runtime_stages)" not in context
     assert "solve_fields_from_state(field, representative" not in context
 
 
