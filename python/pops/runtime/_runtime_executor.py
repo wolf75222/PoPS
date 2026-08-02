@@ -9,6 +9,7 @@ provider selection and the single-layout native installation seams.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any, cast
 
 from pops.codegen._plans import require_install_plan
@@ -188,6 +189,35 @@ def _require_runtime_determinism(
     runtime_plan.determinism.require_assumptions(actual)
 
 
+def _require_supported_runtime_actions(runtime_plan: Any) -> None:
+    """Refuse derived actions for which no native execution owner exists yet."""
+    unsupported = (
+        ("buffer allocations", runtime_plan.resources.buffers),
+        ("cross-memory fences", runtime_plan.communication.fences),
+        ("clock joins", runtime_plan.communication.clock_joins),
+    )
+    for label, rows in unsupported:
+        if rows:
+            raise NotImplementedError(
+                "native RuntimeInstance has no execution owner for planned %s" % label
+            )
+
+
+def _compiled_spatial_ghost_depth(block: Any) -> int:
+    spatial = getattr(block, "spatial", None)
+    value = (
+        spatial.get("ghost_depth")
+        if isinstance(spatial, Mapping)
+        else getattr(spatial, "ghost_depth", None)
+    )
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise TypeError(
+            "compiled block %r has no exact positive spatial ghost depth"
+            % getattr(block, "name", None)
+        )
+    return value
+
+
 def _require_single_layout_runtime_plan(plan: Any, runtime_plan: Any) -> None:
     """Require the exact call/layout projection consumed by one native engine."""
     layout_plan = plan.artifact.layout_plan
@@ -211,6 +241,24 @@ def _require_single_layout_runtime_plan(plan: Any, runtime_plan: Any) -> None:
         raise ValueError("single-layout native provider cannot consume mapping providers")
     if any(row.layout_id != layout_id for row in runtime_plan.communication.halos):
         raise ValueError("RuntimePlanBundle halo differs from the installed single layout")
+    calls = {row.identity.token: row for row in runtime_plan.calls}
+    if len(calls) != len(runtime_plan.calls):
+        raise ValueError("RuntimePlanBundle contains duplicate RuntimeCall identities")
+    block_names = {subject_id: name for name, (subject_id, _) in assignments.items()}
+    compiled = {row.name: row for row in plan.artifact.blocks}
+    if set(compiled) != set(assignments):
+        raise ValueError("compiled block set differs from the single-layout plan")
+    for halo in runtime_plan.communication.halos:
+        call = calls.get(halo.call_id)
+        if call is None or call.block_id not in block_names:
+            raise ValueError("RuntimePlanBundle halo has no installed block owner")
+        block = compiled[block_names[call.block_id]]
+        available = _compiled_spatial_ghost_depth(block)
+        if halo.depth > available:
+            raise ValueError(
+                "RuntimePlanBundle halo depth %d exceeds compiled block %r ghost depth %d"
+                % (halo.depth, block.name, available)
+            )
 
 
 class _UniformNativeProvider(RuntimeExecutorProvider):
@@ -343,6 +391,7 @@ def install_runtime_executor(install_plan: Any, runtime_plan: Any = None) -> Any
     from pops.runtime._runtime_planning import require_runtime_plan_bundle
 
     runtime_plan = require_runtime_plan_bundle(plan, runtime_plan)
+    _require_supported_runtime_actions(runtime_plan)
     native_facts = _native_runtime_facts()
     _require_runtime_determinism(plan, runtime_plan, native_facts)
     _require_supported_execution_context(plan, native_facts)

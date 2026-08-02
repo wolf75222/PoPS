@@ -18,6 +18,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Native `RuntimeInstance` installation now maps each single-layout halo requirement to the exact
+  compiled block ghost allocation and fails before backend inspection when a planned buffer,
+  cross-memory fence, or clock join has no execution owner. ConsumerGraph collectives retain their
+  separate transactional owner.
 - `Program.cadence(substeps=..., stride=...)` now authors the native global cadence as immutable,
   identity-bearing Program data and installs it before the Uniform or AMR runtime freezes.
 - `AsyncScientificOutput` now accepts fields, diagnostics, or both on one exact schedule. Diagnostic
