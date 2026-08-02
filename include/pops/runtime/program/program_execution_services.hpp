@@ -1820,8 +1820,9 @@ class ProgramExecutionServices {
       }
       workspace.program_to_runtime = std::move(authenticated_map);
       workspace.runtime_stages.assign(runtime_blocks, nullptr);
-      workspace.expected_program_blocks.clear();
-      workspace.expected_program_blocks_initialized = false;
+      // The ordered Program pack is part of the compiled IR identity, not of the runtime block
+      // materialization. A map/rank/topology rebuild may replace the runtime slots, but it must
+      // never teach an existing value_id a different Program request.
     }
 
     const bool learn_blocks = !workspace.expected_program_blocks_initialized;

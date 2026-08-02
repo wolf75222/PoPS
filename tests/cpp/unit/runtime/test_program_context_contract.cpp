@@ -716,6 +716,10 @@ TEST(ProgramContextContract,
   MultiFab subset_stage(subset_live.box_array(), subset_live.dmap(), subset_live.ncomp(),
                         subset_live.n_grow());
   subset_stage.set_val(Real(11));
+  EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(501), 501, "missing-provider",
+                                                     {{0, &subset_stage}}),
+               std::logic_error)
+      << "a runtime block-map rematerialization must not teach an existing IR value a new pack";
   EXPECT_THROW((void)ctx.solve_fields_from_blocks_at(point(505), 505, "missing-subset-provider",
                                                      {{0, &live_a}}),
                std::invalid_argument)
