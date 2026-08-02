@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define POPS_COMPONENT_API_SYMBOL_V1 "pops_component_interface_v1"
-#define POPS_COMPONENT_CATALOG_SHA256_V1 "a7d1f895537a503d54218e1e2822e978e4c6f2d2c744bd44283774cc94d2ac12"
+#define POPS_COMPONENT_CATALOG_SHA256_V1 "a10653b4730d0e5a8d8b1c21d3bb4263f3ca8fc93ebdfb1af59b88c7cbce07f0"
 #define POPS_COMPONENT_PROTOCOL_ABI_V1 1u
 #define POPS_COMPONENT_COMMON_ABI_V1 1u
 
@@ -26,6 +26,7 @@ typedef enum PopsNativeInterfaceIdV1 {
   POPS_NATIVE_INTERFACE_TAGGER_V2 = 3,
   POPS_NATIVE_INTERFACE_CLUSTERING_V1 = 4,
   POPS_NATIVE_INTERFACE_TRANSFER_V1 = 5,
+  POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1 = 6,
   POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2 = 7,
   POPS_NATIVE_INTERFACE_WRITER_V1 = 8,
   POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2 = 9,
@@ -288,6 +289,35 @@ typedef struct PopsGhostBoundaryApiV1 {
   PopsComponentTableHeaderV1 header;
   PopsApplyRegionBatchFnV1 apply_region_batch;
 } PopsGhostBoundaryApiV1;
+
+typedef struct PopsBoundaryFluxRequestV1 {
+  uint32_t struct_size;
+  const char* provider_identity;
+  const char* state_identity;
+  PopsConstFieldViewV1 base_outward_normal_flux;
+  PopsConstFieldViewV1 coordinates;
+  PopsConstFieldViewV1 outward_normals;
+  const double* face_measures;
+  PopsBoundaryRegionV1 region;
+  size_t dependency_count;
+  const PopsQualifiedConstFieldV1* dependencies;
+  size_t parameter_count;
+  const PopsQualifiedScalarV1* parameters;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+} PopsBoundaryFluxRequestV1;
+typedef struct PopsBoundaryFluxResultV1 {
+  uint32_t struct_size;
+  PopsFieldViewV1 outward_normal_flux;
+  PopsComponentActionV1* actions;
+  PopsComponentStatusV1 status;
+} PopsBoundaryFluxResultV1;
+typedef int32_t (*PopsTransformBoundaryFacesFnV1)(
+    void*, const PopsBoundaryFluxRequestV1*, PopsBoundaryFluxResultV1*);
+typedef struct PopsBoundaryFluxApiV1 {
+  PopsComponentTableHeaderV1 header;
+  PopsTransformBoundaryFacesFnV1 transform_faces;
+} PopsBoundaryFluxApiV1;
 
 typedef struct PopsFieldBoundaryRequestV1 {
   uint32_t struct_size;
@@ -724,6 +754,7 @@ inline constexpr size_t generated_native_interface_table_size(
     case POPS_NATIVE_INTERFACE_TAGGER_V2: return sizeof(PopsTaggerApiV2);
     case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return sizeof(PopsClusteringApiV1);
     case POPS_NATIVE_INTERFACE_TRANSFER_V1: return sizeof(PopsTransferApiV1);
+    case POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1: return sizeof(PopsBoundaryFluxApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return sizeof(PopsFieldSolverApiV2);
     case POPS_NATIVE_INTERFACE_WRITER_V1: return sizeof(PopsWriterApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return sizeof(PopsFieldTopologyApiV2);
@@ -739,6 +770,7 @@ inline constexpr const char* generated_native_interface_table_name(
     case POPS_NATIVE_INTERFACE_TAGGER_V2: return "PopsTaggerApiV2";
     case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return "PopsClusteringApiV1";
     case POPS_NATIVE_INTERFACE_TRANSFER_V1: return "PopsTransferApiV1";
+    case POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1: return "PopsBoundaryFluxApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return "PopsFieldSolverApiV2";
     case POPS_NATIVE_INTERFACE_WRITER_V1: return "PopsWriterApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return "PopsFieldTopologyApiV2";

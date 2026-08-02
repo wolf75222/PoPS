@@ -360,6 +360,76 @@ inline int apply_ghost_boundary(const PopsGhostBoundaryApiV1& api, void* state,
   return api.apply_region_batch(state, &request, &status);
 }
 
+inline int transform_boundary_flux(const PopsBoundaryFluxApiV1& api, void* state,
+                                   const PopsBoundaryFluxRequestV1& request,
+                                   PopsBoundaryFluxResultV1& result) {
+  require_operation(api.transform_faces != nullptr, "transform_faces");
+  validate_execution_context(request.execution);
+  validate_logical_time(request.logical_time);
+  validate_boundary_region(request.region);
+  if (request.struct_size < sizeof(PopsBoundaryFluxRequestV1) ||
+      result.struct_size < sizeof(PopsBoundaryFluxResultV1) ||
+      !component_text(request.provider_identity) || !component_text(request.state_identity) ||
+      request.face_measures == nullptr || result.actions == nullptr ||
+      request.region.kind != POPS_BOUNDARY_FACE_V1 || request.region.codimension != 1 ||
+      request.region.axis_count != 1)
+    throw std::invalid_argument("boundary flux transformation request is incomplete");
+  validate_execution_field(request.execution, request.base_outward_normal_flux,
+                           "boundary base outward flux");
+  validate_execution_field(request.execution, request.coordinates, "boundary flux coordinates");
+  validate_execution_field(request.execution, request.outward_normals, "boundary outward normals");
+  validate_execution_field(request.execution, result.outward_normal_flux,
+                           "boundary transformed outward flux");
+  if (!same_field_domain(request.base_outward_normal_flux, result.outward_normal_flux) ||
+      !same_spatial_domain(request.base_outward_normal_flux, request.coordinates) ||
+      !same_spatial_domain(request.base_outward_normal_flux, request.outward_normals) ||
+      request.coordinates.component_count != static_cast<std::size_t>(request.region.dimension) ||
+      request.outward_normals.component_count != static_cast<std::size_t>(request.region.dimension))
+    throw std::invalid_argument("boundary flux field descriptors disagree");
+  const std::uint32_t normal_axis = 1u << static_cast<unsigned>(request.region.axes[0]);
+  if (request.base_outward_normal_flux.centering != POPS_FIELD_CENTERING_FACE_V1 ||
+      request.base_outward_normal_flux.centering_axes != normal_axis)
+    throw std::invalid_argument(
+        "boundary base outward flux is not centered on its authenticated face axis");
+  const std::size_t point_count = field_point_count(request.base_outward_normal_flux);
+  const auto* coordinates = static_cast<const double*>(request.coordinates.data);
+  const auto* normals = static_cast<const double*>(request.outward_normals.data);
+  for (std::size_t point = 0; point < point_count; ++point)
+    if (!std::isfinite(request.face_measures[point]) || request.face_measures[point] <= 0.0)
+      throw std::invalid_argument("boundary flux face measure is not positive and finite");
+  for (std::size_t j = 0; j < request.coordinates.extents[1]; ++j)
+    for (std::size_t i = 0; i < request.coordinates.extents[0]; ++i)
+      for (std::size_t component = 0; component < request.coordinates.component_count;
+           ++component) {
+        const auto coordinate_offset =
+            static_cast<std::ptrdiff_t>(i) * request.coordinates.axis_strides[0] +
+            static_cast<std::ptrdiff_t>(j) * request.coordinates.axis_strides[1] +
+            static_cast<std::ptrdiff_t>(component) * request.coordinates.component_stride;
+        const auto normal_offset =
+            static_cast<std::ptrdiff_t>(i) * request.outward_normals.axis_strides[0] +
+            static_cast<std::ptrdiff_t>(j) * request.outward_normals.axis_strides[1] +
+            static_cast<std::ptrdiff_t>(component) * request.outward_normals.component_stride;
+        const double expected = component == static_cast<std::size_t>(request.region.axes[0])
+                                    ? static_cast<double>(request.region.sides[0])
+                                    : 0.0;
+        if (!std::isfinite(coordinates[coordinate_offset]) ||
+            !std::isfinite(normals[normal_offset]) || normals[normal_offset] != expected)
+          throw std::invalid_argument(
+              "boundary flux coordinates or outward normal disagree with the oriented face");
+      }
+  validate_const_fields(request.dependencies, request.dependency_count,
+                        "boundary flux dependencies");
+  for (std::size_t index = 0; index < request.dependency_count; ++index) {
+    validate_execution_field(request.execution, request.dependencies[index].values,
+                             "boundary flux dependency");
+    if (!same_spatial_domain(request.base_outward_normal_flux, request.dependencies[index].values))
+      throw std::invalid_argument(
+          "boundary flux dependency does not cover the transformed face points");
+  }
+  validate_scalars(request.parameters, request.parameter_count, "boundary flux parameters");
+  return api.transform_faces(state, &request, &result);
+}
+
 inline int evaluate_field_boundary(const PopsFieldBoundaryClosureApiV1& api, void* state,
                                    const PopsFieldBoundaryRequestV1& request,
                                    PopsComponentStatusV1& status, bool jvp) {

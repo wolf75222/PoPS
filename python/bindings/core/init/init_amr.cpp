@@ -304,6 +304,20 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
           py::arg("target_json"), py::arg("execution_context"))
       .def(
+          "_install_boundary_flux_component",
+          [](AmrSystem& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
+            system.install_boundary_flux_component(
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
+      .def(
           "_install_field_boundary_residual_component",
           [](AmrSystem& system, const std::string& name,
              std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,

@@ -31,7 +31,7 @@ from .ports import (
     RepresentationFlow, SignDependence, SonicPolicy)
 from .providers import (
     BoundaryProvider, BoundaryProviderKind, BoundaryProviderRegistry, DirectionalTransport,
-    Dirichlet, GhostFormula, Inflow, Mixed, Neumann, NoFlux, Outflow,
+    Dirichlet, GhostFormula, Inflow, Mixed, Neumann, NoFlux, Outflow, PostRiemannFlux,
     ResolvedBoundaryBinding, ResolvedBoundaryPlan)
 from .topology import (
     BoundaryHandle, BoundaryOrientation, BoundarySide, BoundaryTopology,
@@ -125,7 +125,7 @@ __all__ = [
     "IncomingMultiplicity", "NumericalFlux", "RepresentationFlow", "SignDependence",
     "SonicPolicy", "BoundaryProvider", "BoundaryProviderKind", "BoundaryProviderRegistry",
     "DirectionalTransport", "Dirichlet", "GhostFormula", "Inflow", "Mixed", "Neumann",
-    "NoFlux", "Outflow",
+    "NoFlux", "Outflow", "PostRiemannFlux",
     "ResolvedBoundaryBinding", "ResolvedBoundaryPlan",
     "BoundaryComponentBinding", "BoundaryLinearizationContribution",
     "BoundaryResidualContribution",

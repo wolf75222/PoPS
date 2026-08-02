@@ -159,6 +159,16 @@
       "operations": ["apply"]
     },
     {
+      "id": 6,
+      "name": "boundary_flux",
+      "uri": "pops://interfaces/boundary-flux",
+      "version": 1,
+      "cpp_table": "PopsBoundaryFluxApiV1",
+      "hot_path": true,
+      "facets": ["provider", "lowering", "fallible_evaluation"],
+      "operations": ["transform_faces"]
+    },
+    {
       "id": 7,
       "name": "field_solver",
       "uri": "pops://interfaces/field-solver",
@@ -205,6 +215,10 @@
     "conservative_flux": {
       "interface": "numerical_flux",
       "operation": "evaluate_faces"
+    },
+    "boundary_flux_provider": {
+      "interface": "boundary_flux",
+      "operation": "transform_faces"
     },
     "residual_operator": {
       "interface": "field_boundary_closure",

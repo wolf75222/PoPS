@@ -925,6 +925,35 @@ typedef struct PopsGhostBoundaryApiV1 {{
   PopsApplyRegionBatchFnV1 apply_region_batch;
 }} PopsGhostBoundaryApiV1;
 
+typedef struct PopsBoundaryFluxRequestV1 {{
+  uint32_t struct_size;
+  const char* provider_identity;
+  const char* state_identity;
+  PopsConstFieldViewV1 base_outward_normal_flux;
+  PopsConstFieldViewV1 coordinates;
+  PopsConstFieldViewV1 outward_normals;
+  const double* face_measures;
+  PopsBoundaryRegionV1 region;
+  size_t dependency_count;
+  const PopsQualifiedConstFieldV1* dependencies;
+  size_t parameter_count;
+  const PopsQualifiedScalarV1* parameters;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+}} PopsBoundaryFluxRequestV1;
+typedef struct PopsBoundaryFluxResultV1 {{
+  uint32_t struct_size;
+  PopsFieldViewV1 outward_normal_flux;
+  PopsComponentActionV1* actions;
+  PopsComponentStatusV1 status;
+}} PopsBoundaryFluxResultV1;
+typedef int32_t (*PopsTransformBoundaryFacesFnV1)(
+    void*, const PopsBoundaryFluxRequestV1*, PopsBoundaryFluxResultV1*);
+typedef struct PopsBoundaryFluxApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsTransformBoundaryFacesFnV1 transform_faces;
+}} PopsBoundaryFluxApiV1;
+
 typedef struct PopsFieldBoundaryRequestV1 {{
   uint32_t struct_size;
   const char* closure_identity;

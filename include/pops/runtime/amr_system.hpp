@@ -384,6 +384,9 @@ class AmrSystem {
   POPS_EXPORT void install_ghost_boundary_component(
       const std::string& name, PreparedBoundaryComponentSpec spec,
       std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_boundary_flux_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
   POPS_EXPORT void install_field_boundary_residual_component(
       const std::string& name, PreparedBoundaryComponentSpec spec,
       std::shared_ptr<component::LoadedComponent> component);

@@ -2,7 +2,7 @@
 
 The prepared hyperbolic boundary path is already the compiled Uniform/AMR
 route.  A few older native authorities still exist while their replacements
-need metric, characteristic, and post-Riemann kernels.  Keep their remaining
+need metric and characteristic kernels.  Keep their remaining
 lexical surface bounded so adjacent work cannot silently create another
 transport-boundary engine before that cutover is complete.
 """
@@ -10,6 +10,7 @@ transport-boundary engine before that cutover is complete.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -144,3 +145,49 @@ def test_boundary_provider_identity_cannot_erase_its_selected_law() -> None:
     assert "provider_kind" in keys, (
         "BoundaryProvider canonical identity must authenticate its selected law"
     )
+
+
+def test_post_riemann_flux_is_one_typed_outward_oriented_pipeline_stage() -> None:
+    catalog = json.loads(
+        (ROOT / "schemas/component_catalog.v2.json").read_text(encoding="utf-8")
+    )
+    interface = next(
+        row for row in catalog["native_interface_abis"]
+        if row["name"] == "boundary_flux"
+    )
+    assert interface["cpp_table"] == "PopsBoundaryFluxApiV1"
+    assert interface["operations"] == ["transform_faces"]
+    route = catalog["boundary_handle_native_routes"]["boundary_flux_provider"]
+    assert route["interface"] == "boundary_flux"
+    assert route["operation"] == "transform_faces"
+
+    executor = (
+        ROOT / "include/pops/mesh/boundary/boundary_component_executor.hpp"
+    ).read_text(encoding="utf-8")
+    assert re.search(
+        r"const double outward\s*=\s*static_cast<double>\(workspace\.side\)\s*\*",
+        executor,
+    )
+    assert re.search(
+        r"static_cast<Real>\(static_cast<double>\(workspace\.side\)\s*\*\s*outward\)",
+        executor,
+    )
+
+    uniform = (
+        ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
+    ).read_text(encoding="utf-8")
+    uniform_stage = uniform[
+        uniform.index("assemble_rhs_without_prepared_interfaces"):
+        uniform.index("struct BlockRhsEval")
+    ]
+    assert uniform_stage.index("compute_face_fluxes") < uniform_stage.index(
+        "transform_grid_boundary_fluxes"
+    ) < uniform_stage.index("mf_eval_rhs")
+
+    amr = (
+        ROOT / "include/pops/runtime/builders/compiled/amr_dsl_block.hpp"
+    ).read_text(encoding="utf-8")
+    first_flux = amr.index("detail::compute_amr_face_fluxes")
+    first_transform = amr.index("transform_grid_boundary_fluxes", first_flux)
+    first_divergence = amr.index("pops::mf_eval_rhs", first_transform)
+    assert first_flux < first_transform < first_divergence

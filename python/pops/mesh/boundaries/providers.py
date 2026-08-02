@@ -31,6 +31,7 @@ class BoundaryProviderKind(Enum):
     DIRICHLET = "dirichlet"
     NEUMANN = "neumann"
     NO_FLUX = "no_flux"
+    POST_RIEMANN_FLUX = "post_riemann_flux"
     CONSTRAINT_RESIDUAL = "constraint_residual"
 
 
@@ -43,6 +44,7 @@ _OUTPUT_CONTRACTS: dict[BoundaryProviderKind, type | tuple[type, ...]] = {
     BoundaryProviderKind.DIRICHLET: ExteriorTrace,
     BoundaryProviderKind.NEUMANN: ConstraintResidual,
     BoundaryProviderKind.NO_FLUX: NumericalFlux,
+    BoundaryProviderKind.POST_RIEMANN_FLUX: NumericalFlux,
     BoundaryProviderKind.CONSTRAINT_RESIDUAL: ConstraintResidual,
 }
 
@@ -113,7 +115,12 @@ class BoundaryProvider:
     def __post_init__(self) -> None:
         if not isinstance(self.kind, BoundaryProviderKind):
             raise TypeError("BoundaryProvider.kind must be a BoundaryProviderKind")
-        _handle(self.handle, where="BoundaryProvider.handle", kind="boundary_provider")
+        handle_kind = (
+            "boundary_flux_provider"
+            if self.kind is BoundaryProviderKind.POST_RIEMANN_FLUX
+            else "boundary_provider"
+        )
+        _handle(self.handle, where="BoundaryProvider.handle", kind=handle_kind)
         if not isinstance(self.outputs, tuple) or not self.outputs:
             raise TypeError("BoundaryProvider.outputs must be a non-empty tuple")
         if any(not isinstance(row, BoundaryPort) for row in self.outputs):
@@ -231,6 +238,21 @@ def NoFlux(*, handle: Any, output: NumericalFlux,
     return BoundaryProvider(handle, (output,), dependencies, BoundaryProviderKind.NO_FLUX)
 
 
+def PostRiemannFlux(*, handle: Any, output: NumericalFlux,
+                    dependencies: BoundaryDependencies) -> BoundaryProvider:
+    """Bind one exact native transformation of an already evaluated outward flux.
+
+    The provider owns neither reconstruction nor the Riemann solve.  Its
+    ``boundary_flux_provider`` Handle resolves only to the typed
+    ``BoundaryFlux.transform_faces`` ABI, so it cannot be mistaken for a ghost
+    producer or for the shared-interface ``NumericalFlux.evaluate_faces`` route.
+    """
+    if not isinstance(output, NumericalFlux):
+        raise TypeError("PostRiemannFlux satisfies NumericalFlux only")
+    return BoundaryProvider(
+        handle, (output,), dependencies, BoundaryProviderKind.POST_RIEMANN_FLUX)
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedBoundaryBinding:
     need: BoundaryPort
@@ -339,6 +361,6 @@ class BoundaryProviderRegistry:
 __all__ = [
     "BoundaryProvider", "BoundaryProviderKind", "BoundaryProviderRegistry", "DirectionalTransport",
     "Dirichlet",
-    "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow",
+    "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow", "PostRiemannFlux",
     "ResolvedBoundaryBinding", "ResolvedBoundaryPlan",
 ]

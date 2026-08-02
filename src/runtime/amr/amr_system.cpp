@@ -1439,6 +1439,19 @@ POPS_EXPORT void AmrSystem::install_ghost_boundary_component(
   found->second->install_ghost_component(std::move(spec), std::move(component));
 }
 
+POPS_EXPORT void AmrSystem::install_boundary_flux_component(
+    const std::string& name, PreparedBoundaryComponentSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_boundary_flux_component");
+  if (P->built)
+    throw std::runtime_error("AmrSystem boundary flux: system is already built");
+  const auto found = P->boundary_plans_.find(name);
+  if (found == P->boundary_plans_.end())
+    throw std::runtime_error("AmrSystem boundary flux requires an installed block boundary plan");
+  found->second->install_flux_component(std::move(spec), std::move(component));
+}
+
 POPS_EXPORT void AmrSystem::install_field_boundary_residual_component(
     const std::string& name, PreparedBoundaryComponentSpec spec,
     std::shared_ptr<component::LoadedComponent> component) {
