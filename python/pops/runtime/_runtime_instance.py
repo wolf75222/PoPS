@@ -746,6 +746,18 @@ class RuntimeInstance:
     def program_report(self) -> Any:
         return self._executor.program_report()
 
+    def program_accepted_state(self) -> bytes:
+        """Return the exact accepted AMR Program state owned by the native executor."""
+        provider = getattr(self._executor, "program_accepted_state", None)
+        if not callable(provider):
+            raise NotImplementedError(
+                "this runtime provider does not expose accepted AMR Program state"
+            )
+        state = provider()
+        if type(state) is not bytes:
+            raise TypeError("native accepted AMR Program state must be exact bytes")
+        return state
+
     @property
     def amr(self) -> Any:
         """Read-only AMR hierarchy/report view supplied by an adaptive executor."""

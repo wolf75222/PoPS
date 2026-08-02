@@ -2199,10 +2199,10 @@ def test_only_consumer_free_serial_failed_run_releases_its_identity_for_retry():
     assert catalyst_identity.token in publisher._closed_observer_runs
 
 
-def test_mpi_size_one_failed_run_never_releases_its_identity():
+def test_mpi_size_one_consumer_free_failed_run_releases_its_identity():
     from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 
-    run_identity = make_identity("run", {"case": "mpi-size-one-sealed"})
+    run_identity = make_identity("run", {"case": "mpi-size-one-reusable"})
     publisher = object.__new__(RuntimeConsumerPublisher)
     publisher._rank = 0
     publisher._size = 1
@@ -2230,7 +2230,23 @@ def test_mpi_size_one_failed_run_never_releases_its_identity():
         release_identity=True,
         entry_effect_fence=entry_fence,
     )
-    assert run_identity.token in publisher._closed_observer_runs
+    assert run_identity.token not in publisher._closed_observer_runs
+    assert run_identity.token not in publisher._observer_run_phases
+    publisher.begin_post_commit_consumers(run_identity)
+
+
+def test_runtime_instance_exposes_only_exact_native_program_accepted_state():
+    runtime = object.__new__(RuntimeInstance)
+    runtime._executor = SimpleNamespace(program_accepted_state=lambda: b"accepted-amr-state")
+    assert runtime.program_accepted_state() == b"accepted-amr-state"
+
+    runtime._executor = SimpleNamespace()
+    with pytest.raises(NotImplementedError, match="accepted AMR Program state"):
+        runtime.program_accepted_state()
+
+    runtime._executor = SimpleNamespace(program_accepted_state=lambda: bytearray(b"mutable"))
+    with pytest.raises(TypeError, match="must be exact bytes"):
+        runtime.program_accepted_state()
 
 
 def test_failed_run_close_refuses_divergent_mpi_lane_inventory(monkeypatch):
