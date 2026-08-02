@@ -140,8 +140,14 @@ Supported native routes include:
   axis-permuted periodic coordinates also fail closed until a prepared coordinate map exists. The
   conversion route is explicitly `partial`: conservative-to-primitive recovery and arbitrary
   representation components remain unavailable, and conversion does not invent a boundary
-  admissibility projection. Separate `unavailable` rows expose the missing characteristic
-  no-inflow kernel and post-Riemann flux transformation.
+  admissibility projection. A separate `unavailable` row exposes the missing characteristic
+  no-inflow kernel. Post-Riemann transformation is instead an explicit `partial` route: a typed
+  `BoundaryFlux` component receives the already evaluated outward-normal flux and executes between
+  the Riemann solve and divergence/reflux through the same prepared Uniform/AMR plan. The runtime
+  converts lower and upper faces to outward orientation before the call and converts the result
+  back to canonical positive-axis face storage afterwards. This route is currently 2D Cartesian
+  host-batch execution; it has no device-native or embedded/cut-cell metric ABI, and the ordinary
+  Uniform route materializes face fields when selected.
   These requests fail during resolution or lowering; none silently degrades to component-wise
   ghost filling. A native rank-1/2/4 regrid fixture removes and recreates the fine hierarchy, then
   proves that uncovered internal fine ghosts retain the conservative coarse-fine transfer and are

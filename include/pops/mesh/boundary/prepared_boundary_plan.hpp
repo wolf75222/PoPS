@@ -204,9 +204,11 @@ class PreparedBoundaryPlan {
           lane_(std::exchange(other.lane_, nullptr)),
           component_revision_(std::exchange(other.component_revision_, 0)),
           ghost_components_(std::move(other.ghost_components_)),
+          flux_components_(std::move(other.flux_components_)),
           residual_components_(std::move(other.residual_components_)),
           jvp_components_(std::move(other.jvp_components_)),
           ghost_workspaces_(std::move(other.ghost_workspaces_)),
+          flux_workspaces_(std::move(other.flux_workspaces_)),
           residual_workspaces_(std::move(other.residual_workspaces_)),
           jvp_workspaces_(std::move(other.jvp_workspaces_)) {}
     Session& operator=(Session&& other) noexcept {
@@ -215,9 +217,11 @@ class PreparedBoundaryPlan {
         lane_ = std::exchange(other.lane_, nullptr);
         component_revision_ = std::exchange(other.component_revision_, 0);
         ghost_components_ = std::move(other.ghost_components_);
+        flux_components_ = std::move(other.flux_components_);
         residual_components_ = std::move(other.residual_components_);
         jvp_components_ = std::move(other.jvp_components_);
         ghost_workspaces_ = std::move(other.ghost_workspaces_);
+        flux_workspaces_ = std::move(other.flux_workspaces_);
         residual_workspaces_ = std::move(other.residual_workspaces_);
         jvp_workspaces_ = std::move(other.jvp_workspaces_);
       }
@@ -236,6 +240,9 @@ class PreparedBoundaryPlan {
     void fill_same_level_and_physical(
         MultiFab& state, const detail::BoundaryFieldRegistry& fields, const Geometry& geometry,
         const runtime::multiblock::BoundaryEvaluationPoint& point) const;
+    void transform_fluxes(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                          const MultiFab& state, const detail::BoundaryFieldRegistry& fields,
+                          const Geometry& geometry, MultiFab& fx, MultiFab& fy) const;
     void add_residual(const runtime::multiblock::BoundaryEvaluationPoint& point,
                       const detail::BoundaryFieldRegistry& fields, const Geometry& geometry) const;
     void apply_jvp(const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -247,6 +254,9 @@ class PreparedBoundaryPlan {
     void prepare_ghost_executor(const MultiFab& prototype,
                                 const detail::BoundaryFieldRegistry& fields,
                                 const Geometry& geometry);
+    void prepare_flux_executor(const MultiFab& prototype,
+                               const detail::BoundaryFieldRegistry& fields,
+                               const Geometry& geometry);
     void prepare_residual_executor(const detail::BoundaryFieldRegistry& fields,
                                    const Geometry& geometry);
     void prepare_jvp_executor(const detail::BoundaryFieldRegistry& fields,
@@ -262,6 +272,9 @@ class PreparedBoundaryPlan {
     void fill_same_level_and_physical_control(
         MultiFab& state, const MultiFab* auxiliary, const Geometry& geometry,
         const runtime::multiblock::BoundaryEvaluationPoint& point) const;
+    void transform_fluxes_control(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                  const MultiFab& state, const MultiFab* auxiliary,
+                                  const Geometry& geometry, MultiFab& fx, MultiFab& fy) const;
     void add_residual_control(const runtime::multiblock::BoundaryEvaluationPoint& point,
                               const MultiFab& state, const MultiFab* auxiliary,
                               const Geometry& geometry, MultiFab& residual) const;
@@ -274,9 +287,11 @@ class PreparedBoundaryPlan {
     const ExecutionLane* lane_ = nullptr;
     std::size_t component_revision_ = 0;
     std::vector<PreparedGhostBoundaryComponent::Session> ghost_components_;
+    std::vector<PreparedBoundaryFluxComponent::Session> flux_components_;
     std::vector<PreparedFieldBoundaryResidualComponent::Session> residual_components_;
     std::vector<PreparedFieldBoundaryJvpComponent::Session> jvp_components_;
     mutable std::vector<detail::PreparedGhostBoundaryWorkspace> ghost_workspaces_;
+    mutable std::vector<detail::PreparedBoundaryFluxWorkspace> flux_workspaces_;
     mutable std::vector<detail::PreparedFieldBoundaryWorkspace> residual_workspaces_;
     mutable std::vector<detail::PreparedFieldBoundaryWorkspace> jvp_workspaces_;
   };
@@ -354,6 +369,11 @@ class PreparedBoundaryPlan {
     install_typed_(ghost_components_, std::move(spec), std::move(component));
     ++component_revision_;
   }
+  void install_flux_component(PreparedBoundaryComponentSpec spec,
+                              std::shared_ptr<component::LoadedComponent> component) {
+    install_typed_(flux_components_, std::move(spec), std::move(component));
+    ++component_revision_;
+  }
   void install_residual_component(PreparedBoundaryComponentSpec spec,
                                   std::shared_ptr<component::LoadedComponent> component) {
     install_typed_(residual_components_, std::move(spec), std::move(component));
@@ -371,8 +391,10 @@ class PreparedBoundaryPlan {
   }
 
   bool has_component_boundaries() const {
-    return !ghost_components_.empty() || !residual_components_.empty() || !jvp_components_.empty();
+    return !ghost_components_.empty() || !flux_components_.empty() ||
+           !residual_components_.empty() || !jvp_components_.empty();
   }
+  bool has_flux_transformations() const noexcept { return !flux_components_.empty(); }
 
   /// The built-in hyperbolic laws fill every ghost layer allocated by the state. A dynamically
   /// loaded ghost component is prepared only for this plan's authenticated required_depth(), so it
@@ -436,6 +458,8 @@ class PreparedBoundaryPlan {
     std::vector<std::string> result = read_dependencies_.fields;
     for (const auto& component : ghost_components_)
       append_unique_(result, component->spec().fields);
+    for (const auto& component : flux_components_)
+      append_unique_(result, component->spec().fields);
     for (const auto& component : residual_components_)
       append_unique_(result, component->spec().fields);
     for (const auto& component : jvp_components_)
@@ -446,6 +470,8 @@ class PreparedBoundaryPlan {
   std::vector<std::string> required_state_identities() const {
     std::vector<std::string> result = read_dependencies_.states;
     for (const auto& component : ghost_components_)
+      append_unique_(result, component->spec().states);
+    for (const auto& component : flux_components_)
       append_unique_(result, component->spec().states);
     for (const auto& component : residual_components_)
       append_unique_(result, component->spec().states);
@@ -661,6 +687,16 @@ class PreparedBoundaryPlan {
     session.apply_jvp(point, fields, geometry);
   }
 
+  void transform_fluxes_control(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                const MultiFab& state, const MultiFab* auxiliary,
+                                const Geometry& geometry, MultiFab& fx, MultiFab& fy,
+                                const ExecutionLane& lane = ExecutionLane::world()) const {
+    if (!has_flux_transformations())
+      return;
+    auto session = make_session(lane);
+    session.transform_fluxes_control(point, state, auxiliary, geometry, fx, fy);
+  }
+
   void apply_jvp_control(const runtime::multiblock::BoundaryEvaluationPoint& point,
                          const detail::BoundaryFieldRegistry& fields, const Geometry& geometry,
                          const ExecutionLane& lane) const {
@@ -680,6 +716,7 @@ class PreparedBoundaryPlan {
   PreparedBoundaryReadDependencies read_dependencies_;
   std::vector<PeriodicIdentification2D> periodic_identifications_;
   std::vector<std::shared_ptr<PreparedGhostBoundaryComponent>> ghost_components_;
+  std::vector<std::shared_ptr<PreparedBoundaryFluxComponent>> flux_components_;
   std::vector<std::shared_ptr<PreparedFieldBoundaryResidualComponent>> residual_components_;
   std::vector<std::shared_ptr<PreparedFieldBoundaryJvpComponent>> jvp_components_;
   std::size_t component_revision_ = 0;
@@ -873,10 +910,13 @@ inline PreparedBoundaryPlan::Session::Session(const PreparedBoundaryPlan& plan,
     : plan_(&plan), lane_(&lane), component_revision_(plan.component_revision_) {
   plan.validate_base();
   ghost_components_.reserve(plan.ghost_components_.size());
+  flux_components_.reserve(plan.flux_components_.size());
   residual_components_.reserve(plan.residual_components_.size());
   jvp_components_.reserve(plan.jvp_components_.size());
   for (const auto& component : plan.ghost_components_)
     ghost_components_.push_back(component->make_session(lane));
+  for (const auto& component : plan.flux_components_)
+    flux_components_.push_back(component->make_session(lane));
   for (const auto& component : plan.residual_components_)
     residual_components_.push_back(component->make_session(lane));
   for (const auto& component : plan.jvp_components_)
@@ -978,6 +1018,51 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
   for (std::size_t index = 0; index < ghost_components_.size(); ++index)
     detail::apply_ghost_component(ghost_components_[index], ghost_workspaces_[index], state, fields,
                                   geometry, point);
+}
+
+inline void PreparedBoundaryPlan::Session::transform_fluxes_control(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const MultiFab& state,
+    const MultiFab* auxiliary, const Geometry& geometry, MultiFab& fx, MultiFab& fy) const {
+  validate_current_();
+  if (flux_components_.empty())
+    return;
+  detail::BoundaryFieldRegistry fields;
+  fields.configure_states(plan_->required_state_identities());
+  fields.configure_fields(plan_->required_field_identities());
+  fields.begin_binding();
+  const auto states = plan_->required_state_identities();
+  if (!states.empty()) {
+    if (states.size() != 1 || states.front() != plan_->state_identity())
+      throw std::runtime_error(
+          "post-Riemann boundary flux with multiple states requires the N-ary prepared registry "
+          "seam");
+    fields.bind_state(states.front(), state);
+  }
+  const auto dependencies = plan_->required_field_identities();
+  if (!dependencies.empty()) {
+    if (dependencies.size() != 1 || auxiliary == nullptr)
+      throw std::runtime_error(
+          "post-Riemann boundary flux fields require the N-ary prepared registry seam");
+    fields.bind_field(dependencies.front(), *auxiliary);
+  }
+  for (const auto& component : flux_components_) {
+    auto workspace = detail::prepare_boundary_flux_workspace(component, state, fields, geometry);
+    detail::apply_boundary_flux_component(component, workspace, state, fields, geometry, fx, fy,
+                                          point);
+  }
+}
+
+inline void PreparedBoundaryPlan::Session::transform_fluxes(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const MultiFab& state,
+    const detail::BoundaryFieldRegistry& fields, const Geometry& geometry, MultiFab& fx,
+    MultiFab& fy) const {
+  validate_current_();
+  if (flux_workspaces_.size() != flux_components_.size())
+    throw std::logic_error(
+        "PreparedBoundaryPlan flux executor was not materialized before numerical execution");
+  for (std::size_t index = 0; index < flux_components_.size(); ++index)
+    detail::apply_boundary_flux_component(flux_components_[index], flux_workspaces_[index], state,
+                                          fields, geometry, fx, fy, point);
 }
 
 inline void PreparedBoundaryPlan::Session::add_residual_control(
@@ -1087,6 +1172,18 @@ inline void PreparedBoundaryPlan::Session::prepare_ghost_executor(
   for (const auto& component : ghost_components_)
     ghost_workspaces_.push_back(detail::prepare_ghost_workspace(component, prototype, fields,
                                                                 geometry, plan_->required_depth_));
+}
+
+inline void PreparedBoundaryPlan::Session::prepare_flux_executor(
+    const MultiFab& prototype, const detail::BoundaryFieldRegistry& fields,
+    const Geometry& geometry) {
+  validate_current_();
+  plan_->validate_for(prototype);
+  flux_workspaces_.clear();
+  flux_workspaces_.reserve(flux_components_.size());
+  for (const auto& component : flux_components_)
+    flux_workspaces_.push_back(
+        detail::prepare_boundary_flux_workspace(component, prototype, fields, geometry));
 }
 
 inline void PreparedBoundaryPlan::Session::prepare_residual_executor(

@@ -109,6 +109,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     execution_data = component_execution_data(install_plan.execution_context)
     component_installers = {
         "apply_region_batch": getattr(native, "_install_ghost_boundary_component", None),
+        "transform_faces": getattr(native, "_install_boundary_flux_component", None),
         "residual": getattr(native, "_install_field_boundary_residual_component", None),
         "jvp": getattr(native, "_install_field_boundary_jvp_component", None),
     }
@@ -333,6 +334,12 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             if operation in {"residual", "jvp"} and len(row["outputs"]) != 1:
                 raise NotImplementedError(
                     "native boundary residual/JVP currently requires one exact mutable output")
+            if operation == "transform_faces" and (
+                    len(row["outputs"]) != 1 or
+                    row["outputs"][0] != row["state_identity"] or row["directions"]):
+                raise NotImplementedError(
+                    "native post-Riemann boundary flux requires one exact state output and no "
+                    "JVP direction table")
             component_jobs.append((
                 install_component,
                 block.name,

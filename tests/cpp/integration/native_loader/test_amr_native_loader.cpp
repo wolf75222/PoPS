@@ -94,6 +94,48 @@ std::string component_source() {
       return 0;
     }
 
+    int transform_boundary_flux(void* state, const PopsBoundaryFluxRequestV1* request,
+                                PopsBoundaryFluxResultV1* result) {
+      if (result == nullptr)
+        return 42;
+      if (state == nullptr || request == nullptr || request->region.kind != POPS_BOUNDARY_FACE_V1 ||
+          request->region.axis_count != 1 || request->region.axes == nullptr ||
+          request->region.sides == nullptr || request->outward_normals.data == nullptr ||
+          request->face_measures == nullptr || result->outward_normal_flux.data == nullptr) {
+        result->status = {sizeof(PopsComponentStatusV1), 42, POPS_COMPONENT_ABORT_RUN_V1,
+                          "boundary flux contract is incomplete"};
+        return 42;
+      }
+      const auto* base = static_cast<const double*>(request->base_outward_normal_flux.data);
+      const auto* normals = static_cast<const double*>(request->outward_normals.data);
+      auto* output = static_cast<double*>(result->outward_normal_flux.data);
+      const auto points = request->base_outward_normal_flux.extents[0] *
+                          request->base_outward_normal_flux.extents[1];
+      const auto axis = static_cast<std::size_t>(request->region.axes[0]);
+      const double side = static_cast<double>(request->region.sides[0]);
+      for (std::size_t point = 0; point < points; ++point) {
+        const auto normal_offset =
+            point * static_cast<std::size_t>(request->outward_normals.axis_strides[0]) +
+            axis * static_cast<std::size_t>(request->outward_normals.component_stride);
+        if (normals[normal_offset] != side || request->face_measures[point] <= 0.0) {
+          result->status = {sizeof(PopsComponentStatusV1), 43, POPS_COMPONENT_ABORT_RUN_V1,
+                            "boundary flux orientation is inconsistent"};
+          return 43;
+        }
+        for (std::size_t component = 0;
+             component < request->base_outward_normal_flux.component_count; ++component) {
+          const auto index =
+              point * static_cast<std::size_t>(request->base_outward_normal_flux.axis_strides[0]) +
+              component *
+                  static_cast<std::size_t>(request->base_outward_normal_flux.component_stride);
+          output[index] = base[index] + 10.0;
+        }
+        result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
+      }
+      result->status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
+      return 0;
+    }
+
     int tag_batch(void*, const PopsTaggerRequestV2* request, PopsComponentStatusV1* status) {
       ++tag_call_count;
       last_tag_state_data = request->states[0].values.data;
@@ -276,6 +318,10 @@ std::string component_source() {
         {sizeof(PopsGhostBoundaryApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
          POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, &prepare, &destroy},
         &apply_ghost};
+    const PopsBoundaryFluxApiV1 boundary_flux{
+        {sizeof(PopsBoundaryFluxApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+         POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, &prepare, &destroy},
+        &transform_boundary_flux};
     const PopsTaggerApiV2 tagger{{sizeof(PopsTaggerApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
                                   POPS_NATIVE_INTERFACE_TAGGER_V2, 2, &prepare, &destroy},
                                  &tag_batch};
@@ -292,6 +338,7 @@ std::string component_source() {
 #endif
         {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1), &transfer},
         {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1), &ghost},
+        {POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, sizeof(PopsBoundaryFluxApiV1), &boundary_flux},
         {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2), &tagger},
         {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1), &clustering}};
     const PopsComponentApiV1 component{
@@ -306,7 +353,7 @@ std::string component_source() {
         "pops://test/final-flux@1.0.0",
         "semantic-final-flux",
         "manifest-final-flux",
-        5,
+        6,
         interfaces};
     }  // namespace
 
@@ -377,6 +424,7 @@ pops::component::ExpectedNativeComponent expected() {
           {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, sizeof(PopsNumericalFluxApiV1)},
            {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, sizeof(PopsTransferApiV1)},
            {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1)},
+           {POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, sizeof(PopsBoundaryFluxApiV1)},
            {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2)},
            {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1)}}};
 }
@@ -1134,6 +1182,91 @@ TEST(test_amr_native_loader, BoundaryPlanSessionsOwnFreshLaneQualifiedComponentS
     EXPECT_EQ(destroy_count(), 2);
   }
   pops::dynlib::close(inspection);
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader,
+     PostRiemannBoundaryFluxUsesOutwardOrientationAndPreservesCanonicalFaceStorage) {
+  const auto library = compile_component();
+  {
+    auto component = std::make_shared<pops::component::LoadedComponent>(
+        pops::component::LoadedComponent::load(library.string(), expected()));
+    const auto make_spec = [&](std::string target, std::string boundary, int side) {
+      pops::PreparedBoundaryComponentSpec spec;
+      spec.target_identity = std::move(target);
+      spec.component_id = kComponentId;
+      spec.manifest_identity = kManifestIdentity;
+      spec.interface_version = 1;
+      spec.producer_identity = spec.target_identity;
+      spec.state_identity = "case::state::u";
+      spec.ghost_identity = boundary;
+      spec.layout_identity = "case::layout::cells";
+      spec.region.kind = POPS_BOUNDARY_FACE_V1;
+      spec.region.dimension = 2;
+      spec.region.codimension = 1;
+      spec.region.axes = {0};
+      spec.region.sides = {side};
+      spec.region.identity = std::move(boundary);
+      spec.outputs = {spec.state_identity};
+      spec.parameters_json = R"({"outward_shift":10.0})";
+      spec.target_json = R"({"kind":"post-riemann-flux"})";
+      spec.execution = prepared_execution();
+      return spec;
+    };
+
+    auto hyperbolic = pops::prepare_hyperbolic_boundary<2>(
+        {"foextrap", "foextrap", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+        {"case::boundary::xlo", "case::boundary::xhi", "case::boundary::ylo",
+         "case::boundary::yhi"},
+        {"Scalar"});
+    pops::PreparedBoundaryPlan plan("case::boundary::flux-plan", 1, std::move(hyperbolic), {},
+                                    "case::state::u");
+    plan.install_flux_component(make_spec("case::boundary-flux::xlo", "case::boundary::xlo", -1),
+                                component);
+    plan.install_flux_component(make_spec("case::boundary-flux::xhi", "case::boundary::xhi", 1),
+                                component);
+    EXPECT_TRUE(plan.has_flux_transformations());
+
+    const pops::Box2D domain = pops::Box2D::from_extents(3, 3);
+    const pops::Geometry geometry(domain, pops::Real(0), pops::Real(1), pops::Real(0),
+                                  pops::Real(1));
+    const pops::BoxArray cell_boxes = pops::BoxArray::from_domain(domain, domain.nx());
+    pops::MultiFab state(cell_boxes, pops::DistributionMapping(cell_boxes.size(), pops::n_ranks()),
+                         1, 1);
+    state.set_val(pops::Real(1));
+    pops::Box2D xface_box = domain;
+    ++xface_box.hi[0];
+    const pops::BoxArray xface_boxes(std::vector<pops::Box2D>{xface_box});
+    pops::MultiFab fx(xface_boxes, pops::DistributionMapping(xface_boxes.size(), pops::n_ranks()),
+                      1, 0);
+    pops::Box2D yface_box = domain;
+    ++yface_box.hi[1];
+    const pops::BoxArray yface_boxes(std::vector<pops::Box2D>{yface_box});
+    pops::MultiFab fy(yface_boxes, pops::DistributionMapping(yface_boxes.size(), pops::n_ranks()),
+                      1, 0);
+    fx.set_val(pops::Real(3));
+    fy.set_val(pops::Real(4));
+
+    pops::detail::BoundaryFieldRegistry fields;
+    fields.configure_states(plan.required_state_identities());
+    fields.configure_fields(plan.required_field_identities());
+    fields.begin_binding();
+    const auto lane = pops::ExecutionLane::world("case::boundary::flux-session");
+    auto session = plan.make_session(lane);
+    session.prepare_flux_executor(state, fields, geometry);
+    const pops::runtime::multiblock::BoundaryEvaluationPoint point{
+        "clock.boundary-flux", 0, 0, 0, 0, pops::amr::Rational(0, 1), 0.1, 0.0};
+    session.transform_fluxes(point, state, fields, geometry, fx, fy);
+
+    if (fx.local_size() != 0) {
+      // The provider receives outward flux.  Adding +10 outward therefore scatters as -7 on the
+      // lower face (-(-3 + 10)) and +13 on the upper face (+(+3 + 10)).
+      EXPECT_EQ(fx.fab(0)(domain.lo[0], 1, 0), pops::Real(-7));
+      EXPECT_EQ(fx.fab(0)(domain.hi[0] + 1, 1, 0), pops::Real(13));
+      EXPECT_EQ(fx.fab(0)(1, 1, 0), pops::Real(3));
+      EXPECT_EQ(fy.fab(0)(1, 1, 0), pops::Real(4));
+    }
+  }
   std::filesystem::remove(library);
 }
 

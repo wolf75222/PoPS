@@ -40,10 +40,19 @@ def _execution_context() -> ExecutionContext:
 
 
 @pytest.mark.parametrize("prepare_fails", (False, True))
-def test_boundary_component_install_is_transactional_and_preserves_prepare_json(prepare_fails):
+@pytest.mark.parametrize(
+    ("operation", "native_interface", "expected_installer"),
+    (
+        ("apply_region_batch", {"abi_id": 17, "version": 1,
+                                "cpp_table": "GhostBoundary"}, "ghost"),
+        ("transform_faces", {"abi_id": 6, "version": 1,
+                             "cpp_table": "BoundaryFlux"}, "flux"),
+    ),
+)
+def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
+        prepare_fails, operation, native_interface, expected_installer):
     component_id = "pops://external.test/boundary@1.0.0"
     manifest_identity = "component-manifest:boundary-test"
-    native_interface = {"abi_id": 17, "version": 1, "cpp_table": "GhostBoundary"}
     region = {
         "kind": "face", "dimension": 2, "codimension": 1,
         "axes": [0], "sides": [-1], "identity": "left-face",
@@ -56,7 +65,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         "interface_version": 1,
         "region": region,
         "parameters": [{"qualified_id": "case::inlet", "value": 2.0}],
-        "operation": "apply_region_batch",
+        "operation": operation,
         "state_identity": "case::block::state",
         "states": [], "directions": [], "fields": [],
         "outputs": ["case::block::state"],
@@ -92,6 +101,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
             self.prepare_overrides = None
             self.discarded = False
             self.state_routes = []
+            self.installer = None
 
         def _install_block_state_route(self, block, identity):
             self.state_routes.append((block, identity))
@@ -104,10 +114,21 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
 
         def _install_ghost_boundary_component(
                 self, block, handle, row, parameters_json, target_json, execution):
+            self._install_component(
+                "ghost", block, handle, row, parameters_json, target_json, execution)
+
+        def _install_boundary_flux_component(
+                self, block, handle, row, parameters_json, target_json, execution):
+            self._install_component(
+                "flux", block, handle, row, parameters_json, target_json, execution)
+
+        def _install_component(
+                self, installer, block, handle, row, parameters_json, target_json, execution):
             assert block == "block"
             assert handle is native_handle
             assert row == component_row
             assert execution["communicator_identity"] == "serial"
+            self.installer = installer
             self.prepare_overrides = (parameters_json, target_json)
             if prepare_fails:
                 raise RuntimeError("component prepare rejected")
@@ -152,6 +173,7 @@ def test_boundary_component_install_is_transactional_and_preserves_prepare_json(
         assert native.state_routes == [("block", "case::block::state")]
         assert native.discarded is False
     assert native.prepare_overrides == ("", "")
+    assert native.installer == expected_installer
 
 
 @pytest.mark.parametrize(

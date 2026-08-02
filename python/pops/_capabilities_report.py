@@ -449,19 +449,21 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "boundary:post_riemann_flux",
             layout="uniform|amr",
-            backend="none",
+            backend="production",
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            status="unavailable",
+            status="partial",
             limitation=(
-                "the typed NumericalFlux port and immutable no_flux provider law resolve without "
-                "semantic inference, but the prepared boundary component ABI has ghost, residual, "
-                "and JVP operations and no post-Riemann numerical-flux transformation port"
+                "one typed BoundaryFlux component transforms the already evaluated outward-normal "
+                "face flux between the Riemann solve and divergence/reflux through the same "
+                "prepared Uniform/AMR boundary plan; execution is currently a 2D Cartesian "
+                "host-batch route, the ordinary Uniform route materializes face fields when this "
+                "stage is selected, and no device-native or embedded/cut-cell metric ABI or "
+                "high-level TransportBoundarySet convenience exists yet"
             ),
             requested="post-Riemann transport-boundary flux provider",
-            available_route="prepared ghost-state/exterior-state transport boundary",
-            alternative="add the typed NumericalFlux boundary component interface",
+            available_route="PostRiemannFlux plus one qualified BoundaryFlux component",
             source=source,
         ),
         _row(

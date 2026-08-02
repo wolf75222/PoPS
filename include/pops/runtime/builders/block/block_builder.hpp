@@ -126,7 +126,9 @@ template <class Limiter, class Flux, class Model>
 inline void assemble_rhs_without_prepared_interfaces(
     const Model& model, MultiFab& state, const GridContext& context, MultiFab& residual,
     bool reconstruct_primitive, Real positivity_floor, Real weno_epsilon = kWenoEpsilon,
-    const std::shared_ptr<MultiFab>& ws_cache = {}) {
+    const std::shared_ptr<MultiFab>& ws_cache = {},
+    const runtime::multiblock::BoundaryEvaluationPoint* point = nullptr,
+    const PreparedGridBoundarySession* boundary = nullptr) {
   std::vector<Box2D> xboxes;
   std::vector<Box2D> yboxes;
   xboxes.reserve(static_cast<std::size_t>(state.box_array().size()));
@@ -151,6 +153,15 @@ inline void assemble_rhs_without_prepared_interfaces(
     compute_face_fluxes<Limiter, Flux>(model, state, *context.aux, fx, fy, context.geom.dx(),
                                        context.geom.dy(), reconstruct_primitive, positivity_floor,
                                        weno_epsilon);
+  }
+  if (context.boundary_plan && context.boundary_plan->has_flux_transformations()) {
+    if (point == nullptr)
+      throw std::logic_error(
+          "post-Riemann boundary flux transformation requires a BoundaryEvaluationPoint");
+    if (boundary != nullptr)
+      transform_grid_boundary_fluxes(state, fx, fy, *boundary, *point);
+    else
+      transform_grid_boundary_fluxes(state, fx, fy, context, *point);
   }
   zero_prepared_interface_fluxes(fx, fy, context);
   mf_eval_rhs(model, state, *context.aux, fx, fy, context.geom.dx(), context.geom.dy(), residual);
@@ -203,20 +214,23 @@ struct BlockRhsEval {
   void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
                  MultiFab& R) const {
     fill_grid_ghosts(U, *ctx, point);
-    eval_core_filled(U, R);
+    eval_core_filled(U, R, &point, nullptr);
   }
 
   void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
     fill_grid_ghosts(U, boundary, point);
-    eval_core_filled(U, R);
+    eval_core_filled(U, R, &point, &boundary);
   }
 
  private:
-  void eval_core_filled(MultiFab& U, MultiFab& R) const {
-    if (ctx->boundary_plan && ctx->boundary_plan->has_omitted_faces()) {
-      assemble_rhs_without_prepared_interfaces<Limiter, Flux>(model, U, *ctx, R, recon_prim,
-                                                              pos_floor, weno_eps, ws_cache);
+  void eval_core_filled(MultiFab& U, MultiFab& R,
+                        const runtime::multiblock::BoundaryEvaluationPoint* point = nullptr,
+                        const PreparedGridBoundarySession* boundary = nullptr) const {
+    if (ctx->boundary_plan && (ctx->boundary_plan->has_omitted_faces() ||
+                               ctx->boundary_plan->has_flux_transformations())) {
+      assemble_rhs_without_prepared_interfaces<Limiter, Flux>(
+          model, U, *ctx, R, recon_prim, pos_floor, weno_eps, ws_cache, point, boundary);
       return;
     }
     if constexpr (std::is_same_v<Flux, HLLFlux>) {

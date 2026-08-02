@@ -412,6 +412,21 @@ POPS_EXPORT void System::install_ghost_boundary_component(
   found->second->install_ghost_component(std::move(spec), std::move(component));
 }
 
+POPS_EXPORT void System::install_boundary_flux_component(
+    const std::string& name, PreparedBoundaryComponentSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "install_boundary_flux_component");
+  if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
+    throw std::runtime_error(
+        "System::install_boundary_flux_component: embedded-boundary transport has no "
+        "geometry-aware post-Riemann provider");
+  const auto found = P->boundary_plans_.find(name);
+  if (found == P->boundary_plans_.end())
+    throw std::runtime_error("System boundary flux requires an installed block boundary plan");
+  found->second->install_flux_component(std::move(spec), std::move(component));
+}
+
 POPS_EXPORT void System::install_field_boundary_residual_component(
     const std::string& name, PreparedBoundaryComponentSpec spec,
     std::shared_ptr<component::LoadedComponent> component) {

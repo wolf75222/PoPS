@@ -125,10 +125,6 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
             "executable model eigenstructure",
             "prepared characteristic kernel",
         ),
-        "boundary:post_riemann_flux": (
-            "no post-Riemann numerical-flux transformation port",
-            "NumericalFlux boundary component interface",
-        ),
     }
     for feature, (limitation, alternative) in expected_unavailable.items():
         route = routes[feature]
@@ -137,8 +133,13 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
         assert limitation in route.limitation
         assert alternative in route.alternative
         assert route.error_message
-    assert "immutable no_flux provider law" in \
-        routes["boundary:post_riemann_flux"].limitation
+    post_riemann = routes["boundary:post_riemann_flux"]
+    assert post_riemann.status == "partial"
+    assert post_riemann.layout == "uniform|amr"
+    assert post_riemann.backend == "production"
+    assert "outward-normal face flux" in post_riemann.limitation
+    assert "Riemann solve and divergence/reflux" in post_riemann.limitation
+    assert "2D Cartesian host-batch" in post_riemann.limitation
 
 
 def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy():
