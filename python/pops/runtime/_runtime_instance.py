@@ -433,6 +433,15 @@ class RuntimeInstance:
         registry = getattr(self, "_consumer_recoveries", {})
         return tuple(registry[key].record for key in sorted(registry))
 
+    def _failed_run_effect_fence(self) -> tuple[Any, ...]:
+        """Snapshot every RuntimeInstance-owned authority that can outlive a failed run."""
+        return (
+            self._consumer_cursors,
+            self._consumer_reports,
+            tuple(getattr(self, "_consumer_finalize_pending", ())),
+            self.consumer_recoveries,
+        )
+
     @property
     def post_commit_reports(self) -> tuple[Any, ...]:
         """Post-commit delivery reports retained across completed runs."""
@@ -1415,6 +1424,9 @@ class RuntimeInstance:
                 "RuntimeInstance._run does not accept strategy= or cfl=; declare the controller "
                 "with Program.step_strategy(...)"
             )
+        require_observer_world = getattr(self._publisher, "require_observer_world_available", None)
+        if callable(require_observer_world):
+            require_observer_world()
         from pops.runtime._step_strategy import (
             prepare_step_controller,
             resolve_run_strategy,
@@ -1430,7 +1442,16 @@ class RuntimeInstance:
         self._step_transaction_methods()
         entry_temporal = copy.deepcopy(getattr(native, "_temporal_restart_state", None))
         entry_controller = copy.deepcopy(getattr(native, "_step_controller", None))
-        entry_consumer_reports = self._consumer_reports
+        entry_consumer_fence = self._failed_run_effect_fence()
+        publisher_fence = getattr(self._publisher, "failed_run_effect_fence", None)
+        entry_publisher_fence = None
+        if callable(publisher_fence):
+            try:
+                entry_publisher_fence = publisher_fence()
+            except BaseException:
+                # Reopening is an optimization for an effect-free failed invocation.  If its
+                # proof cannot be captured, retain the deterministic identity fail-closed.
+                entry_publisher_fence = None
         previous_root, self._output_root = self._output_root, output_dir
         steps = 0
         rejected_steps = 0
@@ -1487,7 +1508,8 @@ class RuntimeInstance:
                 raise RuntimeError(
                     "max_steps exhausted before t_end: "
                     f"accepted {steps} step(s), reached t={native.time()!r}, "
-                    f"requested t_end={t_end!r}")
+                    f"requested t_end={t_end!r}"
+                )
             # A zero-step run has no accepted final occurrence. Its start consumers were already
             # fired above; do not fabricate an AtEnd/Always/When/Every transaction at that same
             # native state.
@@ -1495,11 +1517,38 @@ class RuntimeInstance:
             if callable(close_live):
                 close_live(manifest.run_identity)
         except BaseException as error:
-            if manifest is not None:
+            seal_observer_loss = getattr(self._publisher, "seal_observer_collective_loss", None)
+            observer_world_lost = bool(callable(seal_observer_loss) and seal_observer_loss(error))
+            if observer_world_lost:
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "post-commit cleanup was skipped because MPI_COMM_WORLD lost its "
+                        "collective proof"
+                    )
+            # Prove restoration of the complete run-entry authority before a consumer-free serial
+            # invocation is allowed to reuse its deterministic identity.  Cleanup still runs when
+            # restoration fails, but the identity remains sealed fail-closed.
+            entry_restored = False
+            if steps == 0:
+                restore_error = None
+                try:
+                    restore_temporal = getattr(native, "_restore_temporal_restart_state", None)
+                    if callable(restore_temporal):
+                        restore_temporal(entry_temporal)
+                    elif hasattr(native, "_temporal_restart_state"):
+                        native._temporal_restart_state = entry_temporal
+                    if hasattr(native, "_step_controller"):
+                        native._step_controller = entry_controller
+                    entry_restored = True
+                except BaseException as caught:
+                    restore_error = caught
+                add_note = getattr(error, "add_note", None)
+                if restore_error is not None and callable(add_note):
+                    add_note("run-entry temporal rollback also failed: %s" % restore_error)
+            if manifest is not None and not observer_world_lost:
                 close_live = getattr(self._publisher, "close_live_visualizations", None)
-                close_failed_run = getattr(
-                    self._publisher, "close_failed_run_consumers", None
-                )
+                close_failed_run = getattr(self._publisher, "close_failed_run_consumers", None)
                 if callable(close_live):
                     before = len(self.post_commit_diagnostics)
                     try:
@@ -1507,8 +1556,12 @@ class RuntimeInstance:
                             close_failed_run(
                                 manifest.run_identity,
                                 release_identity=(
-                                    self._consumer_reports == entry_consumer_reports
+                                    entry_restored
+                                    and self._failed_run_effect_fence() == entry_consumer_fence
+                                    and not self._consumer_finalize_pending
+                                    and not self.consumer_recoveries
                                 ),
+                                entry_effect_fence=entry_publisher_fence,
                             )
                         else:
                             close_live(manifest.run_identity, raise_on_failure=False)
@@ -1524,25 +1577,6 @@ class RuntimeInstance:
                                 "post-commit consumer delivery diagnostics: %s"
                                 % "; ".join(after[before:])
                             )
-            # ``begin_run`` binds controller/strategy state before the first native transaction.
-            # If no macro-step commits, the complete failed call leaves the temporal authority at
-            # its entry boundary.  After one or more accepted steps, each later failed transaction
-            # already restores the last accepted boundary and that progress must be retained.
-            if steps == 0:
-                restore_error = None
-                try:
-                    restore_temporal = getattr(native, "_restore_temporal_restart_state", None)
-                    if callable(restore_temporal):
-                        restore_temporal(entry_temporal)
-                    elif hasattr(native, "_temporal_restart_state"):
-                        native._temporal_restart_state = entry_temporal
-                    if hasattr(native, "_step_controller"):
-                        native._step_controller = entry_controller
-                except BaseException as caught:
-                    restore_error = caught
-                add_note = getattr(error, "add_note", None)
-                if restore_error is not None and callable(add_note):
-                    add_note("run-entry temporal rollback also failed: %s" % restore_error)
             if console_session is not None:
                 from pops.runtime._console_run import safe_console_failed
 
