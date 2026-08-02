@@ -263,38 +263,6 @@ def _resolve(
         name, plan, rows, request.layout, request.operator.unknown
     )
     dependencies = boundary_dependency_pack(plan, request.operator.unknown)
-    if target == "amr_system" and dependencies["fields"]:
-        _reject(
-            rows, "field:%s:boundaries" % name,
-            "field.boundary.amr_field_dependency_not_native",
-            "field %r has a boundary law depending on another solved field; the AMR "
-            "provider has no exact composite materialization route" % name,
-        )
-    if (
-        target == "amr_system"
-        and layout_contract.levels > 1
-        and dependencies["states"]
-    ):
-        _reject(
-            rows, "field:%s:boundaries" % name,
-            "field.boundary.amr_multilevel_state_dependency_not_native",
-            "field %r has a state-dependent boundary law on a multilevel hierarchy" % name,
-        )
-    for kind in ("states", "fields"):
-        for dependency in dependencies[kind]:
-            rows.append(LoweringCoverageRow(
-                "field:%s:boundary-dependency:%s:%d" % (
-                    name, dependency["qualified_id"], dependency["component"]
-                ),
-                "lowered",
-                ("field-install:%s:boundary-buffer:%s" % (name, kind),),
-            ))
-    for coordinate in dependencies["logical_time"]:
-        rows.append(LoweringCoverageRow(
-            "field:%s:boundary-time:%s" % (name, coordinate),
-            "lowered",
-            ("field-install:%s:logical-timepoint" % name,),
-        ))
     boundary_dynamic = faces is not None and any(face["dynamic"] for face in faces)
     boundary_iterate = faces is not None and any(
         face["iterate_dependent"] for face in faces
@@ -330,6 +298,24 @@ def _resolve(
         "derived",
         rule="%s + provider-target=%s" % (policy, target),
     ))
+    for kind in ("states", "fields"):
+        for dependency in dependencies[kind]:
+            route = "field-install:%s:boundary-buffer:%s" % (name, kind)
+            if target == "amr_system":
+                route += ":level-qualified"
+            rows.append(LoweringCoverageRow(
+                "field:%s:boundary-dependency:%s:%d" % (
+                    name, dependency["qualified_id"], dependency["component"]
+                ),
+                "lowered",
+                (route,),
+            ))
+    for coordinate in dependencies["logical_time"]:
+        rows.append(LoweringCoverageRow(
+            "field:%s:boundary-time:%s" % (name, coordinate),
+            "lowered",
+            ("field-install:%s:logical-timepoint" % name,),
+        ))
 
     if plan.preconditioner is not None:
         _reject(
@@ -389,6 +375,9 @@ def _resolve(
             "dependent": any(
                 dependencies[kind] for kind in ("states", "fields", "logical_time")
             ),
+            "state_dependent": bool(dependencies["states"]),
+            "field_dependent": bool(dependencies["fields"]),
+            "logical_time_coordinates": tuple(dependencies["logical_time"]),
             "iterate_dependent": boundary_iterate,
         },
         nonlinear=plan.nonlinear is not None,

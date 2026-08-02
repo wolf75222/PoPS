@@ -1009,7 +1009,8 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
     once rather than silently dropping them.
     """
     targets = list(dict.fromkeys(args.targets))
-    if not targets:
+    standalone_regex_file = getattr(args, "standalone_regex_file", None)
+    if not targets and not standalone_regex_file:
         raise SystemExit("C++ target-label verification requires at least one target")
 
     tests = _read_ctest_inventory(args.ctest_json)
@@ -1072,7 +1073,6 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
             + details
         )
 
-    standalone_regex_file = getattr(args, "standalone_regex_file", None)
     if standalone_regex_file:
         escaped = [re.escape(name) for name in standalone]
         standalone_regex = (
@@ -1807,7 +1807,7 @@ def main() -> int:
 
     cpp_target_labels = sub.add_parser("verify-cpp-target-labels")
     cpp_target_labels.add_argument("--ctest-json", required=True)
-    cpp_target_labels.add_argument("--targets", nargs="+", required=True)
+    cpp_target_labels.add_argument("--targets", nargs="*", required=True)
     cpp_target_labels.add_argument("--standalone-regex-file")
     cpp_target_labels.set_defaults(func=verify_cpp_target_labels)
 

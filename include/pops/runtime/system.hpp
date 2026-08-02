@@ -1391,6 +1391,9 @@ class System {
                                                             const MultiFab& U_stage);
   POPS_EXPORT SolveReport solve_fields_from_blocks_in_place_(
       const std::string& field, const std::vector<const MultiFab*>& U_stages);
+  POPS_EXPORT SolveReport solve_fields_from_blocks_at_in_place_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+      const std::vector<const MultiFab*>& U_stages);
   POPS_EXPORT void prepare_default_field_publication_storage_();
   POPS_EXPORT void prepare_named_field_publication_storage_(const std::string& field);
   POPS_EXPORT void begin_field_publication_transaction();

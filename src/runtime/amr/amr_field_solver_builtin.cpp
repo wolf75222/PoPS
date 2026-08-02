@@ -99,8 +99,7 @@ bool fully_refines_every_level(const AmrFieldSolverBuildRequest& request) {
     return false;
   int parent_refinement = 1;
   for (int level = 0; level + 1 < request.hierarchy.nlev(); ++level) {
-    const int ratio =
-        request.hierarchy.refinement_ratios.at(static_cast<std::size_t>(level));
+    const int ratio = request.hierarchy.refinement_ratios.at(static_cast<std::size_t>(level));
     if (ratio <= 0)
       return false;
     const Geometry parent_geometry = request.geometry.refine(parent_refinement);
@@ -108,8 +107,7 @@ bool fully_refines_every_level(const AmrFieldSolverBuildRequest& request) {
     std::uint64_t covered_cells = 0;
     for (int patch = 0; patch < children.size(); ++patch) {
       const Box2D footprint = children[patch].coarsen(ratio);
-      if (footprint.refine(ratio) != children[patch] ||
-          !parent_geometry.domain.contains(footprint))
+      if (footprint.refine(ratio) != children[patch] || !parent_geometry.domain.contains(footprint))
         return false;
       for (int previous = 0; previous < patch; ++previous)
         if (!footprint.intersect(children[previous].coarsen(ratio)).empty())
@@ -216,12 +214,15 @@ class PreparedGeometricMgFieldSolver final : public AmrPreparedFieldSolver {
     for (auto& solver : level_solvers_)
       solver->set_boundary_context(context);
   }
-  void set_boundary_context_for_level(int level,
-                                      const FieldBoundaryExecutionContext& context) override {
+  void set_boundary_context_at_level(int level,
+                                     const FieldBoundaryExecutionContext& context) override {
     if (fac_) {
-      fac_->set_boundary_context_for_level(level, context);
+      fac_->set_boundary_context_at_level(level, context);
       return;
     }
+    if (level < 0 || level >= level_count())
+      throw std::out_of_range(
+          "geometric-MG boundary context level is outside the prepared hierarchy");
     level_solvers_.at(static_cast<std::size_t>(level))->set_boundary_context(context);
   }
   SolveReport solve() override {
@@ -282,7 +283,7 @@ class GeometricMgFieldSolverProvider final : public AmrFieldSolverProvider {
         "pops.amr.field-solver.geometric-mg.distributed-coarse@1",
         "pops.amr.field-solver.geometric-mg.dynamic-boundary@1",
         "pops.amr.field-solver.geometric-mg.exact-preparation@1",
-        "pops.amr.field-solver.geometric-mg.level-qualified-linear-boundary@1",
+        "pops.amr.field-solver.geometric-mg.level-qualified-dynamic-boundary@1",
         "pops.amr.field-solver.geometric-mg.level-local-hierarchy@1",
         "pops.amr.field-solver.geometric-mg.nonlinear-boundary@1",
         "pops.amr.field-solver.geometric-mg.reaction@1",

@@ -548,6 +548,27 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             source=source,
         ),
         _row(
+            "amr:external_field_solver_v2",
+            layout="amr",
+            backend="none",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="unavailable",
+            limitation=(
+                "FieldSolver@2 carries a level on patch metadata, but the installed external "
+                "component adapter owns one uniform System MultiFab and no AmrFieldSolverProvider "
+                "hierarchy materialization"
+            ),
+            requested="external FieldSolver@2 on an AMR hierarchy",
+            available_route="external FieldSolver@2 on one uniform host/serial level",
+            alternative=(
+                "implement an authenticated AMR component bridge that materializes all levels, "
+                "coarse-fine topology and collective solve ownership"
+            ),
+            source=source,
+        ),
+        _row(
             "amr:field_coupled_rhs_jacvec",
             layout="amr",
             backend="none",

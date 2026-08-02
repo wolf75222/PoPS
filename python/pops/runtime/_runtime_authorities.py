@@ -461,7 +461,12 @@ def _validate_refined_shared_interface_execution(
     *,
     dynamic_regrid: bool = False,
 ) -> None:
-    """Require one contiguous materialized prefix on the selected communicator."""
+    """Require one contiguous materialized prefix on the selected communicator.
+
+    Frozen and depth-preserving dynamic hierarchies share this exact execution contract.  Native
+    rematerialization prepares a detached collective registry and publishes it only after every
+    ``MPI_COMM_WORLD`` rank agrees on the replacement layout identity.
+    """
     if not levels or levels != tuple(range(len(levels))):
         raise ValueError("shared-interface materialized levels must be a contiguous L0 prefix")
     if type(rank_count) is not int or rank_count < 1:

@@ -10,6 +10,7 @@ below, so their tableau remains authored and visible instead of being inferred f
 Projection and coupled-source splitting are opt-in by block identity/registration; implicit-solve
 tests still need purpose-built Program primitives.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -74,21 +75,15 @@ def _empty_module_metadata_exports() -> str:
     return (
         'extern "C" int pops_module_operator_count() { return 0; }\n'
         'extern "C" int pops_module_state_space_count() { return 0; }\n'
-        'extern "C" int pops_module_field_space_count() { return 0; }\n'
-        + string_exports
+        'extern "C" int pops_module_field_space_count() { return 0; }\n' + string_exports
     )
 
 
 def _coupling_application(block_count: int, enabled: bool) -> str:
     if not enabled:
         return ""
-    candidates = [
-        "        {%d, &next_%d}" % (block, block)
-        for block in range(block_count)
-    ]
-    return "      ctx.apply_coupling_operators(dt, {\n%s\n      });" % ",\n".join(
-        candidates
-    )
+    candidates = ["        {%d, &next_%d}" % (block, block) for block in range(block_count)]
+    return "      ctx.apply_coupling_operators(dt, {\n%s\n      });" % ",\n".join(candidates)
 
 
 def _forward_euler_body(
@@ -111,8 +106,7 @@ def _forward_euler_body(
             )
         )
         requests.append(
-            "        {%d, &state_%d, &rhs_%d, %d, 0}"
-            % (block, block, block, 3000 + block)
+            "        {%d, &state_%d, &rhs_%d, %d, 0}" % (block, block, block, 3000 + block)
         )
         combinations.extend(
             (
@@ -128,7 +122,7 @@ def _forward_euler_body(
     return "\n".join(
         (
             "      ctx.set_stage_time(0, 1);",
-        "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
+            "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
             *declarations,
             "      ctx.rhs_group(4000, {\n%s\n      });" % ",\n".join(requests),
             *combinations,
@@ -174,8 +168,7 @@ def _rhs_stage(
     return [
         "      ctx.set_stage_time(%d, %d);" % (numerator, denominator),
         *declarations,
-        "      ctx.rhs_group(%d, {\n%s\n      });"
-        % (40000 + stage, ",\n".join(requests)),
+        "      ctx.rhs_group(%d, {\n%s\n      });" % (40000 + stage, ",\n".join(requests)),
     ]
 
 
@@ -186,13 +179,9 @@ def _projection_and_commit(
     apply_couplings: bool,
 ) -> list[str]:
     projections = [
-        "      ctx.apply_projection(%d, next_%d);" % (block, block)
-        for block in projection_indices
+        "      ctx.apply_projection(%d, next_%d);" % (block, block) for block in projection_indices
     ]
-    commits = [
-        "        {&state_%d, &next_%d}" % (block, block)
-        for block in range(block_count)
-    ]
+    commits = ["        {&state_%d, &next_%d}" % (block, block) for block in range(block_count)]
     return [
         _coupling_application(block_count, apply_couplings),
         *projections,
@@ -212,8 +201,7 @@ def _ssprk2_body(
         stage_one.extend(
             (
                 "      pops::MultiFab& stage1_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);"
-                % (block, 20000 + block, block),
+                "ctx.scratch_state(%d, 0, state_%d);" % (block, 20000 + block, block),
                 "      ctx.lincomb(stage1_%d, pops::Real(1), state_%d, dt, rhs_0_%d, dt, "
                 "{{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
             )
@@ -221,8 +209,7 @@ def _ssprk2_body(
         result.extend(
             (
                 "      pops::MultiFab& endpoint1_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);"
-                % (block, 21000 + block, block),
+                "ctx.scratch_state(%d, 0, state_%d);" % (block, 21000 + block, block),
                 "      ctx.lincomb(endpoint1_%d, pops::Real(1), stage1_%d, dt, rhs_1_%d, "
                 "dt, {{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
                 "      pops::MultiFab& next_%d = ctx.scratch_state(%d, 0, state_%d);"
@@ -235,7 +222,7 @@ def _ssprk2_body(
     return "\n".join(
         (
             *_state_declarations(block_count),
-        "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
+            "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
             *_rhs_stage(
                 block_count,
                 stage=0,
@@ -274,8 +261,7 @@ def _ssprk3_body(
         first_stage.extend(
             (
                 "      pops::MultiFab& stage1_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);"
-                % (block, 20000 + block, block),
+                "ctx.scratch_state(%d, 0, state_%d);" % (block, 20000 + block, block),
                 "      ctx.lincomb(stage1_%d, pops::Real(1), state_%d, dt, rhs_0_%d, dt, "
                 "{{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
             )
@@ -283,13 +269,11 @@ def _ssprk3_body(
         second_stage.extend(
             (
                 "      pops::MultiFab& endpoint1_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);"
-                % (block, 21000 + block, block),
+                "ctx.scratch_state(%d, 0, state_%d);" % (block, 21000 + block, block),
                 "      ctx.lincomb(endpoint1_%d, pops::Real(1), stage1_%d, dt, rhs_1_%d, "
                 "dt, {{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
                 "      pops::MultiFab& stage2_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);"
-                % (block, 22000 + block, block),
+                "ctx.scratch_state(%d, 0, state_%d);" % (block, 22000 + block, block),
                 "      ctx.lincomb(stage2_%d, pops::Real(3) / pops::Real(4), state_%d, "
                 "pops::Real(1) / pops::Real(4), endpoint1_%d, dt, "
                 "{{0, 3, 4}}, {{0, 1, 4}});" % (block, block, block),
@@ -298,8 +282,7 @@ def _ssprk3_body(
         result.extend(
             (
                 "      pops::MultiFab& endpoint2_%d = "
-                "ctx.scratch_state(%d, 0, state_%d);"
-                % (block, 23000 + block, block),
+                "ctx.scratch_state(%d, 0, state_%d);" % (block, 23000 + block, block),
                 "      ctx.lincomb(endpoint2_%d, pops::Real(1), stage2_%d, dt, rhs_2_%d, "
                 "dt, {{0, 1, 1}}, {{1, 1, 1}});" % (block, block, block),
                 "      pops::MultiFab& next_%d = ctx.scratch_state(%d, 0, state_%d);"
@@ -312,7 +295,7 @@ def _ssprk3_body(
     return "\n".join(
         (
             *_state_declarations(block_count),
-        "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
+            "      (void)pops::consume_solve_outcome(ctx.solve_fields());",
             *_rhs_stage(
                 block_count,
                 stage=0,
@@ -346,6 +329,19 @@ def _ssprk3_body(
     )
 
 
+def _make_test_field_solve_explicitly_coarse(body: str) -> str:
+    """Qualify the legacy test-only AMR field cadence without claiming a fine solve."""
+    generic = "      (void)pops::consume_solve_outcome(ctx.solve_fields());"
+    if body.count(generic) != 1:
+        raise AssertionError("explicit test Program must contain one default field solve")
+    return body.replace(
+        generic,
+        "      if (ctx.level() == 0)\n"
+        "        (void)pops::consume_solve_outcome(\n"
+        "            ctx.solve_default_field_on_coarse_level());",
+    )
+
+
 def _source(
     *,
     target: str,
@@ -375,6 +371,8 @@ def _source(
         )
     else:  # pragma: no cover - private callers validate the method
         raise ValueError("unsupported explicit test Program %r" % method)
+    if target == "amr_system":
+        body = _make_test_field_solve_explicitly_coarse(body)
     common = """\
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)
 #error "test Programs require the shared runtime exception ABI consumer contract"
@@ -412,7 +410,8 @@ extern "C" pops::Real %s(%s*, pops::Real) {
         "pops::AmrSystem" if target == "amr_system" else "pops::System",
     )
     if target == "system":
-        install = """\
+        install = (
+            """\
 extern "C" void pops_install_program(pops::System* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
   context->configure_primary_clock("pops.test.clock.macro");
@@ -422,9 +421,12 @@ extern "C" void pops_install_program(pops::System* system) {
 %s
   });
 }
-""" % body
+"""
+            % body
+        )
     else:
-        install = """\
+        install = (
+            """\
 extern "C" void pops_install_program_amr(pops::AmrSystem* system) {
   auto context = pops::runtime::program::make_program_execution_provider(system);
   context->configure_primary_clock("pops.test.clock.macro");
@@ -435,7 +437,9 @@ extern "C" void pops_install_program_amr(pops::AmrSystem* system) {
     });
   }, context);
 }
-""" % body
+"""
+            % body
+        )
     return common + install
 
 
@@ -505,9 +509,7 @@ def _install_explicit_program(
     coupled_sources: bool = False,
 ) -> str:
     if method not in {"euler", "ssprk2", "ssprk3", "imex_source_free"}:
-        raise ValueError(
-            "method must be 'euler', 'ssprk2', 'ssprk3', or 'imex_source_free'"
-        )
+        raise ValueError("method must be 'euler', 'ssprk2', 'ssprk3', or 'imex_source_free'")
     if not isinstance(runtime, (System, AmrSystem)):
         raise TypeError("runtime must be a pops.runtime System or AmrSystem")
     block_names = tuple(runtime.block_names())

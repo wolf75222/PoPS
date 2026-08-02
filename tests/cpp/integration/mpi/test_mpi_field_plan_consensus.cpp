@@ -1,22 +1,38 @@
-// Exact collective consensus for resolved field-plan registries. Each scenario uses a fresh facade:
-// setters are intentionally local/non-collective, then mark_bound compares one canonical std::map-
-// ordered sequence of (provider_slot, plan_identity) before field-plan materialization.
+// Exact collective consensus for resolved field-plan registries and level-qualified AMR stage
+// packs. Registry scenarios keep setters local/non-collective, then mark_bound compares one
+// canonical std::map-ordered sequence of (provider_slot, plan_identity). The stage-pack scenario
+// drives distributed L0/L1 storage and proves successful publication, while a second supported
+// replicated-L0/distributed-L1 scenario proves the composite field-coupled residual JVP against an
+// independent finite difference. It also proves a level-local solved-field physical-boundary JVP
+// and pre-solve rejection when provider, evaluation point, or pack presence differs between ranks.
+// The deliberately unsupported distributed-L0 composite topology is rejected collectively before
+// RHS assembly, solve, publication, or mutation of already accepted field/provider state.
 
 #include <gtest/gtest.h>
 
+#include "amr_transfer_test_authority.hpp"
 #include "gtest_compat.hpp"
+#include "load_balance_test_authority.hpp"
+#include <pops/core/state/state.hpp>
+#include <pops/coupling/base/elliptic_rhs.hpp>
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
+#include <pops/physics/bricks/bricks.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/amr/hierarchy_tensor_solver_provider.hpp>
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/runtime/system.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <limits>
+#include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -420,6 +436,163 @@ AmrFieldHierarchyPolicyAuthority composite_hierarchy_policy() {
   };
 }
 
+AmrFieldHierarchyPolicyAuthority level_local_hierarchy_policy() {
+  return {
+      "pops.field-hierarchy.level-local",
+      1,
+      {"pops.field-hierarchy.options.empty@1", {}},
+  };
+}
+
+using StagePackModel = CompositeModel<ExBVelocity, NoSource, ChargeDensity>;
+
+StagePackModel stage_pack_model() {
+  return StagePackModel{ExBVelocity{Real(1)}, NoSource{}, ChargeDensity{Real(1)}};
+}
+
+std::vector<double> stage_pack_density(int n, double amplitude) {
+  std::vector<double> density(static_cast<std::size_t>(n) * n, Real(0));
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+      const double x = (static_cast<double>(i) + 0.5) / static_cast<double>(n) - 0.5;
+      const double y = (static_cast<double>(j) + 0.5) / static_cast<double>(n) - 0.5;
+      density[static_cast<std::size_t>(j) * n + i] = amplitude * std::exp(-(x * x + y * y) / 0.025);
+    }
+  return density;
+}
+
+Real global_max_allocated_diff(const MultiFab& lhs, const MultiFab& rhs) {
+  if (lhs.box_array().boxes() != rhs.box_array().boxes() ||
+      lhs.dmap().ranks() != rhs.dmap().ranks() || lhs.ncomp() != rhs.ncomp() ||
+      lhs.n_grow() != rhs.n_grow())
+    throw std::invalid_argument("MPI stage-pack comparison requires identical layouts");
+  device_fence();
+  Real local = Real(0);
+  for (int li = 0; li < lhs.local_size(); ++li) {
+    const ConstArray4 left = lhs.fab(li).const_array();
+    const ConstArray4 right = rhs.fab(li).const_array();
+    const Box2D grown = lhs.fab(li).grown_box();
+    for (int component = 0; component < lhs.ncomp(); ++component)
+      for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+        for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+          local = std::max(local, std::fabs(left(i, j, component) - right(i, j, component)));
+  }
+  return all_reduce_max(local);
+}
+
+Real global_max_valid_scalar_diff(const MultiFab& lhs, const MultiFab& rhs) {
+  if (lhs.box_array().boxes() != rhs.box_array().boxes() ||
+      lhs.dmap().ranks() != rhs.dmap().ranks())
+    throw std::invalid_argument("MPI scalar comparison requires identical layouts");
+  device_fence();
+  Real local = Real(0);
+  for (int li = 0; li < lhs.local_size(); ++li) {
+    const ConstArray4 left = lhs.fab(li).const_array();
+    const ConstArray4 right = rhs.fab(li).const_array();
+    const Box2D valid = lhs.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        local = std::max(local, std::fabs(left(i, j, 0) - right(i, j, 0)));
+  }
+  return all_reduce_max(local);
+}
+
+std::pair<Real, Real> global_physical_boundary_support(const MultiFab& values,
+                                                       const Box2D& domain) {
+  device_fence();
+  Real local_boundary = Real(0);
+  Real local_interior = Real(0);
+  for (int li = 0; li < values.local_size(); ++li) {
+    const ConstArray4 data = values.fab(li).const_array();
+    const Box2D valid = values.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        const Real magnitude = std::fabs(data(i, j, 0));
+        const bool physical =
+            i == domain.lo[0] || i == domain.hi[0] || j == domain.lo[1] || j == domain.hi[1];
+        Real& maximum = physical ? local_boundary : local_interior;
+        maximum = std::max(maximum, magnitude);
+      }
+  }
+  return {all_reduce_max(local_boundary), all_reduce_max(local_interior)};
+}
+
+void add_valid_constant(MultiFab& field, Real value) {
+  device_fence();
+  for (int li = 0; li < field.local_size(); ++li) {
+    Array4 destination = field.fab(li).array();
+    const Box2D valid = field.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        destination(i, j, 0) += value;
+  }
+}
+
+std::pair<Real, Real> global_stage_pack_superposition_error(const MultiFab& both,
+                                                            const MultiFab& only_a,
+                                                            const MultiFab& only_b,
+                                                            const MultiFab& base) {
+  if (both.box_array().boxes() != only_a.box_array().boxes() ||
+      both.box_array().boxes() != only_b.box_array().boxes() ||
+      both.box_array().boxes() != base.box_array().boxes() ||
+      both.dmap().ranks() != only_a.dmap().ranks() ||
+      both.dmap().ranks() != only_b.dmap().ranks() || both.dmap().ranks() != base.dmap().ranks())
+    throw std::invalid_argument("MPI stage-pack superposition requires identical layouts");
+  device_fence();
+  Real local_error = Real(0);
+  Real local_response = Real(0);
+  for (int li = 0; li < both.local_size(); ++li) {
+    const ConstArray4 simultaneous = both.fab(li).const_array();
+    const ConstArray4 a = only_a.fab(li).const_array();
+    const ConstArray4 b = only_b.fab(li).const_array();
+    const ConstArray4 origin = base.fab(li).const_array();
+    const Box2D valid = both.box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        const Real simultaneous_response = simultaneous(i, j) - origin(i, j);
+        const Real separate_response = (a(i, j) - origin(i, j)) + (b(i, j) - origin(i, j));
+        local_error = std::max(local_error, std::fabs(simultaneous_response - separate_response));
+        local_response = std::max(local_response, std::fabs(simultaneous_response));
+      }
+  }
+  return {all_reduce_max(local_error), all_reduce_max(local_response)};
+}
+
+bool mapping_is_distributed_across_two_ranks(const DistributionMapping& mapping) {
+  const auto& owners = mapping.ranks();
+  return std::find(owners.begin(), owners.end(), 0) != owners.end() &&
+         std::find(owners.begin(), owners.end(), 1) != owners.end();
+}
+
+DistributionMapping split_xlow_face_across_ranks(const BoxArray& boxes, const Box2D& domain) {
+  if (n_ranks() <= 0)
+    throw std::logic_error("physical-boundary distribution requires an active communicator");
+  std::vector<int> owners(static_cast<std::size_t>(boxes.size()), 0);
+  int next_face_owner = 0;
+  int next_other_owner = 0;
+  for (int box = 0; box < boxes.size(); ++box) {
+    if (boxes[box].lo[0] == domain.lo[0])
+      owners[static_cast<std::size_t>(box)] = next_face_owner++ % n_ranks();
+    else
+      owners[static_cast<std::size_t>(box)] = next_other_owner++ % n_ranks();
+  }
+  return DistributionMapping(std::move(owners));
+}
+
+bool xlow_face_is_distributed_across_two_ranks(const BoxArray& boxes,
+                                               const DistributionMapping& mapping,
+                                               const Box2D& domain) {
+  bool rank_zero = false;
+  bool rank_one = false;
+  for (int box = 0; box < boxes.size(); ++box) {
+    if (boxes[box].lo[0] != domain.lo[0])
+      continue;
+    rank_zero = rank_zero || mapping[box] == 0;
+    rank_one = rank_one || mapping[box] == 1;
+  }
+  return rank_zero && rank_one;
+}
+
 void install(AmrSystem& system, const std::string& slot, const std::string& plan_identity,
              double provider_coefficient = 1.0) {
   system.set_field_solver_plan(slot, plan_identity, "provider:" + slot, "output-owner", "plasma",
@@ -469,6 +642,729 @@ bool duplicate_rejected(System& system) {
   return false;
 }
 
+long prove_field_jacvec_route(AmrRuntime& runtime, const std::string& jacvec_field,
+                              const std::string& block_name, int block_index,
+                              const AmrFieldHierarchyPolicyAuthority& hierarchy_policy,
+                              std::string_view topology_digest, std::string_view route_label) {
+  constexpr Real c_dt = Real(0.01);
+  constexpr Real h = Real(2e-4);
+  long failures = 0;
+  const auto require = [&failures, route_label](bool condition, std::string_view check) {
+    if (!condition) {
+      std::fprintf(stderr, "rank %d: %.*s failed: %.*s\n", my_rank(),
+                   static_cast<int>(route_label.size()), route_label.data(),
+                   static_cast<int>(check.size()), check.data());
+      ++failures;
+    }
+  };
+  const auto consume_solved = [route_label](SolveOutcome outcome, std::string_view check) {
+    if (!outcome.report().solved()) {
+      const SolveConsumption action = outcome.report().action == SolveAction::kRejectAttempt
+                                          ? SolveConsumption::kRejectAttempt
+                                          : SolveConsumption::kFailRun;
+      const SolveReport failed = outcome.consume(action);
+      char metrics[192];
+      std::snprintf(metrics, sizeof(metrics),
+                    " (iters=%d, residual=%.17g, reference=%.17g, relative=%.17g)", failed.iters,
+                    static_cast<double>(failed.residual_norm),
+                    static_cast<double>(failed.reference_residual_norm),
+                    static_cast<double>(failed.rel_residual));
+      throw std::runtime_error(std::string(route_label) + " " + std::string(check) +
+                               " failed: " + failed.reason + metrics);
+    }
+    return outcome.consume(SolveConsumption::kAccept);
+  };
+
+  AmrFieldSolveConfig jacvec_plan;
+  CompositeFacOptions fac_options;
+  // Preserve the production tolerance while giving the distributed partial-refinement FAC route
+  // enough outer cycles to reach it; the default 30 cycles stops near 2e-7 on this tiny hierarchy.
+  fac_options.max_iters = 80;
+  jacvec_plan.solver_options =
+      geometric_mg_amr_field_solver_options(GeometricMgOptions{}, fac_options);
+  jacvec_plan.plan_identity = "tests.mpi." + jacvec_field + ".plan@1";
+  jacvec_plan.provider_identity = "tests.mpi." + jacvec_field;
+  jacvec_plan.topology_provider_kind = "structured";
+  jacvec_plan.topology_provenance = "tests.mpi.periodic-cartesian";
+  jacvec_plan.topology_digest = std::string(topology_digest);
+  jacvec_plan.output_owner_identity = "tests.mpi.stage-pack." + block_name;
+  jacvec_plan.output_block = block_name;
+  jacvec_plan.output_key = jacvec_field;
+  jacvec_plan.hierarchy_policy = hierarchy_policy;
+  jacvec_plan.nullspace = operator_topology_zero_mean_nullspace();
+  jacvec_plan.has_reaction = true;
+  jacvec_plan.reaction = Real(2);
+  jacvec_plan.providers.push_back(FieldProviderBinding{"tests.mpi." + jacvec_field + "/rhs",
+                                                       block_name, jacvec_field, Real(1)});
+  runtime.install_field_plan(jacvec_field, jacvec_plan);
+  runtime.register_named_field(block_name, jacvec_field, 0, 1, 2,
+                               /*gradient_sign=*/-1);
+  runtime.set_block_named_elliptic_rhs(
+      block_index, jacvec_field,
+      [](const MultiFab& state, MultiFab& rhs) { add_scaled_component(state, Real(1), 0, rhs); });
+
+  require(consume_solved(runtime.solve_named_fields(&jacvec_field), "baseline").solved(),
+          "baseline consumption");
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
+        "main",
+        31 + 10 * block_index + level,
+        level,
+        level,
+        13,
+        ::pops::amr::Rational(1, 2),
+        0.01 / static_cast<double>(1 << level),
+        0.305};
+    MultiFab iterate = runtime.level_state(block_index, level);
+    MultiFab direction = iterate;
+    scale(direction, Real(0.75));
+
+    require(consume_solved(
+                runtime.solve_named_fields_from_state_at(point, jacvec_field, block_index, iterate),
+                "base")
+                .solved(),
+            "base consumption");
+    std::vector<MultiFab> base_phi;
+    base_phi.reserve(static_cast<std::size_t>(runtime.nlev()));
+    for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level)
+      base_phi.emplace_back(runtime.provider_potential_level(jacvec_field, provider_level));
+
+    auto residual_at = [&](Real shift, bool coupled) {
+      MultiFab state = iterate;
+      saxpy(state, shift, direction);
+      MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+      residual.set_val(Real(0));
+      if (coupled) {
+        require(consume_solved(runtime.solve_named_fields_from_state_at(point, jacvec_field,
+                                                                        block_index, state),
+                               "perturbed")
+                    .solved(),
+                "perturbed consumption");
+      }
+      runtime.level_rhs_core_into_at(block_index, level, point, state, residual,
+                                     /*flux_only=*/false);
+      if (coupled) {
+        require(consume_solved(runtime.solve_named_fields_from_state_at(point, jacvec_field,
+                                                                        block_index, iterate),
+                               "restore")
+                    .solved(),
+                "restore consumption");
+      }
+      return residual;
+    };
+
+    const MultiFab r0 = residual_at(Real(0), /*coupled=*/false);
+    const MultiFab plus = residual_at(h, /*coupled=*/true);
+    const MultiFab minus = residual_at(-h, /*coupled=*/true);
+    const MultiFab stale_plus = residual_at(h, /*coupled=*/false);
+    const MultiFab restored_r0 = residual_at(Real(0), /*coupled=*/false);
+
+    MultiFab generated = direction;
+    saxpy(generated, -c_dt / h, plus);
+    saxpy(generated, c_dt / h, r0);
+    MultiFab centered = direction;
+    saxpy(centered, -c_dt / (Real(2) * h), plus);
+    saxpy(centered, c_dt / (Real(2) * h), minus);
+    const Real response = global_max_valid_scalar_diff(centered, direction);
+    require(response > Real(1e-7), "field-coupled response");
+    require(global_max_valid_scalar_diff(generated, centered) < Real(2e-2) * response + Real(2e-7),
+            "centered-difference parity");
+
+    MultiFab stale = direction;
+    saxpy(stale, -c_dt / h, stale_plus);
+    saxpy(stale, c_dt / h, r0);
+    require(global_max_valid_scalar_diff(stale, centered) > Real(1e-7),
+            level == 0 ? "L0 rejects a frozen provider" : "L1 rejects a frozen provider");
+    for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level)
+      require(global_max_valid_scalar_diff(
+                  runtime.provider_potential_level(jacvec_field, provider_level),
+                  base_phi[static_cast<std::size_t>(provider_level)]) < Real(1e-8),
+              "restores its complete provider hierarchy");
+    require(global_max_valid_scalar_diff(restored_r0, r0) < Real(1e-8),
+            "restores its residual carrier");
+  }
+  return failures;
+}
+
+long prove_exact_distributed_stage_pack() {
+  constexpr int n = 8;
+  constexpr int phi_component = kAuxNamedBase;
+  long failures = 0;
+  const auto require = [&failures](bool condition, std::string_view label) {
+    if (!condition) {
+      std::fprintf(stderr, "rank %d: exact stage-pack check failed: %.*s\n", my_rank(),
+                   static_cast<int>(label.size()), label.data());
+      ++failures;
+    }
+  };
+
+  try {
+    AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{true, true};
+    params.mesh.n = n;
+    params.mesh.L = 1.0;
+    params.mesh.regrid_every = 0;
+    params.mesh.distribute_coarse = true;
+    params.mesh.coarse_max_grid = n / 2;
+    params.poisson.bc = BCRec{};
+    detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+    // Exercise a genuinely distributed stage pack on both materialized levels. The ordinary
+    // bootstrap fine seed is one patch; replace it with full-domain tiles so np=2 owns live and
+    // staged pieces on L0 and L1 instead of merely carrying empty local views on one rank.
+    layout.dm[0] = DistributionMapping(layout.ba[0].size(), n_ranks());
+    layout.dm_coarse = layout.dm[0];
+    const Box2D fine_domain = layout.geom.domain.refine(kAmrRefRatio);
+    layout.ba[1] = BoxArray::from_domain(fine_domain, n);
+    layout.dm[1] = DistributionMapping(layout.ba[1].size(), n_ranks());
+
+    std::vector<AmrRuntimeBlock> blocks;
+    blocks.push_back(detail::dispatch_amr_block(stage_pack_model(), "minmod", "rusanov", layout,
+                                                "a", stage_pack_density(n, 0.35),
+                                                /*has_density=*/true, 1.4, 1, false));
+    blocks.push_back(detail::dispatch_amr_block(stage_pack_model(), "minmod", "rusanov", layout,
+                                                "b", stage_pack_density(n, 0.65),
+                                                /*has_density=*/true, 1.4, 1, false));
+    for (AmrRuntimeBlock& block : blocks)
+      block.aux_ncomp = phi_component + 1;
+
+    int rhs_assembly_calls = 0;
+    AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                       std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    test::install_second_order_amr_transfer_authorities(runtime, 2);
+    runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+        0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+    AmrFieldSolveConfig plan;
+    plan.solver_options =
+        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+    plan.plan_identity = "tests.mpi.stage-pack.coupled-screened.plan@1";
+    plan.provider_identity = "tests.mpi.stage-pack.coupled-screened";
+    plan.topology_provider_kind = "structured";
+    plan.topology_provenance = "tests.mpi.periodic-cartesian";
+    plan.topology_digest = "tests.mpi.periodic-cartesian.full-refinement@1";
+    plan.output_owner_identity = "tests.mpi.stage-pack.a";
+    plan.output_block = "a";
+    plan.output_key = "coupled_screened";
+    plan.hierarchy_policy = level_local_hierarchy_policy();
+    plan.nullspace = operator_topology_zero_mean_nullspace();
+    plan.has_reaction = true;
+    plan.reaction = Real(2);
+    plan.providers.push_back(
+        FieldProviderBinding{"tests.mpi.stage-pack.a/rhs", "a", "coupled_screened", Real(1)});
+    plan.providers.push_back(
+        FieldProviderBinding{"tests.mpi.stage-pack.b/rhs", "b", "coupled_screened", Real(1)});
+    runtime.install_field_plan("coupled_screened", plan);
+    runtime.register_named_field("a", "coupled_screened", phi_component,
+                                 /*gx=*/-1, /*gy=*/-1, /*gradient_sign=*/Real(1));
+    runtime.set_block_named_elliptic_rhs(
+        0, "coupled_screened", [&rhs_assembly_calls](const MultiFab& state, MultiFab& rhs) {
+          ++rhs_assembly_calls;
+          add_scaled_component(state, Real(1), 0, rhs);
+        });
+    runtime.set_block_named_elliptic_rhs(
+        1, "coupled_screened", [&rhs_assembly_calls](const MultiFab& state, MultiFab& rhs) {
+          ++rhs_assembly_calls;
+          add_scaled_component(state, Real(1), 0, rhs);
+        });
+
+    const std::string field = "coupled_screened";
+    {
+      SolveOutcome baseline = runtime.solve_named_fields(&field);
+      require(baseline.report().solved(), "baseline report");
+      require(baseline.consume(SolveConsumption::kAccept).solved(), "baseline consumption");
+    }
+    require(runtime.nlev() == 2, "two materialized levels");
+
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      const MultiFab& live_a = runtime.level_state(0, level);
+      const MultiFab& live_b = runtime.level_state(1, level);
+      require(mapping_is_distributed_across_two_ranks(live_a.dmap()), "block a distributed");
+      require(mapping_is_distributed_across_two_ranks(live_b.dmap()), "block b distributed");
+      require(live_a.local_size() > 0, "block a has a local piece");
+      require(live_b.local_size() > 0, "block b has a local piece");
+
+      const MultiFab base_phi = runtime.provider_potential_level(field, level);
+      const MultiFab accepted_a = live_a;
+      const MultiFab accepted_b = live_b;
+      MultiFab stage_a = accepted_a;
+      MultiFab stage_b = accepted_b;
+      add_valid_constant(stage_a, Real(0.05));
+      add_valid_constant(stage_b, Real(0.08));
+      const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
+          "main",
+          17,
+          level,
+          level,
+          29,
+          ::pops::amr::Rational(1, 2),
+          0.01 / static_cast<double>(1 << level),
+          0.205};
+
+      auto solve_and_accept = [&](const std::vector<const MultiFab*>& stages) {
+        const MultiFab visible_before = runtime.provider_potential_level(field, level);
+        const int assemblies_before = rhs_assembly_calls;
+        SolveOutcome pending = runtime.solve_named_fields_from_states_at(point, field, stages);
+        require(rhs_assembly_calls == assemblies_before + 2 * runtime.nlev(),
+                "successful request assembled every block and level");
+        require(global_max_allocated_diff(runtime.level_state(0, level), accepted_a) == Real(0),
+                "block a live state restored before consumption");
+        require(global_max_allocated_diff(runtime.level_state(1, level), accepted_b) == Real(0),
+                "block b live state restored before consumption");
+        require(global_max_allocated_diff(runtime.provider_potential_level(field, level),
+                                          visible_before) == Real(0),
+                "candidate private before consumption");
+        require(pending.report().solved(), "stage-pack report solved");
+        require(pending.consume(SolveConsumption::kAccept).solved(), "stage-pack result consumed");
+        require(global_max_allocated_diff(runtime.level_state(0, level), accepted_a) == Real(0),
+                "block a live state restored after consumption");
+        require(global_max_allocated_diff(runtime.level_state(1, level), accepted_b) == Real(0),
+                "block b live state restored after consumption");
+        return MultiFab(runtime.provider_potential_level(field, level));
+      };
+
+      std::vector<const MultiFab*> stages(2, nullptr);
+      stages[0] = &stage_a;
+      const MultiFab only_a = solve_and_accept(stages);
+      stages[0] = nullptr;
+      stages[1] = &stage_b;
+      const MultiFab only_b = solve_and_accept(stages);
+      stages[0] = &stage_a;
+      const MultiFab both = solve_and_accept(stages);
+
+      const auto [superposition_error, response] =
+          global_stage_pack_superposition_error(both, only_a, only_b, base_phi);
+      require(response > Real(1e-7), "both stage states contribute");
+      require(superposition_error < Real(5e-4) * response + Real(1e-10),
+              "stage-pack superposition");
+
+      stages[0] = &accepted_a;
+      stages[1] = &accepted_b;
+      const MultiFab restored = solve_and_accept(stages);
+      require(global_max_valid_scalar_diff(restored, base_phi) < Real(1e-8),
+              "accepted stage pack restores provider result");
+    }
+
+    // This runtime deliberately de-replicates both L0 and L1. The builtin composite provider
+    // refuses that ownership contract, so this route proves only the level-local policy here.
+    failures += prove_field_jacvec_route(
+        runtime, "distributed_jacvec", "a", 0, level_local_hierarchy_policy(),
+        "tests.mpi.periodic-cartesian.full-refinement@1", "distributed level-local JVP");
+
+    // These request bytes are collective inputs. Keep every local request structurally valid so
+    // each mismatch reaches the exact consensus, then prove no solver or publication ran.
+    const int level = 0;
+    const MultiFab accepted_a = runtime.level_state(0, level);
+    const MultiFab accepted_b = runtime.level_state(1, level);
+    MultiFab stage_a = accepted_a;
+    MultiFab stage_b = accepted_b;
+    add_valid_constant(stage_a, Real(0.03));
+    add_valid_constant(stage_b, Real(0.04));
+    const ::pops::runtime::multiblock::BoundaryEvaluationPoint common_point{
+        "main", 41, level, 0, 7, ::pops::amr::Rational(1, 2), 0.01, 0.41};
+    const MultiFab visible_before = runtime.provider_potential_level(field, level);
+    const int assemblies_before = rhs_assembly_calls;
+
+    auto require_collective_pre_solve_rejection =
+        [&](const ::pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+            const std::string& provider, const std::vector<const MultiFab*>& stages) {
+          bool rejected = false;
+          bool exact_error = false;
+          try {
+            (void)runtime.solve_named_fields_from_states_at(point, provider, stages);
+          } catch (const std::invalid_argument& error) {
+            rejected = true;
+            exact_error =
+                std::string_view(error.what()) ==
+                "AmrRuntime::solve_named_fields_from_states_at request differs between MPI ranks";
+          } catch (...) {
+          }
+          require(rejected, "divergent request rejected collectively");
+          require(exact_error, "divergent request exact diagnostic");
+          require(rhs_assembly_calls == assemblies_before,
+                  "divergence refused before RHS assembly and solve");
+          require(!runtime.field_solve_transaction_active(), "divergence leaves no transaction");
+          require(global_max_allocated_diff(runtime.level_state(0, level), accepted_a) == Real(0),
+                  "divergence preserves block a live state");
+          require(global_max_allocated_diff(runtime.level_state(1, level), accepted_b) == Real(0),
+                  "divergence preserves block b live state");
+          require(global_max_allocated_diff(runtime.provider_potential_level(field, level),
+                                            visible_before) == Real(0),
+                  "divergence preserves published provider");
+        };
+
+    {
+      auto point = common_point;
+      if (my_rank() == 1)
+        ++point.stage;
+      require_collective_pre_solve_rejection(point, field, {&stage_a, &stage_b});
+    }
+    {
+      const std::string provider = my_rank() == 1 ? "rank-one-provider" : field;
+      require_collective_pre_solve_rejection(common_point, provider, {&stage_a, &stage_b});
+    }
+    {
+      std::vector<const MultiFab*> stages{&stage_a, &stage_b};
+      if (my_rank() == 1)
+        stages[1] = nullptr;
+      require_collective_pre_solve_rejection(common_point, field, stages);
+    }
+
+    // CompositeFAC deliberately rejects a distributed coarse hierarchy. Prove the collective
+    // capability guard runs before any RHS, solve, publication, or transaction mutation by keeping
+    // this accepted level-local field as a witness on the exact same distributed L0/L1 runtime.
+    std::vector<MultiFab> live_a_before, live_b_before, provider_before;
+    for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level) {
+      live_a_before.emplace_back(runtime.level_state(0, provider_level));
+      live_b_before.emplace_back(runtime.level_state(1, provider_level));
+      provider_before.emplace_back(runtime.provider_potential_level(field, provider_level));
+    }
+    const int rejected_assemblies_before = rhs_assembly_calls;
+    const std::size_t fields_before = runtime.n_named_fields();
+    const std::vector<std::string> slots_before = runtime.provider_slots();
+    AmrFieldSolveConfig rejected_plan = plan;
+    rejected_plan.plan_identity = "tests.mpi.distributed-composite-rejected.plan@1";
+    rejected_plan.provider_identity = "tests.mpi.distributed-composite-rejected";
+    rejected_plan.output_key = "distributed_composite_rejected";
+    rejected_plan.hierarchy_policy = composite_hierarchy_policy();
+    rejected_plan.providers = {FieldProviderBinding{"tests.mpi.distributed-composite-rejected/rhs",
+                                                    "a", "distributed_composite_rejected",
+                                                    Real(1)}};
+
+    constexpr std::string_view expected =
+        "AMR field solver provider rejected request (code 14): composite hierarchy cannot "
+        "represent this coarse distribution or active region";
+    bool rejected = false;
+    bool exact_diagnostic = false;
+    try {
+      runtime.install_field_plan("distributed_composite_rejected", rejected_plan);
+    } catch (const std::invalid_argument& error) {
+      rejected = true;
+      exact_diagnostic = std::string_view(error.what()) == expected;
+    } catch (...) {
+    }
+    require(rejected, "distributed-L0 composite rejected on every rank");
+    require(exact_diagnostic, "distributed-L0 composite exact code-14 diagnostic");
+    require(rhs_assembly_calls == rejected_assemblies_before,
+            "distributed-L0 composite rejected before RHS assembly and solve");
+    require(!runtime.field_solve_transaction_active(),
+            "distributed-L0 composite leaves no field transaction");
+    require(runtime.n_named_fields() == fields_before,
+            "distributed-L0 composite publishes no field plan");
+    require(runtime.provider_slots() == slots_before,
+            "distributed-L0 composite preserves the provider registry");
+    require(!runtime.has_named_field("distributed_composite_rejected"),
+            "distributed-L0 composite provider slot remains absent");
+    for (int provider_level = 0; provider_level < runtime.nlev(); ++provider_level) {
+      const auto index = static_cast<std::size_t>(provider_level);
+      require(global_max_allocated_diff(runtime.level_state(0, provider_level),
+                                        live_a_before[index]) == Real(0),
+              "distributed-L0 composite preserves block a live state");
+      require(global_max_allocated_diff(runtime.level_state(1, provider_level),
+                                        live_b_before[index]) == Real(0),
+              "distributed-L0 composite preserves block b live state");
+      require(global_max_allocated_diff(runtime.provider_potential_level(field, provider_level),
+                                        provider_before[index]) == Real(0),
+              "distributed-L0 composite preserves accepted provider publication");
+    }
+  } catch (const std::exception& error) {
+    if (my_rank() == 0)
+      std::fprintf(stderr, "exact distributed stage-pack proof failed: %s\n", error.what());
+    ++failures;
+  } catch (...) {
+    if (my_rank() == 0)
+      std::fprintf(stderr, "exact distributed stage-pack proof failed with an unknown error\n");
+    ++failures;
+  }
+  return failures;
+}
+
+long prove_replicated_coarse_composite_jvp() {
+  constexpr int n = 8;
+  long failures = 0;
+  const auto require = [&failures](bool condition, std::string_view label) {
+    if (!condition) {
+      std::fprintf(stderr, "rank %d: replicated-coarse composite JVP failed: %.*s\n", my_rank(),
+                   static_cast<int>(label.size()), label.data());
+      ++failures;
+    }
+  };
+
+  try {
+    AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{true, true};
+    params.mesh.n = n;
+    params.mesh.regrid_every = 0;
+    params.mesh.distribute_coarse = false;
+    detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+    // CompositeFAC's current MPI contract keeps a complete coarse copy on every rank while the
+    // refined level is genuinely partitioned. Tile the central fine seed so both ranks own live
+    // pieces while uncovered L0 cells continue to exercise the coarse part of the composite solve.
+    const Box2D fine_region = layout.ba[1].boxes().front();
+    layout.ba[1] = BoxArray::from_domain(fine_region, n / 2);
+    layout.dm[1] = DistributionMapping(layout.ba[1].size(), n_ranks());
+    require(layout.replicated_coarse, "coarse ownership is explicitly replicated");
+    require(mapping_is_distributed_across_two_ranks(layout.dm[1]), "L1 mapping is distributed");
+
+    std::vector<AmrRuntimeBlock> blocks;
+    blocks.push_back(detail::dispatch_amr_block(stage_pack_model(), "minmod", "rusanov", layout,
+                                                "composite", stage_pack_density(n, 0.5),
+                                                /*has_density=*/true, 1.4, 1, false));
+    blocks.back().aux_ncomp = kAuxNamedBase + 1;
+
+    AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                       std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    test::install_second_order_amr_transfer_authorities(runtime, 1);
+    runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+        0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+    require(runtime.nlev() == 2, "composite hierarchy has L0/L1");
+    require(runtime.level_state(0, 0).local_size() > 0,
+            "each rank owns its replicated coarse copy");
+    require(runtime.level_state(0, 1).local_size() > 0, "each rank owns a fine piece");
+    failures += prove_field_jacvec_route(runtime, "replicated_coarse_composite_jacvec", "composite",
+                                         0, composite_hierarchy_policy(),
+                                         "tests.mpi.periodic-cartesian.central-refinement@1",
+                                         "replicated-coarse distributed-fine composite JVP");
+  } catch (const std::exception& error) {
+    if (my_rank() == 0)
+      std::fprintf(stderr, "replicated-coarse composite JVP proof failed: %s\n", error.what());
+    ++failures;
+  } catch (...) {
+    if (my_rank() == 0)
+      std::fprintf(stderr, "replicated-coarse composite JVP proof failed with an unknown error\n");
+    ++failures;
+  }
+  return failures;
+}
+
+long prove_distributed_physical_boundary_jvp() {
+  constexpr int n = 8;
+  constexpr int phi_component = kAuxNamedBase;
+  constexpr Real c_dt = Real(0.01);
+  constexpr Real h = Real(2e-4);
+  const std::string state_identity = "tests://mpi/physical-boundary/state/a";
+  const std::string field_identity = "tests://mpi/physical-boundary/field/jacvec";
+  const std::string field = "distributed_boundary_jacvec";
+  long failures = 0;
+  const auto require = [&failures](bool condition, std::string_view label) {
+    if (!condition) {
+      std::fprintf(stderr, "rank %d: distributed physical-boundary JVP failed: %.*s\n", my_rank(),
+                   static_cast<int>(label.size()), label.data());
+      ++failures;
+    }
+  };
+
+  try {
+    AmrBuildParams params;
+    params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
+    params.mesh.periodicity = Periodicity{false, false};
+    params.mesh.n = n;
+    params.mesh.L = 1.0;
+    params.mesh.regrid_every = 0;
+    params.mesh.distribute_coarse = true;
+    params.mesh.coarse_max_grid = n / 2;
+    BCRec physical_field_bc;
+    physical_field_bc.xlo = physical_field_bc.xhi = BCType::Dirichlet;
+    physical_field_bc.ylo = physical_field_bc.yhi = BCType::Dirichlet;
+    params.poisson.bc = physical_field_bc;
+    detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+
+    layout.dm[0] = split_xlow_face_across_ranks(layout.ba[0], layout.geom.domain);
+    layout.dm_coarse = layout.dm[0];
+    const Box2D fine_domain = layout.geom.domain.refine(kAmrRefRatio);
+    layout.ba[1] = BoxArray::from_domain(fine_domain, n);
+    layout.dm[1] = split_xlow_face_across_ranks(layout.ba[1], fine_domain);
+    require(mapping_is_distributed_across_two_ranks(layout.dm[0]),
+            "physical-boundary L0 is distributed");
+    require(mapping_is_distributed_across_two_ranks(layout.dm[1]),
+            "physical-boundary L1 is distributed");
+    require(
+        xlow_face_is_distributed_across_two_ranks(layout.ba[0], layout.dm[0], layout.geom.domain),
+        "physical x-low face is split across ranks on L0");
+    require(xlow_face_is_distributed_across_two_ranks(layout.ba[1], layout.dm[1], fine_domain),
+            "physical x-low face is split across ranks on L1");
+
+    BCRec transport_bc;
+    transport_bc.xlo = transport_bc.xhi = BCType::Foextrap;
+    transport_bc.ylo = transport_bc.yhi = BCType::Foextrap;
+    auto boundary_plan = std::make_shared<PreparedBoundaryPlan>(
+        "tests://mpi/physical-boundary/plan", 1, std::vector<BCRec>{transport_bc},
+        std::vector<int>{}, state_identity, PreparedBoundaryReadDependencies{{}, {field_identity}});
+    const PreparedBoundaryFieldRead field_read = boundary_plan->prepare_field_read(field_identity);
+    std::map<std::string, std::shared_ptr<PreparedBoundaryPlan>> boundary_plans{
+        {"a", boundary_plan}};
+    layout.boundary_plans = &boundary_plans;
+
+    std::vector<AmrRuntimeBlock> blocks;
+    blocks.push_back(detail::dispatch_amr_block(stage_pack_model(), "minmod", "rusanov", layout,
+                                                "a", stage_pack_density(n, 0.5),
+                                                /*has_density=*/true, 1.4, 1, false));
+    blocks.back().aux_ncomp = phi_component + 1;
+    blocks.back().state_identity = state_identity;
+    blocks.back().level_boundary_residual_at_point_prepared =
+        [field_read](const ::pops::runtime::multiblock::BoundaryEvaluationPoint& point,
+                     MultiFab& state, const MultiFab&, const Geometry& geometry, MultiFab& residual,
+                     const PreparedGridBoundarySession& boundary) {
+          const PreparedBoundaryReadView reads = boundary.bind_reads(point, state);
+          const MultiFab& solved_field = reads.field(field_read);
+          for (int local = 0; local < residual.local_size(); ++local) {
+            const int field_local = solved_field.local_index_of(residual.global_index(local));
+            if (field_local < 0)
+              throw std::logic_error(
+                  "distributed physical boundary lost co-distributed field ownership");
+            const Box2D valid = residual.box(local);
+            if (valid.lo[0] > geometry.domain.lo[0] || valid.hi[0] < geometry.domain.lo[0])
+              continue;
+            const ConstArray4 phi = solved_field.fab(field_local).const_array();
+            const Array4 output = residual.fab(local).array();
+            const int i = geometry.domain.lo[0];
+            for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+              output(i, j, 0) += Real(100) * phi(i, j, 0);
+          }
+        };
+
+    AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                       std::move(blocks), layout.base_per, layout.replicated_coarse, layout.wall);
+    test::install_second_order_amr_transfer_authorities(runtime, 1);
+    runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+        0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+
+    AmrFieldSolveConfig plan;
+    plan.solver_options =
+        geometric_mg_amr_field_solver_options(GeometricMgOptions{}, CompositeFacOptions{});
+    plan.plan_identity = "tests.mpi.distributed-boundary-jacvec.plan@1";
+    plan.provider_identity = "tests.mpi.distributed-boundary-jacvec";
+    plan.topology_provider_kind = "structured";
+    plan.topology_provenance = "tests.mpi.physical-cartesian";
+    plan.topology_digest = "tests.mpi.physical-cartesian.full-refinement@1";
+    plan.output_owner_identity = "tests.mpi.physical-boundary.a";
+    plan.output_block = "a";
+    plan.output_key = field;
+    plan.hierarchy_policy = level_local_hierarchy_policy();
+    plan.nullspace = operator_topology_zero_mean_nullspace();
+    plan.has_reaction = true;
+    plan.reaction = Real(2);
+    plan.providers.push_back(
+        FieldProviderBinding{"tests.mpi.distributed-boundary-jacvec/rhs", "a", field, Real(1)});
+    runtime.install_field_plan(field, plan);
+    runtime.register_named_field("a", field, 0, 1, 2, /*gradient_sign=*/-1);
+    runtime.set_block_named_elliptic_rhs(0, field, [](const MultiFab& state, MultiFab& rhs) {
+      add_scaled_component(state, Real(1), 0, rhs);
+    });
+    runtime.install_boundary_storage_routes({{field_identity, field}});
+
+    require(runtime.nlev() == 2, "physical-boundary hierarchy has L0/L1");
+    for (int level = 0; level < runtime.nlev(); ++level) {
+      const ::pops::runtime::multiblock::BoundaryEvaluationPoint point{
+          "main",
+          71 + level,
+          level,
+          0,
+          17,
+          ::pops::amr::Rational(1, 2),
+          0.01 / static_cast<double>(1 << level),
+          0.405};
+      MultiFab iterate = runtime.level_state(0, level);
+      MultiFab direction = iterate;
+      scale(direction, Real(0.75));
+
+      {
+        SolveOutcome base = runtime.solve_named_fields_from_state_at(point, field, 0, iterate);
+        require(base.report().solved(), "physical-boundary base report");
+        require(base.consume(SolveConsumption::kAccept).solved(),
+                "physical-boundary base consumption");
+      }
+      const MultiFab base_phi = runtime.provider_potential_level(field, level);
+
+      auto residual_at = [&](Real shift, bool coupled, bool include_boundary) {
+        MultiFab state = iterate;
+        saxpy(state, shift, direction);
+        MultiFab residual(iterate.box_array(), iterate.dmap(), iterate.ncomp(), 0);
+        residual.set_val(Real(0));
+        if (coupled) {
+          SolveOutcome perturbed = runtime.solve_named_fields_from_state_at(point, field, 0, state);
+          require(perturbed.report().solved(), "physical-boundary perturbed report");
+          require(perturbed.consume(SolveConsumption::kAccept).solved(),
+                  "physical-boundary perturbed consumption");
+        }
+        if (include_boundary)
+          runtime.level_rhs_into_at(0, level, point, state, residual);
+        else
+          runtime.level_rhs_core_into_at(0, level, point, state, residual, /*flux_only=*/false);
+        if (coupled) {
+          SolveOutcome restored =
+              runtime.solve_named_fields_from_state_at(point, field, 0, iterate);
+          require(restored.report().solved(), "physical-boundary restore report");
+          require(restored.consume(SolveConsumption::kAccept).solved(),
+                  "physical-boundary restore consumption");
+        }
+        return residual;
+      };
+
+      const MultiFab r0 = residual_at(Real(0), /*coupled=*/false, /*include_boundary=*/true);
+      const MultiFab plus = residual_at(h, /*coupled=*/true, /*include_boundary=*/true);
+      const MultiFab minus = residual_at(-h, /*coupled=*/true, /*include_boundary=*/true);
+      const MultiFab stale_plus = residual_at(h, /*coupled=*/false, /*include_boundary=*/true);
+      const MultiFab plus_core = residual_at(h, /*coupled=*/true, /*include_boundary=*/false);
+      const MultiFab minus_core = residual_at(-h, /*coupled=*/true, /*include_boundary=*/false);
+      const MultiFab stale_plus_core =
+          residual_at(h, /*coupled=*/false, /*include_boundary=*/false);
+      const MultiFab restored_r0 =
+          residual_at(Real(0), /*coupled=*/false, /*include_boundary=*/true);
+
+      MultiFab generated = direction;
+      saxpy(generated, -c_dt / h, plus);
+      saxpy(generated, c_dt / h, r0);
+      MultiFab centered = direction;
+      saxpy(centered, -c_dt / (Real(2) * h), plus);
+      saxpy(centered, c_dt / (Real(2) * h), minus);
+      const Real response = global_max_valid_scalar_diff(centered, direction);
+      require(response > Real(1e-7), "physical-boundary field-coupled JVP response");
+      require(
+          global_max_valid_scalar_diff(generated, centered) < Real(2e-2) * response + Real(2e-7),
+          "physical-boundary field-coupled JVP centered-difference parity");
+
+      MultiFab centered_core = direction;
+      saxpy(centered_core, -c_dt / (Real(2) * h), plus_core);
+      saxpy(centered_core, c_dt / (Real(2) * h), minus_core);
+      require(global_max_valid_scalar_diff(centered, centered_core) > Real(1e-8),
+              "physical boundary affects distributed JVP");
+
+      MultiFab coupled_boundary = plus;
+      saxpy(coupled_boundary, Real(-1), plus_core);
+      MultiFab stale_boundary = stale_plus;
+      saxpy(stale_boundary, Real(-1), stale_plus_core);
+      require(global_max_valid_scalar_diff(coupled_boundary, stale_boundary) > Real(1e-8),
+              "frozen provider changes distributed physical boundary");
+
+      const auto [boundary_support, interior_support] =
+          global_physical_boundary_support(coupled_boundary, runtime.level_geom(level).domain);
+      require(boundary_support > Real(1e-8), "distributed physical-boundary contribution exists");
+      require(interior_support < Real(1e-13),
+              "distributed physical-boundary contribution remains face-local");
+      require(global_max_valid_scalar_diff(runtime.provider_potential_level(field, level),
+                                           base_phi) < Real(1e-8),
+              "distributed physical-boundary provider restores");
+      require(global_max_valid_scalar_diff(restored_r0, r0) < Real(1e-8),
+              "distributed physical-boundary residual carrier restores");
+    }
+  } catch (const std::exception& error) {
+    if (my_rank() == 0)
+      std::fprintf(stderr, "distributed physical-boundary JVP proof failed: %s\n", error.what());
+    ++failures;
+  } catch (...) {
+    if (my_rank() == 0)
+      std::fprintf(stderr,
+                   "distributed physical-boundary JVP proof failed with an unknown error\n");
+    ++failures;
+  }
+  return failures;
+}
+
 int run_field_plan_consensus(int argc, char** argv) {
   comm_init(&argc, &argv);
 #if defined(POPS_HAS_KOKKOS)
@@ -481,6 +1377,10 @@ int run_field_plan_consensus(int argc, char** argv) {
     if (!condition)
       ++failures;
   };
+
+  failures += prove_exact_distributed_stage_pack();
+  failures += prove_replicated_coarse_composite_jvp();
+  failures += prove_distributed_physical_boundary_jvp();
 
   // A hierarchy provider cannot split publication by returning individually valid but different
   // reports. Both outcome divergence and equal-length reason-byte divergence are rejected with one
