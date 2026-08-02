@@ -293,6 +293,21 @@ def resolve(
     )
     from pops.output._restart_provider import RestartAuthority
     restart_authority = RestartAuthority.from_consumer_graph(consumer_graph)
+    lowering_coverage = layout_lowering_coverage(layout_plan)
+    if bootstrap_plan is not None:
+        from pops.codegen._amr_lowering_coverage import amr_lowering_coverage
+        from pops.codegen.lowering_coverage import LoweringCoverageReport
+
+        amr_coverage = amr_lowering_coverage(
+            resolved_hierarchy=resolved_hierarchy,
+            transfer=amr_transfer,
+            bootstrap=bootstrap_plan,
+            execution=amr_execution,
+        )
+        lowering_coverage = LoweringCoverageReport((
+            *lowering_coverage.rows,
+            *amr_coverage.rows,
+        ))
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
@@ -310,7 +325,7 @@ def resolve(
         capabilities={"resolution": evidence,
                       "layout_plan": layout_plan.capability_evidence(),
                       "amr_bootstrap": amr_capabilities},
-        lowering_coverage=layout_lowering_coverage(layout_plan), compile_options=options,
+        lowering_coverage=lowering_coverage, compile_options=options,
         component_inputs=tuple(components),
         resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
         initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan,

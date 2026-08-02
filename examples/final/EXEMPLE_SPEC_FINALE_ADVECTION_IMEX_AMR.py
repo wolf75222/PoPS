@@ -98,6 +98,7 @@ IMEX_CN_HEUN = AdditiveRungeKuttaTableau(
     implicit_c=(Fraction(0), Fraction(1)),
     name="cn-heun-imex",
 )
+HYSTERESIS_MIN_CYCLES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +149,8 @@ class IMEXRuntimeSnapshot:
     regrid_count: int
     topology_epoch: int
     program_hash: str
+    program_accepted_state: bytes
+    program_transaction_state: str
     consumer_graph_identity: str
     consumer_cursors: dict[str, Any]
 
@@ -158,6 +161,15 @@ class IMEXAMRProgramEvidence:
 
     flux_ledger_levels: tuple[int, ...]
     synchronization_phases: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class IMEXRejectedAttemptEvidence:
+    """Exact proof that one consumed SolveOutcome rolled back without publication."""
+
+    error: str
+    before: IMEXRuntimeSnapshot
+    after: IMEXRuntimeSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,7 +299,10 @@ def _preset_imex_program(core: IMEXAMRAuthoring, *, solve_action: Any) -> Progra
 
 
 def build_authoring(
-    *, use_preset: bool = False, field_solver: Any | None = None,
+    *,
+    use_preset: bool = False,
+    field_solver: Any | None = None,
+    relaxation_domain: Any | None = None,
 ) -> IMEXAMRAuthoring:
     domain = Rectangle(
         "unit_square",
@@ -310,7 +325,11 @@ def build_authoring(
     # the incoming subspace; a static boundary table must not silently pretend to support them.
     velocity_x = model.param(RuntimeParam("a_x", default=1.0, domain=Positive()))
     velocity_y = model.param(RuntimeParam("a_y", default=0.25, domain=Positive()))
-    relaxation_rate = model.param(RuntimeParam("lambda", default=50.0, domain=Positive()))
+    relaxation_rate = model.param(RuntimeParam(
+        "lambda",
+        default=50.0,
+        domain=Positive() if relaxation_domain is None else relaxation_domain,
+    ))
     inlet_value = model.param(RuntimeParam("u_in", default=0.0, domain=Interval(-10.0, 10.0)))
     a_x = model.value(velocity_x)
     a_y = model.value(velocity_y)
@@ -483,9 +502,13 @@ def build_layout(core: IMEXAMRAuthoring) -> Any:
             Coarsen(value < core.case.value(core.coarsen_value)),
             Buffer(cells=2),
         ),
-        # Equality is explicit. A non-zero temporal dwell requires a checkpointed per-cell tagging
-        # state provider; this example does not pretend that an in-memory counter is restart-safe.
-        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        # Keep one full tagging cycle between opposite decisions. The native Program accepted-state
+        # image owns this sparse, topology-independent history, so rejection and strict restart
+        # restore the same hysteresis authority instead of resetting an in-memory Python counter.
+        hysteresis=Hysteresis(
+            min_cycles=HYSTERESIS_MIN_CYCLES,
+            equality=EqualityPolicy.HOLD,
+        ),
         conflict_policy=ConflictPolicy.REFINE_WINS,
     )
     transfer = AMRTransfer()
@@ -538,10 +561,15 @@ def build_consumers(core: IMEXAMRAuthoring, *, output_mode: Any = None) -> Any:
 
 def build_final_case(
     *, use_preset: bool = False, field_solver: Any | None = None,
+    relaxation_domain: Any | None = None,
     initial_background: float = 0.05, initial_amplitude: float = 0.95,
     output_mode: Any = None,
 ) -> FinalIMEXAMRCase:
-    core = build_authoring(use_preset=use_preset, field_solver=field_solver)
+    core = build_authoring(
+        use_preset=use_preset,
+        field_solver=field_solver,
+        relaxation_domain=relaxation_domain,
+    )
     core.numerics.boundaries.add(build_boundaries(core))
     core.case.numerics(core.numerics, block=core.tracer)
     core.case.initials.add(build_initial(
@@ -551,12 +579,17 @@ def build_final_case(
     return FinalIMEXAMRCase(core, build_layout(core))
 
 
-def build_bind_params(core: IMEXAMRAuthoring, *, inlet_value: float = 0.0) -> dict[Any, float]:
+def build_bind_params(
+    core: IMEXAMRAuthoring,
+    *,
+    inlet_value: float = 0.0,
+    relaxation_rate: float = 50.0,
+) -> dict[Any, float]:
     resolve = core.case.resolve
     return {
         resolve(core.velocity_x): 1.0,
         resolve(core.velocity_y): 0.25,
-        resolve(core.relaxation_rate): 50.0,
+        resolve(core.relaxation_rate): relaxation_rate,
         resolve(core.inlet_value): inlet_value,
         resolve(core.refine_value): 0.70,
         resolve(core.coarsen_value): 0.25,
@@ -566,14 +599,33 @@ def build_bind_params(core: IMEXAMRAuthoring, *, inlet_value: float = 0.0) -> di
 
 def compile_final_case(
     *, use_preset: bool = False,
+    relaxation_domain: Any | None = None,
 ) -> tuple[FinalIMEXAMRCase, Any, Any]:
     """Compile one exact manual or preset-authored target through the public lifecycle."""
 
     target = build_final_case(
-        use_preset=use_preset, output_mode=_native_output_mode()
+        use_preset=use_preset,
+        relaxation_domain=relaxation_domain,
+        output_mode=_native_output_mode(),
     )
     resolved = pops.resolve(pops.validate(target.authoring.case), layout=target.layout)
     return target, resolved, pops.compile(resolved)
+
+
+def _program_transaction_state(simulation: Any) -> str:
+    """Canonicalize every rollback-sensitive Program registry without field arrays."""
+
+    report = simulation.program_report().to_dict()
+    return json.dumps({
+        "cache": report["cache"],
+        "clocks": report["clocks"],
+        "diagnostics": report["diagnostics"],
+        "flux_ledger": report["flux_ledger"],
+        "histories": report["histories"],
+        "level_relations": report["level_relations"],
+        "synchronization": report["synchronization"],
+        "temporal": report["temporal"],
+    }, sort_keys=True, separators=(",", ":"))
 
 
 def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
@@ -594,6 +646,9 @@ def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
     }
     if any(count <= 0 for count in field_level_counts.values()):
         raise RuntimeError("IMEX acceptance installed an empty diagnostic-field hierarchy")
+    program_accepted_state = bytes(simulation.program_accepted_state())
+    if not program_accepted_state:
+        raise RuntimeError("IMEX acceptance installed no canonical Program accepted-state image")
     regrid = simulation.amr.explain_regrid()
     return IMEXRuntimeSnapshot(
         time=float(simulation.time()),
@@ -623,6 +678,8 @@ def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
         regrid_count=int(regrid.regrid_count),
         topology_epoch=int(regrid.topology_epoch),
         program_hash=str(simulation.installed_program_hash()),
+        program_accepted_state=program_accepted_state,
+        program_transaction_state=_program_transaction_state(simulation),
         consumer_graph_identity=simulation.consumer_graph.identity.token,
         consumer_cursors=simulation.consumer_cursors.to_data(),
     )
@@ -710,6 +767,14 @@ def _require_same_snapshot(
         "regrid_count": (left.regrid_count, right.regrid_count),
         "topology_epoch": (left.topology_epoch, right.topology_epoch),
         "program_hash": (left.program_hash, right.program_hash),
+        "program_accepted_state": (
+            left.program_accepted_state,
+            right.program_accepted_state,
+        ),
+        "program_transaction_state": (
+            left.program_transaction_state,
+            right.program_transaction_state,
+        ),
         "consumer_graph_identity": (
             left.consumer_graph_identity,
             right.consumer_graph_identity,
@@ -790,6 +855,54 @@ def _reopen_scientific_outputs(root: Path) -> tuple[Path, Path, str, str]:
         hdf5.output_identity.token,
         paraview.output_identity.token,
     )
+
+
+def run_rejected_attempt_rollback(output_dir: Any) -> IMEXRejectedAttemptEvidence:
+    """Force one singular IMEX solve and prove complete rollback before publication."""
+
+    root = Path(output_dir)
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("rejected-attempt proof requires an empty output directory")
+    target, _resolved, artifact = compile_final_case(
+        use_preset=False,
+        relaxation_domain=Interval(-1.0e6, 1.0e6),
+    )
+    first_dt = float(target.authoring.run_controls["t_end"])
+    diagonal = float(IMEX_CN_HEUN.implicit_A[1][1])
+    singular_rate = -1.0 / (first_dt * diagonal)
+    simulation = _bind_artifact(
+        artifact,
+        params=build_bind_params(
+            target.authoring,
+            relaxation_rate=singular_rate,
+        ),
+    )
+    before = _snapshot(simulation)
+    try:
+        pops.run(
+            simulation,
+            t_end=first_dt,
+            max_steps=1,
+            output_dir=root,
+        )
+    except RuntimeError as error:
+        message = str(error)
+        if not message.startswith("step attempt rejected during "):
+            raise RuntimeError(
+                "negative IMEX proof failed for an unexpected reason: %s" % message
+            ) from error
+    else:
+        raise RuntimeError("singular IMEX solve unexpectedly accepted its macro-step")
+
+    after = _snapshot(simulation)
+    _require_same_snapshot(before, after, where="rejected IMEX attempt")
+    leaked = tuple(path for path in root.rglob("*") if path.is_file())
+    if leaked:
+        raise RuntimeError(
+            "rejected IMEX attempt published files: %s"
+            % ", ".join(str(path) for path in leaked)
+        )
+    return IMEXRejectedAttemptEvidence(message, before, after)
 
 
 def run_manual_and_restart(output_dir: Any) -> IMEXExecutionEvidence:
@@ -916,6 +1029,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     output_dir = args.output_dir.resolve()
 
+    rejected = run_rejected_attempt_rollback(output_dir / "rejected")
     evidence = run_manual_and_restart(output_dir / "manual")
     preset = run_preset_parity(output_dir / "preset", evidence.accepted)
     restart_equal = _snapshots_bit_identical(evidence.accepted, evidence.restored)
@@ -940,6 +1054,9 @@ def main(argv: list[str] | None = None) -> None:
     print("bit-identical restart: %s" % restart_equal)
     print("bit-identical continuation: %s" % continuation_equal)
     print("manual/pops.lib.time.IMEX parity: %s" % preset_equal)
+    print("rejected-attempt rollback: %s" % _snapshots_bit_identical(
+        rejected.before, rejected.after,
+    ))
     print(
         "regrid count: %d -> %d (topology epoch %d -> %d)"
         % (
@@ -957,7 +1074,13 @@ def main(argv: list[str] | None = None) -> None:
         "flux_ledger_levels": list(evidence.program_evidence.flux_ledger_levels),
         "levels": evidence.level_count,
         "manual_preset_bit_identical": preset_equal,
+        "rejected_attempt_error": rejected.error,
+        "rejected_attempt_rollback": _snapshots_bit_identical(
+            rejected.before, rejected.after,
+        ),
         "program_hash": preset.program_hash,
+        "program_accepted_state_bytes": len(preset.program_accepted_state),
+        "tagging_hysteresis_min_cycles": HYSTERESIS_MIN_CYCLES,
         "regrid_count": evidence.accepted.regrid_count,
         "regrid_count_after_continuation": evidence.restarted.regrid_count,
         "runtime_steps": evidence.accepted.macro_step,
