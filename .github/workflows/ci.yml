@@ -695,7 +695,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -759,7 +759,7 @@ jobs:
           extra-apt: mold
 
       - id: python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -900,7 +900,7 @@ jobs:
           extra-apt: mold
 
       - id: python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -1190,7 +1190,7 @@ jobs:
         with:
           extra-apt: mold
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: steps.test-plan.outputs.python_shard_count != '0'
         with:
           python-version: '3.12'
@@ -1348,7 +1348,7 @@ jobs:
         with:
           extra-apt: mold
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -1979,7 +1979,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: matrix.graph == 'python'
         with:
           python-version: '3.12'
@@ -2238,7 +2238,7 @@ jobs:
           version="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-')"
           echo "key=${image}-${RUNNER_ARCH}-gcc-${version}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         id: openmp-python
         if: matrix.kind == 'python'
         with:
