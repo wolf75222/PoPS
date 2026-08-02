@@ -830,7 +830,11 @@ class SystemFieldSolver {
       return FieldDistribution::Distributed;
     }
     [[nodiscard]] MultiFab snapshot() override { return MultiFab(phi_); }
-    void restore(const MultiFab& value) override { phi_ = value; }
+    void restore(const MultiFab& value) override {
+      // The prepared FieldSolver request borrows phi_'s stable storage. Rollback restores values
+      // without replacing that allocation, so the cached ABI views remain valid for an exact retry.
+      PureFieldAlgebra::copy_allocated(phi_, value);
+    }
     void configure_boundary(FieldSolveConfig& plan) override {
       if (plan.has_boundary_kernel)
         throw std::runtime_error(
