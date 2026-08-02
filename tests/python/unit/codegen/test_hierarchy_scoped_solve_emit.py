@@ -29,7 +29,7 @@ def _coupled_model(name):
     u = model.primitive("u", mx / rho)
     v = model.primitive("v", my / rho)
     pressure = model.primitive("p", cs2 * rho)
-    model.primitive_vars(rho=rho, u=u, v=v, p=pressure)
+    model.primitive_vars(rho=rho, u=u, v=v)
     model.conservative_from([rho, rho * u, rho * v])
     model.flux(
         x=[mx, mx * u + pressure, my * u],
