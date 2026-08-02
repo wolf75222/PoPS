@@ -302,7 +302,7 @@ def validate_prepared_boundary_jacvec(blocks: tuple[Any, ...], program: Any) -> 
 
 def validate_shared_interface_program(
         blocks: tuple[Any, ...], layout_plan: Any, program: Any, *,
-        target: str, resolved_hierarchy: Any = None) -> bool:
+        target: str, resolved_hierarchy: Any = None) -> tuple[bool, bool]:
     """Prove that every interface is installed and evaluated as one atomic RHS group.
 
     This runs during resolve, before code generation or engine construction.  The runtime
@@ -332,7 +332,7 @@ def validate_shared_interface_program(
                     if side.boundary in owned_boundaries:
                         endpoint_owners[identity][side_name].add(block.name)
     if not declarations:
-        return False
+        return False, False
     if program is None:
         raise ValueError("shared block interfaces require one explicit whole-system Program")
 
@@ -397,7 +397,7 @@ def validate_shared_interface_program(
     values = list(program._values)
     coherence = plan_rhs_coherence(program, values, block_key=_block_name)
     hierarchy = None if resolved_hierarchy is None else resolved_hierarchy.plan
-    _validate_shared_interface_jacvec_pairs(
+    implicit_jacvec_ids = _validate_shared_interface_jacvec_pairs(
         program, target=target, hierarchy=hierarchy, neighbours=neighbours,
         interface_count=len(declarations), runtime_block_count=len(blocks), coherence=coherence)
 
@@ -447,7 +447,7 @@ def validate_shared_interface_program(
         raise ValueError(
             "shared interface default-flux evaluations were not proved simultaneous: %s"
             % sorted(ungrouped))
-    return True
+    return True, bool(implicit_jacvec_ids)
 
 
 __all__ = ["validate_prepared_boundary_jacvec", "validate_shared_interface_program"]

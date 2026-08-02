@@ -71,6 +71,21 @@ def test_dynamic_refined_shared_interface_bind_accepts_serial_and_exact_mpi_worl
     )
 
 
+def test_implicit_pair_requires_exact_frozen_two_level_prefix_at_complete_bind() -> None:
+    serial = {"communicator_identity": "serial"}
+    _validate_refined_shared_interface_execution(
+        (0,), serial, 1, implicit_jacvec_pair=True, complete_bind=False
+    )
+    _validate_refined_shared_interface_execution(
+        (0, 1), serial, 1, implicit_jacvec_pair=True, complete_bind=True
+    )
+    for levels in ((0,), (0, 1, 2)):
+        with pytest.raises(NotImplementedError, match=r"exactly materialized levels \(L0, L1\)"):
+            _validate_refined_shared_interface_execution(
+                levels, serial, 1, implicit_jacvec_pair=True, complete_bind=True
+            )
+
+
 def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> None:
     with pytest.raises(ValueError, match="contiguous L0 prefix"):
         _validate_refined_shared_interface_execution((), {}, 1)
@@ -79,6 +94,11 @@ def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> 
     with pytest.raises(TypeError, match="exact bool"):
         _validate_refined_shared_interface_execution(
             (0, 1), {"communicator_identity": "serial"}, 1, dynamic_regrid=1
+        )
+    with pytest.raises(TypeError, match="complete-bind contracts must be exact bools"):
+        _validate_refined_shared_interface_execution(
+            (0, 1), {"communicator_identity": "serial"}, 1,
+            implicit_jacvec_pair=True, complete_bind=1,
         )
     with pytest.raises(TypeError, match="serial or exact MPI_COMM_WORLD"):
         _validate_refined_shared_interface_execution(

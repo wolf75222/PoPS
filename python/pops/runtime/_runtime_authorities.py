@@ -461,12 +461,31 @@ def _materialized_shared_interface_levels(native: Any, hierarchy: Any) -> tuple[
     return tuple(range(materialized))
 
 
+def _requires_shared_interface_implicit_jacvec_pair(install_plan: Any) -> bool:
+    """Read the authenticated compiled-Program requirement, retaining old explicit artifacts."""
+    capabilities = install_plan.artifact.plan.capabilities
+    if not isinstance(capabilities, Mapping):
+        raise TypeError("compiled shared-interface capabilities must be a mapping")
+    evidence = capabilities.get("shared_interfaces")
+    if evidence is None:
+        # Artifacts predating the implicit pair route could contain only explicit shared rates.
+        return False
+    if not isinstance(evidence, Mapping) or set(evidence) != {"implicit_jacvec_pair"}:
+        raise TypeError("compiled shared-interface capability evidence is not canonical")
+    required = evidence["implicit_jacvec_pair"]
+    if type(required) is not bool:
+        raise TypeError("compiled shared-interface implicit-JVP requirement must be an exact bool")
+    return required
+
+
 def _validate_refined_shared_interface_execution(
     levels: tuple[int, ...],
     execution_data: dict[str, Any],
     rank_count: int,
     *,
     dynamic_regrid: bool = False,
+    implicit_jacvec_pair: bool = False,
+    complete_bind: bool = False,
 ) -> None:
     """Require one contiguous materialized prefix on the selected communicator.
 
@@ -480,6 +499,13 @@ def _validate_refined_shared_interface_execution(
         raise RuntimeError("native shared-interface rank count must be a positive integer")
     if type(dynamic_regrid) is not bool:
         raise TypeError("shared-interface dynamic_regrid must be an exact bool")
+    if type(implicit_jacvec_pair) is not bool or type(complete_bind) is not bool:
+        raise TypeError(
+            "shared-interface implicit-JVP and complete-bind contracts must be exact bools")
+    if implicit_jacvec_pair and complete_bind and levels != (0, 1):
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP requires exactly materialized levels (L0, L1) "
+            "at bind")
     communicator = execution_data.get("communicator_identity")
     if communicator == "serial":
         if rank_count != 1:
@@ -576,6 +602,7 @@ def finalize_runtime_authorities(
         raise ValueError("native block registry contains duplicate names")
     block_indices = {name: index for index, name in enumerate(block_names)}
     execution_data = component_execution_data(install_plan.execution_context)
+    implicit_jacvec_pair = _requires_shared_interface_implicit_jacvec_pair(install_plan)
     adaptive = {row.adaptive for row in install_plan.artifact.layout_plan.layouts}
     levels = (0,)
     if adaptive == {True}:
@@ -595,7 +622,13 @@ def finalize_runtime_authorities(
         from pops import _pops
 
         _validate_refined_shared_interface_execution(
-            levels, execution_data, _pops.n_ranks(), dynamic_regrid=dynamic_refined)
+            levels,
+            execution_data,
+            _pops.n_ranks(),
+            dynamic_regrid=dynamic_refined,
+            implicit_jacvec_pair=implicit_jacvec_pair,
+            complete_bind=complete,
+        )
         if complete and dynamic_refined and levels != tuple(range(hierarchy.level_count)):
             raise NotImplementedError(
                 "dynamic shared interfaces require the complete configured prefix materialized "

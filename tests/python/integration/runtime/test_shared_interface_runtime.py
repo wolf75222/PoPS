@@ -568,6 +568,9 @@ def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(t
     )
     resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
     assert resolved.resolved_hierarchy.plan.level_count == 2
+    assert resolved.capabilities["shared_interfaces"] == {
+        "implicit_jacvec_pair": True,
+    }
     artifact = pops.compile(resolved)
 
     assert artifact.target == "amr_system"

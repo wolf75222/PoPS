@@ -118,7 +118,9 @@ Supported native routes include:
   in one packed matrix-free apply, and both base residuals in the same top-level atomic RHS round.
   The packed direction perturbs both endpoint states before one shared-flux evaluation, so the
   finite difference includes both cross-interface derivatives. Field-coupled boundaries, dynamic
-  hierarchy mutation, additional blocks/interfaces and mixed apply operators fail closed.
+  hierarchy mutation, additional blocks/interfaces and mixed apply operators fail closed. Bind also
+  requires the frozen hierarchy to have exactly the materialized prefix `(L0, L1)`; a configured but
+  unmaterialized fine level is rejected before the first matrix-free apply.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, dynamic active-depth
   changes, non-finest dynamic replacements at depth greater than two, and historical
   shared-interface rates remain unavailable. Frozen and depth-preserving dynamic

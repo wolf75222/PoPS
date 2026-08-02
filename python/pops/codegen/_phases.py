@@ -243,9 +243,11 @@ def resolve(
     )
 
     validate_prepared_boundary_jacvec(blocks, resolved_time)
-    has_shared_interfaces = validate_shared_interface_program(
-        blocks, layout_plan, resolved_time, target=target,
-        resolved_hierarchy=resolved_hierarchy,
+    has_shared_interfaces, has_shared_interface_implicit_jacvec = (
+        validate_shared_interface_program(
+            blocks, layout_plan, resolved_time, target=target,
+            resolved_hierarchy=resolved_hierarchy,
+        )
     )
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
@@ -324,7 +326,10 @@ def resolve(
                       "amr_resources": amr_requirements},
         capabilities={"resolution": evidence,
                       "layout_plan": layout_plan.capability_evidence(),
-                      "amr_bootstrap": amr_capabilities},
+                      "amr_bootstrap": amr_capabilities,
+                      "shared_interfaces": {
+                          "implicit_jacvec_pair": has_shared_interface_implicit_jacvec,
+                      }},
         lowering_coverage=lowering_coverage, compile_options=options,
         component_inputs=tuple(components),
         resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
