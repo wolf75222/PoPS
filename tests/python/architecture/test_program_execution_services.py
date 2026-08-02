@@ -44,6 +44,7 @@ SHARED_SIGNATURES = (
     "struct ProgramClockCoordinate",
     "class ExclusiveUseGuard",
     "static bool field_layout_matches_(",
+    "void require_field_evaluation_point_(",
     "ProgramRuntimeState& program_runtime_state_()",
     "void install(std::function<void(double)> step)",
     "SolveOutcome solve_fields()",
@@ -360,11 +361,10 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_clock_coordinate_",
             "program_execution_field_facade_",
         ):
-            definitions = re.findall(
-                rf"(?m)^  [^\n;=]*\b{re.escape(hook)}\s*\(", source
-            )
-            assert len(definitions) == 1, (
-                "%s must define exactly one explicit provider hook %s" % (context, hook)
+            definitions = re.findall(rf"(?m)^  [^\n;=]*\b{re.escape(hook)}\s*\(", source)
+            assert len(definitions) == 1, "%s must define exactly one explicit provider hook %s" % (
+                context,
+                hook,
             )
 
 
@@ -378,6 +378,40 @@ def test_field_state_evaluation_consumes_outcomes_in_the_shared_service():
     assert all(
         "program_execution_solve_fields_from_state_at_" not in provider for provider in providers
     )
+
+
+def test_field_evaluation_point_validation_is_shared_before_provider_dispatch():
+    shared = _read(SHARED)
+    providers = (_read(UNIFORM), _read(AMR))
+    validation = shared.split("void require_field_evaluation_point_(", 1)[1].split("\n public:", 1)[
+        0
+    ]
+
+    assert shared.count("void require_field_evaluation_point_(") == 1
+    for invariant in (
+        "point.clock.empty()",
+        "point.tick < 0",
+        "point.substep < 0",
+        "point.stage < 0",
+        "!(point.dt > 0.0)",
+        "!std::isfinite(point.dt)",
+        "!std::isfinite(point.physical_time)",
+        "point.stage_fraction < amr::Rational(0, 1)",
+        "amr::Rational(1, 1) < point.stage_fraction",
+    ):
+        assert invariant in validation
+        assert validation.index(invariant) < validation.index(
+            "provider_().program_execution_resource_level_()"
+        )
+    assert (
+        shared.count('require_field_evaluation_point_(point, "Program single-state field solve")')
+        == 1
+    )
+    assert (
+        shared.count('require_field_evaluation_point_(point, "Program simultaneous field solve")')
+        == 1
+    )
+    assert all("require_field_evaluation_point_" not in provider for provider in providers)
 
 
 def test_grid_free_program_state_services_are_shared_not_mirrored():
@@ -414,9 +448,7 @@ def test_field_configuration_uses_one_shared_facade_dispatch():
         "set_field_boundary_parameters",
         "set_field_boundary_kernel",
     ):
-        assert shared.count(
-            "provider_().program_execution_field_facade_().%s" % operation
-        ) == 1
+        assert shared.count("provider_().program_execution_field_facade_().%s" % operation) == 1
         assert operation not in uniform
         assert operation not in amr
 
@@ -715,9 +747,10 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
     assert projection.count("const int runtime_block = sys_block(block);") == 1
     assert "program_execution_apply_projection_(runtime_block, state)" in projection
     assert "program_execution_apply_projection_(sys_block(block), state)" not in projection
-    assert projection.count(
-        "program_execution_projection_balance_integrals_(runtime_block, state)"
-    ) == 2
+    assert (
+        projection.count("program_execution_projection_balance_integrals_(runtime_block, state)")
+        == 2
+    )
     assert "program_execution_projection_balance_integrals_(block, state)" not in projection
     assert "sys_->block_project(runtime_block, state);" in uniform
     assert (
@@ -728,9 +761,9 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
             0
         ]
         assert "sys_block(" not in projection_hook
-        balance_hook = provider.split(
-            "program_execution_projection_balance_integrals_", 1
-        )[1].split("Real program_execution_hmin_", 1)[0]
+        balance_hook = provider.split("program_execution_projection_balance_integrals_", 1)[
+            1
+        ].split("Real program_execution_hmin_", 1)[0]
         assert "sys_block(" not in balance_hook
 
 

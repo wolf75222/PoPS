@@ -185,8 +185,14 @@ class ProgramExecutionServices {
     return provider_().program_execution_runtime_state_();
   }
 
-  void require_active_field_evaluation_level_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+  void require_field_evaluation_point_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view route) const {
+    if (point.clock.empty() || point.tick < 0 || point.substep < 0 || point.stage < 0 ||
+        !(point.dt > 0.0) || !std::isfinite(point.dt) || !std::isfinite(point.physical_time) ||
+        point.stage_fraction < amr::Rational(0, 1) ||
+        amr::Rational(1, 1) < point.stage_fraction)
+      throw std::invalid_argument(std::string(route) +
+                                  " requires a complete exact BoundaryEvaluationPoint");
     const int active_level = provider_().program_execution_resource_level_();
     if (point.level != active_level)
       throw std::invalid_argument(
@@ -215,7 +221,7 @@ class ProgramExecutionServices {
                                           MultiFab& state) const {
     if (provider_slot.empty())
       throw std::invalid_argument("Program field solve requires an exact provider slot");
-    require_active_field_evaluation_level_(point);
+    require_field_evaluation_point_(point, "Program single-state field solve");
     return provider_().program_execution_field_solve_from_state_at_outcome_(point, provider_slot,
                                                                             block, state);
   }
@@ -229,7 +235,7 @@ class ProgramExecutionServices {
       std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
     if (field.empty())
       throw std::invalid_argument("Program field solve requires an exact provider slot");
-    require_active_field_evaluation_level_(point);
+    require_field_evaluation_point_(point, "Program simultaneous field solve");
     return provider_().program_execution_solve_generated_field_from_blocks_outcome_(
         point, value_id, field, overrides);
   }
@@ -328,7 +334,6 @@ class ProgramExecutionServices {
                                     Body&& body) const {
     if (provider_slot.empty())
       throw std::invalid_argument("Program field solve requires an exact provider slot");
-    require_active_field_evaluation_level_(point);
     const auto restore = [&]() {
       const SolveReport restored = consume_field_outcome_(
           solve_fields_from_state_at(point, provider_slot, block, restore_state));

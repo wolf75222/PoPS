@@ -18,6 +18,7 @@ the boundary):
 The AST scans are source-only (they run without the native extension); the lowering proofs import
 ``pops`` and skip cleanly when it is not importable. ASCII only.
 """
+
 import ast
 import pathlib
 
@@ -55,7 +56,7 @@ _STEPPER_METHODS = {"step", "advance", "integrate"}
 # single allowed stepper class, named explicitly (no broad allowlist).
 _ALLOWED_STEPPER_CLASSES = {
     "Program": "python/pops/time/_program/api.py: the ONE canonical compiled-time stepper; step() is a "
-               "build-time IR authoring decorator, not a numerical advance loop",
+    "build-time IR authoring decorator, not a numerical advance loop",
 }
 
 # lib/time/rk.py:ButcherTableau is a DATA helper (A/b/c coefficient table), not a stepper: it is not
@@ -63,7 +64,7 @@ _ALLOWED_STEPPER_CLASSES = {
 # non-stepper class the time surface may define with an RK-adjacent name.
 _ALLOWED_NON_STEPPER_DATA = {
     "ButcherTableau": "python/pops/lib/time/rk.py: a Butcher A/b/c coefficient table (data), not a "
-                      "stepper; carries no step/advance/integrate and is not exported as a stepper",
+    "stepper; carries no step/advance/integrate and is not exported as a stepper",
 }
 
 # The canonical physical field-operator base + its home package. A second public class exposing a
@@ -112,8 +113,11 @@ def _public_classes(tree):
 
 
 def _class_methods(node):
-    return {child.name for child in node.body
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    return {
+        child.name
+        for child in node.body
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
 
 
 def _dotted_name(node):
@@ -144,12 +148,15 @@ def test_time_surface_defines_no_second_public_stepper():
             # it is the named exception; any other stepper-shaped public class is a violation.
             violations.append(
                 "%s:%d public class %r defines stepper method(s) %s"
-                % (rel, node.lineno, node.name, sorted(methods & _STEPPER_METHODS)))
+                % (rel, node.lineno, node.name, sorted(methods & _STEPPER_METHODS))
+            )
 
     assert not violations, (
         "only pops.time.Program may be a public stepper; a second stepper-shaped class bypasses the "
-        "canonical time program:\n  " + "\n  ".join(violations)
-        + "\n(allowed: %s)" % ", ".join(sorted(_ALLOWED_STEPPER_CLASSES)))
+        "canonical time program:\n  "
+        + "\n  ".join(violations)
+        + "\n(allowed: %s)" % ", ".join(sorted(_ALLOWED_STEPPER_CLASSES))
+    )
 
 
 def test_lib_time_exports_are_macros_not_stepper_classes():
@@ -169,8 +176,10 @@ def test_lib_time_exports_are_macros_not_stepper_classes():
                 if isinstance(target, ast.Name) and target.id == "__all__":
                     if isinstance(node.value, (ast.List, ast.Tuple)):
                         exported.update(
-                            elt.value for elt in node.value.elts
-                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str))
+                            elt.value
+                            for elt in node.value.elts
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                        )
     assert exported, "pops.lib.time.__init__ must declare __all__"
 
     # Collect every FunctionDef / ClassDef name across the sub-modules with its kind.
@@ -193,14 +202,19 @@ def test_lib_time_exports_are_macros_not_stepper_classes():
             node = class_defs[name]
             if _class_methods(node) & _STEPPER_METHODS:
                 violations.append(
-                    "%s: allowed data helper %r unexpectedly defines a stepper method" % (name, name))
+                    "%s: allowed data helper %r unexpectedly defines a stepper method"
+                    % (name, name)
+                )
             continue
         if name in class_defs:
-            violations.append("pops.lib.time exports class %r (must export scheme macros only)" % name)
+            violations.append(
+                "pops.lib.time exports class %r (must export scheme macros only)" % name
+            )
 
     assert not violations, (
         "pops.lib.time must export scheme-builder functions (and the ButcherTableau data helper), "
-        "never a stepper class:\n  " + "\n  ".join(violations))
+        "never a stepper class:\n  " + "\n  ".join(violations)
+    )
 
 
 def test_lib_time_macro_returns_the_same_program_handle():
@@ -226,7 +240,8 @@ def test_lib_time_macro_returns_the_same_program_handle():
     for name in ("ForwardEuler", "SSPRK2", "SSPRK3", "RK4"):
         result = getattr(lib_time, name)(instance, rate=rate)
         assert isinstance(result, Program), (
-            "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(result)))
+            "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(result))
+        )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -242,20 +257,24 @@ def test_only_pops_fields_defines_a_field_operator_class():
         for node in _public_classes(_parse(path)):
             base_names = {_dotted_name(base) or "" for base in node.bases}
             subclasses_field = any(
-                name and name.endswith(_FIELD_OPERATOR_BASE_SUFFIX) for name in base_names)
+                name and name.endswith(_FIELD_OPERATOR_BASE_SUFFIX) for name in base_names
+            )
             has_register = bool(_class_methods(node) & _FIELD_REGISTER_METHODS)
             if subclasses_field:
                 violations.append(
                     "%s:%d public class %r subclasses FieldOperator outside pops/fields"
-                    % (rel, node.lineno, node.name))
+                    % (rel, node.lineno, node.name)
+                )
             elif has_register:
                 violations.append(
                     "%s:%d public class %r exposes register_field outside pops/fields"
-                    % (rel, node.lineno, node.name))
+                    % (rel, node.lineno, node.name)
+                )
 
     assert not violations, (
         "the physical field operator has one home (pops.fields.FieldOperator); a parallel "
-        "field system elsewhere is refused:\n  " + "\n  ".join(violations))
+        "field system elsewhere is refused:\n  " + "\n  ".join(violations)
+    )
 
 
 def test_bind_path_consumes_field_plans_never_constructs_them():
@@ -270,11 +289,13 @@ def test_bind_path_consumes_field_plans_never_constructs_them():
                     if tail in _FIELD_AUTHORING_CTOR_NAMES:
                         violations.append(
                             "%s:%d constructs %s() (bind must consume, not author, a field plan)"
-                            % (rel, node.lineno, tail))
+                            % (rel, node.lineno, tail)
+                        )
 
     assert not violations, (
         "the runtime bind path must consume field authoring, never construct FieldOperator/"
-        "FieldDiscretization itself:\n  " + "\n  ".join(violations))
+        "FieldDiscretization itself:\n  " + "\n  ".join(violations)
+    )
 
 
 def test_field_handle_is_the_sole_public_field_solve_route():
@@ -352,15 +373,15 @@ def test_field_handle_is_the_sole_public_field_solve_route():
 
 def test_native_named_field_solve_uses_exact_block_slots_not_a_representative():
     """A coupled named-field solve must preserve every qualified block stage."""
-    context = _read(REPO_ROOT / "include" / "pops" / "runtime" / "program"
-                    / "program_context.hpp")
+    context = _read(REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_context.hpp")
+    services = _read(
+        REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
+    )
     assert "representative" not in context
     assert "workspace.program_to_system[p]" in context
-    assert (
-        "solve_fields_from_blocks_at_in_place_(point, field, workspace.system_stages)"
-        in context
-    )
-    assert 'require_field_evaluation_point_(point, 0, "Program simultaneous field solve")' in context
+    assert "solve_fields_from_blocks_at_in_place_(point, field, workspace.system_stages)" in context
+    assert "require_field_evaluation_point_" not in context
+    assert 'require_field_evaluation_point_(point, "Program simultaneous field solve")' in services
     assert "solve_fields_from_blocks_in_place_(field, workspace.system_stages)" not in context
     assert "solve_fields_from_state(field, representative" not in context
 
@@ -385,7 +406,7 @@ def test_no_public_function_takes_an_amr_config_string_kwarg():
                 continue
             args = node.args
             pairs = list(
-                zip(args.args[len(args.args) - len(args.defaults):], args.defaults, strict=True)
+                zip(args.args[len(args.args) - len(args.defaults) :], args.defaults, strict=True)
             )
             pairs += list(zip(args.kwonlyargs, args.kw_defaults, strict=True))
             for arg, default in pairs:
@@ -394,11 +415,13 @@ def test_no_public_function_takes_an_amr_config_string_kwarg():
                 if isinstance(default, ast.Constant) and isinstance(default.value, str):
                     violations.append(
                         "%s:%d public %s(%s=%r) is an AMR-config string selector"
-                        % (rel, node.lineno, node.name, arg.arg, default.value))
+                        % (rel, node.lineno, node.name, arg.arg, default.value)
+                    )
 
     assert not violations, (
         "AMR is configured by the typed layout=AMR(...) descriptor, not a string kwarg or a "
-        "target='amr_system' branch:\n  " + "\n  ".join(violations))
+        "target='amr_system' branch:\n  " + "\n  ".join(violations)
+    )
 
 
 def test_amr_config_lives_in_the_layout_descriptor_only():
@@ -413,22 +436,24 @@ def test_amr_config_lives_in_the_layout_descriptor_only():
     layout = final_amr_layout(cartesian_grid(n=16, L=1.0))
     manifest = layout.inspect()
     assert manifest["capabilities"]["layout"] == "amr", (
-        "AMR(...) must be the typed AMR configuration surface")
+        "AMR(...) must be the typed AMR configuration surface"
+    )
 
     view_path = POPS / "runtime" / "amr" / "_view.py"
-    classes = [node for node in _public_classes(_parse(view_path))
-               if node.name == "AmrRuntimeView"]
+    classes = [node for node in _public_classes(_parse(view_path)) if node.name == "AmrRuntimeView"]
     assert len(classes) == 1, "the canonical AMR runtime view must remain unique"
     public_methods = {name for name in _class_methods(classes[0]) if not name.startswith("_")}
     mutators = sorted(
-        name for name in public_methods
+        name
+        for name in public_methods
         if name.startswith(("set_", "configure", "add_"))
         or "level" in name.lower()
         or "ratio" in name.lower()
     )
     assert not mutators, (
         "sim.amr is a read-only runtime view; it must expose no AMR-config mutator, found: %s"
-        % mutators)
+        % mutators
+    )
 
 
 if __name__ == "__main__":
