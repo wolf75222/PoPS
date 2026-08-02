@@ -150,11 +150,19 @@ class _Prepared(PreparedPublication):
         self.publisher.temporaries.remove(self.temp_id)
         artifact = "artifact-%s" % self.effect.payload.identity.hexdigest[:12]
         self.publisher.artifacts.add(artifact)
+        mode = self.effect.target.parallel_mode
+        rank_artifacts = ()
+        if mode is ParallelMode.PER_RANK:
+            rank_artifacts = tuple(
+                (rank, "%s-r%d" % (artifact, rank)) for rank in range(2)
+            )
         return PublicationReceipt(
             self.effect.identity,
             self.effect.payload.identity,
             "test-publisher",
             artifact,
+            parallel_mode=mode,
+            rank_artifacts=rank_artifacts,
         )
 
     def discard(self):
