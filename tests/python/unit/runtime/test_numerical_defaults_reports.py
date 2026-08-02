@@ -76,7 +76,6 @@ def test_system_inspect_reports_effective_block_and_solver_options():
             newton_rel_tol=1e-6,
             newton_fd_eps=2e-7,
             newton_damping=0.8,
-            newton_diagnostics=True,
         ),
         spatial=engine.Spatial(positivity_floor=1e-12),
     )
@@ -97,10 +96,23 @@ def test_system_inspect_reports_effective_block_and_solver_options():
     assert block["newton"]["rel_tol"] == pytest.approx(1e-6)
     assert block["newton"]["fd_eps"] == pytest.approx(2e-7)
     assert "fail_policy" not in block["newton"]
-    assert block["newton"]["diagnostics"] is True
+    assert block["newton"]["diagnostics"] is False
     assert block["physical"]["cs2"] == pytest.approx(0.7)
     assert block["physical"]["q"] == pytest.approx(-2.0)
     assert block["positivity_floor"] == pytest.approx(1e-12)
+
+
+def test_system_rejects_unpublished_newton_diagnostics():
+    sim = System(n=8, L=1.0, periodicity=(True, True))
+    with pytest.raises(
+        ValueError,
+        match="no typed implicit Program consumer publishes that report",
+    ):
+        sim.add_equation(
+            "ion",
+            _isothermal_model(),
+            time=engine.IMEX(newton_diagnostics=True),
+        )
 
 
 def test_invalid_newton_values_are_rejected():

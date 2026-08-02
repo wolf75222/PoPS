@@ -345,9 +345,7 @@ def _capture_v3(owner, sim, prepared):
     if prepared.local_program_state:
         rematerialize = getattr(sim, "rematerialize_program_accepted_state", None)
         if not callable(rematerialize):
-            raise TypeError(
-                "checkpoint AMR engine lacks accepted-state consensus validation"
-            )
+            raise TypeError("checkpoint AMR engine lacks accepted-state consensus validation")
         # Re-materializing onto the unchanged ownership is a non-mutating validation pass. It
         # authenticates every rank-independent accepted field, including persistent tagging,
         # before any rank may seal or publish a checkpoint.
@@ -447,7 +445,10 @@ def prepare_v3(
     """
     import numpy as np
     from pops.output._checkpoint_collective import checkpoint_topology
-    from pops.runtime._amr_checkpoint_contract import preflight_contract
+    from pops.runtime._amr_checkpoint_contract import (
+        checkpoint_temporal_partition_kind,
+        preflight_contract,
+    )
     from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
     from pops.runtime._temporal_restart import TemporalRestartState
 
@@ -487,6 +488,17 @@ def prepare_v3(
         if not sim.installed_program_hash():
             raise ValueError(
                 "restart: RegridOnRestart requires an artifact-backed compiled AMR Program"
+            )
+    if checkpoint_temporal_partition_kind(d) == "cell_local":
+        if checkpoint_ranks != current_ranks:
+            raise ValueError(
+                "restart: cell-local temporal partitions require the recorded MPI cardinality "
+                "until ownership rematerialization is implemented"
+            )
+        if hierarchy_mode != "restore_recorded_hierarchy":
+            raise ValueError(
+                "restart: cell-local temporal partitions require RestoreRecordedHierarchy "
+                "until regrid rematerialization is implemented"
             )
     checkpoint_levels, checkpoint_configured_levels = _checkpoint_amr_level_envelope(sim, d)
     from pops.runtime._amr_checkpoint_topology import recorded_rank_topology
@@ -1060,9 +1072,7 @@ def apply_v3(owner, sim, prepared):
             "recorded accepted-contract identity",
             lambda: _restart_accepted_contract_identity(sim),
         )
-        before_history_identity = _restart_history_identity(
-            owner, sim, phase="recorded hierarchy"
-        )
+        before_history_identity = _restart_history_identity(owner, sim, phase="recorded hierarchy")
         before_integrals = _restart_composite_integrals(owner, sim, phase="recorded hierarchy")
         _restart_collective_phase(
             owner,

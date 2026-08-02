@@ -37,6 +37,7 @@ def lower_analytic_components(
     *,
     frame_id: str,
     bindings: Any = None,
+    time_clock_id: str | None = None,
 ) -> tuple[tuple[tuple[str, ...], tuple[float, ...]], ...]:
     """Return one validated postfix opcode/literal pair per scalar component."""
 
@@ -51,6 +52,7 @@ def lower_analytic_components(
             frame_id=frame_id,
             where="components[%d]" % index,
             bindings=bindings,
+            time_clock_id=time_clock_id,
         )
         for index, expression in enumerate(components)
     )
@@ -62,6 +64,7 @@ def _lower_expression(
     frame_id: str,
     where: str,
     bindings: Any,
+    time_clock_id: str | None,
 ) -> tuple[tuple[str, ...], tuple[float, ...]]:
     from pops.analytic import ScalarExpr
 
@@ -74,8 +77,8 @@ def _lower_expression(
     budget = [0]
     _lower_node(
         data["root"], expected="scalar", frame_id=frame_id, where=where + ".root",
-        depth=1, budget=budget, opcodes=opcodes, literals=literals,
-        bindings=bindings,
+        depth=1, budget=budget, opcodes=opcodes, literals=literals, bindings=bindings,
+        time_clock_id=time_clock_id,
     )
     if len(opcodes) != len(literals) or not opcodes:
         raise RuntimeError("analytic lowering produced an invalid postfix program")
@@ -93,6 +96,7 @@ def _lower_node(
     opcodes: list[str],
     literals: list[float],
     bindings: Any,
+    time_clock_id: str | None,
 ) -> None:
     if depth > _MAX_DEPTH:
         raise ValueError("%s exceeds analytic max_depth=%d" % (where, _MAX_DEPTH))
@@ -147,6 +151,23 @@ def _lower_node(
         literals.append(float(value_id))
         return
 
+    if kind == "scalar" and op == "time":
+        if set(data) != {"kind", "op", "clock", "clock_id"}:
+            raise TypeError("%s time node has an unsupported shape" % where)
+        if not isinstance(time_clock_id, str) or not time_clock_id:
+            raise NotImplementedError(
+                "%s requires a consuming runtime with one exact physical-time Clock" % where
+            )
+        if data["clock_id"] != time_clock_id:
+            raise ValueError("%s time belongs to another logical Clock" % where)
+        from pops.time import Clock
+
+        if Clock.from_data(data["clock"]).qualified_id != time_clock_id:
+            raise ValueError("%s time Clock data does not authenticate clock_id" % where)
+        opcodes.append("input")
+        literals.append(0.0)
+        return
+
     if set(data) != {"kind", "op", "arguments"} \
             or not isinstance(data["arguments"], (tuple, list)):
         raise TypeError("%s operator node has an unsupported shape" % where)
@@ -179,8 +200,8 @@ def _lower_node(
         _lower_node(
             argument, expected=child_kind, frame_id=frame_id,
             where="%s.arguments[%d]" % (where, index), depth=depth + 1, budget=budget,
-            opcodes=opcodes, literals=literals,
-            bindings=bindings,
+            opcodes=opcodes, literals=literals, bindings=bindings,
+            time_clock_id=time_clock_id,
         )
     # The canonical schema vocabulary is also the native ABI vocabulary.  Keeping one spelling
     # prevents the Python and C++ validators from accepting disjoint instruction sets.

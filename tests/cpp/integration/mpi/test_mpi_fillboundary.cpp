@@ -116,15 +116,13 @@ static int pops_run_test_mpi_fillboundary(int argc, char** argv) {
         for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
           field(i, j, 0) = mapped_value(i, j);
     }
-    BCRec boundary;
-    boundary.xlo = BCType::Periodic;
-    boundary.xhi = BCType::Periodic;
-    boundary.ylo = BCType::Foextrap;
-    boundary.yhi = BCType::Foextrap;
     const PeriodicIdentification2D reflected_x{0, 1, std::array<int, 2>{{0, 1}},
                                                std::array<int, 2>{{1, -1}}};
-    PreparedBoundaryPlan plan("test::mpi::reflected-periodic", mapped_ng, {boundary}, {}, "", {},
-                              {reflected_x});
+    auto boundary = prepare_hyperbolic_boundary<2>(
+        {"periodic", "periodic", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+        {"test::mpi::xlo", "test::mpi::xhi", "test::mpi::ylo", "test::mpi::yhi"}, {"Scalar"}, true);
+    PreparedBoundaryPlan plan("test::mpi::reflected-periodic", mapped_ng, std::move(boundary), {},
+                              "", {}, {reflected_x});
 
     plan.fill_same_level_and_physical(mapped, mapped_domain);
 

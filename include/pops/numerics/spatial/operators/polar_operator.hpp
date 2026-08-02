@@ -141,13 +141,18 @@ struct PolarFaceFluxRKernel {
     // Reconstructed states on either side of the radial face i (REUSES Cartesian reconstruct_pp<>,
     // dir == 0). L = extrapolation from cell i-1 toward its + face; R = from cell i toward its
     // - face.
-    const auto L =
-        reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rr =
-        reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto L = reconstruct_pp_recovered<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim,
+                                                   pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp_recovered<Model>(model, u, i, j, 0, -1, lim, recon_prim,
+                                                    pos_floor, pos_comp);
+    if (!record_reconstruction_recoveries(failures, failure, L, Rr)) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        fr(i, j, c) = Real(0);
+      return;
+    }
     const FaceContext face = FaceContext::axis_aligned(0, rf);
     const auto evaluation =
-        evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+        evaluate_numerical_flux_at(nflux, model, L.value, ax, i - 1, j, Rr.value, ax, i, j, face);
     failures.record(evaluation, failure);
     if (!evaluation.succeeded()) {
       for (int c = 0; c < Model::n_vars; ++c)
@@ -180,13 +185,18 @@ struct PolarFaceFluxThetaKernel {
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   FluxEvaluationRecorder failures;
   POPS_HD void operator()(int i, int j, std::uint64_t& failure) const {
-    const auto L =
-        reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Rr =
-        reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto L = reconstruct_pp_recovered<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim,
+                                                   pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp_recovered<Model>(model, u, i, j, 1, -1, lim, recon_prim,
+                                                    pos_floor, pos_comp);
+    if (!record_reconstruction_recoveries(failures, failure, L, Rr)) {
+      for (int c = 0; c < Model::n_vars; ++c)
+        ft(i, j, c) = Real(0);
+      return;
+    }
     const FaceContext face = FaceContext::axis_aligned(1);
     const auto evaluation =
-        evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+        evaluate_numerical_flux_at(nflux, model, L.value, ax, i, j - 1, Rr.value, ax, i, j, face);
     failures.record(evaluation, failure);
     if (!evaluation.succeeded()) {
       for (int c = 0; c < Model::n_vars; ++c)

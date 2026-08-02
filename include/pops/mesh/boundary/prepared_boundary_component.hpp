@@ -57,7 +57,7 @@ struct PreparedBoundaryComponentSpec {
   std::shared_ptr<const component::PreparedExecutionContextV1> execution;
 };
 
-enum class PreparedBoundaryOperation { GhostRegion, FieldResidual, FieldJvp };
+enum class PreparedBoundaryOperation { GhostRegion, FluxTransform, FieldResidual, FieldJvp };
 
 /// One statically typed prepared component invocation.  The operation is a template argument, never
 /// a production string branch: installation chooses one typed entry point and scientific calls retain
@@ -86,8 +86,15 @@ class PreparedBoundaryComponent final {
                                                        spec_.interface_version);
     }
 
+    [[nodiscard]] const PopsBoundaryFluxApiV1& boundary_flux_api() const {
+      static_assert(Operation == PreparedBoundaryOperation::FluxTransform);
+      return component_->table<PopsBoundaryFluxApiV1>(POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1,
+                                                      spec_.interface_version);
+    }
+
     [[nodiscard]] const PopsFieldBoundaryClosureApiV1& field_api() const {
-      static_assert(Operation != PreparedBoundaryOperation::GhostRegion);
+      static_assert(Operation == PreparedBoundaryOperation::FieldResidual ||
+                    Operation == PreparedBoundaryOperation::FieldJvp);
       return component_->table<PopsFieldBoundaryClosureApiV1>(
           POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1, spec_.interface_version);
     }
@@ -159,8 +166,15 @@ class PreparedBoundaryComponent final {
                                                      spec_.interface_version);
   }
 
+  const PopsBoundaryFluxApiV1& boundary_flux_api() const {
+    static_assert(Operation == PreparedBoundaryOperation::FluxTransform);
+    return component_->table<PopsBoundaryFluxApiV1>(POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1,
+                                                    spec_.interface_version);
+  }
+
   const PopsFieldBoundaryClosureApiV1& field_api() const {
-    static_assert(Operation != PreparedBoundaryOperation::GhostRegion);
+    static_assert(Operation == PreparedBoundaryOperation::FieldResidual ||
+                  Operation == PreparedBoundaryOperation::FieldJvp);
     return component_->table<PopsFieldBoundaryClosureApiV1>(
         POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1, spec_.interface_version);
   }
@@ -177,6 +191,8 @@ class PreparedBoundaryComponent final {
   static constexpr PopsNativeInterfaceIdV1 native_interface_id_() {
     if constexpr (Operation == PreparedBoundaryOperation::GhostRegion)
       return POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1;
+    else if constexpr (Operation == PreparedBoundaryOperation::FluxTransform)
+      return POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1;
     else
       return POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1;
   }
@@ -184,6 +200,8 @@ class PreparedBoundaryComponent final {
   const PopsComponentTableHeaderV1& table_header() const {
     if constexpr (Operation == PreparedBoundaryOperation::GhostRegion)
       return ghost_api().header;
+    else if constexpr (Operation == PreparedBoundaryOperation::FluxTransform)
+      return boundary_flux_api().header;
     else
       return field_api().header;
   }
@@ -202,6 +220,14 @@ class PreparedBoundaryComponent final {
     component::validate_execution_context(spec_.execution->view());
     if constexpr (Operation == PreparedBoundaryOperation::GhostRegion) {
       component::require_operation(ghost_api().apply_region_batch != nullptr, "apply_region_batch");
+    } else if constexpr (Operation == PreparedBoundaryOperation::FluxTransform) {
+      component::require_operation(boundary_flux_api().transform_faces != nullptr,
+                                   "transform_faces");
+      if (spec_.region.kind != POPS_BOUNDARY_FACE_V1 || spec_.region.codimension != 1 ||
+          spec_.outputs.size() != 1 || spec_.outputs.front() != spec_.state_identity ||
+          !spec_.directions.empty())
+        throw std::invalid_argument(
+            "BoundaryFlux requires one oriented face, one state output and no direction table");
     } else {
       component::require_operation(
           Operation == PreparedBoundaryOperation::FieldResidual ? field_api().residual != nullptr
@@ -226,6 +252,8 @@ class PreparedBoundaryComponent final {
 
 using PreparedGhostBoundaryComponent =
     PreparedBoundaryComponent<PreparedBoundaryOperation::GhostRegion>;
+using PreparedBoundaryFluxComponent =
+    PreparedBoundaryComponent<PreparedBoundaryOperation::FluxTransform>;
 using PreparedFieldBoundaryResidualComponent =
     PreparedBoundaryComponent<PreparedBoundaryOperation::FieldResidual>;
 using PreparedFieldBoundaryJvpComponent =

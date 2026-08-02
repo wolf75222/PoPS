@@ -1,16 +1,17 @@
 #pragma once
 
 /// @file
-/// @brief Device-to-host failure channel for pointwise numerical-flux evaluations.
+/// @brief Device-to-host failure channel for pointwise face-state and numerical-flux evaluations.
 ///
-/// Flux providers execute inside Kokkos kernels and therefore cannot throw.  Every spatial
-/// entrypoint owns one tracker, passes its trivially-copyable recorder to all of its kernels, and
-/// consumes the collective report before publishing the computed field.  The packed reduction is
-/// ordered first by status severity (Ok < Retry < Reject < Failed), then by the unsigned reason
-/// code.  Consequently concurrent failures produce one deterministic result on every backend and,
-/// after the world reduction, on every MPI rank.
+/// Primitive recovery and flux providers execute inside Kokkos kernels and therefore cannot throw.
+/// Every spatial entrypoint owns one tracker, passes its trivially-copyable recorder to all of its
+/// kernels, and consumes the collective report before publishing the computed field.  The packed
+/// reduction is ordered first by status severity (Ok < Retry < Reject < Failed), then by the
+/// unsigned reason code.  Consequently concurrent failures produce one deterministic result on
+/// every backend and, after the world reduction, on every MPI rank.
 
 #include <pops/numerics/fv/flux_interfaces.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/export.hpp>
 
@@ -116,6 +117,28 @@ namespace detail {
 inline constexpr std::uint64_t kFluxReasonMask = UINT64_C(0xffffffff);
 inline constexpr int kFluxSeverityShift = 32;
 inline constexpr std::uint32_t kNonFiniteFiniteVolumeReason = UINT32_C(0x4e46494e);  // "NFIN"
+inline constexpr std::uint32_t kVariableRecoveryReasonBase = UINT32_C(0x56520000);   // "VR"
+
+POPS_HD constexpr EvaluationStatus recovery_evaluation_status(RecoveryStatus status) {
+  switch (status) {
+    case RecoveryStatus::kRecovered:
+      return EvaluationStatus::kOk;
+    case RecoveryStatus::kExhausted:
+      return EvaluationStatus::kRetry;
+    case RecoveryStatus::kRejected:
+      return EvaluationStatus::kReject;
+    case RecoveryStatus::kInvalidContract:
+      return EvaluationStatus::kFailed;
+  }
+  return EvaluationStatus::kFailed;
+}
+
+POPS_HD constexpr std::uint32_t recovery_evaluation_reason(const RecoveryReport& report) {
+  if (report.reason_code != 0)
+    return report.reason_code;
+  return kVariableRecoveryReasonBase |
+         (static_cast<std::uint32_t>(report.cause) & UINT32_C(0x0000ffff));
+}
 
 POPS_HD constexpr std::uint64_t pack_flux_failure(EvaluationStatus status,
                                                   std::uint32_t reason_code) {
@@ -167,6 +190,20 @@ struct FluxEvaluationRecorder {
       return;
     const std::uint64_t candidate =
         detail::pack_flux_failure(EvaluationStatus::kFailed, detail::kNonFiniteFiniteVolumeReason);
+    if (candidate > aggregate)
+      aggregate = candidate;
+  }
+
+  /// Join one device-side primitive/local-variable recovery refusal into the same deterministic
+  /// transport reduction as numerical-flux failures.  Recovery is computed pointwise and cannot
+  /// throw from a Kokkos kernel; this adapter preserves Retry/Reject/Fatal semantics and the
+  /// provider reason code without allocating or invoking a type-erased callback.
+  POPS_HD void record_recovery(const RecoveryReport& report, std::uint64_t& aggregate) const {
+    if (report.publication_permitted())
+      return;
+    const std::uint64_t candidate =
+        detail::pack_flux_failure(detail::recovery_evaluation_status(report.status),
+                                  detail::recovery_evaluation_reason(report));
     if (candidate > aggregate)
       aggregate = candidate;
   }

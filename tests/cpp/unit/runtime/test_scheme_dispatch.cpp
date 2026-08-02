@@ -30,17 +30,21 @@ int routed_n_ghost(LimiterRouteId route) {
 }  // namespace
 
 TEST(test_scheme_dispatch, routes_each_limiter_to_its_reconstruction_policy) {
-  // Each route binds the compile-time type whose ::n_ghost matches kLimiters (1/2/2/3) and the type in
+  // Each route binds the compile-time type whose ::n_ghost matches kLimiters and the type in
   // reconstruction.hpp -- so the X-macro POPS_FOR_EACH_LIMITER cannot drift from the route table.
   EXPECT_EQ(routed_n_ghost(LimiterRouteId::kNone), NoSlope::n_ghost);
   EXPECT_EQ(routed_n_ghost(LimiterRouteId::kMinmod), Minmod::n_ghost);
   EXPECT_EQ(routed_n_ghost(LimiterRouteId::kVanLeer), VanLeer::n_ghost);
   EXPECT_EQ(routed_n_ghost(LimiterRouteId::kWeno5), Weno5::n_ghost);
+  EXPECT_EQ(routed_n_ghost(LimiterRouteId::kMc), MC::n_ghost);
+  EXPECT_EQ(routed_n_ghost(LimiterRouteId::kSuperbee), Superbee::n_ghost);
   // Cross-check against the route table's ::n_ghost expectation (kLimiters, single source).
   EXPECT_EQ(routed_n_ghost(LimiterRouteId::kNone), 1);
   EXPECT_EQ(routed_n_ghost(LimiterRouteId::kMinmod), 2);
   EXPECT_EQ(routed_n_ghost(LimiterRouteId::kVanLeer), 2);
   EXPECT_EQ(routed_n_ghost(LimiterRouteId::kWeno5), 3);
+  EXPECT_EQ(routed_n_ghost(LimiterRouteId::kMc), 2);
+  EXPECT_EQ(routed_n_ghost(LimiterRouteId::kSuperbee), 2);
 }
 
 TEST(test_scheme_dispatch, count_lock_matches_the_route_table) {

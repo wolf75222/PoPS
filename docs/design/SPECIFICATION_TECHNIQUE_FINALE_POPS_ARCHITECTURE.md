@@ -426,7 +426,11 @@ uniquement un échec de transport ABI et ne fabrique jamais de statut scientifiq
 La représentation matière est typée (`full`, couverture binaire, fraction cut-cell, ids matériau ou
 leur combinaison), jamais simulée par un tableau de `1`. La route actuellement prouvée de bout en bout
 est plus étroite que cette ABI : `Uniform(CartesianGrid)`, cell-centered, plein matériau, float64,
-host et communicateur série. AMR, embedded boundary, multimatériau, GPU, MPI sans consensus global,
+host, communicateur série et politique `pops.field-hierarchy.level-local`. Le champ `level` des
+métadonnées ABI ne constitue pas à lui seul une implémentation AMR : aucun bridge ne matérialise la
+paire externe comme `AmrFieldSolverProvider`. L'autorité expose donc explicitement `max_levels=1`,
+`hierarchy_materialization=false` et `amr_provider_bridge=false`. AMR, une autre politique de
+hiérarchie, embedded boundary, multimatériau, GPU, MPI sans consensus global,
 conditions de bord dépendantes d'un état/champ/temps et outer solve non linéaire sont refusés à
 `resolve`; les accepter dans un manifest ne suffit pas à rendre l'adapter capable.
 

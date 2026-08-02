@@ -10,6 +10,7 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb (cut-cell EB) + detail::DiscLevelSet (T5-PR2)
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
@@ -125,7 +126,9 @@ template <class Limiter, class Flux, class Model>
 inline void assemble_rhs_without_prepared_interfaces(
     const Model& model, MultiFab& state, const GridContext& context, MultiFab& residual,
     bool reconstruct_primitive, Real positivity_floor, Real weno_epsilon = kWenoEpsilon,
-    const std::shared_ptr<MultiFab>& ws_cache = {}) {
+    const std::shared_ptr<MultiFab>& ws_cache = {},
+    const runtime::multiblock::BoundaryEvaluationPoint* point = nullptr,
+    const PreparedGridBoundarySession* boundary = nullptr) {
   std::vector<Box2D> xboxes;
   std::vector<Box2D> yboxes;
   xboxes.reserve(static_cast<std::size_t>(state.box_array().size()));
@@ -151,6 +154,15 @@ inline void assemble_rhs_without_prepared_interfaces(
                                        context.geom.dy(), reconstruct_primitive, positivity_floor,
                                        weno_epsilon);
   }
+  if (context.boundary_plan && context.boundary_plan->has_flux_transformations()) {
+    if (point == nullptr)
+      throw std::logic_error(
+          "post-Riemann boundary flux transformation requires a BoundaryEvaluationPoint");
+    if (boundary != nullptr)
+      transform_grid_boundary_fluxes(state, fx, fy, *boundary, *point);
+    else
+      transform_grid_boundary_fluxes(state, fx, fy, context, *point);
+  }
   zero_prepared_interface_fluxes(fx, fy, context);
   mf_eval_rhs(model, state, *context.aux, fx, fy, context.geom.dx(), context.geom.dy(), residual);
 }
@@ -175,19 +187,14 @@ struct BlockRhsEval {
   Real weno_eps =
       kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical, bit-identical)
   void operator()(MultiFab& U, MultiFab& R) const {
+    if (ctx->boundary_plan && ctx->boundary_plan->has_flux_transformations())
+      throw std::logic_error(
+          "post-Riemann boundary flux transformation requires a BoundaryEvaluationPoint");
+    if (ctx->boundary_plan && ctx->boundary_plan->has_omitted_faces())
+      throw std::logic_error(
+          "prepared shared-interface flux requires BoundaryEvaluationPoint group authority");
     fill_grid_ghosts(U, *ctx);
-    if constexpr (std::is_same_v<Flux, HLLFlux>) {
-      if (ws_cache) {
-        // Re-allocate the scratch at the current layout (4 components, 1 ghost): covers an AMR regrid
-        // or a first call (shared_ptr to an empty MultiFab). Otherwise reuse the existing allocation.
-        if (!detail::wave_speed_cache_matches(*ws_cache, U))
-          *ws_cache = MultiFab(U.box_array(), U.dmap(), 4, 1);
-        assemble_rhs_hll_cached<Limiter>(model, U, *ctx->aux, ctx->geom, R, *ws_cache, recon_prim,
-                                         pos_floor, weno_eps);
-        return;
-      }
-    }
-    assemble_rhs<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, pos_floor, weno_eps);
+    eval_core_filled(U, R);
   }
 
   void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
@@ -202,20 +209,23 @@ struct BlockRhsEval {
   void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
                  MultiFab& R) const {
     fill_grid_ghosts(U, *ctx, point);
-    eval_core_filled(U, R);
+    eval_core_filled(U, R, &point, nullptr);
   }
 
   void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
                  MultiFab& R, const PreparedGridBoundarySession& boundary) const {
     fill_grid_ghosts(U, boundary, point);
-    eval_core_filled(U, R);
+    eval_core_filled(U, R, &point, &boundary);
   }
 
  private:
-  void eval_core_filled(MultiFab& U, MultiFab& R) const {
-    if (ctx->boundary_plan && ctx->boundary_plan->has_omitted_faces()) {
-      assemble_rhs_without_prepared_interfaces<Limiter, Flux>(model, U, *ctx, R, recon_prim,
-                                                              pos_floor, weno_eps, ws_cache);
+  void eval_core_filled(MultiFab& U, MultiFab& R,
+                        const runtime::multiblock::BoundaryEvaluationPoint* point = nullptr,
+                        const PreparedGridBoundarySession* boundary = nullptr) const {
+    if (ctx->boundary_plan && (ctx->boundary_plan->has_omitted_faces() ||
+                               ctx->boundary_plan->has_flux_transformations())) {
+      assemble_rhs_without_prepared_interfaces<Limiter, Flux>(
+          model, U, *ctx, R, recon_prim, pos_floor, weno_eps, ws_cache, point, boundary);
       return;
     }
     if constexpr (std::is_same_v<Flux, HLLFlux>) {
@@ -788,6 +798,9 @@ inline int block_n_ghost(const std::string& lim) {
   static_assert(limiter_n_ghost_ct("vanleer") == VanLeer::n_ghost,
                 "kLimiters[vanleer].n_ghost drifted");
   static_assert(limiter_n_ghost_ct("weno5") == Weno5::n_ghost, "kLimiters[weno5].n_ghost drifted");
+  static_assert(limiter_n_ghost_ct("mc") == MC::n_ghost, "kLimiters[mc].n_ghost drifted");
+  static_assert(limiter_n_ghost_ct("superbee") == Superbee::n_ghost,
+                "kLimiters[superbee].n_ghost drifted");
   return limiter_n_ghost(lim);
 }
 
@@ -896,17 +909,29 @@ std::function<void(const MultiFab&, MultiFab&)> make_poisson_rhs(const Model& m)
 
 /// PER-CELL (one cell) cons <-> prim conversions of the MODEL, type-erased over arrays of
 /// Model::n_vars doubles. First = primitive -> conservative (M.to_conservative, init from the
-/// primitives), second = conservative -> primitive (M.to_primitive, diagnostic). Captures the model by
-/// value (frozen when the block is added). For a model WITHOUT a conversion (pure scalar, no
-/// hyperbolic brick) both are the IDENTITY -- exact for a scalar transport (prim == cons).
-/// Model::Prim shares the Model::n_vars width of State (HyperbolicPhysicalModel contract), so the flat
-/// arrays align component by component. Shared by add_block (native) and add_compiled_model (compiled):
+/// primitives), second = conservative -> primitive through one PreparedVariableRecovery method.
+/// The second closure returns a RecoveryReport and writes its output only after recovery succeeds.
+/// Captures the model by value (frozen when the block is added). For a model WITHOUT a conversion
+/// (pure scalar, no hyperbolic brick) both formulas are the IDENTITY -- exact for scalar transport
+/// (prim == cons) -- while the recovery route still rejects non-finite publication.
+/// This flat ABI requires Model::Prim to share the Model::n_vars width of State; make_cell_convert
+/// enforces that additional constraint at compile time because HyperbolicPhysicalModel itself only
+/// types the forward/inverse maps. Shared by add_block (native) and add_compiled_model (compiled):
 /// the SAME conversion serves both paths.
 template <class Model>
-std::pair<std::function<void(const double*, double*)>, std::function<void(const double*, double*)>>
+std::pair<std::function<void(const double*, double*)>,
+          std::function<RecoveryReport(const double*, double*)>>
 make_cell_convert(const Model& m) {
   constexpr int NV = Model::n_vars;
+  const auto recovery_plan = prepare_model_variable_recovery(m);
   if constexpr (HasPrimitiveVars<Model>) {
+    static_assert(
+        requires { std::integral_constant<int, Model::Prim::size()>{}; },
+        "make_cell_convert requires a compile-time primitive-state width");
+    if constexpr (requires { std::integral_constant<int, Model::Prim::size()>{}; })
+      static_assert(
+          Model::Prim::size() == NV,
+          "make_cell_convert requires primitive and conservative states to have equal arity");
     auto p2c = [m](const double* in, double* out) {
       typename Model::Prim p{};
       for (int c = 0; c < NV; ++c)
@@ -915,23 +940,43 @@ make_cell_convert(const Model& m) {
       for (int c = 0; c < NV; ++c)
         out[c] = static_cast<double>(u[c]);
     };
-    auto c2p = [m](const double* in, double* out) {
-      typename Model::State u{};
-      for (int c = 0; c < NV; ++c)
-        u[c] = static_cast<Real>(in[c]);
-      const typename Model::Prim p = m.to_primitive(u);
-      for (int c = 0; c < NV; ++c)
-        out[c] = static_cast<double>(p[c]);
+    auto c2p = [recovery_plan](const double* in, double* out) {
+      constexpr int N = Model::n_vars;
+      Real conserved[N] = {};
+      Real initial_guess[N] = {};
+      for (int c = 0; c < N; ++c)
+        conserved[c] = initial_guess[c] = static_cast<Real>(in[c]);
+      const RecoveryOutcome<N> outcome =
+          recover_prepared_variable(recovery_plan, conserved, initial_guess);
+      if (!outcome.publication_permitted())
+        return recovery_report(outcome);
+      for (int c = 0; c < N; ++c)
+        out[c] = static_cast<double>(outcome.value[c]);
+      return recovery_report(outcome);
     };
     return {std::function<void(const double*, double*)>(p2c),
-            std::function<void(const double*, double*)>(c2p)};
+            std::function<RecoveryReport(const double*, double*)>(c2p)};
   } else {
-    auto id = [](const double* in, double* out) {
+    auto p2c = [](const double* in, double* out) {
       for (int c = 0; c < NV; ++c)
         out[c] = in[c];
     };
-    return {std::function<void(const double*, double*)>(id),
-            std::function<void(const double*, double*)>(id)};
+    auto c2p = [recovery_plan](const double* in, double* out) {
+      constexpr int N = Model::n_vars;
+      Real conserved[N] = {};
+      Real initial_guess[N] = {};
+      for (int c = 0; c < N; ++c)
+        conserved[c] = initial_guess[c] = static_cast<Real>(in[c]);
+      const RecoveryOutcome<N> outcome =
+          recover_prepared_variable(recovery_plan, conserved, initial_guess);
+      if (!outcome.publication_permitted())
+        return recovery_report(outcome);
+      for (int c = 0; c < N; ++c)
+        out[c] = static_cast<double>(outcome.value[c]);
+      return recovery_report(outcome);
+    };
+    return {std::function<void(const double*, double*)>(p2c),
+            std::function<RecoveryReport(const double*, double*)>(c2p)};
   }
 }
 

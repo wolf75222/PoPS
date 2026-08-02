@@ -6,8 +6,9 @@ from .cartesian import (
     CartesianDirection,
     X_AXIS,
     Y_AXIS,
+    Z_AXIS,
 )
 
 __all__ = [
-    "Cartesian2D", "CartesianAxis", "CartesianDirection", "X_AXIS", "Y_AXIS",
+    "Cartesian2D", "CartesianAxis", "CartesianDirection", "X_AXIS", "Y_AXIS", "Z_AXIS",
 ]

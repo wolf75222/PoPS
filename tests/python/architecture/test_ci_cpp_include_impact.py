@@ -375,6 +375,35 @@ def test_cpp_duration_catalog_inventory_rejects_invalid_weights(
         sel.validate_cpp_duration_catalogs(["test_alpha"])
 
 
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    (
+        ({"target_count": 2, "estimated_targets": []}, "target_count"),
+        (
+            {"target_count": 1, "estimated_targets": ["test_missing"]},
+            "estimated_targets orphaned",
+        ),
+        (
+            {"target_count": 1, "estimated_targets": ["test_alpha", "test_alpha"]},
+            "estimated_targets must be sorted unique",
+        ),
+    ),
+)
+def test_cpp_duration_catalog_inventory_authenticates_metadata(
+    tmp_path, monkeypatch, metadata, message,
+):
+    build_path = tmp_path / "build.json"
+    test_path = tmp_path / "test.json"
+    catalog = {"_meta": metadata, "test_alpha": 1.0}
+    build_path.write_text(json.dumps(catalog), encoding="utf-8")
+    test_path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr(sel, "CPP_BUILD_DURATIONS_JSON", build_path)
+    monkeypatch.setattr(sel, "CPP_DURATIONS_JSON", test_path)
+
+    with pytest.raises(SystemExit, match=message):
+        sel.validate_cpp_duration_catalogs(["test_alpha"])
+
+
 def test_amr_program_header_plan_covers_both_analytic_targets_exactly_once(tmp_path):
     """The ADC-760 reproducer must produce one authenticated, exact one-shard plan."""
     output = _run_plan_cpp_shard(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import hashlib
 import json
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,36 @@ if TYPE_CHECKING:
 
 
 _SCHEMA_VERSION = 1
+_PROVIDER_SCHEMA_VERSION = 2
+
+
+class BoundaryProviderKind(Enum):
+    """Exact immutable law selected by one boundary provider specification."""
+
+    INFLOW = "inflow"
+    OUTFLOW = "outflow"
+    DIRECTIONAL_TRANSPORT = "directional_transport"
+    MIXED = "mixed"
+    GHOST_FORMULA = "ghost_formula"
+    DIRICHLET = "dirichlet"
+    NEUMANN = "neumann"
+    NO_FLUX = "no_flux"
+    POST_RIEMANN_FLUX = "post_riemann_flux"
+    CONSTRAINT_RESIDUAL = "constraint_residual"
+
+
+_OUTPUT_CONTRACTS: dict[BoundaryProviderKind, type | tuple[type, ...]] = {
+    BoundaryProviderKind.INFLOW: (ExteriorTrace, GhostState),
+    BoundaryProviderKind.OUTFLOW: (ExteriorTrace, GhostState),
+    BoundaryProviderKind.DIRECTIONAL_TRANSPORT: (ExteriorTrace, GhostState),
+    BoundaryProviderKind.MIXED: ConstraintResidual,
+    BoundaryProviderKind.GHOST_FORMULA: GhostState,
+    BoundaryProviderKind.DIRICHLET: ExteriorTrace,
+    BoundaryProviderKind.NEUMANN: ConstraintResidual,
+    BoundaryProviderKind.NO_FLUX: NumericalFlux,
+    BoundaryProviderKind.POST_RIEMANN_FLUX: NumericalFlux,
+    BoundaryProviderKind.CONSTRAINT_RESIDUAL: ConstraintResidual,
+}
 
 
 def _handle(value: Any, *, where: str, kind: str) -> Handle:
@@ -79,9 +110,17 @@ class BoundaryProvider:
     handle: Handle
     outputs: tuple[BoundaryPort, ...]
     dependencies: BoundaryDependencies
+    kind: BoundaryProviderKind
 
     def __post_init__(self) -> None:
-        _handle(self.handle, where="BoundaryProvider.handle", kind="boundary_provider")
+        if not isinstance(self.kind, BoundaryProviderKind):
+            raise TypeError("BoundaryProvider.kind must be a BoundaryProviderKind")
+        handle_kind = (
+            "boundary_flux_provider"
+            if self.kind is BoundaryProviderKind.POST_RIEMANN_FLUX
+            else "boundary_provider"
+        )
+        _handle(self.handle, where="BoundaryProvider.handle", kind=handle_kind)
         if not isinstance(self.outputs, tuple) or not self.outputs:
             raise TypeError("BoundaryProvider.outputs must be a non-empty tuple")
         if any(not isinstance(row, BoundaryPort) for row in self.outputs):
@@ -90,6 +129,25 @@ class BoundaryProvider:
             raise ValueError("BoundaryProvider contains double output ports")
         if not isinstance(self.dependencies, BoundaryDependencies):
             raise TypeError("BoundaryProvider.dependencies must be explicit")
+        allowed = _OUTPUT_CONTRACTS[self.kind]
+        if any(not isinstance(row, allowed) for row in self.outputs):
+            allowed_names = (allowed.__name__ if isinstance(allowed, type) else
+                             "/".join(row.__name__ for row in allowed))
+            raise TypeError(
+                "BoundaryProvider kind %r requires typed %s outputs"
+                % (self.kind.value, allowed_names)
+            )
+        if self.kind is BoundaryProviderKind.DIRECTIONAL_TRANSPORT and \
+                self.dependencies.characteristic.mode is not ClosureMode.DIRECTIONAL:
+            raise ValueError(
+                "directional_transport provider requires explicit directional characteristic "
+                "closure"
+            )
+        if self.kind is not BoundaryProviderKind.DIRECTIONAL_TRANSPORT and \
+                self.dependencies.characteristic.mode is ClosureMode.DIRECTIONAL:
+            raise ValueError(
+                "directional characteristic closure requires a directional_transport provider"
+            )
         target = self.dependencies.representation.target
         if any(row.representation != target for row in self.outputs):
             raise ValueError("provider output representation must match RepresentationFlow.target")
@@ -101,7 +159,8 @@ class BoundaryProvider:
         return self.handle.qualified_id
 
     def canonical_identity(self) -> dict[str, Any]:
-        return {"schema_version": _SCHEMA_VERSION, "provider_type": "boundary",
+        return {"schema_version": _PROVIDER_SCHEMA_VERSION, "provider_type": "boundary",
+                "provider_kind": self.kind.value,
                 "handle": self.handle.canonical_identity(),
                 "outputs": [row.canonical_identity() for row in self.outputs],
                 "dependencies": self.dependencies.canonical_identity()}
@@ -110,7 +169,7 @@ class BoundaryProvider:
         return {"report_type": "boundary_provider", **self.canonical_identity()}
 
 
-def _factory(name: str, handle: Any, outputs: Any, dependencies: Any,
+def _factory(name: str, kind: BoundaryProviderKind, handle: Any, outputs: Any, dependencies: Any,
              allowed: type | tuple[type, ...], *, directional: bool = False) -> BoundaryProvider:
     if not isinstance(outputs, tuple) or not outputs or any(
             not isinstance(row, allowed) for row in outputs):
@@ -121,50 +180,77 @@ def _factory(name: str, handle: Any, outputs: Any, dependencies: Any,
         raise TypeError("%s dependencies must be BoundaryDependencies" % name)
     if directional and dependencies.characteristic.mode is not ClosureMode.DIRECTIONAL:
         raise ValueError("DirectionalTransport requires explicit directional characteristic closure")
-    return BoundaryProvider(handle, outputs, dependencies)
+    return BoundaryProvider(handle, outputs, dependencies, kind)
 
 
 def Inflow(*, handle: Any, outputs: tuple[BoundaryPort, ...],
            dependencies: BoundaryDependencies) -> BoundaryProvider:
-    return _factory("Inflow", handle, outputs, dependencies, (ExteriorTrace, GhostState))
+    return _factory(
+        "Inflow", BoundaryProviderKind.INFLOW, handle, outputs, dependencies,
+        (ExteriorTrace, GhostState))
 
 
 def Outflow(*, handle: Any, outputs: tuple[BoundaryPort, ...],
             dependencies: BoundaryDependencies) -> BoundaryProvider:
-    return _factory("Outflow", handle, outputs, dependencies, (ExteriorTrace, GhostState))
+    return _factory(
+        "Outflow", BoundaryProviderKind.OUTFLOW, handle, outputs, dependencies,
+        (ExteriorTrace, GhostState))
 
 
 def DirectionalTransport(*, handle: Any, outputs: tuple[BoundaryPort, ...],
                          dependencies: BoundaryDependencies) -> BoundaryProvider:
-    return _factory("DirectionalTransport", handle, outputs, dependencies,
+    return _factory("DirectionalTransport", BoundaryProviderKind.DIRECTIONAL_TRANSPORT,
+                    handle, outputs, dependencies,
                     (ExteriorTrace, GhostState), directional=True)
 
 
 def Mixed(*, handle: Any, outputs: tuple[BoundaryPort, ...],
           dependencies: BoundaryDependencies) -> BoundaryProvider:
-    return _factory("Mixed", handle, outputs, dependencies, ConstraintResidual)
+    return _factory(
+        "Mixed", BoundaryProviderKind.MIXED, handle, outputs, dependencies, ConstraintResidual)
 
 
 def GhostFormula(*, handle: Any, outputs: tuple[BoundaryPort, ...],
                  dependencies: BoundaryDependencies) -> BoundaryProvider:
-    return _factory("GhostFormula", handle, outputs, dependencies, GhostState)
+    return _factory(
+        "GhostFormula", BoundaryProviderKind.GHOST_FORMULA, handle, outputs, dependencies,
+        GhostState)
 
 
 def Dirichlet(*, handle: Any, outputs: tuple[BoundaryPort, ...],
               dependencies: BoundaryDependencies) -> BoundaryProvider:
-    return _factory("Dirichlet", handle, outputs, dependencies, ExteriorTrace)
+    return _factory(
+        "Dirichlet", BoundaryProviderKind.DIRICHLET, handle, outputs, dependencies,
+        ExteriorTrace)
 
 
 def Neumann(*, handle: Any, outputs: tuple[BoundaryPort, ...],
             dependencies: BoundaryDependencies) -> BoundaryProvider:
-    return _factory("Neumann", handle, outputs, dependencies, ConstraintResidual)
+    return _factory(
+        "Neumann", BoundaryProviderKind.NEUMANN, handle, outputs, dependencies,
+        ConstraintResidual)
 
 
 def NoFlux(*, handle: Any, output: NumericalFlux,
            dependencies: BoundaryDependencies) -> BoundaryProvider:
     if not isinstance(output, NumericalFlux):
         raise TypeError("NoFlux satisfies NumericalFlux only")
-    return BoundaryProvider(handle, (output,), dependencies)
+    return BoundaryProvider(handle, (output,), dependencies, BoundaryProviderKind.NO_FLUX)
+
+
+def PostRiemannFlux(*, handle: Any, output: NumericalFlux,
+                    dependencies: BoundaryDependencies) -> BoundaryProvider:
+    """Bind one exact native transformation of an already evaluated outward flux.
+
+    The provider owns neither reconstruction nor the Riemann solve.  Its
+    ``boundary_flux_provider`` Handle resolves only to the typed
+    ``BoundaryFlux.transform_faces`` ABI, so it cannot be mistaken for a ghost
+    producer or for the shared-interface ``NumericalFlux.evaluate_faces`` route.
+    """
+    if not isinstance(output, NumericalFlux):
+        raise TypeError("PostRiemannFlux satisfies NumericalFlux only")
+    return BoundaryProvider(
+        handle, (output,), dependencies, BoundaryProviderKind.POST_RIEMANN_FLUX)
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +359,8 @@ class BoundaryProviderRegistry:
 
 
 __all__ = [
-    "BoundaryProvider", "BoundaryProviderRegistry", "DirectionalTransport", "Dirichlet",
-    "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow",
+    "BoundaryProvider", "BoundaryProviderKind", "BoundaryProviderRegistry", "DirectionalTransport",
+    "Dirichlet",
+    "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow", "PostRiemannFlux",
     "ResolvedBoundaryBinding", "ResolvedBoundaryPlan",
 ]

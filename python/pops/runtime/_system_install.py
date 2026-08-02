@@ -41,6 +41,14 @@ else:
     _System = object
 
 
+def _reject_unpublished_newton_diagnostics(time: Any, *, where: str) -> None:
+    if getattr(time, "newton_diagnostics", False):
+        raise ValueError(
+            f"{where}: newton_diagnostics=True is unavailable on the Program-only System "
+            "runtime because no typed implicit Program consumer publishes that report"
+        )
+
+
 class _SystemInstall(_System):
     """Equation/coupling installation methods of System."""
 
@@ -73,6 +81,7 @@ class _SystemInstall(_System):
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
+        _reject_unpublished_newton_diagnostics(time, where="System.add_equation")
         nsub = positive_int(substeps if substeps is not None else getattr(time, "substeps", 1), where="System.add_equation.substeps")
         nstride = positive_int(stride if stride is not None else getattr(time, "stride", 1), where="System.add_equation.stride")
 

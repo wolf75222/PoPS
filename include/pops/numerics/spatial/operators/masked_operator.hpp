@@ -105,52 +105,68 @@ struct AssembleRhsMaskedKernel {
     const FaceContext xface = FaceContext::axis_aligned(0);
     typename Model::State Fxm{}, Fxp{};
     if (!omission.omit(0, -1, i, j) && mask_active(mask, i - 1, j)) {
-      const auto Lxm =
-          reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-      const auto Rxm =
-          reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-      const auto evaluation =
-          evaluate_numerical_flux_at(nflux, model, Lxm, ax, i - 1, j, Rxm, ax, i, j, xface);
-      failures.record(evaluation, failure);
-      evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
-      Fxm = apply_face_measure(evaluation.checked_density(), xface).value;
+      const auto Lxm = reconstruct_pp_recovered<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim,
+                                                       pos_floor, pos_comp);
+      const auto Rxm = reconstruct_pp_recovered<Model>(model, u, i, j, 0, -1, lim, recon_prim,
+                                                       pos_floor, pos_comp);
+      if (record_reconstruction_recoveries(failures, failure, Lxm, Rxm)) {
+        const auto evaluation = evaluate_numerical_flux_at(nflux, model, Lxm.value, ax, i - 1, j,
+                                                           Rxm.value, ax, i, j, xface);
+        failures.record(evaluation, failure);
+        evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
+        Fxm = apply_face_measure(evaluation.checked_density(), xface).value;
+      } else {
+        evaluations_succeeded = false;
+      }
     }
     if (!omission.omit(0, +1, i, j) && mask_active(mask, i + 1, j)) {
-      const auto Lxp =
-          reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
-      const auto Rxp =
-          reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-      const auto evaluation =
-          evaluate_numerical_flux_at(nflux, model, Lxp, ax, i, j, Rxp, ax, i + 1, j, xface);
-      failures.record(evaluation, failure);
-      evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
-      Fxp = apply_face_measure(evaluation.checked_density(), xface).value;
+      const auto Lxp = reconstruct_pp_recovered<Model>(model, u, i, j, 0, +1, lim, recon_prim,
+                                                       pos_floor, pos_comp);
+      const auto Rxp = reconstruct_pp_recovered<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim,
+                                                       pos_floor, pos_comp);
+      if (record_reconstruction_recoveries(failures, failure, Lxp, Rxp)) {
+        const auto evaluation = evaluate_numerical_flux_at(nflux, model, Lxp.value, ax, i, j,
+                                                           Rxp.value, ax, i + 1, j, xface);
+        failures.record(evaluation, failure);
+        evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
+        Fxp = apply_face_measure(evaluation.checked_density(), xface).value;
+      } else {
+        evaluations_succeeded = false;
+      }
     }
 
     // y faces
     const FaceContext yface = FaceContext::axis_aligned(1);
     typename Model::State Fym{}, Fyp{};
     if (!omission.omit(1, -1, i, j) && mask_active(mask, i, j - 1)) {
-      const auto Lym =
-          reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-      const auto Rym =
-          reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-      const auto evaluation =
-          evaluate_numerical_flux_at(nflux, model, Lym, ax, i, j - 1, Rym, ax, i, j, yface);
-      failures.record(evaluation, failure);
-      evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
-      Fym = apply_face_measure(evaluation.checked_density(), yface).value;
+      const auto Lym = reconstruct_pp_recovered<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim,
+                                                       pos_floor, pos_comp);
+      const auto Rym = reconstruct_pp_recovered<Model>(model, u, i, j, 1, -1, lim, recon_prim,
+                                                       pos_floor, pos_comp);
+      if (record_reconstruction_recoveries(failures, failure, Lym, Rym)) {
+        const auto evaluation = evaluate_numerical_flux_at(nflux, model, Lym.value, ax, i, j - 1,
+                                                           Rym.value, ax, i, j, yface);
+        failures.record(evaluation, failure);
+        evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
+        Fym = apply_face_measure(evaluation.checked_density(), yface).value;
+      } else {
+        evaluations_succeeded = false;
+      }
     }
     if (!omission.omit(1, +1, i, j) && mask_active(mask, i, j + 1)) {
-      const auto Lyp =
-          reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
-      const auto Ryp =
-          reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-      const auto evaluation =
-          evaluate_numerical_flux_at(nflux, model, Lyp, ax, i, j, Ryp, ax, i, j + 1, yface);
-      failures.record(evaluation, failure);
-      evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
-      Fyp = apply_face_measure(evaluation.checked_density(), yface).value;
+      const auto Lyp = reconstruct_pp_recovered<Model>(model, u, i, j, 1, +1, lim, recon_prim,
+                                                       pos_floor, pos_comp);
+      const auto Ryp = reconstruct_pp_recovered<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim,
+                                                       pos_floor, pos_comp);
+      if (record_reconstruction_recoveries(failures, failure, Lyp, Ryp)) {
+        const auto evaluation = evaluate_numerical_flux_at(nflux, model, Lyp.value, ax, i, j,
+                                                           Ryp.value, ax, i, j + 1, yface);
+        failures.record(evaluation, failure);
+        evaluations_succeeded = evaluations_succeeded && evaluation.succeeded();
+        Fyp = apply_face_measure(evaluation.checked_density(), yface).value;
+      } else {
+        evaluations_succeeded = false;
+      }
     }
 
     const auto S = model.source(load_state<Model>(u, i, j), Ac);

@@ -185,6 +185,7 @@ class PreparedGridBoundarySession final {
     if (!context_.boundary_plan->has_component_boundaries())
       return;
     plan_session_->prepare_ghost_executor(prototype, registry_, context_.geom);
+    plan_session_->prepare_flux_executor(prototype, registry_, context_.geom);
     if (!residual_outputs_.empty()) {
       bind_registry_(preparation_point, prototype, nullptr, &prototype);
       plan_session_->prepare_residual_executor(registry_, context_.geom);
@@ -251,7 +252,7 @@ class PreparedGridBoundarySession final {
       return;
     }
     if (!context_.boundary_plan->has_component_boundaries()) {
-      plan_session_->fill_same_level_and_physical(state, context_.geom);
+      plan_session_->fill_same_level_and_physical(state, context_.geom, point);
       return;
     }
     bind_registry_(point, state, nullptr, nullptr);
@@ -264,6 +265,14 @@ class PreparedGridBoundarySession final {
       return;
     bind_registry_(point, state, nullptr, &residual);
     plan_session_->add_residual(point, registry_, context_.geom);
+  }
+
+  void transform_fluxes(MultiFab& state, MultiFab& fx, MultiFab& fy,
+                        const runtime::multiblock::BoundaryEvaluationPoint& point) const {
+    if (!plan_session_ || !context_.boundary_plan->has_flux_transformations())
+      return;
+    bind_registry_(point, state, nullptr, nullptr);
+    plan_session_->transform_fluxes(point, state, registry_, context_.geom, fx, fy);
   }
 
   void apply_jvp(MultiFab& state, const MultiFab& direction, MultiFab& output,
@@ -430,6 +439,21 @@ inline void fill_grid_ghosts(MultiFab& state, const PreparedGridBoundarySession&
 inline void fill_grid_ghosts(MultiFab& state, const PreparedGridBoundarySession& session,
                              const runtime::multiblock::BoundaryEvaluationPoint& point) {
   session.fill(state, point);
+}
+
+inline void transform_grid_boundary_fluxes(
+    MultiFab& state, MultiFab& fx, MultiFab& fy, const GridContext& context,
+    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  if (context.boundary_plan && context.boundary_plan->has_flux_transformations())
+    context.boundary_plan->transform_fluxes_control(
+        point, state, context.aux, context.geom, fx, fy,
+        ExecutionLane::world(context.boundary_plan->identity(), "::boundary-flux-control"));
+}
+
+inline void transform_grid_boundary_fluxes(
+    MultiFab& state, MultiFab& fx, MultiFab& fy, const PreparedGridBoundarySession& session,
+    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  session.transform_fluxes(state, fx, fy, point);
 }
 
 inline void add_grid_boundary_residual(MultiFab& state, MultiFab& residual,

@@ -67,6 +67,17 @@ struct CompositeModel {
   static VariableSet conservative_vars() { return Hyperbolic::conservative_vars(); }
   static VariableSet primitive_vars() { return Hyperbolic::primitive_vars(); }
 
+  /// Optional primitive-recovery admissibility, forwarded from the hyperbolic brick.  Keeping the
+  /// method concept-gated preserves the historical finite-only recovery path for every brick that
+  /// does not declare a physical policy.
+  POPS_HD bool recovery_admissible(const Prim& p, int* failing_component) const
+    requires requires(const Hyperbolic h, const Prim q, int* component) {
+      { h.recovery_admissible(q, component) } -> std::same_as<bool>;
+    }
+  {
+    return hyp.recovery_admissible(p, failing_component);
+  }
+
   POPS_HD Real pressure(const State& u) const
     requires requires(const Hyperbolic h, const State s) { h.pressure(s); }
   {

@@ -57,8 +57,9 @@ are reused only when their bytes authenticate to the same binary identity.
 table layouts, plus the version of the common request/value ABI. The complete declaration feeds the
 catalog digest. The generator emits `pops.interfaces`, the Python route data and
 `generated_component_abi.hpp` together; `--check` makes any hand-edited drift fail CI. The current
-protocol includes separate tables for numerical flux, ghost boundary, field-boundary closure,
-tagging, clustering, transfer, reflux, field solve, writer and field topology. Adding an
+protocol includes separate tables for numerical flux, ghost boundary, post-Riemann boundary-flux
+transformation, field-boundary closure, tagging, clustering, transfer, reflux, field solve, writer
+and field topology. Adding an
 implementation requires no central scientific switch.
 
 The installed CPU route proves 2D, `float64`, host execution. It supports source/header payloads and

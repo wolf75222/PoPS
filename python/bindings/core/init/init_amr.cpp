@@ -247,19 +247,34 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           "_install_boundary_plan",
           [](AmrSystem& system, const std::string& name, const std::string& identity,
              int required_depth, const std::vector<std::string>& face_types,
-             const std::vector<double>& face_values, int ncomp,
+             const std::vector<double>& face_values,
+             const std::vector<std::string>& face_identities,
+             const std::vector<std::string>& component_roles,
              const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
-             const std::vector<std::array<int, 6>>& periodic_identifications) {
+             const std::vector<std::array<int, 6>>& periodic_identifications,
+             const std::vector<std::string>& face_representations,
+             const std::vector<std::string>& face_converter_identities,
+             const std::vector<std::vector<std::string>>& face_analytic_opcodes,
+             const std::vector<std::vector<double>>& face_analytic_literals,
+             const std::vector<std::string>& face_analytic_clocks) {
             system.install_boundary_plan(
-                name, identity, required_depth, face_types, face_values, ncomp,
-                omitted_interface_faces, state_identity, PreparedBoundaryReadDependencies{},
-                decode_periodic_identification_rows(periodic_identifications));
+                name, identity, required_depth, face_types, face_values, face_identities,
+                component_roles, omitted_interface_faces, state_identity,
+                PreparedBoundaryReadDependencies{},
+                decode_periodic_identification_rows(periodic_identifications), face_representations,
+                face_converter_identities, face_analytic_opcodes, face_analytic_literals,
+                face_analytic_clocks);
           },
           py::arg("name"), py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
-          py::arg("face_values"), py::arg("ncomp"),
+          py::arg("face_values"), py::arg("face_identities"), py::arg("component_roles"),
           py::arg("omitted_interface_faces") = std::vector<int>{},
           py::arg("state_identity") = std::string{},
           py::arg("periodic_identifications") = std::vector<std::array<int, 6>>{},
+          py::arg("face_representations") = std::vector<std::string>{},
+          py::arg("face_converter_identities") = std::vector<std::string>{},
+          py::arg("face_analytic_opcodes") = std::vector<std::vector<std::string>>{},
+          py::arg("face_analytic_literals") = std::vector<std::vector<double>>{},
+          py::arg("face_analytic_clocks") = std::vector<std::string>{},
           "Install one resolved per-block ghost-production plan before lazy AMR construction.")
       .def("_install_block_state_route", &AmrSystem::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
@@ -302,6 +317,20 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const std::string& parameters_json, const std::string& target_json,
              const py::dict& execution) {
             system.install_ghost_boundary_component(
+                name,
+                pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
+                                                                          target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
+          py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_boundary_flux_component",
+          [](AmrSystem& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component, const py::dict& row,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
+            system.install_boundary_flux_component(
                 name,
                 pops::python::detail::boundary_component_spec_from_python(row, parameters_json,
                                                                           target_json, execution),
@@ -814,6 +843,15 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
+      // Exact Program-index -> AMR-block-index map established by name at install.  Expose only
+      // immutable report metadata, never a structural mutation route.
+      .def("program_block_map", &AmrSystem::program_block_map)
+      .def(
+          "program_param_count",
+          [](const AmrSystem& system, int program_block) {
+            return system.program_params(program_block).count;
+          },
+          py::arg("program_block"))
       .def("program_accepted_state",
            [](const AmrSystem& s) {
              const auto bytes = s.program_accepted_state();
@@ -845,6 +883,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
           py::arg("payload"), py::arg("names"), py::arg("depths"), py::arg("ncomps"))
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
+      .def("program_temporal_partition_manifest", &AmrSystem::program_temporal_partition_manifest)
       .def("program_flux_ledger_manifest", &AmrSystem::program_flux_ledger_manifest)
       .def("program_interface_flux_ledger_manifest",
            &AmrSystem::program_interface_flux_ledger_manifest)

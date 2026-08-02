@@ -1,0 +1,259 @@
+schema_version = 2
+gate = "adc757-prepared-numerics-slice"
+issue = "ADC-757"
+evidence_from = ["ADC-682", "ADC-749", "ADC-750", "ADC-751", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
+deferred = [
+  "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
+  "remaining_legacy_recovery_and_boundary_authority_deletion",
+  "amr_regrid_migration_and_restart_coherence",
+  "gpu_backend_execution",
+  "accelerator_stream_partitioning",
+  "performance_baselines_and_end_to_end_benchmarks",
+  "local_time_and_load_balance_provider_families",
+]
+
+# This is an executable partial gate, not ADC-757 closure. Every claimed
+# requirement has one success proof and one refusal/detector proof.
+[[check]]
+requirement = "prepared_local_nonlinear"
+polarity = "positive"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.FiniteDifferenceAnalyticAndAdUseOneOutcomeContract$"
+
+[[check]]
+requirement = "prepared_local_nonlinear"
+polarity = "refusal"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.EveryFailureClassIsExplicitAndLeavesTheGuessUntouched$"
+
+[[check]]
+requirement = "typed_fallible_evaluation"
+polarity = "positive"
+target = "test_newton_robustness"
+test_regex = "^PreparedLocalNonlinear\\.FallibleEvaluationStatusAndReasonRemainDistinct$"
+
+[[check]]
+requirement = "typed_fallible_evaluation"
+polarity = "refusal"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.FatalEvaluationIsTypedAllocationFreeAndCannotPublish$"
+
+[[check]]
+requirement = "transactional_recovery_publication"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.tentative_publication_rolls_back_solution_and_warm_start$"
+
+[[check]]
+requirement = "transactional_recovery_publication"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.malformed_and_repair_candidates_fail_closed$"
+
+[[check]]
+requirement = "model_declared_admissibility"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.model_declared_admissibility_permits_valid_candidate$"
+
+[[check]]
+requirement = "model_declared_admissibility"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.model_declared_admissibility_blocks_publication$"
+
+[[check]]
+requirement = "allocation_aware_cell_hot_path"
+polarity = "positive"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.ConvergedPreparedPathAllocatesNothingAndRollsBack$"
+
+[[check]]
+requirement = "allocation_aware_cell_hot_path"
+polarity = "refusal"
+target = "test_prepared_numerics_gate"
+test_regex = "^PreparedNumericsGate\\.AllocationProbeDetectsControlHeapTraffic$"
+
+[[check]]
+requirement = "prepared_boundary_publication"
+polarity = "positive"
+target = "test_prepared_boundary_plan"
+test_regex = "^test_prepared_boundary_plan\\.evaluates_prepared_coordinate_time_inflow_on_device_without_hot_path_allocation$"
+
+[[check]]
+requirement = "prepared_boundary_publication"
+polarity = "refusal"
+target = "test_prepared_boundary_plan"
+test_regex = "^test_prepared_boundary_plan\\.analytic_inflow_preflights_nonfinite_values_before_any_mutation$"
+
+[[check]]
+requirement = "post_riemann_boundary_flux"
+polarity = "positive"
+target = "test_amr_native_loader"
+test_regex = "^test_amr_native_loader\\.PostRiemannBoundaryFluxUsesOutwardOrientationAndPreservesCanonicalFaceStorage$"
+
+[[check]]
+requirement = "post_riemann_boundary_flux"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/mesh/test_boundary_topology_ports.py"
+test = "test_post_riemann_flux_refuses_wrong_component_route_or_output"
+
+[[check]]
+requirement = "mpi_collective_execution"
+polarity = "positive"
+kind = "mpi_ctest"
+target = "test_mpi_system_analytic_level_set"
+test_regex = "^test_mpi_system_analytic_level_set_np2$"
+nproc = 2
+
+[[check]]
+requirement = "mpi_collective_execution"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_flux_failure_collective"
+test_regex = "^test_mpi_flux_failure_collective_np2$"
+nproc = 2
+
+[[check]]
+requirement = "qualified_flux_provider_pack"
+polarity = "positive"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.generated_provider_requirements_own_native_slot_reads$"
+
+[[check]]
+requirement = "qualified_flux_provider_pack"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_compiler_model_provider.py"
+test = "test_field_dependent_flux_without_provider_fails_before_native_source"
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "positive"
+target = "test_riemann_capabilities"
+test_regex = "^test_riemann_capabilities\\.state_layout_permutation_is_provider_owned$"
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.hllc_rejects_each_nonfinite_provider_stage_with_a_typed_cause$"
+
+[[check]]
+requirement = "capability_driven_riemann"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.roe_rejects_nonfinite_dissipation_with_a_typed_cause$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiters\\.mc_and_superbee_match_reference_formulas$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiter_qualification\\.mc_and_superbee_are_second_order_on_smooth_periodic_cell_averages$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "positive"
+target = "test_weno_convergence"
+test_regex = "^test_muscl_limiter_qualification\\.discontinuities_create_no_extremum_and_expose_interface_dissipation_budget$"
+
+[[check]]
+requirement = "prepared_limiter_provider"
+polarity = "refusal"
+target = "test_dispatch_tags"
+test_regex = "^test_dispatch_tags\\.validate_limiter_accepts_and_rejects$"
+
+[[check]]
+requirement = "typed_flux_recovery_consumption"
+polarity = "positive"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.recovery_report_uses_the_flux_failure_reduction_without_type_erasure$"
+
+[[check]]
+requirement = "typed_flux_recovery_consumption"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.face_recovery_refusal_never_reaches_the_numerical_flux$"
+
+[[check]]
+requirement = "runtime_recovery_consumer_publication"
+polarity = "positive"
+target = "test_block_builder"
+test_regex = "^test_block_builder\\.cell_primitive_conversion_consumes_prepared_recovery_outcome$"
+
+[[check]]
+requirement = "runtime_recovery_consumer_publication"
+polarity = "refusal"
+target = "test_facade_routing"
+test_regex = "^FacadeRouting\\.PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedState$"
+
+[[check]]
+requirement = "type_erased_recovery_method_identity"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.type_erased_report_preserves_selected_method_kind$"
+
+[[check]]
+requirement = "type_erased_recovery_method_identity"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.rejected_report_names_last_method_without_forging_selection$"
+
+[[check]]
+requirement = "cell_local_temporal_partition_authority"
+polarity = "positive"
+target = "test_temporal_partition_restart"
+test_regex = "^test_temporal_partition_restart\\.batched_attempt_commit_and_rollback_are_exact$"
+
+[[check]]
+requirement = "cell_local_temporal_partition_authority"
+polarity = "refusal"
+target = "test_temporal_partition_restart"
+test_regex = "^test_temporal_partition_restart\\.strict_amr_restore_consumes_manifest_and_refuses_global_step_bypass$"
+
+[[check]]
+requirement = "host_workspace_reentrancy"
+polarity = "positive"
+target = "test_krylov_workspace_reentrancy"
+test_regex = "^test_krylov_workspace_reentrancy\\.distinct_workspaces_run_fresh_operator_and_preconditioner_sessions_concurrently$"
+
+[[check]]
+requirement = "host_workspace_reentrancy"
+polarity = "refusal"
+target = "test_krylov_workspace_reentrancy"
+test_regex = "^test_krylov_workspace_reentrancy\\.workspace_rebind_reserves_mutation_during_blocking_operator_prepare$"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_recovery_admissibility_codegen.py"
+test = "test_recovery_admissibility_is_emitted_and_hashed"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_recovery_admissibility_codegen.py"
+test = "test_recovery_admissibility_rejects_ambiguous_authoring"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/runtime/test_amr_checkpoint_contract.py"
+test = "test_preflight_returns_exact_native_payload_and_counters"
+
+[[check]]
+requirement = "python_ir_generated_abi_and_restart_parity"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/runtime/test_amr_checkpoint_contract.py"
+test = "test_historical_version_refusal_happens_before_restart_transaction"

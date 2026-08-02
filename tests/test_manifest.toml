@@ -166,6 +166,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_amr_prepared_boundary_cf"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_prepared_boundary_cf.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_amr_program_reflux"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -883,6 +889,11 @@ sources = ["tests/cpp/unit/numerics/test_positivity_floor.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_numerics_gate"
+sources = ["tests/cpp/unit/numerics/test_prepared_numerics_gate.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_primitive_recon"
 sources = ["tests/cpp/unit/numerics/test_primitive_recon.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -900,6 +911,11 @@ labels = ["unit", "numerics", "fast"]
 [[cpp.suite]]
 name = "test_splitting"
 sources = ["tests/cpp/unit/numerics/test_splitting.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_variable_recovery_chain"
+sources = ["tests/cpp/unit/numerics/test_variable_recovery_chain.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
@@ -1133,6 +1149,11 @@ labels = ["unit", "mesh", "fast"]
 name = "test_program_reflux_ledger"
 sources = ["tests/cpp/integration/amr/test_program_reflux_ledger.cpp"]
 labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_temporal_partition_restart"
+sources = ["tests/cpp/integration/amr/test_temporal_partition_restart.cpp"]
+labels = ["integration", "runtime", "amr", "medium"]
 
 [[cpp.suite]]
 name = "test_residual_operator"

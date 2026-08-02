@@ -11,6 +11,7 @@
 #include <pops/numerics/elliptic/interface/field_nullspace_provider.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/mesh/boundary/periodicity.hpp>
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>        // CoupledSourceProgram (facade POD, ADC-214)
@@ -186,7 +187,8 @@ class System {
 
   /// Adds an equation block (one species).
   /// @param model    composition of bricks (transport/source/elliptic + parameters)
-  /// @param limiter  reconstruction: "none" | "minmod" | "vanleer" | "weno5"
+  /// @param limiter  reconstruction: "none" | "minmod" | "vanleer" | "weno5" | "mc" |
+  ///                 "superbee"
   /// @param riemann  numerical flux: "rusanov" (minimal generic) | "hll" (generic, requires
   ///                 model.wave_speeds) | "hllc" | "roe" (generic when the model supplies the
   ///                 HasHLLCStructure / HasRoeDissipation hooks; no layout inference or fallback)
@@ -223,11 +225,10 @@ class System {
   ///                 rel_tol / abs_tol define the mandatory per-cell stopping criterion
   ///                 ||F||inf <= abs_tol + rel_tol*||F0||inf; fd_eps controls the finite-difference
   ///                 Jacobian and damping controls W -= damping*delta in (0, 1].
-  /// @param newton_diagnostics IMEX only: enables the block's Newton report (max residual,
-  ///                 max iterations, failed cells -- non-finite / degenerate pivot / non-convergence),
-  ///                 aggregated over the substeps of each advance and available via newton_report(name).
-  ///                 OPT-IN: false (default) omits the retained diagnostic summary. Stays
-  ///                 flat (a separate bool, outside the homogeneous family of convergence options).
+  /// @param newton_diagnostics Reserved compatibility flag. The Program-only System runtime rejects
+  ///                 true until a typed implicit Program consumer actually publishes a Newton
+  ///                 report; accepting it would otherwise allocate a carrier that no execution
+  ///                 route writes.
   /// @param wave_speed_cache riemann='hll' + explicit ONLY: pre-computes model.wave_speeds once for
   ///                 every exact reconstructed face-trace pair, then reuses that interval from both
   ///                 adjacent residual cells. Net gain when wave_speeds is expensive (moment hierarchy).
@@ -246,9 +247,9 @@ class System {
                  double positivity_floor = 0.0, bool wave_speed_cache = false,
                  double weno_epsilon = static_cast<double>(kWenoEpsilon));
 
-  /// Report of the implicit source Newton (IMEX) of a block, AGGREGATED over the substeps of the
-  /// LAST advance of the block. Only exists if the block was added with newton_diagnostics=true
-  /// (explicit error otherwise). Flat copy (no dependency on the numerics header).
+  /// Compatibility query for a report published by a typed implicit Program consumer. The current
+  /// Program-only System runtime rejects the opt-in request until such a consumer is installed.
+  /// Flat copy (no dependency on the numerics header).
   struct SourceNewtonReport {
     bool enabled;           ///< a report was computed (at least one IMEX advance played)
     bool converged;         ///< no failed cell on the last advance
@@ -268,8 +269,9 @@ class System {
   /// real System context and installs a zero-copy native block. The complete canonical BindSchema
   /// vector crosses the fixed ABI once and is injected into the generated model before those closures
   /// are constructed. Package and module ABI keys must match.
-  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5: add_compiled_model reallocates
-  ///                the block state to block_n_ghost = 3 ghosts after install_block, like add_block)
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" | "mc" | "superbee"
+  ///                (weno5: add_compiled_model reallocates the block state to block_n_ghost = 3
+  ///                ghosts after install_block, like add_block)
   /// @param riemann "rusanov" | "hll" | "hllc" | "roe"
   /// @param recon   "conservative" | "primitive"
   /// @param time    "explicit" (SSPRK2) | "ssprk3" | "euler" | "imex" (the template marshals the explicit
@@ -320,23 +322,33 @@ class System {
   POPS_EXPORT GridContext grid_context(const std::string& name);
   /// Index-qualified twin for an already authenticated Program block map.
   POPS_EXPORT GridContext grid_context(int block);
-  /// Install one executable built-in ghost plan. `face_types` is xlo,xhi,ylo,yhi using
-  /// periodic/foextrap/dirichlet; `face_values` is component-major (ncomp*4).
+  /// Install one executable built-in hyperbolic ghost plan. Face identities remain block/owner
+  /// qualified and component roles declare reflection behavior; no component index is interpreted.
   POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
                                          int required_depth,
                                          const std::vector<std::string>& face_types,
-                                         const std::vector<double>& face_values, int ncomp,
+                                         const std::vector<double>& face_values,
+                                         const std::vector<std::string>& face_identities,
+                                         const std::vector<std::string>& component_roles,
                                          const std::vector<int>& omitted_interface_faces = {},
                                          const std::string& state_identity = {},
                                          PreparedBoundaryReadDependencies read_dependencies = {});
-  /// Exact-topology overload. The historical exported signature above remains available so
-  /// translation-only callers retain their ABI and execution path.
+  /// Exact-topology overload. Physical laws and component transforms remain model-aware; the
+  /// additional table only identifies periodic face pairs whose coordinate map is not the
+  /// axis-aligned translation represented by Periodicity.
   POPS_EXPORT void install_boundary_plan(
       const std::string& name, const std::string& identity, int required_depth,
-      const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
+      const std::vector<std::string>& face_types, const std::vector<double>& face_values,
+      const std::vector<std::string>& face_identities,
+      const std::vector<std::string>& component_roles,
       const std::vector<int>& omitted_interface_faces, const std::string& state_identity,
       PreparedBoundaryReadDependencies read_dependencies,
-      std::vector<PeriodicIdentification2D> periodic_identifications);
+      std::vector<PeriodicIdentification2D> periodic_identifications,
+      const std::vector<std::string>& face_representations = {},
+      const std::vector<std::string>& face_converter_identities = {},
+      const std::vector<std::vector<std::string>>& face_analytic_opcodes = {},
+      const std::vector<std::vector<double>>& face_analytic_literals = {},
+      const std::vector<std::string>& face_analytic_clocks = {});
   /// Register the exact state Handle owned by a materialized block.  This registry is independent
   /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
   /// dependency of another block's boundary component.
@@ -351,6 +363,9 @@ class System {
   /// The LoadedComponent was authenticated by the component loader; the plan rechecks its exact
   /// component/manifest/interface identity before preparing the typed table.
   POPS_EXPORT void install_ghost_boundary_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_boundary_flux_component(
       const std::string& name, PreparedBoundaryComponentSpec spec,
       std::shared_ptr<component::LoadedComponent> component);
   POPS_EXPORT void install_field_boundary_residual_component(
@@ -382,7 +397,8 @@ class System {
   /// spatial stencil). WENO5 reads 3 ghosts, > the 2 allocated by install_block; called by add_compiled_model
   /// (header) with block_n_ghost(limiter) AFTER install_block, so the native compiled path
   /// (loader .so) accepts weno5 -- SAME mechanism as add_block. No-op if U already has enough ghosts
-  /// (none/minmod/vanleer, <= 2): allocation and data bit-identical to history. POPS_EXPORT:
+  /// (all catalogue routes with <= 2 ghosts): allocation and data bit-identical to history.
+  /// POPS_EXPORT:
   /// called by the header template add_compiled_model -> must be exported for the loader .so.
   POPS_EXPORT void set_block_ghosts(const std::string& name, int n_ghost);
   /// @}
@@ -636,11 +652,13 @@ class System {
   /// arrays of ncomp doubles. Installed by install_block / add_compiled_model / push_dynamic from
   /// the block's model, consumed by set_primitive_state / get_primitive_state.
   using CellConvert = std::function<void(const double* in, double* out)>;
+  /// Fallible conservative -> primitive conversion. A failed report forbids writing @p out.
+  using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
   /// Installs the pointwise cons <-> prim conversions of a block (after install_block). Called by
   /// the header template add_compiled_model (compiled model); the native path add_block and the dynamic
   /// .so path set them directly. POPS_EXPORT: resolved by the native loader through dlopen.
   POPS_EXPORT void set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                        CellConvert cons_to_prim);
+                                        CellRecovery cons_to_prim);
 
   /// Installs the optional STEP BOUNDS of a block (after install_block): reduction of the
   /// max source frequency (HasSourceFrequency trait, bound dt <= cfl*substeps/(stride*mu)) and of the
@@ -1389,6 +1407,9 @@ class System {
                                                             const MultiFab& U_stage);
   POPS_EXPORT SolveReport solve_fields_from_blocks_in_place_(
       const std::string& field, const std::vector<const MultiFab*>& U_stages);
+  POPS_EXPORT SolveReport solve_fields_from_blocks_at_in_place_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+      const std::vector<const MultiFab*>& U_stages);
   POPS_EXPORT void prepare_default_field_publication_storage_();
   POPS_EXPORT void prepare_named_field_publication_storage_(const std::string& field);
   POPS_EXPORT void begin_field_publication_transaction();

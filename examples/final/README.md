@@ -30,8 +30,8 @@ matching contract note is
 selects two state spaces of one model into two owner-qualified blocks, couples them through a typed
 elliptic field on the same periodic layout, publishes owner-qualified signed charge-contribution
 and momentum diagnostics, refuses a required cross-layout read when no mapping provider is
-installed, and proves scientific outputs plus bind/layout-exact restart continuation through the
-public lifecycle.
+installed, and proves scientific outputs plus bind/layout-exact, bit-identical restart continuation
+through the public lifecycle.
 
 ## Public contract
 

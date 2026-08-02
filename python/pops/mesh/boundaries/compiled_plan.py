@@ -173,6 +173,7 @@ class CompiledBoundaryPlan:
         """Bind scalar values through one generic evaluator, never an authoring callback."""
         from pops.model import Handle, ParamHandle
         from pops.model._bind_expression import eval_expression_key
+        from pops.runtime._analytic_expression_lowering import lower_analytic_components
 
         if not isinstance(params, Mapping):
             raise TypeError("compiled boundary binding requires resolved BindSchema values")
@@ -192,33 +193,87 @@ class CompiledBoundaryPlan:
         faces = []
         for face in data["faces"]:
             if not isinstance(face, dict) or face.get("type") not in {
-                    "periodic", "foextrap", "dirichlet", "external"}:
+                    "periodic", "foextrap", "dirichlet", "slip_wall", "external"}:
                 raise ValueError("compiled boundary face has no executable producer type")
-            if face["type"] in {"periodic", "foextrap", "external"}:
+            representation = face.get("representation", "conservative")
+            converter = face.get("converter")
+            if representation not in {"conservative", "primitive"}:
+                raise ValueError("compiled boundary face has no executable state representation")
+            if representation == "conservative" and converter is not None:
+                raise ValueError(
+                    "compiled conservative boundary face must not invent a converter")
+            if representation == "primitive" and (
+                    face["type"] != "dirichlet" or not isinstance(converter, str)
+                    or not converter):
+                raise ValueError(
+                    "compiled primitive boundary face requires one exact fixed-state converter")
+            if face["type"] in {"periodic", "foextrap", "slip_wall", "external"}:
                 values = [0.0] * ncomp
+                analytic_programs = []
+                analytic_clock = None
             else:
                 expressions = face.get("values")
                 if not isinstance(expressions, list) or len(expressions) != ncomp:
                     raise ValueError(
                         "compiled Dirichlet boundary must exactly cover every state component"
                     )
-                values = []
-                for index, expression in enumerate(expressions):
-                    value = eval_expression_key(
-                        expression,
-                        environment,
-                        where="compiled boundary face %d component %d"
-                        % (int(face["ordinal"]), index),
+                protocols = {
+                    expression.get("protocol")
+                    for expression in expressions
+                    if isinstance(expression, dict)
+                }
+                if protocols == {"pops.analytic.scalar.v1"}:
+                    clocks = set()
+                    from pops.analytic import ScalarExpr
+
+                    analytic_expressions = []
+                    for expression in expressions:
+                        analytic = ScalarExpr.from_data(expression["value"])
+                        analytic_expressions.append(analytic)
+                        clocks.update(clock.qualified_id for clock in analytic.time_clocks())
+                    if len(clocks) > 1:
+                        raise ValueError("compiled analytic boundary face mixes logical Clocks")
+                    analytic_clock = next(iter(clocks), None)
+                    lowered = lower_analytic_components(
+                        [expression.to_data() for expression in analytic_expressions],
+                        frame_id=data["frame_id"],
+                        bindings=params,
+                        time_clock_id=analytic_clock,
                     )
-                    if isinstance(value, bool) or not isinstance(value, (int, float)):
-                        raise TypeError("compiled boundary expression did not bind to a real scalar")
-                    values.append(float(value))
+                    analytic_programs = [
+                        {"opcodes": list(opcodes), "literals": list(literals)}
+                        for opcodes, literals in lowered
+                    ]
+                    values = [0.0] * ncomp
+                elif protocols:
+                    raise TypeError(
+                        "compiled Dirichlet boundary mixes unsupported expression protocols"
+                    )
+                else:
+                    analytic_programs = []
+                    analytic_clock = None
+                    values = []
+                    for index, expression in enumerate(expressions):
+                        value = eval_expression_key(
+                            expression,
+                            environment,
+                            where="compiled boundary face %d component %d"
+                            % (int(face["ordinal"]), index),
+                        )
+                        if isinstance(value, bool) or not isinstance(value, (int, float)):
+                            raise TypeError(
+                                "compiled boundary expression did not bind to a real scalar")
+                        values.append(float(value))
             faces.append({
                 "ordinal": int(face["ordinal"]),
                 "geometry": face.get("geometry"),
                 "producer": face.get("producer"),
                 "type": face["type"],
+                "representation": representation,
+                "converter": converter,
                 "values": values,
+                "analytic_programs": analytic_programs,
+                "analytic_clock": analytic_clock,
             })
         faces.sort(key=lambda row: row["ordinal"])
 

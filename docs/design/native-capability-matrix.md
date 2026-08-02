@@ -114,12 +114,14 @@ Supported native routes include:
   proper-nesting support across an omitted physical-boundary face. This route does not mirror one
   endpoint's AMR tags through the interface mapping.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP,
-  dynamic active-depth changes, non-finest dynamic replacements at depth greater than two,
-  historical shared-interface rates, and rank-changing dynamic refined rematerialization remain
+  dynamic active-depth changes, non-finest dynamic replacements at depth greater than two, and
+  historical shared-interface rates remain unavailable. Frozen and depth-preserving dynamic
+  refined interfaces use the same exact `MPI_COMM_WORLD` trace and replacement-registry consensus
+  as the flat route. Dynamic rematerialization stages a detached collective candidate; a
+  rank-local failure restores the accepted layout, topology epoch, evaluator audit count and
+  executable registry before retry. Every rank evaluates the canonical shared flux and scatters
+  only to its locally owned endpoint cells. Rank-changing dynamic refined rematerialization remains
   unavailable.
-  Frozen refined interface publication uses the same exact `MPI_COMM_WORLD` trace consensus as the
-  flat route; every rank evaluates the canonical shared flux and scatters only to its locally owned
-  endpoint cells.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
   policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
   one lookahead across the hierarchy, and currently select the exact native policy routes
@@ -128,7 +130,58 @@ Supported native routes include:
   interpolation are cell-centered on the supplied route. Derived fields use `elliptic_solve` and
   caches use `patch_topology`; unsupported provider contracts fail before artifact creation.
 - Finite-volume spatial discretisation on the 2D core.
+- One prepared, model-aware 2D transport-boundary plan shared by Uniform and AMR native/compiled
+  routes. The capability matrix marks this route `partial` and names its exact built-ins:
+  periodicity, extrapolation, constant or `RuntimeParam` fixed state, conservative device-side
+  analytic fixed state over typed `(x,y,t,params)`, fixed-state primitive inflow converted once
+  through the exact compiled block-model `to_conservative` provider, and typed-role slip wall.
+  Analytic programs are immutable postfix tables evaluated in native device kernels at the exact
+  `BoundaryEvaluationPoint`; no Python callback or hot-loop allocation is retained. The analytic
+  finite-value contract is strictly non-mutating: one device preflight and one communicator
+  reduction complete before any same-level, periodic, MPI or physical halo write. The commit kernel
+  then evaluates the program again; this deliberate two-pass route avoids a per-cell scratch field
+  but retains one blocking collective per analytic boundary fill.
+  The analytic route remains `partial`: primitive per-point conversion and discrete state/field/input reads are
+  rejected, as is an analytic ghost depth larger than the normal domain extent. Analytic faces with
+  axis-permuted periodic coordinates also fail closed until a prepared coordinate map exists. The
+  conversion route is explicitly `partial`: conservative-to-primitive recovery and arbitrary
+  representation components remain unavailable, and conversion does not invent a boundary
+  admissibility projection. A separate `unavailable` row exposes the missing characteristic
+  no-inflow kernel. Post-Riemann transformation is instead an explicit `partial` route: a typed
+  `BoundaryFlux` component receives the already evaluated outward-normal flux and executes between
+  the Riemann solve and divergence/reflux through the same prepared Uniform/AMR plan. The runtime
+  converts lower and upper faces to outward orientation before the call and converts the result
+  back to canonical positive-axis face storage afterwards. This route is currently 2D Cartesian
+  host-batch execution; it has no device-native or embedded/cut-cell metric ABI, and the ordinary
+  Uniform route materializes face fields when selected.
+  These requests fail during resolution or lowering; none silently degrades to component-wise
+  ghost filling. A native rank-1/2/4 regrid fixture removes and recreates the fine hierarchy, then
+  proves that uncovered internal fine ghosts retain the conservative coarse-fine transfer and are
+  never treated as physical faces by the rematerialized prepared boundary session. The explicit
+  public route is
+  `Inflow(state=U, value=primitive_values, representation=Primitive(),
+  converter=pops.boundary.model_primitive_to_conservative(U))`; the converter is derived from the
+  authenticated block state and cannot name an unrelated callback or kernel.
+  `primitive_values` follows the model's declared primitive-variable order.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
+  `riemann:typed_failure_outcome` is deliberately `partial`: every built-in returns the common
+  device-copyable `FluxEvaluation` with typed status, stability bound, and reason code, and a
+  reduced failure rejects the owning transaction instead of publishing a candidate or silently
+  selecting another solver. `riemann:prepared_recovery_policy` is separately `unavailable`:
+  there is no prepared ordered solver chain, requested-versus-used solver outcome, block counter,
+  or restart metadata yet. Callers can therefore request the single-solver typed-rejection route
+  explicitly, but cannot claim a configured fallback policy.
+- Prepared variable recovery is explicitly `partial`. One block-prepared closed-form method returns
+  a device-copyable `RecoveryOutcome`/`RecoveryReport`. Type erasure retains both the selected and
+  last-attempted method kinds, so a successful fallback or a refusal cannot be reported as an opaque
+  chain index. System conservative-to-primitive
+  materialization and Cartesian, polar, masked, and embedded-boundary face reconstruction consume
+  publication permission before copying a candidate or evaluating a flux. This route adds no
+  implicit repair, fallback, or mutable cache. The separate
+  `recovery:complete_consumer_cutover` capability remains `unavailable`: initial/analytic and
+  model/source conversion, AMR transfer/regrid, primitive boundary traces, fallible
+  primitive-to-conservative conversion, persistent warm starts, cache/restart, backend parity, and
+  performance evidence do not yet share that authority.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.
@@ -136,16 +189,37 @@ Supported native routes include:
 - Prepared state-boundary residual/JVP pairs on Program matrix-free solves. The exact base
   `BoundaryEvaluationPoint` is transported into the apply closure, the core RHS is
   finite-differenced, and the authenticated state-only boundary JVP is added once with persistent
-  conditional scratch. A field-dependent boundary closure under `field_coupled=True` is refused
-  until a qualified tangent-field solve exists. Core field-coupled `rhs_jacvec` currently has an
-  exact provider route only on AMR level 0.
-- Level-local AMR named-field solves materialize linear dynamic-boundary state dependencies once per
-  active level. The context carries that exact level and the matching state layout/distribution;
-  coarse storage is never silently reused by a fine solver. Composite-FAC dynamic boundaries,
-  iterate-dependent multilevel boundaries, and field-to-field dependencies remain unavailable.
+  conditional scratch. Field-coupled `rhs_jacvec` re-solves its exact prepared provider from the
+  perturbed state on level zero and every refined level; if a transport boundary reads that solved
+  field, its complete residual is finite-differenced before the perturbed provider is restored.
+  Ordinary single-state field solves use that same owner-qualified provider ABI on Uniform and AMR:
+  the generated call carries the exact `BoundaryEvaluationPoint`, provider slot, active level and
+  stage state, with no AMR coarse-report reuse overload.
+  Dynamic physical field boundaries may read level-qualified conservative states, already-solved
+  fields and the exact stage/local time under both `LevelByLevelSolve` and
+  `CompositeHierarchySolve`; the composite FAC provider requires one exact dependency carrier per
+  materialized level before entering a solve. The generated resolve/source contract covers the
+  field-dependent transport-boundary JVP route. A native L0/L1 level-local oracle now places that
+  dependency on a physical face of a fully refined domain and checks the complete core-plus-boundary
+  `rhs_jacvec(field_coupled=True)` against an independent centered finite difference; it also proves
+  physical-face locality, provider sensitivity and restoration after every perturbation. The core
+  field-coupled JVP has a two-rank level-local oracle over genuinely distributed L0/L1 state and
+  provider storage. Its composite-policy MPI oracle exercises the ownership topology supported by
+  the builtin FAC provider: one complete replicated L0 copy per rank and a genuinely distributed
+  L1. Both check centered-difference parity, frozen-provider sensitivity and collective restoration
+  of the complete provider hierarchy plus the active-level residual carrier. A second two-rank L0/L1
+  oracle drives the level-local solved field through an x-low physical-face residual split across
+  both ranks, proving that its JVP contribution is non-trivial, face-local, provider-sensitive and
+  collectively restored.
+  Partially refined FAC patches carrying a dynamic physical boundary must remain strictly interior;
+  a patch touching a non-periodic domain face fails closed. A selected solve with a field dependency
+  also fails closed until its complete dependency closure can share one transaction. Simultaneous
+  multi-block stage solves use one exact hierarchy-qualified multi-state request carrying the same
+  `BoundaryEvaluationPoint`, provider slot and active level; every provisional conservative state is
+  restored before the provider candidate can be consumed.
 - Runtime scientific output v1: typed `SERIAL`, `ROOT`, `COLLECTIVE` and `PER_RANK` publication on the
   exact modes advertised by NPZ, ParaView and HDF5, with native Uniform/AMR piece ownership.
-- Runtime accepted-state checkpoint v5 for Uniform and v6 for AMR. The single-file MPI route captures
+- Runtime accepted-state checkpoint v5 for Uniform and v7 for AMR. The single-file MPI route captures
   collectively only after every rank agrees on the exact gather-plan identity, agrees again on the
   sealed payload identity, and publishes once on rank 0 with atomic no-clobber semantics. The provider
   authority is resolved into the compiled plan, including the builtin v5 manual route. Restart reads
@@ -161,10 +235,12 @@ Supported native routes include:
   artifact creation until their adapter contract owns the same persistent-state route. MPI capture
   validates the rank-independent accepted-state image on every producer before sealing or
   publication; disagreement fails collectively and cannot leave a partial checkpoint.
+- The prepared limiter registry exposes native `Minmod`, `VanLeer`, `MC`, and `Superbee` MUSCL
+  policies. Each is a stateless `POPS_HD` compile-time provider with formal order 2 and exactly two
+  ghost layers; Uniform, AMR, MPI and supported device targets consume the same route identity.
 
 Explicit unsupported rows include:
 
-- `limiter:mc` and `limiter:superbee`: catalogued descriptors with no native C++ symbol.
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is a scientific-output route, not a restartable checkpoint
   encoding; `RuntimeInstance.checkpoint()` and the typed `Checkpoint` consumer use uniform v5 or AMR
@@ -186,10 +262,12 @@ Explicit unsupported rows include:
   a global transform receipt derives a distinct run identity. Persistent tagging state is restored
   and rolled back with the accepted image, then advanced exactly once by a successful transform.
   Serial and exact-`MPI_COMM_WORLD` shared-interface groups are rematerialized at unchanged
-  cardinality in the same transaction and execute conservatively after rollback or commit. Uniform,
-  multi-layout, elliptic-field, rank-changing dynamic shared-interface, and
-  bootstrap-staggered/cache cases remain explicit refusals; `bit_identical=True` is incompatible
-  with the policy. Exact phase-local dense-history consensus fingerprints are gathered only on this
+  cardinality in the same transaction and execute conservatively after rollback or commit. The MPI
+  acceptance proof covers one refined transition, a rank-local post-transform fault, exact
+  all-rank rollback, retry with one receipt identity and post-restart interface execution. Uniform,
+  multi-layout, elliptic-field, active-depth-change, unsupported non-finest replacements at depth
+  greater than two, rank-changing dynamic shared-interface, and bootstrap-staggered/cache cases
+  remain explicit refusals; `bit_identical=True` is incompatible with the policy. Exact phase-local dense-history consensus fingerprints are gathered only on this
   cold restart path; they prove all-rank agreement per hierarchy rather than bitwise continuity
   across interpolation. Accepted solution components retain the separate native composite
   conservation invariant. Fingerprint memory and collective-communication cost scales with all
@@ -200,20 +278,25 @@ Explicit unsupported rows include:
   GPU Kokkos execution space before constructing `System`/`AmrSystem`; build-time availability is
   not launch authorization. The native providers do accept an explicit, authenticated
   `MPI_COMM_WORLD` context; custom communicators remain unavailable.
-- `amr:field_coupled_rhs_jacvec`: AMR level greater than zero is explicitly unavailable because the
-  provider ABI does not transport a level-qualified tangent field. The reported error identifies
-  the level-0 field-coupled route as the available route; a multi-level request must fail rather
-  than silently reuse the coarse provider. The shared execution service additionally requires the
-  JVP evaluation point to match the active Program resource level before either the perturbed solve
-  or frozen-state restoration can dispatch. Closing the remaining gap requires a typed per-level
-  tangent-field publication and transactional primal restoration, plus CompositeFAC coupling where
-  selected; the existing primal `fields` table cannot represent that derivative.
 - `amr:composite_dynamic_boundary`: a fully refined hierarchy uses the exact finest-level uniform
   field solver and receives that level's logical time, state dependencies, distributions, and
   nonlinear/JVP context. A partially refined FAC hierarchy refuses the same request because its
   interface correction does not yet own the required homogeneous/JVP boundary operator per level;
   it never reuses the inhomogeneous primal closure as a correction boundary.
-
+- `amr:external_field_solver_v2`: the generated ABI already carries a `level` in every global patch
+  metadata row, but the installed external-component adapter materializes one uniform `System`
+  `MultiFab`. There is no authenticated bridge from the component pair to
+  `AmrFieldSolverProvider`, no complete coarse/fine topology materialization, and no collective
+  hierarchy solve ownership. The provider authority therefore advertises `max_levels=1`,
+  `hierarchy_materialization=false` and `amr_provider_bridge=false`; any AMR target or non-level-local
+  hierarchy policy is rejected during field-plan resolution rather than dispatched to a builtin.
+  Closing this row does not start by flipping that capability: it requires an AMR component installer
+  in `_PreparedAmrFieldSolverInstall`, a native `AmrFieldSolverProvider`/`AmrPreparedFieldSolver`
+  adapter over the component pair, one regrid-aware all-level topology/request lifetime replacing the
+  single-`MultiFab` cache in `PreparedFieldSolverComponent`, and communicator-wide
+  declaration/materialization/solve consensus. The existing v2 patch metadata may remain the data
+  carrier for the restricted full-material case, but that bridge must prove coarse/fine coverage and
+  ownership before the public capability can become available.
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and
 future validators:

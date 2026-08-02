@@ -27,7 +27,7 @@ def _load_runner():
 def test_m3_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M3 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 41
+    assert len(data["check"]) == 43
 
 
 def test_m3_gate_pins_three_level_subcycled_reflux_proof():
@@ -89,6 +89,32 @@ def test_m3_gate_pins_accepted_interface_ledger_restart_proof():
     ) in source.read_text(encoding="utf-8")
 
 
+def test_m3_gate_pins_qualified_field_warm_start_restart_and_rollback():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    nodeid = (
+        "tests/python/integration/amr/test_amr_composite_field_carrier.py::"
+        "test_fac_overrides_propagate_through_a_refined_final_root_lifecycle"
+    )
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "positive",
+        "kind": "pytest",
+        "target": "accepted_state",
+        "nodeid": nodeid,
+    } in data["check"]
+
+    source = (
+        ROOT / "tests/python/integration/amr/test_amr_composite_field_carrier.py"
+    ).read_text(encoding="utf-8")
+    assert "accepted_warm_starts = _field_warm_starts(simulation, slot)" in source
+    assert "resolved = _resolve(solver, strict_restart=True)" in source
+    assert "restarted.restart(checkpoint)" in source
+    assert "injected post-field-restore validation failure" in source
+    assert "np.testing.assert_array_equal(actual, expected)" in source
+
+
 def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors
@@ -119,6 +145,17 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         "issue": "ADC-678",
         "requirement": "accepted_state",
         "polarity": "refusal",
+        "kind": "pytest",
+        "target": "accepted_state",
+        "nodeid": (
+            "tests/python/unit/amr/test_external_amr_providers.py::"
+            "test_external_tagger_requires_exact_candidate_program_capability"
+        ),
+    } in checks
+    assert {
+        "issue": "ADC-678",
+        "requirement": "accepted_state",
+        "polarity": "refusal",
         "kind": "ctest",
         "target": "test_amr_native_loader",
         "test_regex": (
@@ -126,6 +163,15 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         ),
     } in checks
 
+    provider_source = (
+        ROOT / "tests/python/unit/amr/test_external_amr_providers.py"
+    ).read_text(encoding="utf-8")
+    assert "external AMR Tagger persistent_hysteresis is not implemented" in provider_source
+    runtime_source = (
+        ROOT / "tests/cpp/integration/amr/test_amr_multiblock_regrid_union.cpp"
+    ).read_text(encoding="utf-8")
+    assert "check_persistent_tagging_hysteresis_and_rollback()" in runtime_source
+    assert "check_persistent_tagging_equality_at_inclusive_boundary()" in runtime_source
     restart_source = (
         ROOT / "tests/python/integration/amr/test_amr_regrid_on_restart.py"
     ).read_text(encoding="utf-8")
@@ -278,6 +324,19 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
         ),
         "nproc": 2,
     } in checks
+    restart_mpi_source = (
+        ROOT / "tests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py"
+    ).read_text(encoding="utf-8")
+    assert "injected rank-local pre-collective validation failure" in restart_mpi_source
+    assert "all(allgather_value(_COMM, caught))" in restart_mpi_source
+    assert "_restart_accepted_contract_identity" in restart_mpi_source
+    assert 'receipt["history_consensus_identity_before"]' in restart_mpi_source
+    assert "both AB2 histories are conservatively rematerialized" in restart_mpi_source
+    program_context = (
+        ROOT / "include/pops/runtime/program/amr_program_context.hpp"
+    ).read_text(encoding="utf-8")
+    assert "AMR RegridOnRestart requires a clean accepted Program boundary" in program_context
+    assert "supports shared-interface flux groups only in serial" not in program_context
     assert {
         "issue": "ADC-678",
         "requirement": "accepted_state",

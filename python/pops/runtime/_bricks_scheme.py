@@ -65,7 +65,8 @@ _FLUX_SCHEMES = {  # riemann descriptor scheme -> Spatial.flux route
 _RECON_SCHEMES = {  # variables descriptor scheme -> Spatial.recon route
     "conservative": RECON_CONSERVATIVE, "primitive": RECON_PRIMITIVE,
 }
-_LIMITER_SUGGEST = ("pops.numerics.reconstruction.limiters.Minmod() / .VanLeer(), "
+_LIMITER_SUGGEST = ("pops.numerics.reconstruction.limiters.Minmod() / .VanLeer() / .MC() / "
+                    ".Superbee(), "
                     "pops.numerics.reconstruction.FirstOrder() / WENO5() / MUSCL(...)")
 _FLUX_SUGGEST = "pops.numerics.riemann.Rusanov() / HLL() / HLLC() / Roe()"
 _RECON_SUGGEST = "pops.numerics.variables.Conservative() / Primitive()"
@@ -134,9 +135,10 @@ class Spatial:
     weno5=/primitive=) stay as typed-flag sugar.
 
     - ``limiter`` (Spec 5 sec.14.1 alias: ``reconstruction``): a reconstruction / limiter descriptor
-      lowering to "none" | "minmod" | "vanleer" | "weno5".
+      lowering to "none" | "minmod" | "vanleer" | "mc" | "superbee" | "weno5".
       ``pops.numerics.reconstruction.FirstOrder()`` -> none, ``.limiters.Minmod()`` /
-      ``.VanLeer()``, ``.WENO5()`` / ``.WENO5Z()`` -> weno5, ``.MUSCL(limiter=...)`` -> its limiter.
+      ``.VanLeer()`` / ``.MC()`` / ``.Superbee()``, ``.WENO5()`` / ``.WENO5Z()`` -> weno5,
+      ``.MUSCL(limiter=...)`` -> its limiter.
       weno5 = WENO5-Z, order 5 in smooth regions, 5-point stencil (3 ghosts), oscillation-free
       capture near a front; only the private native-``ModelSpec`` branch of ``add_equation``
       exposes it (the compiled .so paths allocate 2 ghosts -> explicit rejection).

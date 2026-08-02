@@ -15,6 +15,7 @@ from tests.python.integration._final_field_program import (
     passive_field_model,
     resolve_periodic_field_program,
 )
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 def _manifest(name, interface, parameters=()):
@@ -147,13 +148,21 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{
 '''
 
 
-def _solver_source(manifest, *, solution_expression="7.0"):
+def _solver_source(
+    manifest,
+    *,
+    solution_expression="7.0",
+    solve_count_statement="++state->solve_count;",
+    iterations_expression="state->solve_count",
+    extra_includes="",
+):
     expected_parameters_json = json.dumps(
         {"answer": 7}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return f'''#include <pops/runtime/config/generated_component_abi.hpp>
 #include <cstddef>
 #include <cstring>
 #include <limits>
+{extra_includes}
 
 namespace {{
 struct State {{ int prepare_count; int solve_count; }};
@@ -199,7 +208,7 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
       !request->boundary_contract_json ||
       std::strstr(request->boundary_contract_json, "identity") == nullptr)
     return 3;
-  ++state->solve_count;
+  {solve_count_statement}
   for (std::size_t local = 0; local < request->local_patch_count; ++local) {{
     const auto& patch = request->local_patches[local];
     if (patch.metadata_index >= request->topology.patch_count ||
@@ -227,7 +236,7 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
   }}
   report->status = POPS_SOLVE_SOLVED_V2;
   report->action = POPS_SOLVE_ACTION_NONE_V2;
-  report->iterations = state->solve_count;
+  report->iterations = {iterations_expression};
   report->relative_residual = 0.0;
   report->reference_residual_norm = 1.0;
   report->residual_norm = 0.0;
@@ -261,10 +270,17 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{
 '''
 
 
-def _nonfinite_solver_source(manifest):
+def _externally_faulted_solver_source(manifest, fault_marker):
     return _solver_source(
         manifest,
-        solution_expression="std::numeric_limits<double>::quiet_NaN()",
+        solution_expression=(
+            "std::filesystem::exists(%s) "
+            "? std::numeric_limits<double>::quiet_NaN() : 7.0"
+            % json.dumps(str(fault_marker))
+        ),
+        solve_count_statement="",
+        iterations_expression="1",
+        extra_includes="#include <filesystem>",
     )
 
 
@@ -299,6 +315,7 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     simulation = pops.bind(
         artifact,
         initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     slot, = simulation.field_provider_slots()
     before = simulation.inspect().to_dict()["instance"]["field_providers"]
@@ -340,15 +357,19 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     assert simulation.inspect().to_dict()["instance"]["field_providers"] == providers
 
 
-def test_external_field_solver_rejects_converged_nonfinite_solution_without_publishing(
+def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(
     tmp_path,
 ):
+    fault_marker = tmp_path / "external-field-solver-fault"
+    fault_marker.write_text("force a non-finite component result", encoding="utf-8")
     topology = _component(
         tmp_path, name="nonfinite-topology", interface=interfaces.FieldTopology,
         source_factory=_topology_source)
     solver = _component(
         tmp_path, name="nonfinite-solver", interface=interfaces.FieldSolver,
-        source_factory=_nonfinite_solver_source,
+        source_factory=lambda manifest: _externally_faulted_solver_source(
+            manifest, fault_marker
+        ),
         manifest_parameters=({"name": "answer", "kind": "runtime"},),
         instance_parameters={"answer": 7})
     provider = ExternalFieldSolver(
@@ -360,13 +381,32 @@ def test_external_field_solver_rejects_converged_nonfinite_solution_without_publ
         target="system", n=8, field_solver=provider,
         components=(topology, solver))
 
+    artifact = pops.compile(resolved)
     simulation = pops.bind(
-        pops.compile(resolved),
+        artifact,
         initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
+        resources={"execution_context": artifact_execution_context(artifact)},
     )
     slot, = simulation.field_provider_slots()
-    before = np.asarray(simulation.field_potential_global(slot)).copy()
-    assert before.size == 64 and np.all(before == 0.0)
+    accepted_before = {
+        "time": simulation.time(),
+        "macro_step": simulation.macro_step(),
+        "state": np.asarray(
+            simulation.state_global("material"), dtype=np.float64
+        ).copy(),
+        "potential": np.asarray(
+            simulation.field_potential_global(slot), dtype=np.float64
+        ).copy(),
+        "cursors": simulation.consumer_cursors.to_data(),
+        "reports": tuple(simulation._consumer_reports),
+        "temporal": json.dumps(
+            simulation._executor._temporal_restart_state.to_data(),
+            sort_keys=True,
+        ),
+        "providers": simulation.inspect().to_dict()["instance"]["field_providers"],
+    }
+    assert accepted_before["potential"].size == 64
+    assert np.all(accepted_before["potential"] == 0.0)
 
     with pytest.raises(
         RuntimeError,
@@ -374,6 +414,55 @@ def test_external_field_solver_rejects_converged_nonfinite_solution_without_publ
     ):
         pops.run(simulation, t_end=1.0e-4, max_steps=1)
 
-    after = np.asarray(simulation.field_potential_global(slot))
-    np.testing.assert_array_equal(after, before)
+    np.testing.assert_array_equal(
+        np.asarray(simulation.state_global("material"), dtype=np.float64),
+        accepted_before["state"],
+    )
+    after = np.asarray(simulation.field_potential_global(slot), dtype=np.float64)
+    np.testing.assert_array_equal(after, accepted_before["potential"])
     assert np.all(np.isfinite(after))
+    assert simulation.time() == accepted_before["time"]
+    assert simulation.macro_step() == accepted_before["macro_step"]
+    assert simulation.consumer_cursors.to_data() == accepted_before["cursors"]
+    assert tuple(simulation._consumer_reports) == accepted_before["reports"]
+    assert json.dumps(
+        simulation._executor._temporal_restart_state.to_data(),
+        sort_keys=True,
+    ) == accepted_before["temporal"]
+    assert (
+        simulation.inspect().to_dict()["instance"]["field_providers"]
+        == accepted_before["providers"]
+    )
+    failed = simulation._executor._last_step_transaction_report
+    assert (failed.status, failed.phase, failed.action) == (
+        "failed",
+        "solve",
+        "fail_run",
+    )
+    assert failed.committed_effects == ()
+    assert failed.staged_effects
+    assert failed.rolled_back_effects == failed.staged_effects
+
+    assert fault_marker.is_file()
+    fault_marker.unlink()
+    retry = pops.run(simulation, t_end=1.0e-4, max_steps=1)
+    assert retry.accepted_steps == 1
+    assert simulation.time() == 1.0e-4
+    assert simulation.macro_step() == 1
+    np.testing.assert_array_equal(
+        np.asarray(simulation.state_global("material"), dtype=np.float64),
+        accepted_before["state"],
+    )
+    potential = np.asarray(simulation.field_potential_global(slot), dtype=np.float64)
+    assert potential.size == 64
+    assert np.all(np.isfinite(potential))
+    assert np.all(potential == 0.0)
+    accepted = simulation._executor._last_step_transaction_report
+    assert (accepted.status, accepted.phase, accepted.action) == (
+        "accepted",
+        "commit",
+        "commit",
+    )
+    assert accepted.staged_effects
+    assert accepted.committed_effects == accepted.staged_effects
+    assert accepted.rolled_back_effects == ()

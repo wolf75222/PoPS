@@ -24,7 +24,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
     """
 
     _physics_mutators = frozenset({
-        "conservative_vars", "primitive", "primitive_vars", "aux", "aux_field",
+        "conservative_vars", "primitive", "primitive_vars", "recovery_admissibility", "aux",
+        "aux_field",
         "conservative_from", "flux", "flux_term", "eigenvalues", "wave_speeds",
         "wave_speeds_from_jacobian", "stability_speed", "stability_dt", "source",
         "source_term", "linear_source", "rate_operator", "rate", "field_solve",
@@ -93,6 +94,16 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         # positional form: fixes the layout from already-defined names/Var.
         self._m.set_primitive_state(*vars, roles=roles)
         return None
+
+    def recovery_admissibility(self, **constraints: Any) -> None:
+        """Declare fail-closed physical constraints for primitive recovery candidates.
+
+        Each keyword names one component of the primitive layout and maps it to a symbolic Boolean
+        expression over primitive variables.  Example: ``rho=rho > 0, p=p > 0``.  Finite candidates
+        that violate a declared predicate are rejected by the native prepared recovery chain before
+        any solution or warm-start publication.
+        """
+        self._m.recovery_admissibility(**constraints)
 
     def aux(self, name: Any) -> Any:
         """CANONICAL auxiliary field (must be a key of AUX_CANONICAL: phi/grad_x/grad_y/B_z/T_e)."""
