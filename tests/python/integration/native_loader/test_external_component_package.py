@@ -32,6 +32,7 @@ from pops.model import ComponentManifest
 from pops.output import (
     CoarseOnly, ConsumerGraph, ExternalWriter, ParallelMode, ScientificOutput,
 )
+from pops.runtime._consumer_transaction import ConsumerPublicationError
 from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 from pops.time import every, on_start
 
@@ -558,10 +559,18 @@ def _load_example():
     return module
 
 
-def _writer_case(example, artifacts, *, adaptive: bool):
+def _writer_case(
+    example,
+    artifacts,
+    *,
+    adaptive: bool,
+    paired_start_transaction: bool = False,
+):
     from pops.layouts import Uniform
     from pops.output import SelectedLevels
 
+    if adaptive and paired_start_transaction:
+        raise ValueError("paired Writer transaction is a Uniform-only test route")
     core = example.build_authoring(output_root="unused")
     core.numerics.boundaries.add(example.build_transport_boundaries(core))
     core.case.numerics(core.numerics, block=core.tracer)
@@ -594,7 +603,11 @@ def _writer_case(example, artifacts, *, adaptive: bool):
     outputs.append(ScientificOutput(
         format=ExternalWriter(
             artifacts[-1], extension=".popsbin", mode=output_mode),
-        schedule=every(1, clock=core.program.clock),
+        schedule=(
+            on_start(clock=core.program.clock)
+            if paired_start_transaction
+            else every(1, clock=core.program.clock)
+        ),
         fields=(core.tracer_state,),
         levels=SelectedLevels(0, 1) if adaptive else CoarseOnly(),
         target="amr-writer" if adaptive else "uniform-writer",
@@ -633,6 +646,81 @@ def _bind_writer_case(example, core, layout, artifacts, initial_state=None):
         **bind_inputs,
     )
     return simulation
+
+
+def test_real_writer_collision_compensates_the_complete_consumer_graph_transaction(tmp_path):
+    example = _load_example()
+    first = _compile_writer(tmp_path / "transaction-one", "transaction_writer_one")
+    second = _compile_writer(tmp_path / "transaction-two", "transaction_writer_two")
+    core, layout, initial_state = _writer_case(
+        example,
+        (first, second),
+        adaptive=False,
+        paired_start_transaction=True,
+    )
+    runtime = _bind_writer_case(
+        example,
+        core,
+        layout,
+        (first, second),
+        initial_state,
+    )
+    output_root = tmp_path / "transaction-output"
+    runtime._output_root = output_root
+
+    accepted_before = {
+        "time": runtime.time(),
+        "macro_step": runtime.macro_step(),
+        "state": np.asarray(
+            runtime.state_global("tracer"), dtype=np.float64
+        ).copy(),
+        "cursors": runtime.consumer_cursors.to_data(),
+        "reports": tuple(runtime._consumer_reports),
+    }
+    transactions = runtime._stage_consumers(at_start=True)
+    assert len(transactions) == 1
+    transaction = transactions[0]
+    prepared = tuple(row[1] for row in transaction._prepared)
+    assert len(prepared) == 2
+    targets = tuple(row.target for row in prepared)
+    assert all(target is not None for target in targets)
+    first_target, collision_target = targets
+    collision_bytes = b"pre-existing user-owned publication"
+    collision_target.write_bytes(collision_bytes)
+
+    with pytest.raises(ConsumerPublicationError, match="FileExistsError") as failure:
+        transaction.accept()
+
+    report = failure.value.report
+    assert report.status == "failed"
+    assert report.published == ()
+    assert report.cursors.to_data() == accepted_before["cursors"]
+    assert len(report.staged_effects) == 2
+    assert report.rolled_back_effects == tuple(reversed(report.staged_effects))
+    assert not first_target.exists()
+    assert collision_target.read_bytes() == collision_bytes
+    assert not tuple(output_root.rglob(".*.writer-stage*"))
+    assert not tuple(output_root.rglob("*.component-published"))
+    assert runtime.time() == accepted_before["time"]
+    assert runtime.macro_step() == accepted_before["macro_step"]
+    assert np.array_equal(
+        np.asarray(runtime.state_global("tracer"), dtype=np.float64),
+        accepted_before["state"],
+    )
+    assert runtime.consumer_cursors.to_data() == accepted_before["cursors"]
+    assert tuple(runtime._consumer_reports) == accepted_before["reports"]
+
+    collision_target.unlink()
+    accepted_reports = runtime._fire_consumers(at_start=True)
+    assert len(accepted_reports) == 1
+    assert accepted_reports[0].status == "accepted"
+    assert len(accepted_reports[0].published) == 2
+    assert runtime.consumer_cursors.to_data() != accepted_before["cursors"]
+    published = tuple(sorted(output_root.rglob("*.popsbin")))
+    assert len(published) == 2
+    assert all("fields=1" in path.read_text(encoding="utf-8") for path in published)
+    assert not tuple(output_root.rglob(".*.writer-stage*"))
+    assert not tuple(output_root.rglob("*.component-published"))
 
 
 def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_path):

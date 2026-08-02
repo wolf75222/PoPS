@@ -988,7 +988,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "selected_count=$(python3 -c" in mpi_block
     assert "selected ${selected_count}/${expected} launches" in mpi_block
     assert "ctest --preset ci-mpi --output-on-failure --parallel 4 --no-tests=error" in mpi_block
-    assert "timeout-minutes: 70" in mpi_block
+    # The complete M4 installed-package gate now runs after the native MPI,
+    # Python MPI and collective-HDF5 matrices in this same required job.  Keep
+    # the outer watchdog aligned with that complete sequential contract.
+    assert "timeout-minutes: 180" in mpi_block
     assert "timeout-minutes: 35" in mpi_block
     assert '/usr/bin/python3 -u "$mpi_test"' in mpi_block
     assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block

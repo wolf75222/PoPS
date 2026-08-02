@@ -366,6 +366,18 @@ void bind_system_program(py::class_<System>& cls) {
       // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)
+      // Exact Program-index -> System-index map established by name during install_program.  The
+      // structured runtime report consumes this owned native fact; an empty Python-side fallback
+      // must never be mistaken for an identity map in a sliced multi-layout Program.
+      .def("program_block_map", &System::program_block_map)
+      // Metadata-only parameter occupancy for ProgramRuntimeReport.  Keep the fixed-size values
+      // private while exposing the native count that proves every compiled carrier was installed.
+      .def(
+          "program_param_count",
+          [](const System& system, int program_block) {
+            return system.program_params(program_block).count;
+          },
+          py::arg("program_block"))
       // ADC-592: runtime freeze lifecycle. mark_bound() (called LAST by the Python bind flow) freezes
       // the composition -> every structural setter then rejects; lifecycle_state() reports
       // assembling / bound / running (running derived from macro_step()).

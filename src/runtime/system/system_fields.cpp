@@ -410,6 +410,7 @@ void System::stage_field_publication_candidate() {
   if (!p_->field_publication_active_ || !p_->accepted_field_publication_ ||
       p_->field_publication_candidate_ready_)
     throw std::logic_error("System field publication has no unique active candidate slot");
+  p_->fields_.stage_named_topology_reports();
   if (p_->candidate_field_publication_)
     p_->candidate_field_publication_->capture(*p_);
   else
