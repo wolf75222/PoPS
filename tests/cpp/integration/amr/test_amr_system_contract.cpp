@@ -436,6 +436,46 @@ TEST(test_amr_system_contract, VariableDtStrideUsesOneExactPublicWindow) {
   EXPECT_DOUBLE_EQ(system.program_cadence_window_start_time(), 0.0);
 }
 
+TEST(test_amr_system_contract, StrideHeldStepPublishesTheExactZeroBalance) {
+#if defined(POPS_HAS_KOKKOS)
+  Kokkos::ScopeGuard guard;
+#endif
+  AmrSystemConfig cfg;
+  cfg.n = 4;
+  cfg.L = 1.0;
+  cfg.regrid_every = 0;
+  cfg.periodicity = {true, true};
+
+  AmrSystem system(cfg);
+  system.add_block("tracer", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
+  system.install_program_step([](double) {});
+  system.set_program_cadence(/*substeps=*/1, /*stride=*/2);
+  system.begin_step_transaction();
+  system.step(0.1);
+
+  const std::string route = "pops.balance-ledger-route.v1:sha256:" + std::string(64, '8');
+  const auto balance = system.accepted_balance_terms(route);
+  EXPECT_EQ(balance.size(), 5u);
+  for (const auto& [name, value] : balance) {
+    EXPECT_FALSE(name.empty());
+    EXPECT_DOUBLE_EQ(value, 0.0);
+  }
+  system.commit_step_transaction();
+  system.finalize_step_transaction();
+
+  system.begin_step_transaction();
+  system.step(0.1);
+  system.rollback_step_transaction();
+  system.begin_step_transaction();
+  const auto restored = system.accepted_balance_terms(route);
+  EXPECT_EQ(restored.size(), 5u);
+  for (const auto& [name, value] : restored) {
+    EXPECT_FALSE(name.empty());
+    EXPECT_DOUBLE_EQ(value, 0.0);
+  }
+  system.rollback_step_transaction();
+}
+
 TEST(test_amr_system_contract, CadenceRestoreRejectsClockDriftWithoutMutatingAcceptedState) {
 #if defined(POPS_HAS_KOKKOS)
   Kokkos::ScopeGuard guard;

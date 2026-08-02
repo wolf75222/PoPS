@@ -35,10 +35,15 @@ FORBIDDEN_FINAL_IMPORTS = (
 # The published wheel matrix is CPU/Kokkos Serial without MPI or parallel HDF5. The full suite still
 # runs; this supported-platform subset is repeated with a strict all-pass/no-hidden-skip policy.
 PYTHON_REQUIRED_SELECTION = "not mpi and not hdf5"
+INSTALLED_COMPONENT_PACKAGE_NODEID = (
+    "tests/python/integration/native_loader/test_external_component_package.py"
+    "::test_source_component_executes_through_generic_native_loader_and_flux_consumer"
+)
 REQUIRED_RELEASE_GATES = (
     "official_build",
-    "doctor",
+    "installed_wheel",
     "codesign",
+    "doctor",
     "native_conformance",
     "python_conformance",
     "examples",

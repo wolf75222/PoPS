@@ -10,6 +10,10 @@ SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 PROGRAM_RUNTIME_STATE = PROGRAM_DIR / "program_runtime_state.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
+BINDINGS = (
+    ROOT / "python" / "bindings" / "core" / "init" / "init_system.cpp",
+    ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp",
+)
 PREPARED_AFFINE = (
     ROOT / "include" / "pops" / "numerics" / "elliptic" / "linear" / "prepared_affine_problem.hpp"
 )
@@ -117,6 +121,8 @@ SHARED_SIGNATURES = (
     "int n_blocks(",
     "Real physical_time(",
     "void record_scalar(",
+    "void record_balance_term(",
+    "bool balance_consumer_is_due(",
     "RuntimeParams program_params(",
     "void set_field_logical_timepoint(",
     "void set_field_boundary_parameters(",
@@ -187,6 +193,11 @@ def test_uniform_and_amr_inherit_the_same_execution_service():
         r"ProgramExecutionServices<AmrProgramContext>",
         amr,
     )
+
+
+def test_balance_attempt_sink_is_not_python_bound():
+    for binding in BINDINGS:
+        assert "record_program_balance_term" not in _read(binding)
 
 
 def test_codegen_uses_one_facade_selected_provider_factory_not_concrete_context_dispatch():
@@ -345,6 +356,8 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_publish_lincomb_",
             "program_execution_publish_exact_lincomb_",
             "program_execution_validate_commit_aliases_",
+            "program_execution_record_balance_term_",
+            "program_execution_balance_consumer_is_due_",
             "program_execution_runtime_state_",
             "program_execution_clock_coordinate_",
             "program_execution_set_field_timepoint_",

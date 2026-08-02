@@ -21,6 +21,7 @@ import zipfile
 
 from final_release_contract import (
     FINAL_EXAMPLES,
+    INSTALLED_COMPONENT_PACKAGE_NODEID,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
@@ -32,7 +33,8 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 4
+EVIDENCE_SCHEMA_VERSION = 7
+PUBLIC_API_EVIDENCE_SCHEMA_VERSION = 3
 
 
 class PreflightError(RuntimeError):
@@ -190,6 +192,54 @@ def _artifact_file(root: Path, relative: Any, digest: Any, *, label: str) -> Non
         raise PreflightError("release evidence %s hash drifted" % label)
 
 
+def _wheel_lane_contract(path: Path, archive: zipfile.ZipFile, contract: Any) -> None:
+    """Require one native wheel whose filename and WHEEL tags match the promised lane."""
+
+    lanes = contract.SUPPORTED_MATRIX["wheels"]
+    if len(lanes) != 1:
+        raise PreflightError("release contract must promise exactly one wheel lane")
+    lane = lanes[0]
+    if set(lane) != {"os", "arch", "python", "backend"}:
+        raise PreflightError("promised wheel lane is malformed")
+    if lane["os"] != "macos" or lane["arch"] != "arm64" \
+            or lane["backend"] != "Kokkos Serial":
+        raise PreflightError("promised wheel lane has no release tag verifier")
+
+    if path.suffix != ".whl":
+        raise PreflightError("release artifact is not a wheel")
+    parts = path.name[:-4].split("-")
+    if len(parts) != 5:
+        raise PreflightError("release wheel filename must not contain a build tag")
+    distribution, version, python_tag, abi_tag, platform_tag = parts
+    expected_python = lane["python"]
+    if distribution.lower().replace("_", "-") != "pops" \
+            or version != contract.PACKAGE_VERSION:
+        raise PreflightError("release wheel filename name/version disagrees with the contract")
+    if python_tag != expected_python or abi_tag != expected_python:
+        raise PreflightError("release wheel Python/ABI tags disagree with the promised lane")
+    if re.fullmatch(r"macosx_\d+_\d+_arm64", platform_tag) is None:
+        raise PreflightError("release wheel platform tag disagrees with the promised lane")
+
+    dist_info = "%s-%s.dist-info" % (distribution, version)
+    wheel_names = [name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")]
+    if wheel_names != [dist_info + "/WHEEL"]:
+        raise PreflightError("release wheel has no unique lane-bound WHEEL record")
+    try:
+        wheel_metadata = archive.read(wheel_names[0]).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PreflightError("release wheel WHEEL record is not UTF-8") from exc
+    fields: dict[str, list[str]] = {}
+    for line in wheel_metadata.splitlines():
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            fields.setdefault(key, []).append(value)
+    expected_tag = "%s-%s-%s" % (python_tag, abi_tag, platform_tag)
+    if fields.get("Wheel-Version") != ["1.0"] \
+            or fields.get("Root-Is-Purelib") != ["false"] \
+            or fields.get("Tag") != [expected_tag]:
+        raise PreflightError("release WHEEL metadata disagrees with the promised native lane")
+
+
 def _checkpoint_tree(path: Path) -> str:
     if path.is_file():
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -219,6 +269,7 @@ def _wheel_evidence(directory: Path, gates: dict[str, Any], contract: Any) -> No
         raise PreflightError("official build wheel size drifted")
     try:
         with zipfile.ZipFile(path) as archive:
+            _wheel_lane_contract(path, archive, contract)
             metadata_names = [name for name in archive.namelist()
                               if name.endswith(".dist-info/METADATA")]
             if len(metadata_names) != 1:
@@ -236,7 +287,227 @@ def _wheel_evidence(directory: Path, gates: dict[str, Any], contract: Any) -> No
         raise PreflightError("release wheel name/version disagrees with the release contract")
 
 
-def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
+def _public_api_evidence(
+    path: Path,
+    release_evidence: dict[str, Any],
+    contract: Any,
+) -> None:
+    resolved = path.expanduser().resolve()
+    if _inside(ROOT, resolved) or not resolved.is_file():
+        raise PreflightError(
+            "installed public API evidence must be one file outside the checkout")
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise PreflightError("installed public API evidence is unreadable") from exc
+    expected = {
+        "schema_version",
+        "producer",
+        "wheel_path",
+        "wheel_sha256",
+        "distribution",
+        "typed_payload_files",
+        "typed_payload_sha256",
+        "public_api_sha256",
+        "public_names",
+        "pure_authoring",
+        "qualified_handles",
+        "py_typed",
+        "installed",
+        "installed_distribution",
+        "installed_package",
+        "installed_typed_payload_sha256",
+        "installed_public_api_sha256",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected \
+            or payload["schema_version"] != PUBLIC_API_EVIDENCE_SCHEMA_VERSION:
+        raise PreflightError("installed public API evidence has an unknown schema")
+    producer = {
+        "script": "scripts/prove_public_api_parity.py",
+        "sha256": hashlib.sha256(
+            (ROOT / "scripts" / "prove_public_api_parity.py").read_bytes()
+        ).hexdigest(),
+    }
+    if payload["producer"] != producer:
+        raise PreflightError("installed public API evidence has another producer")
+    wheel = release_evidence["gates"]["official_build"]["evidence"]["wheel"]
+    if payload["wheel_sha256"] != wheel["sha256"]:
+        raise PreflightError("installed public API evidence belongs to another wheel")
+    distribution = payload["distribution"]
+    installed_distribution = payload["installed_distribution"]
+    if not isinstance(distribution, dict) or set(distribution) != {
+            "name", "version", "metadata_sha256"}:
+        raise PreflightError("public API wheel distribution identity is malformed")
+    if installed_distribution != distribution:
+        raise PreflightError("installed distribution identity differs from the release wheel")
+    if not isinstance(distribution["name"], str) \
+            or not isinstance(distribution["version"], str) \
+            or distribution["name"].lower() != "pops" \
+            or distribution["version"] != contract.PACKAGE_VERSION:
+        raise PreflightError("public API distribution identity disagrees with the release")
+    digests = (
+        distribution["metadata_sha256"],
+        payload["wheel_sha256"],
+        payload["typed_payload_sha256"],
+        payload["installed_typed_payload_sha256"],
+        payload["public_api_sha256"],
+        payload["installed_public_api_sha256"],
+    )
+    if any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+           for value in digests):
+        raise PreflightError("installed public API evidence contains an invalid digest")
+    if payload["installed_typed_payload_sha256"] != payload["typed_payload_sha256"] \
+            or payload["installed_public_api_sha256"] != payload["public_api_sha256"]:
+        raise PreflightError("installed public API or typing digest differs from source")
+    if payload["installed"] is not True or payload["pure_authoring"] is not True \
+            or payload["qualified_handles"] is not True or payload["py_typed"] is not True:
+        raise PreflightError("installed public API evidence did not prove the final contract")
+    if not isinstance(payload["typed_payload_files"], int) \
+            or payload["typed_payload_files"] <= 0 \
+            or not isinstance(payload["public_names"], list) \
+            or not payload["public_names"] \
+            or not all(isinstance(name, str) and name for name in payload["public_names"]):
+        raise PreflightError("installed public API evidence has an empty public surface")
+    if not isinstance(payload["installed_package"], str):
+        raise PreflightError("installed public API package path is malformed")
+    installed_package = Path(payload["installed_package"]).resolve()
+    runtime_package = Path(release_evidence["runtime"]["pops_file"]).resolve().parent
+    if installed_package != runtime_package:
+        raise PreflightError(
+            "public API parity was not proven on the authenticated installed runtime")
+
+
+def _installed_wheel_evidence(
+    directory: Path,
+    gates: dict[str, Any],
+    contract: Any,
+    runtime: dict[str, str],
+) -> None:
+    wheel = gates["official_build"]["evidence"]["wheel"]
+    retained = (directory / wheel["path"]).resolve()
+    row = gates["installed_wheel"]
+    evidence = row["evidence"]
+    expected = {
+        "schema_version",
+        "python_executable",
+        "distribution_root",
+        "package_file",
+        "native_extension",
+        "native_member",
+        "native_sha256",
+        "installed_member_count",
+        "installed_tree_sha256",
+        "proof_script_sha256",
+        "version",
+        "wheel_path",
+        "wheel_sha256",
+    }
+    if not isinstance(evidence, dict) or set(evidence) != expected:
+        raise PreflightError("installed wheel evidence is malformed")
+    if evidence["schema_version"] != 2:
+        raise PreflightError("installed wheel evidence schema is unsupported")
+    if evidence["version"] != contract.PACKAGE_VERSION:
+        raise PreflightError("installed wheel evidence version disagrees with release contract")
+    if Path(evidence["wheel_path"]).resolve() != retained \
+            or evidence["wheel_sha256"] != wheel["sha256"]:
+        raise PreflightError("installed wheel evidence does not authenticate the retained wheel")
+    if evidence["python_executable"] != runtime["python_executable"] \
+            or evidence["package_file"] != runtime["pops_file"] \
+            or evidence["native_extension"] != runtime["native_extension"]:
+        raise PreflightError("installed wheel evidence belongs to another runtime")
+
+    commands = row["commands"]
+    logs = _command_evidence(directory, commands, gate="installed_wheel")
+    if len(logs) != 2:
+        raise PreflightError("installed wheel gate requires reinstall and proof transcripts")
+    install_suffix = [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--force-reinstall",
+        "--no-deps",
+        str(retained),
+    ]
+    proof_suffix = [
+        "python",
+        "scripts/prove_installed_wheel.py",
+        "--wheel",
+        str(retained),
+    ]
+    if commands[0]["argv"][-len(install_suffix):] != install_suffix \
+            or commands[1]["argv"][-len(proof_suffix):] != proof_suffix:
+        raise PreflightError("installed wheel gate did not reinstall and prove the retained wheel")
+    try:
+        with zipfile.ZipFile(retained) as archive:
+            member = evidence["native_member"]
+            member_digest = hashlib.sha256(archive.read(member)).hexdigest()
+            rows = []
+            for name in sorted(archive.namelist()):
+                if name.endswith("/") or name.endswith(".dist-info/RECORD"):
+                    continue
+                if ".data/" in name:
+                    raise PreflightError(
+                        "release wheel uses an unsupported .data installation scheme"
+                    )
+                digest = hashlib.sha256(archive.read(name)).hexdigest()
+                rows.append("%s\0%s\n" % (name, digest))
+    except (KeyError, OSError, zipfile.BadZipFile) as exc:
+        raise PreflightError("installed wheel native member is unreadable: %s" % exc) from exc
+    if member_digest != evidence["native_sha256"]:
+        raise PreflightError("installed wheel native member hash drifted")
+    expected_tree = hashlib.sha256("".join(rows).encode("utf-8")).hexdigest()
+    if evidence["installed_member_count"] != len(rows) \
+            or evidence["installed_tree_sha256"] != expected_tree:
+        raise PreflightError("installed wheel payload proof drifted")
+    proof_script = ROOT / "scripts" / "prove_installed_wheel.py"
+    if evidence["proof_script_sha256"] != hashlib.sha256(proof_script.read_bytes()).hexdigest():
+        raise PreflightError("installed wheel proof script drifted")
+
+
+def _codesign_evidence(
+    directory: Path,
+    gates: dict[str, Any],
+    runtime: dict[str, str],
+) -> None:
+    row = gates["codesign"]
+    evidence = row["evidence"]
+    if not isinstance(evidence, dict) or set(evidence) != {
+            "schema_version", "platform", "extensions"}:
+        raise PreflightError("codesign evidence is malformed")
+    if evidence["schema_version"] != 1 or evidence["platform"] != "darwin":
+        raise PreflightError("codesign evidence must authenticate the Darwin release lane")
+    extensions = evidence["extensions"]
+    if not isinstance(extensions, list) or len(extensions) != 1:
+        raise PreflightError("codesign evidence must authenticate exactly one extension")
+    extension = extensions[0]
+    if not isinstance(extension, dict) or set(extension) != {
+            "path", "sha256", "signature"}:
+        raise PreflightError("codesign extension evidence is malformed")
+    if extension != {
+        "path": runtime["native_extension"],
+        "sha256": runtime["native_sha256"],
+        "signature": "adhoc",
+    }:
+        raise PreflightError("codesign evidence does not authenticate the live native extension")
+    retained_native_sha256 = gates["installed_wheel"]["evidence"]["native_sha256"]
+    if extension["sha256"] != retained_native_sha256:
+        raise PreflightError(
+            "codesign changed the retained wheel native bytes; the published wheel "
+            "would differ from the validated runtime"
+        )
+    commands = row["commands"]
+    logs = _command_evidence(directory, commands, gate="codesign")
+    suffix = ["python", "scripts/codesign_pops_extensions.py", "--json"]
+    if len(logs) != 1 or commands[0]["argv"][-len(suffix):] != suffix:
+        raise PreflightError("codesign gate did not run the exact structured verifier")
+
+
+def _examples_evidence(
+    directory: Path,
+    gates: dict[str, Any],
+    runtime: dict[str, str],
+) -> None:
     examples = gates["examples"]["evidence"]
     reopen = gates["artifact_reopen"]["evidence"]
     restart = gates["strict_restart"]["evidence"]
@@ -250,25 +521,41 @@ def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
     logs = _command_evidence(directory, command_rows, gate="examples")
     if len(logs) != len(FINAL_EXAMPLES):
         raise PreflightError("final examples must have one execution transcript each")
-    for example in FINAL_EXAMPLES:
+    for index, example in enumerate(FINAL_EXAMPLES):
         key = example.as_posix()
         row = examples["examples"][key]
-        if not isinstance(row, dict) or set(row) != {"source_sha256", "stdout_sha256", "output_root"}:
+        if not isinstance(row, dict) or set(row) != {
+                "source_sha256", "stdout_sha256", "output_root", "runtime_sha256"}:
             raise PreflightError("release evidence %s is malformed" % key)
         if row["source_sha256"] != hashlib.sha256((ROOT / example).read_bytes()).hexdigest():
             raise PreflightError("release evidence source drifted for %s" % key)
         if not isinstance(row["output_root"], str):
             raise PreflightError("release evidence output root is invalid for %s" % key)
-        matching = [log for log, command in zip(logs, command_rows, strict=True)
-                    if key in " ".join(command["argv"])]
-        if len(matching) != 1:
-            raise PreflightError("release evidence has no unique command transcript for %s" % key)
-        transcript = matching[0].read_text(encoding="utf-8")
+        if row["runtime_sha256"] != runtime["native_sha256"]:
+            raise PreflightError("release evidence runtime digest drifted for %s" % key)
+        output_root = (directory / row["output_root"]).resolve()
+        expected_suffix = [
+            "python",
+            "scripts/run_installed_example.py",
+            "--runtime-sha256",
+            runtime["native_sha256"],
+            "--example",
+            key,
+            "--",
+            "--output-dir",
+            str(output_root),
+        ]
+        command = command_rows[index]["argv"]
+        if command[-len(expected_suffix):] != expected_suffix:
+            raise PreflightError("release evidence command drifted for %s" % key)
+        transcript = logs[index].read_text(encoding="utf-8")
         if row["stdout_sha256"] != hashlib.sha256(transcript.encode("utf-8")).hexdigest():
             raise PreflightError("release evidence stdout hash drifted for %s" % key)
         if any(marker not in transcript for marker in REQUIRED_PROOF_MARKERS):
             raise PreflightError("release evidence lacks restart/reopen proof output for %s" % key)
-        output_root = (directory / row["output_root"]).resolve()
+        runtime_marker = "PoPS release runtime | native_sha256=" + runtime["native_sha256"]
+        if transcript.count(runtime_marker) != 1:
+            raise PreflightError("release evidence runtime binding drifted for %s" % key)
         if not _inside(directory, output_root) or not output_root.is_dir():
             raise PreflightError("release evidence output root is absent for %s" % key)
         reopened = reopen["examples"][key]
@@ -297,7 +584,67 @@ def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
             raise PreflightError("release evidence restart proof markers drifted for %s" % key)
 
 
-def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -> None:
+def _installed_component_package_evidence(
+    directory: Path,
+    python_conformance: dict[str, Any],
+) -> None:
+    component = python_conformance["evidence"]["installed_component_package"]
+    if not isinstance(component, dict) or set(component) != {"nodeid", "headers", "lane"}:
+        raise PreflightError("release evidence installed component package lane is malformed")
+    if component["nodeid"] != INSTALLED_COMPONENT_PACKAGE_NODEID \
+            or component["headers"] != "installed-wheel":
+        raise PreflightError("release evidence installed component package authority drifted")
+    lane = component["lane"]
+    if not isinstance(lane, dict) or set(lane) != {
+            "path", "sha256", "tests", "failures", "skips_or_xfails"}:
+        raise PreflightError("release evidence installed component package JUnit is malformed")
+    if lane["tests"] != 1 or lane["failures"] != 0 or lane["skips_or_xfails"] != 0:
+        raise PreflightError("release evidence installed component package lane is not all-pass")
+    component_report = Path(lane["path"]).resolve()
+    if not _inside(directory, component_report):
+        raise PreflightError(
+            "release evidence installed component package JUnit path escapes its directory")
+    _artifact_file(
+        directory,
+        component_report.relative_to(directory).as_posix(),
+        lane["sha256"],
+        label="installed component package JUnit",
+    )
+    component_commands = [
+        command for command in python_conformance["commands"]
+        if INSTALLED_COMPONENT_PACKAGE_NODEID in command["argv"]
+    ]
+    if len(component_commands) != 1:
+        raise PreflightError(
+            "release evidence must execute the installed component package node exactly once")
+    component_argv = component_commands[0]["argv"]
+    include_assignments = [
+        argument for argument in component_argv if argument.startswith("POPS_INCLUDE=")
+    ]
+    if include_assignments != ["POPS_INCLUDE="] \
+            or "POPS_PROVE_INSTALLED_COMPONENT_PACKAGE=1" not in component_argv:
+        raise PreflightError(
+            "installed component package proof must use only wheel-owned headers")
+    expected_suffix = [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-s",
+        INSTALLED_COMPONENT_PACKAGE_NODEID,
+        "--junitxml",
+        lane["path"],
+    ]
+    if component_argv[-len(expected_suffix):] != expected_suffix:
+        raise PreflightError("installed component package proof command drifted")
+
+
+def _evidence(
+    path: Path,
+    contract: Any,
+    commit: str,
+    runtime: dict[str, str],
+) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     expected = {"schema_version", "producer", "commit_sha", "package_version", "contract_sha256",
                 "artifact_directory", "runtime", "gates"}
@@ -340,10 +687,12 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
         else:
             _command_evidence(directory, commands, gate=name)
     _wheel_evidence(directory, gates, contract)
+    _installed_wheel_evidence(directory, gates, contract, runtime)
+    _codesign_evidence(directory, gates, runtime)
     for name in ("native_conformance", "python_conformance"):
         evidence = gates[name]["evidence"]
         expected = {"required_lane"} if name == "native_conformance" \
-            else {"required_lane", "selection"}
+            else {"required_lane", "selection", "installed_component_package"}
         if not isinstance(evidence, dict) or set(evidence) != expected:
             raise PreflightError("release evidence %s lane is malformed" % name)
         lane = evidence["required_lane"]
@@ -356,11 +705,13 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
         report = Path(lane["path"]).resolve()
         if not _inside(directory, report):
             raise PreflightError("release evidence %s JUnit path escapes its directory" % name)
-        _artifact_file(directory, report.relative_to(directory), lane["sha256"],
+        _artifact_file(directory, report.relative_to(directory).as_posix(), lane["sha256"],
                        label="%s JUnit" % name)
     if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
         raise PreflightError("release evidence Python required-lane selection drifted")
-    _examples_evidence(directory, gates)
+    _installed_component_package_evidence(directory, gates["python_conformance"])
+    _examples_evidence(directory, gates, runtime)
+    return payload
 
 
 def main() -> int:
@@ -369,10 +720,18 @@ def main() -> int:
     parser.add_argument("--tag")
     parser.add_argument("--installed", action="store_true")
     parser.add_argument("--evidence", type=Path)
+    parser.add_argument("--public-api-evidence", type=Path)
     args = parser.parse_args()
     try:
-        if args.release and (not args.tag or not args.installed or args.evidence is None):
-            raise PreflightError("--release requires --tag, --installed and --evidence")
+        if args.release and (
+            not args.tag
+            or not args.installed
+            or args.evidence is None
+            or args.public_api_evidence is None
+        ):
+            raise PreflightError(
+                "--release requires --tag, --installed, --evidence and "
+                "--public-api-evidence")
         contract = _generated()
         checks = _static_contract(contract)
         if args.release:
@@ -381,8 +740,16 @@ def main() -> int:
             if _run("git", "status", "--porcelain"):
                 raise PreflightError("release checkout is dirty")
             runtime = _installed_contract(contract)
-            _evidence(args.evidence, contract, commit, runtime)
-            checks.extend(("tag", "changelog", "installed", "evidence", "clean"))
+            release_evidence = _evidence(args.evidence, contract, commit, runtime)
+            _public_api_evidence(args.public_api_evidence, release_evidence, contract)
+            checks.extend((
+                "tag",
+                "changelog",
+                "installed",
+                "evidence",
+                "public_api_parity",
+                "clean",
+            ))
         elif args.tag:
             _tag_contract(contract.PACKAGE_VERSION, args.tag)
             checks.extend(("tag", "changelog"))

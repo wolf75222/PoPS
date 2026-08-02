@@ -44,12 +44,15 @@ from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import (
     AcceptedStep,
     AdaptiveCFL,
+    Always,
     AtEnd,
+    AtStart,
     Clock,
     Every,
     ExternalTimeGrid,
     FixedDt,
     Schedule,
+    When,
     every_dt,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -259,13 +262,13 @@ class _Executor:
         )
 
     def output_state_root_pieces(self, communicator, block, level):
-        """Expose the exact singleton-world gather required by ROOT publication tests."""
-        from pops._native_collectives import require_world, size
+        """Expose the exact duplicated consumer lane required by ROOT publication tests."""
+        from pops._native_collectives import require_communicator, size
 
         expected = self._plan.execution_context.communicator
-        if communicator is not expected.handle:
-            raise ValueError("ROOT gather did not receive the installed communicator handle")
-        native = require_world(communicator)
+        native = require_communicator(communicator, allow_world=False)
+        if expected.identity != "MPI_COMM_WORLD":
+            raise ValueError("ROOT gather requires an MPI execution context")
         if size(native) != 1:
             raise RuntimeError(
                 "runtime-instance unit executor only implements a singleton ROOT gather"
@@ -385,6 +388,15 @@ def _with_graph(
         "state:u",
         layout.qualified_id,
     )
+    resolved_mode = (
+        parallel_mode
+        if kind is ConsumerKind.SCIENTIFIC_OUTPUT
+        else (
+            ParallelMode(operation.consumer_data()["parallel_mode"])
+            if kind is ConsumerKind.MONITOR
+            else ParallelMode.SERIAL
+        )
+    )
     manifest = ConsumerManifest(
         Handle("density", kind="consumer", owner=OwnerPath.consumer("adc-687")),
         kind,
@@ -394,7 +406,7 @@ def _with_graph(
         NPZ(mode=parallel_mode)
         if output_format is None and kind is ConsumerKind.SCIENTIFIC_OUTPUT
         else output_format,
-        parallel_mode if kind is ConsumerKind.SCIENTIFIC_OUTPUT else ParallelMode.SERIAL,
+        resolved_mode,
         operation=operation,
     )
     graph = ConsumerGraph((manifest,))
@@ -720,7 +732,8 @@ class _BlockingWriter:
 class _BlockingFormat:
     __pops_ir_immutable__ = True
 
-    def __init__(self):
+    def __init__(self, mode: ParallelMode):
+        self._mode = mode
         self.writer_started = threading.Event()
         self.release_writer = threading.Event()
         self.paths = []
@@ -731,7 +744,7 @@ class _BlockingFormat:
             "provider_id": "pops.test.blocking-async.v1",
             "format_name": "blocking-test",
             "extension": ".async",
-            "parallel_mode": "serial",
+            "parallel_mode": self._mode.value,
         }
 
     def writer(self):
@@ -741,7 +754,7 @@ class _BlockingFormat:
 def test_async_scientific_output_overlaps_next_step_and_flushes_real_receipts(tmp_path):
     output_root = tmp_path / "async-output"
     output_root.mkdir()
-    format_provider = _BlockingFormat()
+    format_provider = _BlockingFormat(_scientific_output_mode(_install().artifact))
     authoring_clock = Clock("async-authoring")
     descriptor = AsyncScientificOutput(
         format=format_provider,
@@ -1180,6 +1193,48 @@ def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):
     cursor = runtime.consumer_cursors.for_consumer(manifest.qualified_id)
     assert cursor.committed_samples == 0
     assert tuple(tmp_path.glob("*.npz")) == ()
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    (
+        lambda clock: Schedule(Always(AcceptedStep(clock))),
+        lambda clock: Schedule(Every(AcceptedStep(clock), 1)),
+        lambda clock: Schedule(AtEnd(AcceptedStep(clock))),
+        lambda clock: Schedule(When(AcceptedStep(clock), True)),
+    ),
+)
+def test_zero_step_run_does_not_fabricate_an_accepted_consumer_occurrence(
+    tmp_path, schedule
+):
+    plan, _, manifest = _with_graph(tmp_path, schedule=schedule)
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=0.0, max_steps=0)
+
+    assert report.accepted_steps == 0
+    assert (
+        runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples
+        == 0
+    )
+    assert tuple(tmp_path.glob("*.npz")) == ()
+
+
+def test_zero_step_run_keeps_exactly_one_start_occurrence(tmp_path):
+    plan, _, manifest = _with_graph(
+        tmp_path,
+        schedule=lambda clock: Schedule(AtStart(AcceptedStep(clock))),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    report = runtime._run(t_end=0.0, max_steps=0)
+
+    assert report.accepted_steps == 0
+    assert (
+        runtime.consumer_cursors.for_consumer(manifest.qualified_id).committed_samples
+        == 1
+    )
+    assert _published_times(tmp_path) == [0.0]
 
 
 def test_scientific_format_is_a_structural_provider_without_name_dispatch(tmp_path):
@@ -1743,6 +1798,83 @@ def test_checkpoint_diagnostic_baseline_schema_is_finite_and_canonical():
         )
 
 
+def test_root_output_lane_requires_one_active_run_scoped_communicator():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    lane = SimpleNamespace(active=True, closed=False)
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {"run": lane}
+    assert publisher._root_output_communicator() is lane
+
+    publisher._root_output_lanes = {}
+    with pytest.raises(RuntimeError, match="exactly one active"):
+        publisher._root_output_communicator()
+
+    publisher._root_output_lanes = {"run": SimpleNamespace(active=False, closed=False)}
+    with pytest.raises(RuntimeError, match="not active"):
+        publisher._root_output_communicator()
+
+    publisher._root_output_consumers = ()
+    with pytest.raises(RuntimeError, match="declares no ROOT"):
+        publisher._root_output_communicator()
+
+
+def test_root_output_lane_is_materialized_and_closed_once_per_run():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Lane:
+        active = True
+        closed = False
+
+        def __init__(self):
+            self.close_calls = 0
+
+        def close_collectively(self):
+            self.close_calls += 1
+            self.active = False
+            self.closed = True
+
+    class _World:
+        def __init__(self, lane):
+            self.lane = lane
+            self.identities = []
+
+        def duplicate_observer_lane(self, identity):
+            self.identities.append(identity)
+            return self.lane
+
+    run_identity = make_identity("run", {"case": "root-output-lane"})
+    lane = _Lane()
+    world = _World(lane)
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {}
+    publisher._communicator = world
+    publisher._closed_observer_runs = set()
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(
+        _consumer_graph=SimpleNamespace(nodes=()),
+    )
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_pending_failures = {}
+
+    publisher.begin_post_commit_consumers(run_identity)
+    assert world.identities == ["scientific-output/root/%s" % run_identity.token]
+    assert publisher._root_output_communicator() is lane
+
+    assert publisher.close_live_visualizations(run_identity) == ()
+    assert lane.close_calls == 1
+    assert publisher.close_live_visualizations(run_identity) == ()
+    assert lane.close_calls == 1
+    with pytest.raises(RuntimeError, match="already closed"):
+        publisher.begin_post_commit_consumers(run_identity)
+
+
 def test_diagnostic_component_requires_one_explicit_role_for_multicomponent_state():
     from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 
@@ -1783,6 +1915,66 @@ def test_step_change_diagnostic_uses_the_native_transaction_snapshot():
         SimpleNamespace(), _Provider(), "fluid", "step_change_l2", 0, True, (0, 1)
     )
     assert (value, composite) == (0.125, True)
+
+
+def test_balance_diagnostic_accepts_only_the_exact_native_five_term_tuple():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Provider:
+        def _accepted_balance_terms(self, route):
+            assert route == "pops.balance-ledger-route.v1:sha256:" + "1" * 64
+            return {
+                "storage_change": 11.0,
+                "outward_boundary_flux": 2.0,
+                "sources": 5.0,
+                "reflux": 3.0,
+                "projection": 1.0,
+            }
+
+    terms = RuntimeConsumerPublisher._native_balance_terms(
+        _Provider(),
+        "pops.balance-ledger-route.v1:sha256:" + "1" * 64,
+        block="fluid",
+        component=0,
+        levels=(0,),
+        automatic_terms=(),
+    )
+    assert terms.residual == 4.0
+    assert terms.reflux == 3.0
+
+    class _Incomplete:
+        def _accepted_balance_terms(self, _route):
+            return {"storage_change": 1.0}
+
+    with pytest.raises(TypeError, match="exactly storage_change"):
+        RuntimeConsumerPublisher._native_balance_terms(
+            _Incomplete(),
+            "route",
+            block="fluid",
+            component=0,
+            levels=(0,),
+            automatic_terms=(),
+        )
+
+    class _Coerced:
+        def _accepted_balance_terms(self, _route):
+            return {
+                "storage_change": "1.0",
+                "outward_boundary_flux": 2.0,
+                "sources": 5.0,
+                "reflux": 3.0,
+                "projection": 1.0,
+            }
+
+    with pytest.raises(TypeError, match="exact floating-point"):
+        RuntimeConsumerPublisher._native_balance_terms(
+            _Coerced(),
+            "route",
+            block="fluid",
+            component=0,
+            levels=(0,),
+            automatic_terms=(),
+        )
 
 
 def test_diagnostic_restart_restores_payload_terms_and_native_inspection_registry():

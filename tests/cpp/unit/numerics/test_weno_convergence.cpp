@@ -62,8 +62,8 @@ struct PrimitiveTestModel {
   static constexpr int n_vars = 2;
   int* primitive_calls = nullptr;
 
-  POPS_HD State flux(const State& state, const Aux&, int) const { return state; }
-  POPS_HD Real max_wave_speed(const State&, const Aux&, int) const { return Real(1); }
+  POPS_HD State flux(const State& state, const auto&, int) const { return state; }
+  POPS_HD Real max_wave_speed(const State&, const auto&, int) const { return Real(1); }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
 

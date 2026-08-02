@@ -515,9 +515,33 @@ class ProgramExecutionServices {
   /// Project one candidate state through the exact authored block closure.
   ///
   /// Program-to-runtime block qualification is topology-independent. The provider owns only the
-  /// Uniform or level-qualified native projection call.
+  /// Uniform or level-qualified native projection call. When a generated Balance route is due, the
+  /// provider also supplies exact metric-integrated component values before and after projection;
+  /// their signed delta stays qualified by runtime block/level/component in the attempt mailbox.
   void apply_projection(int block, MultiFab& state) const {
-    provider_().program_execution_apply_projection_(sys_block(block), state);
+    ProgramRuntimeState& runtime = program_runtime_state_();
+    if (!runtime.automatic_balance_capture_due()) {
+      provider_().program_execution_apply_projection_(sys_block(block), state);
+      return;
+    }
+    const int runtime_block = sys_block(block);
+    const std::optional<std::vector<Real>> before =
+        provider_().program_execution_projection_balance_integrals_(block, state);
+    provider_().program_execution_apply_projection_(runtime_block, state);
+    if (!before)
+      return;
+    const std::optional<std::vector<Real>> after =
+        provider_().program_execution_projection_balance_integrals_(block, state);
+    if (!after || before->size() != after->size() ||
+        before->size() != static_cast<std::size_t>(state.ncomp()))
+      throw std::runtime_error(
+          "Program projection balance provider changed its conservative component width");
+    const int level = program_resource_field_level();
+    for (int component = 0; component < state.ncomp(); ++component)
+      runtime.record_automatic_balance_term(runtime_block, level, component, "projection",
+                                            (*after)[static_cast<std::size_t>(component)] -
+                                                (*before)[static_cast<std::size_t>(component)],
+                                            "ProgramExecutionServices");
   }
 
   /// Minimum physical cell size used by the native CFL authority.
@@ -894,8 +918,7 @@ class ProgramExecutionServices {
     if (!std::isfinite(static_cast<double>(target_offset)))
       throw std::invalid_argument("linear history interpolation offset must be finite");
 
-    HistoryRegistration registration =
-        history_registration_(name, max_lag, /*ncomp=*/-1, owner);
+    HistoryRegistration registration = history_registration_(name, max_lag, /*ncomp=*/-1, owner);
     if (!provider_().program_execution_history_initialized_storage_(registration))
       throw std::runtime_error(
           "linear history interpolation requires an initialized native history");
@@ -939,13 +962,11 @@ class ProgramExecutionServices {
     const double logical_fraction = coordinate + static_cast<double>(older_lag);
     const double target_time = older_time + logical_fraction * bracket_dt;
     const double timestamp_fraction = (target_time - older_time) / (newer_time - older_time);
-    if (!std::isfinite(timestamp_fraction) || timestamp_fraction < 0.0 ||
-        timestamp_fraction > 1.0)
+    if (!std::isfinite(timestamp_fraction) || timestamp_fraction < 0.0 || timestamp_fraction > 1.0)
       throw std::runtime_error(
           "linear history interpolation target does not bracket native timestamps");
 
-    registration =
-        ensure_history_registered_(name, older_lag, /*ncomp=*/-1, owner);
+    registration = ensure_history_registered_(name, older_lag, /*ncomp=*/-1, owner);
     MultiFab& older = provider_().program_execution_read_history_storage_(
         registration, older_lag, HistoryReadMode::RequireInitialized);
     MultiFab& newer = provider_().program_execution_read_history_storage_(
@@ -1307,6 +1328,11 @@ class ProgramExecutionServices {
     return profiler().schedule_decision(due, cache_backed);
   }
 
+  bool balance_consumer_is_due(const std::string& contract, const std::string& route,
+                               int every_n) const {
+    return provider_().program_execution_balance_consumer_is_due_(contract, route, every_n);
+  }
+
   /// Scheduler cache semantics shared by every capable Program storage provider.
   ///
   /// The service owns cadence, profiling and value movement.  A provider supplies only the
@@ -1399,6 +1425,14 @@ class ProgramExecutionServices {
 
   void record_scalar(const std::string& name, Real value) const {
     program_runtime_state_().record_diagnostic(name, value);
+  }
+
+  void record_balance_term(const std::string& route, const std::string& term, Real value) const {
+    provider_().program_execution_record_balance_term_(route, term, value);
+  }
+
+  void note_automatic_balance_capture_due(bool due) const {
+    program_runtime_state_().note_automatic_balance_capture_due(due, "ProgramExecutionServices");
   }
 
   void note_step_projection(const std::string& name) const {

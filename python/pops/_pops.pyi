@@ -276,6 +276,15 @@ class System:
     def __init__(self, config: SystemConfig) -> None: ...
     def solve_fields(self) -> _SolveReport: ...
     def _consume_step_projections(self) -> list[str]: ...
+    def _accepted_balance_terms(self, route: str) -> dict[str, float]: ...
+    def _selected_accepted_balance_terms(
+        self,
+        route: str,
+        block: str,
+        component: int,
+        levels: list[int],
+        automatic_terms: list[str],
+    ) -> dict[str, float]: ...
     def output_state_local_pieces(
         self, block: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
@@ -283,10 +292,10 @@ class System:
         self, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_state_root_pieces(
-        self, world: _NativeWorldCommunicator, block: str, level: int
+        self, lane: _NativeObserverMpiLane, block: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_field_root_pieces(
-        self, world: _NativeWorldCommunicator, provider_slot: str, level: int
+        self, lane: _NativeObserverMpiLane, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
 
 
@@ -295,6 +304,15 @@ class AmrSystem:
     def n_levels(self) -> int: ...
     def configured_n_levels(self) -> int: ...
     def _consume_step_projections(self) -> list[str]: ...
+    def _accepted_balance_terms(self, route: str) -> dict[str, float]: ...
+    def _selected_accepted_balance_terms(
+        self,
+        route: str,
+        block: str,
+        component: int,
+        levels: list[int],
+        automatic_terms: list[str],
+    ) -> dict[str, float]: ...
     def materialize_program_restart_histories(
         self,
         payload: bytes,
@@ -309,10 +327,10 @@ class AmrSystem:
         self, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_state_root_pieces(
-        self, world: _NativeWorldCommunicator, block: str, level: int
+        self, lane: _NativeObserverMpiLane, block: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
     def output_field_root_pieces(
-        self, world: _NativeWorldCommunicator, provider_slot: str, level: int
+        self, lane: _NativeObserverMpiLane, provider_slot: str, level: int
     ) -> tuple[dict[str, object], ...]: ...
 
 

@@ -77,10 +77,18 @@ component reduction; adaptive integrals use the native volume-weighted composite
 exact selected levels. Installation and execution must authenticate the bundle's plan, bind,
 component and layout identities without rebuilding or weakening them.
 Every native provider authenticates the exact bundle before reading backend state or constructing
-an execution engine; a missing or mismatched bundle therefore fails before execution. The complete
-bundle is retained in the array-free `RuntimeInstance.inspect()` report under `instance.runtime_plan`
-so derived halos, transfers, collectives, fences, buffers and determinism assumptions remain
-reviewable rather than becoming hidden installation state.
+an execution engine, then checks the plan's determinism guarantee against current native
+rank/device/backend facts and its authenticated reduction order before native preflight; a missing
+bundle, mismatched authority or changed execution fact therefore fails before execution. The
+complete bundle is retained in the array-free `RuntimeInstance.inspect()` report under
+`instance.runtime_plan` so derived halos, transfers, collectives, fences, buffers and determinism
+assumptions remain reviewable rather than becoming hidden installation state.
+Single-layout providers additionally require the exact ordered block/layout call projection,
+layout-qualified halos, and the absence of unconsumed Transfer or mapping-provider routes before
+constructing their sole native engine.
+The multi-layout Uniform provider likewise authenticates ordered block/layout calls and the exact
+mapping-provider set backing its materialized Transfers before constructing child engines. It
+refuses non-empty runtime halo plans until an explicit per-layout halo scheduler exists.
 
 For an accepted step, successful native finalization is an irreversible `native_finalized`
 boundary. The instance commits the engine state, accepted cursor set and consumer receipts across

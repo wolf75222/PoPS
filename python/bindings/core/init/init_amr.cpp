@@ -1,5 +1,5 @@
 #include "../bindings_detail.hpp"
-#include <pops/parallel/world_communicator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include "boundary_component_install.hpp"
 #include "output_geometry_binding.hpp"
 
@@ -182,6 +182,19 @@ pops::runtime::amr::PreparedClusteringSpec amr_clustering_spec_from_python(
   return spec;
 }
 
+pops::runtime::amr::PreparedRefluxSpec amr_reflux_spec_from_python(const py::dict& row,
+                                                                   const py::dict& execution) {
+  pops::runtime::amr::PreparedRefluxSpec spec;
+  spec.provider_identity = py::cast<std::string>(row["provider_identity"]);
+  spec.component_id = py::cast<std::string>(row["component_id"]);
+  spec.manifest_identity = py::cast<std::string>(row["component_manifest_identity"]);
+  spec.layout_identity = py::cast<std::string>(row["layout_identity"]);
+  spec.clock_identity = py::cast<std::string>(row["clock_identity"]);
+  spec.interface_version = py::cast<std::uint32_t>(row["interface_version"]);
+  spec.execution = pops::python::detail::make_component_execution_context(execution);
+  return spec;
+}
+
 // Assembly seams: per-block composition, native block, and refinement tagging.
 void bind_amr_assembly(py::class_<AmrSystem>& cls) {
   cls.def(py::init<const AmrSystemConfig&>())
@@ -270,6 +283,14 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
              const py::dict& binding, const py::dict& execution) {
             system.install_amr_clustering_component(
                 amr_clustering_spec_from_python(binding, execution), std::move(component));
+          },
+          py::arg("component"), py::arg("binding"), py::arg("execution_context"))
+      .def(
+          "_install_amr_reflux_component",
+          [](AmrSystem& system, std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& binding, const py::dict& execution) {
+            system.install_amr_reflux_component(amr_reflux_spec_from_python(binding, execution),
+                                                std::move(component));
           },
           py::arg("component"), py::arg("binding"), py::arg("execution_context"))
       .def("_discard_amr_provider_components", &AmrSystem::discard_amr_provider_components,
@@ -837,6 +858,10 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // driver records a measured scalar into each cadence tick.
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
+      .def("_accepted_balance_terms", &AmrSystem::accepted_balance_terms, py::arg("route"))
+      .def("_selected_accepted_balance_terms", &AmrSystem::selected_accepted_balance_terms,
+           py::arg("route"), py::arg("block"), py::arg("component"), py::arg("levels"),
+           py::arg("automatic_terms"))
       .def("_consume_step_projections", &AmrSystem::consume_step_projections)
       .def("record_program_diagnostic", &AmrSystem::record_program_diagnostic, py::arg("name"),
            py::arg("value"))
@@ -970,16 +995,16 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "Exact compact valid-cell pieces of one qualified field owned by this rank.")
       .def(
           "output_field_root_pieces",
-          [](AmrSystem& s, const WorldCommunicator& world, const std::string& provider_slot,
+          [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& provider_slot,
              int level) {
             std::vector<OutputPiece> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_field_root_pieces(world, provider_slot, level);
+              pieces = s.output_field_root_pieces(lane, provider_slot, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("provider_slot"), py::arg("level"),
+          py::arg("lane"), py::arg("provider_slot"), py::arg("level"),
           "Collectively gather compact field pieces in C++; complete only on MPI rank zero.")
       .def(
           "_output_geometry_snapshot",
@@ -1022,15 +1047,15 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "Exact compact valid-cell pieces of one qualified state owned by this rank.")
       .def(
           "output_state_root_pieces",
-          [](AmrSystem& s, const WorldCommunicator& world, const std::string& name, int level) {
+          [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& name, int level) {
             std::vector<OutputPiece> pieces;
             {
               py::gil_scoped_release release;
-              pieces = s.output_state_root_pieces(world, name, level);
+              pieces = s.output_state_root_pieces(lane, name, level);
             }
             return output_pieces_to_python(pieces);
           },
-          py::arg("world"), py::arg("block"), py::arg("level"),
+          py::arg("lane"), py::arg("block"), py::arg("level"),
           "Collectively gather compact state pieces in C++; complete only on MPI rank zero.")
       .def(
           "set_block_level_state",

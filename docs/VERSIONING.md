@@ -86,5 +86,9 @@ before the official build begins.
    `## [x.y.z] - YYYY-MM-DD` section.
 3. Run `python scripts/generate_release_contract.py --check` and the release preflight; a missing
    build/codesign/example/conformance evidence record blocks tagging.
+   The Darwin gate first preserves an already-valid ad-hoc signature and requires the post-codesign
+   native digest to remain byte-identical to the retained wheel member. A repair confined to the
+   installed copy therefore blocks publication: the wheel users receive must itself contain the
+   exact signed runtime exercised by conformance and the final examples.
 4. Merge, then `git tag vx.y.z` on master and `git push --tags`. The `release.yml` workflow
    turns the tag into a GitHub Release built from that CHANGELOG section.

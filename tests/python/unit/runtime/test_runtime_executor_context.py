@@ -13,9 +13,15 @@ from pops._platform_contracts import (
     ExecutionResource,
     proven_serial_manifest,
 )
+from pops.identity import make_identity
 from pops.runtime import _multi_layout_executor as multi_executor
 from pops.runtime import _platform_manifest as platform_manifest
 from pops.runtime import _runtime_executor as executor
+from pops.runtime import _runtime_planning as runtime_planning
+from pops.runtime._runtime_plan_contracts import (
+    DeterminismGuarantee,
+    RuntimePlanningError,
+)
 from pops.runtime._runtime_planning import build_runtime_plans
 from tests.python.unit.runtime.test_runtime_planning import _install, _manifest
 
@@ -89,6 +95,7 @@ def test_mismatched_native_state_is_rejected_before_system_constructor(
     assert len(memory_spaces) == 1
     facts = {
         "mpi_active": False,
+        "mpi_ranks": 1,
         "kokkos_backend": backend.capabilities["execution_backend"].require(
             "runtime.execution_backend"
         ),
@@ -137,6 +144,206 @@ def test_runtime_plan_is_required_before_native_preflight(monkeypatch):
     with pytest.raises(TypeError, match="exact RuntimePlanBundle"):
         executor.install_runtime_executor(plan)
     assert calls == []
+
+
+def test_determinism_assumptions_are_rechecked_before_native_preflight(monkeypatch):
+    plan = SimpleNamespace(execution_context=SimpleNamespace())
+    runtime_plan = SimpleNamespace(
+        determinism=DeterminismGuarantee(
+            "reproducible",
+            ("rank_count",),
+            {"rank_count": 1},
+            {},
+            make_identity("execution-context", {"test": "runtime-executor"}),
+        ),
+        communication=SimpleNamespace(collectives=()),
+    )
+    calls = []
+
+    def forbidden_preflight(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("native preflight became reachable")
+
+    monkeypatch.setattr(executor, "require_install_plan", lambda value: value)
+    monkeypatch.setattr(executor, "_require_supported_execution_context", forbidden_preflight)
+    monkeypatch.setattr(
+        runtime_planning,
+        "require_runtime_plan_bundle",
+        lambda _plan, value: value,
+    )
+    monkeypatch.setattr(
+        executor,
+        "_native_runtime_facts",
+        lambda: {
+            "mpi_ranks": 2,
+        },
+    )
+    with pytest.raises(RuntimePlanningError) as error:
+        executor.install_runtime_executor(plan, runtime_plan)
+    assert error.value.code == "determinism_assumption_mismatch"
+    assert calls == []
+
+
+def test_matching_runtime_determinism_assumptions_are_consumed():
+    guarantee = DeterminismGuarantee(
+        "reproducible",
+        ("rank_count",),
+        {"rank_count": 1},
+        {},
+        make_identity("execution-context", {"test": "matching-runtime-executor"}),
+    )
+    executor._require_runtime_determinism(
+        SimpleNamespace(execution_context=SimpleNamespace()),
+        SimpleNamespace(
+            determinism=guarantee,
+            communication=SimpleNamespace(collectives=()),
+        ),
+        {"mpi_ranks": 1},
+    )
+
+
+def _single_layout_projection():
+    layout = SimpleNamespace(handle=SimpleNamespace(qualified_id="layout::primary"))
+    plan = SimpleNamespace(
+        artifact=SimpleNamespace(
+            blocks=(SimpleNamespace(name="fluid"),),
+            layout_plan=SimpleNamespace(
+                layouts=(layout,),
+                assignments=(
+                    SimpleNamespace(
+                        subject_kind="block",
+                        subject_id="block::fluid",
+                        subject=SimpleNamespace(
+                            local_id="fluid", qualified_id="block::fluid"
+                        ),
+                        layout=layout.handle,
+                    ),
+                ),
+            ),
+        )
+    )
+    runtime_plan = SimpleNamespace(
+        calls=(SimpleNamespace(block_id="block::fluid", layout_id="layout::primary"),),
+        communication=SimpleNamespace(
+            transfers=(),
+            halos=(SimpleNamespace(layout_id="layout::primary"),),
+        ),
+        resources=SimpleNamespace(mapping_provider_ids=()),
+    )
+    return plan, runtime_plan
+
+
+def test_single_layout_provider_consumes_exact_call_and_halo_projection():
+    plan, runtime_plan = _single_layout_projection()
+
+    executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+    runtime_plan.calls[0].layout_id = "layout::other"
+    with pytest.raises(ValueError, match="calls differ"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+    runtime_plan.calls[0].layout_id = "layout::primary"
+
+    runtime_plan.communication.halos[0].layout_id = "layout::other"
+    with pytest.raises(ValueError, match="halo differs"):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+@pytest.mark.parametrize("transfers,providers,match", [
+    ((object(),), (), "layout Transfers"),
+    ((), ("pops://mapping/test",), "mapping providers"),
+])
+def test_single_layout_provider_refuses_unconsumed_mapping_routes(
+    transfers, providers, match
+):
+    plan, runtime_plan = _single_layout_projection()
+    runtime_plan.communication.transfers = transfers
+    runtime_plan.resources.mapping_provider_ids = providers
+
+    with pytest.raises(ValueError, match=match):
+        executor._require_single_layout_runtime_plan(plan, runtime_plan)
+
+
+@pytest.mark.parametrize(
+    "provider",
+    (executor._UniformNativeProvider(), executor._AdaptiveNativeProvider()),
+)
+def test_single_layout_providers_refuse_call_mismatch_before_geometry(
+    monkeypatch, provider
+):
+    plan, runtime_plan = _single_layout_projection()
+    runtime_plan.calls[0].block_id = "block::other"
+    reached = []
+    monkeypatch.setattr(executor, "require_install_plan", lambda value: value)
+    monkeypatch.setattr(executor, "_require_native_geometry", reached.append)
+
+    with pytest.raises(ValueError, match="calls differ"):
+        provider.install(plan, runtime_plan)
+    assert reached == []
+
+
+def _multi_layout_projection():
+    primary = SimpleNamespace(qualified_id="layout::primary")
+    secondary = SimpleNamespace(qualified_id="layout::secondary")
+    blocks = (
+        SimpleNamespace(name="fluid"),
+        SimpleNamespace(name="solid"),
+    )
+    assignments = tuple(
+        SimpleNamespace(
+            subject_kind="block",
+            subject_id=block_id,
+            subject=SimpleNamespace(local_id=name),
+            layout=layout,
+        )
+        for name, block_id, layout in (
+            ("fluid", "block::fluid", primary),
+            ("solid", "block::solid", secondary),
+        )
+    )
+    plan = SimpleNamespace(
+        artifact=SimpleNamespace(
+            blocks=blocks,
+            layout_plan=SimpleNamespace(assignments=assignments),
+        )
+    )
+    transfer = SimpleNamespace(provider_id="pops://mapping/primary-secondary")
+    runtime_plan = SimpleNamespace(
+        calls=tuple(
+            SimpleNamespace(block_id=block_id, layout_id=layout.qualified_id)
+            for block_id, layout in (
+                ("block::fluid", primary),
+                ("block::solid", secondary),
+            )
+        ),
+        communication=SimpleNamespace(halos=()),
+        resources=SimpleNamespace(
+            mapping_provider_ids=("pops://mapping/primary-secondary",)
+        ),
+    )
+    return plan, runtime_plan, (transfer,)
+
+
+def test_multi_layout_provider_consumes_exact_call_and_mapping_projection():
+    plan, runtime_plan, transfers = _multi_layout_projection()
+
+    multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+
+    runtime_plan.calls[1].layout_id = "layout::primary"
+    with pytest.raises(ValueError, match="calls differ"):
+        multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+    runtime_plan.calls[1].layout_id = "layout::secondary"
+
+    runtime_plan.resources.mapping_provider_ids = ("pops://mapping/other",)
+    with pytest.raises(ValueError, match="mapping providers differ"):
+        multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
+
+
+def test_multi_layout_provider_refuses_unconsumed_halo_plan():
+    plan, runtime_plan, transfers = _multi_layout_projection()
+    runtime_plan.communication.halos = (object(),)
+
+    with pytest.raises(NotImplementedError, match="explicit per-layout halo scheduler"):
+        multi_executor._require_runtime_plan_projection(plan, runtime_plan, transfers)
 
 
 

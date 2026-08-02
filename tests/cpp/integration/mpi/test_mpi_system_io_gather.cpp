@@ -53,6 +53,7 @@
 #include <pops/runtime/system.hpp>
 
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/world_communicator.hpp>
 
 #include <cmath>
@@ -144,12 +145,12 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
 
   // === T1 : gather == reference connue (np-invariant), sur le champ fraichement pose ===========
   // Tous les rangs appellent les accesseurs collectifs ; le resultat egale BIT-A-BIT la reference.
+  auto output_lane = ObserverMpiLane::duplicate_world_collectively("test/system-io/root-output");
   {
     const std::vector<double> dG = sys.density_global("gas");
     const std::vector<double> sG = sys.state_global("gas");
     const std::vector<OutputPiece> local = sys.output_state_local_pieces("gas", 0);
-    const std::vector<OutputPiece> root =
-        sys.output_state_root_pieces(WorldCommunicator::world(), "gas", 0);
+    const std::vector<OutputPiece> root = sys.output_state_root_pieces(output_lane, "gas", 0);
     chk(dG.size() == nn, "T1_density_global_size");
     chk(sG.size() == 4 * nn, "T1_state_global_size");
     chk(dG == rho_ref, "T1_density_global_eq_ref_no_double_count");
@@ -172,6 +173,7 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
       chk(piece.ncomp == 4 && piece.values == sG, "T1_output_state_root_values");
     }
   }
+  output_lane.close_collectively();
 
   // === T2 : apres des pas COLLECTIFS, gather == accesseur local sur le proprietaire ============
   const double dt = 0.01;

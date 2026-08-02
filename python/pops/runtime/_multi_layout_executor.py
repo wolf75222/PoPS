@@ -153,6 +153,33 @@ def _require_conservative_cell_average_geometry(source: Any, target: Any) -> Non
         )
 
 
+def _require_runtime_plan_projection(
+    plan: Any, runtime_plan: Any, transfers: tuple[Any, ...]
+) -> None:
+    """Require every multi-layout route the provider claims before engine construction."""
+    layout_plan = plan.artifact.layout_plan
+    assignments = {
+        row.subject.local_id: (row.subject_id, row.layout.qualified_id)
+        for row in layout_plan.assignments
+        if row.subject_kind == "block"
+    }
+    expected_calls = tuple(assignments[block.name] for block in plan.artifact.blocks)
+    actual_calls = tuple((row.block_id, row.layout_id) for row in runtime_plan.calls)
+    if actual_calls != expected_calls:
+        raise ValueError(
+            "RuntimePlanBundle calls differ from the multi-layout InstallPlan projection"
+        )
+    if runtime_plan.communication.halos:
+        raise NotImplementedError(
+            "multi-layout RuntimePlan halos require an explicit per-layout halo scheduler"
+        )
+    expected_providers = tuple(sorted({row.provider_id for row in transfers}))
+    if runtime_plan.resources.mapping_provider_ids != expected_providers:
+        raise ValueError(
+            "RuntimePlanBundle mapping providers differ from the consumed Transfers"
+        )
+
+
 def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
     """Authenticate the exact bundle and its Transfer projection against one InstallPlan."""
     from pops.runtime._runtime_plan_contracts import LayoutTransfer
@@ -184,6 +211,7 @@ def _require_runtime_plan_bundle(plan: Any, runtime_plan: Any) -> None:
         raise ValueError(
             "RuntimePlanBundle Transfers differ from the authenticated compiled LayoutPlan"
         )
+    _require_runtime_plan_projection(plan, runtime_plan, transfers)
     _require_unique_transfer_targets(transfers)
 
 

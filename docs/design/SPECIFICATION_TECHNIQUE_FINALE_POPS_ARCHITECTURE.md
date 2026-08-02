@@ -606,22 +606,24 @@ Les builtins de `pops.lib.amr` et les composants externes implémentent le même
 provider. Un composant externe est sélectionné sans callback Python :
 
 ```python
-from pops.amr import ClusteringProvider, TaggerProvider
+from pops.amr import ClusteringProvider, RefluxProvider, TaggerProvider
 
 layout = AMR(
     ...,
     tagger=TaggerProvider(component=my_tagger),
     clustering=ClusteringProvider(component=my_clustering),
+    reflux=RefluxProvider(component=my_reflux),
 )
 resolved = pops.resolve(
     pops.validate(case),
     layout=layout,
-    components=(my_tagger, my_clustering),
+    components=(my_tagger, my_clustering, my_reflux),
 )
 ```
 
-Les deux valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
-respectivement l'interface générée `Tagger` ou `Clustering`. Le même objet exact doit être fourni à
+Les trois valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
+respectivement l'interface générée `Tagger`, `Clustering` ou `Reflux`. Le même objet exact doit
+être fourni à
 `resolve(components=...)`; son identité de manifest, son interface et sa version traversent
 `resolve -> compile -> bind`. Le manifest doit déclarer une classification déterministe `bitwise` ou
 `reproducible`, car chaque rang doit produire la même hiérarchie. Un `Tagger` déclare en plus une
@@ -705,9 +707,13 @@ doivent couvrir exactement la hiérarchie.
 
 Le provider natif livré matérialise le coeur maillage/stockage en 2D et ses kernels de transfert,
 correction conservative et sous-cyclage AMR exigent un ratio de transition égal à 2. La correction
-coarse/fine reste l'unique ledger de flux détenu par PoPS : aucune interface externe `Reflux`
-n'existe, car déléguer ce dépôt créerait une seconde autorité conservative. Une autre dimension ou un autre
-ratio est refusé pendant la résolution ou le bind avec les capacités observées. Le coeur de
+coarse/fine reste l'unique ledger de flux détenu par PoPS. L'interface native `Reflux` ne peut
+déléguer qu'un kernel local et non collectif : PoPS lui fournit les flux coarse/fine déjà intégrés
+dans le temps et ramenés sur la même face coarse ; le kernel écrit la correction locale
+`side * (fine - coarse) / dx`. PoPS conserve exclusivement la topologie d'interface, le ledger, la
+réduction MPI, la transaction et l'application à l'état. Un provider `Reflux` ne devient donc jamais
+une seconde autorité conservative. Une autre dimension ou un autre ratio est refusé pendant la
+résolution ou le bind avec les capacités observées. Le coeur de
 planification ne normalise jamais la demande vers ce sous-ensemble. Défensivement,
 `AmrProgramContext` revalide aussi chaque transition à sa construction et refuse un ratio différent
 de 2 avant le premier pas : cette limite appartient au provider natif reflux/average-down installé,
@@ -1405,13 +1411,29 @@ paramètres, interfaces, requirements, capabilities, effets, layouts, clocks, d�
 restart et points d'entrée.
 
 Le même catalogue génère les IDs et tables C/POD versionnées des interfaces natives (flux numérique,
-ghost boundary, closure de champ, tagging, clustering, transfert, solveur de champ, writer et
-topologie de champ). Le reflux conservatif reste une autorité interne pilotée par le flux ledger ;
-aucune table externe `Reflux` n'est annoncée. Chaque famille possède sa propre version d'interface, indépendante de la version
+ghost boundary, closure de champ, tagging, clustering, transfert, kernel local de reflux, solveur de
+champ, writer et topologie de champ). Le reflux conservatif complet reste une autorité interne
+pilotée par le flux ledger ; la table externe `Reflux` ne couvre que la transformation locale,
+non collective, de flux intégrés en correction non appliquée. Chaque famille possède sa propre version d'interface, indépendante de la version
 du protocole enveloppe. Le loader authentifie identité sémantique, manifest, digest du catalogue,
 taille/header de table et opérations requises avant de conserver le handle de bibliothèque. Les tables
 sont résolues une fois à l'installation ; aucun `dlsym`, nom de classe ou dispatch Python n'entre dans
 une boucle de cellules.
+
+Le contrat `Reflux` v1 possède maintenant un adaptateur préparé interne vers
+`PreparedAmrProgramRefluxTransition`. Pour chaque patch enfant local, l'adaptateur reçoit quatre
+paires de flux déjà intégrés et écrit quatre corrections dans des buffers persistants empoisonnés
+avant l'appel. PoPS vérifie que chaque valeur a été écrite et reste finie, atteint un consensus
+d'échec entre rangs, puis applique seul périodicité, masque de couverture, réduction MPI et
+publication transactionnelle. La présence et le contrat exact du provider sont également comparés
+entre rangs avant toute exécution.
+
+La sélection `AMR(..., reflux=RefluxProvider(component))` traverse désormais la même résolution
+normalisée, identité de provider, artifact et transaction d'installation que `Tagger` et
+`Clustering`. Sans sélection explicite, `FluxRegisterReflux` décrit le kernel builtin par le même
+protocole et apparaît dans le même rapport de providers. La qualification initiale de l'adaptateur
+reste limitée à la cible 2D, `float64`, CPU avec stockage hôte. Le chemin n'est pas encore prouvé par
+exécution MPI avec un composant externe, mesure de conservation ni backend GPU.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.
@@ -1491,10 +1513,13 @@ scientifiques choisissent obligatoirement un `ParallelMode` typé :
 d'un unique writer rang 0, `COLLECTIVE` pour les hyperslabs HDF5 MPIO exacts, ou `PER_RANK` pour des
 artefacts locaux qualifiés par rang et un reçu agrégé. Le mode, le format, la sélection, la cible et
 l'identité de chaque pièce native (`global_box_index`, `owner_rank`, `replicated`) sont authentifiés
-entre rangs avant toute écriture. La route `COLLECTIVE` appelle le backend C++ HDF5 parallèle sur
-`MPI_COMM_WORLD`; `h5py` reste uniquement un lecteur/écrivain série optionnel et n'est jamais un
-transport MPI. Une dépendance HDF5 parallèle native absente, un mode incompatible ou un backend
-Kokkos GPU/device handle non supporté est refusé avant le
+entre rangs avant toute écriture. La capture native `ROOT` reçoit uniquement une lane consommateur
+dupliquée pour le run et la libère collectivement à sa fermeture ; les façades
+`System`/`AmrSystem` n'acceptent plus le singleton monde pour cette route. La route `COLLECTIVE`
+appelle le backend C++ HDF5 parallèle avec la lane MPI dupliquée possédée par la session observateur ;
+le writer ne redécouvre ni n'emprunte `MPI_COMM_WORLD`. `h5py` reste uniquement un
+lecteur/écrivain série optionnel et n'est jamais un transport MPI. Une dépendance HDF5 parallèle
+native absente, un mode incompatible ou un backend Kokkos GPU/device handle non supporté est refusé avant le
 constructeur de `System`/`AmrSystem`; aucune route série implicite ne remplace une demande MPI.
 
 Les maillages non structurés, mobiles/déformables ou changeant de topologie, de nouvelles familles de
@@ -1535,6 +1560,24 @@ dans `examples/final/`. Chaque script doit :
 - ne pas importer une classe interne pour remplacer un trou d'API.
 
 ## 14. Gate de conformance finale
+
+Le job de release exécute d'abord
+`scripts/run_final_gate.py --wheel <wheel> --evidence <chemin-hors-checkout>`. Ce gate installe
+l'artefact exact avant que
+`scripts/prove_public_api_parity.py --wheel <wheel> --installed --evidence <autre-chemin-hors-checkout>`
+ne résolve la distribution installée avec `importlib.metadata`, sans importer `pops` dans le
+processus du gate. Le chemin résolu doit être extérieur au checkout. La preuve compare octet par
+octet tous les fichiers Python et de typage (`*.py`, `*.pyi`, `py.typed`) du checkout, du wheel
+retenu et du package installé, puis importe séparément les trois arbres dans des interpréteurs
+isolés. Les trois snapshots doivent exposer la même racine publique, les mêmes signatures et
+annotations, un `Case` explicite, des handles qualifiés distincts et
+authoring/validation/inspection sans chargement de `_pops`. Un ancien nom public, un fichier de
+typage absent, un chemin provenant du checkout ou une divergence source/wheel/installé bloque la
+publication. La preuve authentifie aussi le `Name`, la `Version` et le digest du `METADATA` de la
+distribution installée contre ceux du wheel. Enfin `release_preflight.py` reçoit cette evidence via
+`--public-api-evidence` et vérifie son producteur, le SHA-256 du wheel et le chemin du package contre
+le même runtime installé que l'evidence finale ; une evidence de parité issue d'un autre wheel ou
+d'une autre installation ne peut donc pas être réutilisée.
 
 Une release ne peut être déclarée conforme que par
 `scripts/run_final_gate.py --evidence <chemin-hors-checkout>`. La commande exige un checkout propre,

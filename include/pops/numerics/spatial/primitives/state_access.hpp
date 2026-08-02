@@ -53,9 +53,13 @@ struct SourceFreeModel {
   static constexpr int n_vars = M::n_vars;
   static constexpr int n_aux = aux_comps<M>();  // transparent to the wrapped model's aux width
   M m;
-  POPS_HD State flux(const State& u, const Aux& a, int dir) const { return m.flux(u, a, dir); }
-  POPS_HD Real max_wave_speed(const State& u, const Aux& a, int dir) const {
-    return m.max_wave_speed(u, a, dir);
+  template <class Providers>
+  POPS_HD State flux(const State& u, const Providers& providers, int dir) const {
+    return m.flux(u, providers, dir);
+  }
+  template <class Providers>
+  POPS_HD Real max_wave_speed(const State& u, const Providers& providers, int dir) const {
+    return m.max_wave_speed(u, providers, dir);
   }
   POPS_HD State source(const State&, const Aux&) const { return State{}; }
   POPS_HD Real elliptic_rhs(const State& u) const { return m.elliptic_rhs(u); }
@@ -69,12 +73,14 @@ struct SourceFreeModel {
   {
     return m.pressure(u);
   }
-  POPS_HD void wave_speeds(const State& u, const Aux& a, int dir, Real& smin, Real& smax) const
-    requires requires(const M& mm, const State& s, const Aux& aa, int d, Real& lo, Real& hi) {
-      mm.wave_speeds(s, aa, d, lo, hi);
+  template <class Providers>
+  POPS_HD void wave_speeds(const State& u, const Providers& providers, int dir, Real& smin,
+                           Real& smax) const
+    requires requires(const M& mm, const State& s, const Providers& p, int d, Real& lo, Real& hi) {
+      mm.wave_speeds(s, p, d, lo, hi);
     }
   {
-    m.wave_speeds(u, a, dir, smin, smax);
+    m.wave_speeds(u, providers, dir, smin, smax);
   }
   // Roe / HLLC CAPABILITIES (HasRoeDissipation / HasHLLCStructure): forwarded ONLY if M exposes
   // them (requires clause), exactly like pressure / wave_speeds above and like composite.hpp.
@@ -93,12 +99,14 @@ struct SourceFreeModel {
   {
     return m.hllc_star_state(u, p, s, sStar, dir);
   }
-  POPS_HD State roe_dissipation(const State& ul, const Aux& al, const State& ur, const Aux& ar,
+  template <class LeftProviders, class RightProviders>
+  POPS_HD State roe_dissipation(const State& ul, const LeftProviders& left_providers,
+                                const State& ur, const RightProviders& right_providers,
                                 int dir) const
-    requires requires(const M& mm, const State a_, const Aux x_, const State b_, const Aux y_,
-                      int d) { mm.roe_dissipation(a_, x_, b_, y_, d); }
+    requires requires(const M& mm, const State a_, const LeftProviders& x_, const State b_,
+                      const RightProviders& y_, int d) { mm.roe_dissipation(a_, x_, b_, y_, d); }
   {
-    return m.roe_dissipation(ul, al, ur, ar, dir);
+    return m.roe_dissipation(ul, left_providers, ur, right_providers, dir);
   }
   // Forward the VariableSet introspection (HOST): lets positivity_comp resolve the Density role
   // through the explicit IMEX half-step. Conditional (requires), like pressure / wave_speeds.

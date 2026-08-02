@@ -3,10 +3,12 @@
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen, parallel_copy
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -796,6 +798,90 @@ inline void clear_reflux_storage_on_device(RefluxStorage<Real>& values) {
 
 }  // namespace detail
 
+/// Persistent, patch-local output storage for one external Reflux invocation. It is allocated with
+/// the topology plan, poisoned before every callback and consumed by PoPS only after all entries are
+/// finite. Non-owning ABI views never outlive this workspace.
+struct PreparedAmrRefluxFaceWorkspace {
+  int I0 = 0, I1 = -1, J0 = 0, J1 = -1;
+  int components = 0;
+  RefluxStorage<Real> x_low;
+  RefluxStorage<Real> x_high;
+  RefluxStorage<Real> y_low;
+  RefluxStorage<Real> y_high;
+  std::string patch_identity;
+  std::array<std::string, 4> interface_identities;
+
+  static PreparedAmrRefluxFaceWorkspace prepare(const Box2D& footprint, int ncomp,
+                                                std::string transition_identity,
+                                                std::size_t global_child) {
+    if (footprint.empty() || ncomp <= 0 || transition_identity.empty())
+      throw std::invalid_argument("prepared external Reflux workspace is incomplete");
+    const auto checked_size = [ncomp](std::int64_t extent) {
+      const std::size_t components = static_cast<std::size_t>(ncomp);
+      if (extent <= 0 ||
+          static_cast<std::uint64_t>(extent) > std::numeric_limits<std::size_t>::max() / components)
+        throw std::overflow_error("prepared external Reflux face size overflow");
+      return static_cast<std::size_t>(extent) * components;
+    };
+    PreparedAmrRefluxFaceWorkspace result;
+    result.I0 = footprint.lo[0];
+    result.I1 = footprint.hi[0];
+    result.J0 = footprint.lo[1];
+    result.J1 = footprint.hi[1];
+    result.components = ncomp;
+    result.x_low.resize(checked_size(footprint.ny()));
+    result.x_high.resize(result.x_low.size());
+    result.y_low.resize(checked_size(footprint.nx()));
+    result.y_high.resize(result.y_low.size());
+    result.patch_identity = transition_identity + "/patch=" + std::to_string(global_child);
+    result.interface_identities = {
+        result.patch_identity + "/x-low", result.patch_identity + "/x-high",
+        result.patch_identity + "/y-low", result.patch_identity + "/y-high"};
+    return result;
+  }
+
+  void poison() {
+    const Real sentinel = std::numeric_limits<Real>::quiet_NaN();
+    for (auto* values : {&x_low, &x_high, &y_low, &y_high})
+      std::fill(values->begin(), values->end(), sentinel);
+  }
+
+  [[nodiscard]] bool all_finite() const {
+    for (const auto* values : {&x_low, &x_high, &y_low, &y_high})
+      if (std::any_of(values->begin(), values->end(),
+                      [](Real value) { return !std::isfinite(static_cast<double>(value)); }))
+        return false;
+    return true;
+  }
+
+  [[nodiscard]] RefluxFaceCorrectionView view() {
+    return {I0, I1, J0, J1, x_low.data(), x_high.data(), y_low.data(), y_high.data(), components};
+  }
+
+  [[nodiscard]] RefluxFaceCorrectionConstView view() const {
+    return {I0, I1, J0, J1, x_low.data(), x_high.data(), y_low.data(), y_high.data(), components};
+  }
+};
+
+/// Complete local/noncollective invocation data. Flux strips are already integrated in time and
+/// averaged onto coarse faces; the callback may only fill `correction`.
+struct PreparedAmrRefluxLocalRequest {
+  const std::string* transition_identity = nullptr;
+  const std::string* patch_identity = nullptr;
+  std::array<const std::string*, 4> interface_identities{};
+  int parent_level = -1;
+  int child_level = -1;
+  std::size_t global_child = 0;
+  RefluxStripConstView coarse;
+  RefluxStripConstView fine;
+  RefluxFaceCorrectionView correction;
+  amr::ClockStamp logical_time;
+  Real dx = Real(0);
+  Real dy = Real(0);
+};
+
+using PreparedAmrRefluxLocalKernel = std::function<void(const PreparedAmrRefluxLocalRequest&)>;
+
 /// Prepared spatial reflux storage for one exact Program-owned parent/child transition.  It owns
 /// only the interface topology and collective correction register; ProgramGraph supplies the
 /// already time-integrated coarse/fine flux strips.
@@ -812,19 +898,43 @@ class PreparedAmrProgramRefluxTransition {
                                                     const Box2D& parent_domain,
                                                     Periodicity periodicity,
                                                     const CommunicatorView& communicator) {
+    return prepare_with_local_kernel(parent, child, parent_domain, periodicity, 0,
+                                     "pops://runtime/amr/program-reflux/parent=0/child=1", {},
+                                     communicator);
+  }
+
+  static PreparedAmrProgramRefluxTransition prepare_with_local_kernel(
+      const AmrLevelMP& parent, const AmrLevelMP& child, const Box2D& parent_domain,
+      Periodicity periodicity, int parent_level, std::string transition_identity,
+      PreparedAmrRefluxLocalKernel local_kernel, const CommunicatorView& communicator) {
     if (parent.U.ncomp() != child.U.ncomp())
       throw std::invalid_argument("prepared AMR Program reflux transition component mismatch");
+    if (parent_level < 0 || transition_identity.empty())
+      throw std::invalid_argument("prepared AMR Program reflux transition identity is incomplete");
     validate_ratio_aligned_disjoint_fine_layout(child.U.box_array(), &parent_domain);
     CoarseFineInterface interface(parent_domain, child.U.box_array(), periodicity);
     std::vector<Box2D> correction_regions = interface.reflux_register_regions(child.U.box_array());
-    return PreparedAmrProgramRefluxTransition(parent, child, communicator, std::move(interface),
-                                              std::move(correction_regions));
+    std::vector<PreparedAmrRefluxFaceWorkspace> local_workspaces(
+        static_cast<std::size_t>(child.U.box_array().size()));
+    if (local_kernel)
+      for (int global_child = 0; global_child < child.U.box_array().size(); ++global_child)
+        if (child.U.dmap()[global_child] == communicator.rank())
+          local_workspaces[static_cast<std::size_t>(global_child)] =
+              PreparedAmrRefluxFaceWorkspace::prepare(
+                  PatchRange(child.U.box_array()[global_child]).box(), parent.U.ncomp(),
+                  transition_identity, static_cast<std::size_t>(global_child));
+    return PreparedAmrProgramRefluxTransition(parent, child, communicator, parent_level,
+                                              std::move(transition_identity),
+                                              std::move(local_kernel), std::move(local_workspaces),
+                                              std::move(interface), std::move(correction_regions));
   }
 
   template <class CoarseStripRange, class FineStripRange>
   void synchronize_integrated(MultiFab& parent_state, Real dx, Real dy,
                               const CoarseStripRange& coarse_role, const FineStripRange& fine_role,
-                              const CommunicatorView& communicator) {
+                              const CommunicatorView& communicator,
+                              const amr::ClockStamp* logical_time = nullptr,
+                              std::vector<Real>* integrated_state_correction = nullptr) {
     validate_communicator_(communicator);
     using CoarseStrip = typename CoarseStripRange::value_type;
     using FineStrip = typename FineStripRange::value_type;
@@ -836,6 +946,11 @@ class PreparedAmrProgramRefluxTransition {
     // enter the correction Allreduce while its peer unwinds.
     std::exception_ptr local_failure;
     try {
+      if (local_kernel_ &&
+          (logical_time == nullptr || logical_time->level != parent_level_ ||
+           logical_time->macro_step < 0 || !std::isfinite(logical_time->physical_time)))
+        throw std::invalid_argument(
+            "prepared external Reflux requires the exact parent logical time");
       validate_parent_state_(parent_state);
       if (coarse_role.size() != child_global_size_ || fine_role.size() != child_global_size_)
         throw std::runtime_error(
@@ -863,15 +978,69 @@ class PreparedAmrProgramRefluxTransition {
     } catch (...) {
       local_failure = std::current_exception();
     }
-    const std::uint64_t rejected =
-        all_reduce_max(local_failure ? std::uint64_t(1) : std::uint64_t(0), communicator);
-    if (rejected != 0) {
+    // Presence, rank-local preflight failure and the later execution branch are decided by one
+    // collective bitmask. A rank can therefore never enter the builtin gather while a peer invokes
+    // an external callback.
+    constexpr char kExternalSelected = char{1};
+    constexpr char kBuiltinSelected = char{2};
+    constexpr char kPreflightFailed = char{4};
+    char preflight_consensus = local_kernel_ ? kExternalSelected : kBuiltinSelected;
+    if (local_failure)
+      preflight_consensus |= kPreflightFailed;
+    all_reduce_or_inplace(&preflight_consensus, std::size_t{1}, communicator);
+    const bool provider_mismatch = (preflight_consensus & kExternalSelected) != 0 &&
+                                   (preflight_consensus & kBuiltinSelected) != 0;
+    if ((preflight_consensus & kPreflightFailed) != 0 || provider_mismatch) {
       if (local_failure)
         std::rethrow_exception(local_failure);
-      throw std::runtime_error("AMR Program reflux preflight failed on another communicator rank");
+      throw std::runtime_error(provider_mismatch
+                                   ? "prepared Reflux provider differs between communicator ranks"
+                                   : "AMR Program reflux preflight failed on another "
+                                     "communicator rank");
     }
+    const bool use_external = (preflight_consensus & kExternalSelected) != 0;
 
-    try {
+    if (use_external) {
+      std::exception_ptr local_failure;
+      try {
+        correction_.clear_on_device();
+        device_fence();
+        for (std::size_t global_child = 0; global_child < child_global_size_; ++global_child) {
+          const CoarseStrip& coarse = coarse_role[global_child];
+          const FineStrip& fine = fine_role[global_child];
+          if (!coarse_role_present_(coarse))
+            continue;
+          PreparedAmrRefluxFaceWorkspace& workspace = local_workspaces_[global_child];
+          workspace.poison();
+          std::array<const std::string*, 4> interface_identities;
+          for (std::size_t face = 0; face < interface_identities.size(); ++face)
+            interface_identities[face] = &workspace.interface_identities[face];
+          local_kernel_(PreparedAmrRefluxLocalRequest{
+              &transition_identity_, &workspace.patch_identity, interface_identities, parent_level_,
+              parent_level_ + 1, global_child, reflux_strip_const_view(coarse, ncomp_),
+              reflux_strip_const_view(fine, ncomp_), workspace.view(), *logical_time, dx, dy});
+          if (!workspace.all_finite())
+            throw std::runtime_error(
+                "native Reflux component left a non-finite or unwritten correction");
+          const PreparedAmrRefluxFaceWorkspace& completed = workspace;
+          interface_.route_prepared_reflux_correction_(completed.view(), correction_, ncomp_);
+        }
+        device_fence();
+      } catch (...) {
+        local_failure = std::current_exception();
+        try {
+          device_fence();
+        } catch (...) {
+        }
+      }
+      const std::uint64_t rejected =
+          all_reduce_max(local_failure ? std::uint64_t(1) : std::uint64_t(0), communicator);
+      if (rejected != 0) {
+        if (local_failure)
+          std::rethrow_exception(local_failure);
+        throw std::runtime_error("native Reflux component failed on another communicator rank");
+      }
+    } else {
       correction_.clear_on_device();
       for (std::size_t global_child = 0; global_child < child_global_size_; ++global_child) {
         const CoarseStrip& coarse = coarse_role[global_child];
@@ -881,7 +1050,11 @@ class PreparedAmrProgramRefluxTransition {
         interface_.route_reflux_integrated_pair_prevalidated_(coarse, fine, dx, dy, correction_,
                                                               ncomp_);
       }
+    }
+    try {
       correction_.gather(communicator);
+      if (integrated_state_correction != nullptr)
+        *integrated_state_correction = correction_.component_sums(dx * dy);
       for (int local_parent = 0; local_parent < parent_state.local_size(); ++local_parent)
         for_each_cell(parent_state.box(local_parent),
                       detail::ApplyRefluxRegisterKernel{parent_state.fab(local_parent).array(),
@@ -900,7 +1073,10 @@ class PreparedAmrProgramRefluxTransition {
 
  private:
   PreparedAmrProgramRefluxTransition(const AmrLevelMP& parent, const AmrLevelMP& child,
-                                     const CommunicatorView& communicator,
+                                     const CommunicatorView& communicator, int parent_level,
+                                     std::string transition_identity,
+                                     PreparedAmrRefluxLocalKernel local_kernel,
+                                     std::vector<PreparedAmrRefluxFaceWorkspace> local_workspaces,
                                      CoarseFineInterface interface,
                                      std::vector<Box2D> correction_regions)
       : parent_boxes_(parent.U.box_array().boxes()),
@@ -913,6 +1089,10 @@ class PreparedAmrProgramRefluxTransition {
         communicator_size_(communicator.size()),
         communicator_rank_(communicator.rank()),
         communicator_identity_(detail::parallel_copy_communicator_identity(communicator)),
+        parent_level_(parent_level),
+        transition_identity_(std::move(transition_identity)),
+        local_kernel_(std::move(local_kernel)),
+        local_workspaces_(std::move(local_workspaces)),
         interface_(std::move(interface)),
         correction_(std::move(correction_regions), ncomp_) {
     if (child_footprints_.size() != child_global_size_ || child_ranks_.size() != child_global_size_)
@@ -922,6 +1102,10 @@ class PreparedAmrProgramRefluxTransition {
       if (owner < 0 || owner >= communicator_size_)
         throw std::invalid_argument(
             "prepared AMR Program reflux child owner lies outside the communicator");
+    if (parent_level_ < 0 || transition_identity_.empty() ||
+        local_workspaces_.size() != child_global_size_)
+      throw std::invalid_argument(
+          "prepared AMR Program reflux local-provider metadata is inconsistent");
   }
 
   static std::vector<Box2D> make_child_footprints_(const BoxArray& child_boxes) {
@@ -972,6 +1156,10 @@ class PreparedAmrProgramRefluxTransition {
   int communicator_size_ = 1;
   int communicator_rank_ = 0;
   std::int64_t communicator_identity_ = 0;
+  int parent_level_ = 0;
+  std::string transition_identity_;
+  PreparedAmrRefluxLocalKernel local_kernel_;
+  std::vector<PreparedAmrRefluxFaceWorkspace> local_workspaces_;
   CoarseFineInterface interface_;
   FluxRegister correction_;
 };
@@ -988,16 +1176,23 @@ class PreparedAmrProgramRefluxPlan {
   static PreparedAmrProgramRefluxPlan prepare(
       const std::vector<AmrLevelMP>& levels, const Box2D& base_domain, Periodicity periodicity,
       std::uint64_t topology_generation,
-      const CommunicatorView& communicator = world_communicator_view()) {
+      const CommunicatorView& communicator = world_communicator_view(),
+      PreparedAmrRefluxLocalKernel local_kernel = {}, std::string block_identity = {}) {
     if (levels.empty() || base_domain.empty())
       throw std::invalid_argument("prepared AMR Program reflux requires a non-empty hierarchy");
+    if (local_kernel && block_identity.empty())
+      throw std::invalid_argument("prepared external Reflux requires one qualified block identity");
     std::vector<PreparedAmrProgramRefluxTransition> transitions;
     transitions.reserve(levels.size() - 1);
-    for (std::size_t parent = 0; parent + 1 < levels.size(); ++parent)
-      transitions.push_back(PreparedAmrProgramRefluxTransition::prepare(
+    for (std::size_t parent = 0; parent + 1 < levels.size(); ++parent) {
+      const std::string transition_identity =
+          (block_identity.empty() ? "pops://runtime/amr/program-reflux" : block_identity) +
+          "/parent=" + std::to_string(parent) + "/child=" + std::to_string(parent + 1);
+      transitions.push_back(PreparedAmrProgramRefluxTransition::prepare_with_local_kernel(
           levels[parent], levels[parent + 1],
           amr_level_index_domain(base_domain, static_cast<int>(parent)), periodicity,
-          communicator));
+          static_cast<int>(parent), transition_identity, local_kernel, communicator));
+    }
     return PreparedAmrProgramRefluxPlan(static_cast<int>(levels.size()), topology_generation,
                                         std::move(transitions));
   }

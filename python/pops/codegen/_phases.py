@@ -333,15 +333,20 @@ def compile(plan: Any) -> Any:
     from pops.codegen._compile_drivers import compile_problem
     from pops.codegen._compiled_artifact import CompiledLayoutProgram
     from pops.codegen.program_models import ProgramModelGraph
+    from pops.codegen.program_balance_due import validate_balance_due_contract
+    from pops._balance_due_contract import BalanceDueContract
 
     program = None
     options = dict(plan.compile_options)
     options["libraries"] = plan.libraries
+    balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
+    validate_balance_due_contract(plan.time, balance_due_contract)
     if len(plan.layout_plan.layouts) == 1:
         model_graph = build_program_model_graph(plan)
         program = compile_problem(
             time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
-            problem_snapshot=plan.snapshot, field_plans=plan.field_plans, **options)
+            problem_snapshot=plan.snapshot, field_plans=plan.field_plans,
+            balance_due_contract=balance_due_contract, **options)
         program._discard_authoring()
         row = plan.layout_plan.layouts[0]
         layout_programs = (CompiledLayoutProgram(
@@ -376,6 +381,7 @@ def compile(plan: Any) -> Any:
                 target=plan.layout_targets[layout_id],
                 problem_snapshot=plan.snapshot,
                 field_plans={},
+                balance_due_contract=balance_due_contract,
                 **slice_options,
             )
             compiled_program._discard_authoring()

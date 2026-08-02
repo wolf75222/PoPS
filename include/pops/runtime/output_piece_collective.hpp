@@ -5,10 +5,10 @@
 ///
 /// Local providers are evaluated on every rank under an all-rank error consensus.  Metadata and
 /// IEEE-754 values are framed in a versioned, endian-stable native wire payload and transferred by
-/// WorldCommunicator's chunked MPI_Gatherv transport.  Only rank zero materializes the global piece
-/// vector; Python never gathers NumPy arrays or executes an MPI collective.
+/// an explicitly owned consumer lane. Only rank zero materializes the global piece vector; Python
+/// never gathers NumPy arrays or executes an MPI collective.
 
-#include <pops/parallel/world_communicator.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/output_piece.hpp>
 
 #include <algorithm>
@@ -185,13 +185,21 @@ inline std::string current_exception_text() {
 
 /// Evaluate a local OutputPiece provider and gather its exact result onto MPI rank zero.
 template <typename Provider>
-std::vector<OutputPiece> output_pieces_to_root(const WorldCommunicator& world,
+std::vector<OutputPiece> output_pieces_to_root(const ObserverMpiLane& lane,
                                                std::string operation_identity,
                                                Provider&& provider) {
-  world.require_active_mpi_world();
-  const int rank = world.rank();
+#ifndef POPS_HAS_MPI
+  (void)lane;
+  (void)operation_identity;
+  (void)provider;
+  throw std::runtime_error("native output-piece ROOT gather requires an MPI-enabled build");
+#endif
+  if (!lane.active())
+    throw std::runtime_error(
+        "native output-piece root gather requires an active consumer MPI lane");
+  const int rank = lane.rank();
 
-  const std::vector<std::string> operations = world.allgather_bytes(operation_identity);
+  const std::vector<std::string> operations = lane.allgather_bytes(operation_identity);
   if (!std::all_of(operations.begin(), operations.end(),
                    [&](const std::string& value) { return value == operation_identity; }))
     throw std::invalid_argument("output-piece root gather arguments differ across MPI ranks");
@@ -215,19 +223,19 @@ std::vector<OutputPiece> output_pieces_to_root(const WorldCommunicator& world,
     local_error = detail::current_exception_text();
   }
 
-  const std::vector<std::string> errors = world.allgather_bytes(local_error);
+  const std::vector<std::string> errors = lane.allgather_bytes(local_error);
   for (std::size_t source = 0; source < errors.size(); ++source) {
     if (!errors[source].empty())
       throw std::runtime_error("native output-piece provider failed on rank " +
                                std::to_string(source) + ": " + errors[source]);
   }
 
-  const std::optional<std::vector<std::string>> gathered = world.gather_bytes(packed, 0);
+  const std::optional<std::vector<std::string>> gathered = lane.gather_bytes(packed, 0);
   std::vector<OutputPiece> result;
   std::string root_error;
   if (rank == 0) {
     try {
-      if (!gathered || gathered->size() != static_cast<std::size_t>(world.size()))
+      if (!gathered || gathered->size() != static_cast<std::size_t>(lane.size()))
         throw std::runtime_error("native output-piece root gather has invalid rank cardinality");
       for (std::size_t source = 0; source < gathered->size(); ++source) {
         std::vector<OutputPiece> decoded =
@@ -248,7 +256,7 @@ std::vector<OutputPiece> output_pieces_to_root(const WorldCommunicator& world,
       root_error = detail::current_exception_text();
     }
   }
-  root_error = world.broadcast_bytes(std::move(root_error), 0);
+  root_error = lane.broadcast_bytes(std::move(root_error), 0);
   if (!root_error.empty())
     throw std::runtime_error("native output-piece reconstruction failed: " + root_error);
   return result;

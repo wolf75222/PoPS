@@ -53,6 +53,28 @@ ScientificOutput(
 )
 ```
 
+When the native runtime owns an AMR reflux correction and/or an authored projection, the ledger can
+delegate those exact terms instead of requiring zero placeholders. `component` is the exact
+conservative index shared by the explicit Program sums and native evidence (it defaults to zero for
+a scalar state); the optional typed role is checked against that index at bind:
+
+```python
+from pops.physics.roles import Density
+
+mass = BalanceLedger(
+    "mass",
+    role=Density(),
+    component=0,
+    automatic_terms=("projection", "reflux"),
+)
+program.record_balance(
+    mass,
+    storage_change=storage_increment,
+    outward_boundary_flux=boundary_flux_increment,
+    sources=source_increment,
+)
+```
+
 Le fournisseur possède l'extension. Une cible comme `solution/tracer.vtu` est refusée dès
 l'authoring, avant le bind ; elle empêcherait le changement de format et entrerait en collision au
 deuxième échantillon. Chaque pas accepté dû publie immédiatement un fichier distinct sous le chemin
@@ -82,13 +104,16 @@ count, target suffix, or writer availability:
 
 - `SERIAL` requires the proved serial `ExecutionContext` (rank 0, size 1) and one complete snapshot.
 - `ROOT` requires a distributed context. Every rank participates in the authenticated native
-  gather, but only rank 0 prepares, verifies and atomically publishes the single-file writer.
-  Preparation failures and the final receipt are broadcast to every participant.
+  gather over a run-scoped duplicated consumer lane, but only rank 0 prepares, verifies and
+  atomically publishes the single-file writer. The native `System`/`AmrSystem` output bridge
+  accepts only that owned lane, never the process-world singleton. Preparation failures and the
+  final receipt are broadcast to every participant.
 - `COLLECTIVE` requires a distributed context, an authenticated collective resource plan and the
-  native C++ parallel-HDF5 provider. Each rank writes only its exact non-overlapping native
-  hyperslabs with exactly one MPIO collective transfer per dataset and rank (including a select-none
-  transfer for a rank with no patch). A replicated AMR coarse patch is assigned to rank 0 for this
-  mode so it cannot overlap.
+  native C++ parallel-HDF5 provider. The observer runtime owns a duplicated MPI lane for the complete
+  writer session; neither the Python writer nor the native HDF5 adapter borrows or rediscovers the
+  process world. Each rank writes only its exact non-overlapping native hyperslabs with exactly one
+  MPIO collective transfer per dataset and rank (including a select-none transfer for a rank with no
+  patch). A replicated AMR coarse patch is assigned to rank 0 for this mode so it cannot overlap.
 - `PER_RANK` requires a distributed context and preserves each rank's exact local pieces, including
   explicitly replicated coarse pieces. Targets are rank-qualified before any file is opened. The
   transaction succeeds only after it aggregates one deterministic receipt per contiguous rank.
@@ -192,10 +217,11 @@ therefore write NPZ, HDF5 or the complete VTU/PVTU/PVD/state ParaView bundle. `q
 retained detached snapshots; a full queue deliberately applies backpressure.
 
 The selected format owns the topology. `SERIAL` uses the sole rank. `ROOT` performs the complete
-snapshot gather on the main execution path, then writes from the rank-zero worker without worker
-MPI. `PER_RANK` and `COLLECTIVE` run one worker per rank over a run-scoped communicator duplicated
-collectively before any worker starts. That private lane has a distinct MPI context from
-`MPI_COMM_WORLD`, so numerical and output collective orderings cannot alias. PoPS requires
+snapshot gather on the main execution path over one run-scoped duplicated consumer lane, then
+writes from the rank-zero worker without MPI. `PER_RANK` and `COLLECTIVE` run one worker per rank
+over a run-scoped communicator duplicated collectively before any worker starts. Those private
+lanes have distinct MPI contexts from `MPI_COMM_WORLD`, so numerical and output collective
+orderings cannot alias. PoPS requires
 `MPI_THREAD_MULTIPLE`, authenticates the lane on every worker call and fixes distributed
 `max_attempts` to one: retrying after entry into an MPI publication would not be safe. Supported mode
 combinations remain those of the format itself; in particular, ParaView has no `COLLECTIVE` mode and
@@ -384,9 +410,10 @@ re-emission; a rank-local `KeyboardInterrupt`/`SystemExit` cannot split collecti
 - HDF5 uses native datasets and `read_hdf5()` verification. Serial/root fields must be complete.
   Collective mode requires the compiled C++ parallel-HDF5 route before preparation; every rank
   writes its declared non-overlapping hyperslabs through the exact authenticated communicator and
-  the manifest authenticates all pieces. A synchronous consumer uses the execution communicator;
-  an asynchronous consumer uses its private duplicated worker lane. Python never emulates this
-  mode with a gather-to-root writer: the compiled provider owns the MPIO dataset transfers.
+  the manifest authenticates all pieces. The HDF5 session uses its private duplicated observer lane;
+  neither synchronous nor asynchronous publication borrows the process world. Python never
+  emulates this mode with a gather-to-root writer: the compiled provider owns the MPIO dataset
+  transfers.
   Partition validation scales with piece count rather than global cell count, and shared geometry
   is written once by rank zero. Unlike the default relayed PVTU topology, the single collective HDF5
   target is opened by every rank through parallel HDF5/MPI-IO and must therefore be genuinely
@@ -424,6 +451,102 @@ projection terms. It reports a balance residual and deliberately does not call a
 quantity an invariant. Diagnostic-only outputs remain valid: their owner-qualified diagnostic keys,
 terms, layout metadata and provenance are preserved even when no field array is selected. Geometry
 origins and spacings use the conventional `(x, y)` and `(dx, dy)` order.
+
+An executable open-domain balance uses one shared typed identity rather than a Python callback:
+
+```python
+from pops.diagnostics import Balance, BalanceLedger
+
+mass = BalanceLedger("mass")
+program.record_balance(
+    mass,
+    storage_change=storage_increment,
+    outward_boundary_flux=boundary_flux_increment,
+    sources=source_increment,
+    reflux=reflux_increment,
+    projection=projection_increment,
+)
+
+ScientificOutput(
+    ...,
+    diagnostics=(Balance(mass, block=fluid),),
+)
+```
+
+`AsyncScientificOutput(..., diagnostics=(Balance(mass, block=fluid),))` uses the same exact
+schedule and transaction. Its reductions are completed on the simulation thread before detachment;
+the post-commit worker receives only immutable arrays and scalar payloads, never the native mailbox
+or communicator facade.
+
+Each non-automatic argument to `record_balance` is a signed, time-integrated native Program sum/dot
+reduction, or scalar arithmetic composed only from such reductions and exact literals. When any
+term is delegated to a native producer, every explicit term must instead be composed from
+component-qualified `sum` reductions for the ledger's exact `component`; an all-state dot product
+cannot be reconciled with one component's reflux/projection evidence.
+The reported residual is `storage_change + outward_boundary_flux - sources - reflux - projection`.
+The native attempt mailbox accumulates repeated cadence/substep invocations, rejects missing or
+non-finite terms, and is cleared before the next attempt. The consumer reads it only while the
+outer accepted-step transaction still retains the pre-step image. Python therefore packages the
+five returned scalars and residual but never traverses arrays, invents a zero term, or reuses a
+previous step. Selected automatic terms are resolved by exact runtime block, active hierarchy level
+and conservative component. A missing coordinate, a non-finite value, or simultaneous Program and
+native authority for one term fails the accepted transaction. A rejected attempt or failed consumer
+publication restores both mailboxes with the rest of the native transaction.
+
+The `pops.balance-term` namespace is reserved. Ordinary `Program.record_scalar(...)` authoring and
+the Python runtime diagnostic binding both reject it; generated `record_balance` code reaches a
+separate native sink that validates the route and canonical term before touching the mailbox.
+
+The resolved `ConsumerGraph` now compiles one immutable `BalanceDueContract` into the Program
+artifact. For `every(n, clock=program.clock)`, the native Program queries the next outer accepted
+macro-step before any balance reduction. Off-cadence sum/dot and scalar-arithmetic chains are
+short-circuited, and the five terminal records are omitted; no Kokkos kernel, MPI collective or
+Python callback is entered for that balance route. Multiple consumers of the same route are joined
+by an OR of their exact accepted-step periods. `Always` and `when(True)` are period one,
+`when(False)` contributes no occurrence, and a route with no consumer is compiled off.
+
+The compiler traces the complete reduction/scalar chain rather than scheduling only the terminal
+records. If a value is also consumed by an ordinary Program diagnostic or another non-balance
+operation, that shared producer remains unconditional so cadence fusion cannot change unrelated
+semantics. A `Balance` consumer with no complete matching `Program.record_balance` producer for all
+non-automatic terms fails before native code generation. Program stride/substeps use one
+attempt-local outer accepted-step
+target, so every substep of one due public step sees the same decision and accumulates into the same
+attempt mailbox. The cadence is authored once as part of the Program identity, for example
+`program.cadence(substeps=2, stride=3)`, then authenticated and installed before runtime freeze on
+both Uniform and AMR targets. A stride-held public step executes no Program work and therefore
+publishes the exact additive-identity balance (all five terms are zero); a due Program that omits
+even one term still fails closed. Accepted-step periods larger than the native signed-32-bit ceiling
+can never fire in a representable run and are compiled off instead of being narrowed into C++.
+Selective checkpoint reconstruction may re-execute the Program to rebuild omitted history slots,
+but that work is not a public accepted step. Uniform and AMR replay therefore enter an explicit
+native replay guard: every Balance due query returns false, no term reaches the accepted-attempt
+mailbox, and the guard is restored on both success and exception. The replay still executes all
+non-Balance scientific operations needed to reconstruct the history exactly.
+
+This first sparse cutover is exact only for accepted-step `every(n)` schedules. Physical-time
+`every_dt`, `on_end`, and extension domains/triggers remain conservatively active for every Program
+invocation; their consumer still publishes only when its own runtime schedule is due, but upstream
+balance reductions are not yet skipped. This fallback can add work but cannot suppress required
+evidence. A zero-step run has no accepted native occurrence: its coincident start/end moment cannot
+publish an accepted-step consumer, including `Balance`.
+
+The selected public route now consumes signed AMR reflux corrections and before/after projection
+deltas from the separate qualified attempt mailbox. Uniform Cartesian projection uses the
+authenticated cell measure and embedded-boundary mask; AMR projection excludes covered coarse cells
+and performs one component-vector collective per participating level. A reflux selection requires
+an adaptive hierarchy and expects one contribution for every active parent/fine interface;
+projection expects one for every selected active level. Generated code publishes the OR of the exact
+due route decisions before the first Program operator; the marker is monotone for the attempt,
+disabled during replay, and reset at attempt entry. Consequently off-cadence steps do not pay for
+automatic operator reductions.
+
+The capability remains deliberately bounded. Polar projection is rejected because no exact
+per-cell polar volume provider exists on this path. Automatic physical-boundary flux and source
+evidence are not yet producers and therefore remain explicit `Program.record_balance` arguments.
+The native selector never substitutes a missing automatic value with zero (except the exact reflux
+identity for a hierarchy with no coarse/fine interface), and the legacy all-explicit ledger route
+retains its original identity and behavior.
 
 Checkpoint remains a separate restart effect. These consumers do not define a checkpoint schema or
 reader and do not call the scientific-output manifest a restart identity. The checkpoint provider
