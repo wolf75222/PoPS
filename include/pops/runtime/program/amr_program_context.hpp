@@ -3000,8 +3000,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);
   }
   std::optional<std::vector<Real>> program_execution_projection_balance_integrals_(
-      int program_block, const MultiFab& state) const {
-    const std::size_t runtime_block = static_cast<std::size_t>(sys_block(program_block));
+      int runtime_block_value, const MultiFab& state) const {
+    const std::size_t runtime_block = static_cast<std::size_t>(runtime_block_value);
     if (level_ < 0 || level_ >= nlev())
       throw std::out_of_range("AMR Program projection balance active level is out of range");
     const MultiFab& live = eng_->level_state(runtime_block, level_);
