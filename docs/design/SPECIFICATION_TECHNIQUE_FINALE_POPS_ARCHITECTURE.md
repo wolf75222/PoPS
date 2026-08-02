@@ -1520,10 +1520,12 @@ Quatre scripts sont des tests d'acceptation, pas des esquisses :
    `AMRExecution.subcycled()`, regrid/reflux, HDF5/NPZ/ParaView, restart strict et continuation
    bit-identique ;
 4. `examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py` : état 15 moments, layout Uniform,
-   `Program` IMEX explicite avec garde de réalisabilité dans sa transaction, champ de Poisson,
-   HDF5/ParaView et continuation bit-identique, sans branche de scénario dans le compilateur. Le
-   preset `pops.lib.time.IMEX` reste un constructeur d'un `Program` ordinaire ; il ne remplace pas
-   cette écriture explicite lorsqu'une garde scientifique spécifique doit être composée.
+   fermeture utilisateur `@closure(4)` abaissée dans le graphe de flux générique, `Program` IMEX
+   explicite avec garde de réalisabilité et ensemble complet des stores provisoires dans sa
+   transaction, champ de Poisson, conservation du nombre de particules, HDF5/ParaView et
+   continuation bit-identique, sans branche de scénario dans le compilateur. Le preset
+   `pops.lib.time.IMEX` reste un constructeur d'un `Program` ordinaire ; il ne remplace pas cette
+   écriture explicite lorsqu'une garde scientifique spécifique doit être composée.
 
 `scripts/final_release_contract.py` fixe cet ensemble exact : aucun cinquième script `.py` n'est admis
 dans `examples/final/`. Chaque script doit :
