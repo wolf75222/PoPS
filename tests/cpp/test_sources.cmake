@@ -212,6 +212,7 @@ set(POPS_CPP_TEST_SOURCE_test_system_two_explicit "tests/cpp/integration/runtime
 set(POPS_CPP_TEST_SOURCE_test_two_species_minimal "tests/cpp/unit/physics/test_two_species_minimal.cpp")
 set(POPS_CPP_TEST_SOURCE_test_user_time_integrator "tests/cpp/unit/physics/test_user_time_integrator.cpp")
 set(POPS_CPP_TEST_SOURCE_test_variable_epsilon "tests/cpp/unit/elliptic/test_variable_epsilon.cpp")
+set(POPS_CPP_TEST_SOURCE_test_variable_recovery_chain "tests/cpp/unit/numerics/test_variable_recovery_chain.cpp")
 set(POPS_CPP_TEST_SOURCE_test_variable_role "tests/cpp/unit/runtime/test_variable_role.cpp")
 set(POPS_CPP_TEST_SOURCE_test_variable_user_role "tests/cpp/unit/runtime/test_variable_user_role.cpp")
 set(POPS_CPP_TEST_SOURCE_test_wave_speed_cache_engagement "tests/cpp/integration/runtime/test_wave_speed_cache_engagement.cpp")
