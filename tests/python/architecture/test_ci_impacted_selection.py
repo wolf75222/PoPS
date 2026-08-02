@@ -1317,6 +1317,20 @@ def test_openmp_native_scripts_share_the_fail_closed_requirement_policy(relative
     assert "OK (rien a compiler)" not in source
 
 
+def test_quality_manifest_coverage_is_fail_closed():
+    workflow = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
+    manifest_gate = workflow.split(
+        "      - name: Couverture manifest de tests (test_manifest.toml, bloquante)\n",
+        1,
+    )[1].split("\n  # --- Prewarm natif", 1)[0]
+
+    assert "python3 docs/gen_test_counts.py --check-matrix" in manifest_gate
+    assert 'echo "::error::tests/test_manifest.toml' in manifest_gate
+    assert 'exit "$rc"' in manifest_gate
+    assert "::warning::tests/test_manifest.toml" not in manifest_gate
+    assert "_Informatif" not in manifest_gate
+
+
 def test_quality_cold_instrumented_builds_use_exact_parallel_runtime_prewarm():
     workflow = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
     prewarm = workflow.split("\n  quality-native-prewarm:\n", 1)[1].split(
