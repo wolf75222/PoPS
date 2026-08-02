@@ -373,6 +373,8 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
 
     mpi = bool(_flag_value(flags, "supports_mpi"))
     gpu = bool(_flag_value(flags, "supports_gpu"))
+    amr_status = _status_from_flag(flags, "supports_amr")
+    composite_boundary_status = "partial" if amr_status == "available" else amr_status
     return [
         _row(
             "boundary:prepared_transport",
@@ -494,9 +496,7 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "solver outcome, block counter, or restart metadata; a typed candidate failure "
                 "rejects the step and never substitutes another solver"
             ),
-            requested=(
-                "prepared Riemann recovery chain with requested/used solver diagnostics"
-            ),
+            requested=("prepared Riemann recovery chain with requested/used solver diagnostics"),
             available_route=(
                 "one explicitly selected Riemann solver with typed rejection and transactional "
                 "rollback"
@@ -578,12 +578,14 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             platform="host",
             mpi=False,
             gpu=False,
-            status="available",
+            status=amr_status,
             limitation=(
                 "field-coupled finite-difference rhs_jacvec re-solves the exact prepared field "
-                "provider from the perturbed state on level zero and every refined level, then "
-                "restores the frozen primal publication transactionally; the proved execution "
-                "envelope is host single-process, with no multi-rank MPI route claimed"
+                "provider from the perturbed state on both levels of the proved 2D ratio-2 L0/L1 "
+                "hierarchy, then restores the frozen primal publication transactionally; a "
+                "two-rank native consensus/numerical oracle exists, but the generated-Program "
+                "route has no installed MPI end-to-end proof and therefore advertises only host "
+                "single-process execution"
             ),
             source=source,
         ),
@@ -594,14 +596,16 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             platform="host",
             mpi=False,
             gpu=False,
-            status="partial",
+            status=composite_boundary_status,
             limitation=(
-                "a fully refined hierarchy passes the exact finest-level logical time, state "
-                "dependencies and nonlinear/JVP context to its dynamic field boundary; a "
-                "partially refined CompositeFAC hierarchy is refused because its coarse-fine "
-                "correction lacks a level-qualified homogeneous/JVP boundary operator"
+                "the proved fully refined 2D ratio-2 L0/L1 hierarchy passes the exact finest-level "
+                "logical time, state dependencies and nonlinear/JVP context to its dynamic field "
+                "boundary; a partially refined CompositeFAC hierarchy is refused because its "
+                "coarse-fine correction lacks a level-qualified homogeneous/JVP boundary operator"
             ),
-            available_route="fully refined host single-process CompositeFAC hierarchy",
+            available_route=(
+                "fully refined 2D ratio-2 L0/L1 host single-process CompositeFAC hierarchy"
+            ),
             alternative=(
                 "use a fully refined hierarchy or implement the level-qualified homogeneous/JVP "
                 "coarse-fine correction boundary"

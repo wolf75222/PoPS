@@ -416,12 +416,13 @@ For field-coupled finite-difference JVPs, the exact boundary evaluation level mu
 active Program resource level before the perturbed field solve or the frozen-field restoration is
 allowed to dispatch. A fine-level caller therefore cannot forge a coarse point and reuse level 0.
 The generated finite-difference route materializes that derivative by re-solving the exact prepared
-provider from the perturbed state on every participating level, evaluating the complete residual,
-and restoring the frozen primal field transactionally; it never reuses the unperturbed field pointer
-as a tangent. This proof currently covers host execution in a single process only; PoPS does not
-advertise this route as MPI-capable until a real multi-rank oracle is part of the validation matrix.
-A partially refined CompositeFAC hierarchy with a dynamic physical boundary remains a separate
-explicit refusal until its correction owns a level-qualified homogeneous/JVP boundary operator.
+provider from the perturbed state on both levels of the proved 2D ratio-2 L0/L1 hierarchy, evaluating
+the complete residual, and restoring the frozen primal field transactionally; it never reuses the
+unperturbed field pointer as a tangent. A two-rank native consensus/numerical oracle covers this
+algebra, but the generated-Program route has no installed MPI end-to-end proof. The public capability
+row therefore advertises only host single-process execution. A partially refined CompositeFAC
+hierarchy with a dynamic physical boundary remains a separate explicit refusal until its correction
+owns a level-qualified homogeneous/JVP boundary operator.
 The public report exposes that unsupported subcase separately as
 `amr:composite_dynamic_boundary`; it is not hidden behind the available level-qualified JVP row.
 Linear and nonlinear field routes both retain the accepted warm start until their `SolveReport` is

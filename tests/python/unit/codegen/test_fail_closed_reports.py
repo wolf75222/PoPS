@@ -97,10 +97,13 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert field_jacvec.backend == "production"
     assert field_jacvec.mpi is False
     assert field_jacvec.gpu is False
-    assert "level zero and every refined level" in field_jacvec.limitation
+    assert "proved 2D ratio-2 L0/L1 hierarchy" in field_jacvec.limitation
     assert "restores the frozen primal publication transactionally" in field_jacvec.limitation
-    assert "host single-process" in field_jacvec.limitation
-    assert "no multi-rank MPI route claimed" in field_jacvec.limitation
+    assert "two-rank native consensus/numerical oracle exists" in field_jacvec.limitation
+    assert (
+        "generated-Program route has no installed MPI end-to-end proof" in field_jacvec.limitation
+    )
+    assert "host single-process execution" in field_jacvec.limitation
     assert field_jacvec.available_route == ""
     assert field_jacvec.alternative == ""
     composite_boundary = routes["amr:composite_dynamic_boundary"]
@@ -109,13 +112,29 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert composite_boundary.backend == "production"
     assert composite_boundary.mpi is False
     assert composite_boundary.gpu is False
-    assert "fully refined hierarchy" in composite_boundary.limitation
+    assert "fully refined 2D ratio-2 L0/L1 hierarchy" in composite_boundary.limitation
     assert "partially refined CompositeFAC hierarchy is refused" in composite_boundary.limitation
     assert "level-qualified homogeneous/JVP boundary operator" in composite_boundary.limitation
     assert composite_boundary.available_route == (
-        "fully refined host single-process CompositeFAC hierarchy"
+        "fully refined 2D ratio-2 L0/L1 host single-process CompositeFAC hierarchy"
     )
     assert "coarse-fine correction boundary" in composite_boundary.alternative
+
+
+def test_amr_field_jacvec_routes_follow_the_artifact_amr_flag():
+    report = capability_reports.native_capability_report(
+        flags={"supports_mpi": True, "supports_gpu": False, "supports_amr": False},
+        source="uniform-test-manifest",
+    )
+    routes = {row.feature: row for row in report.routes}
+
+    field_jacvec = routes["amr:field_coupled_rhs_jacvec"]
+    assert field_jacvec.status == "unavailable"
+    assert field_jacvec.error_message
+
+    composite_boundary = routes["amr:composite_dynamic_boundary"]
+    assert composite_boundary.status == "unavailable"
+    assert composite_boundary.error_message
 
 
 def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_kernels():
@@ -177,9 +196,7 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
         flags={"supports_mpi": True, "supports_gpu": True, "supports_amr": True},
         source="test-gpu-manifest",
     )
-    gpu_post_riemann = {
-        row.feature: row for row in gpu_report.routes
-    }["boundary:post_riemann_flux"]
+    gpu_post_riemann = {row.feature: row for row in gpu_report.routes}["boundary:post_riemann_flux"]
     assert gpu_post_riemann.gpu is False
 
 
