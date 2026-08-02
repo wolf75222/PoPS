@@ -1962,6 +1962,11 @@ jobs:
           POPS_KEEP_GENERATED: "1"
           POPS_REQUIRE_MPI_TESTS: "1"
           POPS_REQUIRE_NATIVE_TESTS: "1"
+          # Ubuntu 24.04 OpenMPI 4 OMPIO selects sharedfp/lockedfile during
+          # HDF5 MPI_File_open and aborts inside its fortified sprintf path.
+          # ROMIO is the packaged OpenMPI MPI-IO component and exercises the
+          # same collective HDF5 contract without that implementation defect.
+          OMPI_MCA_io: "^ompio"
         run: |
           # These readers are mandatory capabilities of this lane. Imports happen before the gate
           # so a missing apt module cannot masquerade as a scientific skip.

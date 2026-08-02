@@ -117,6 +117,7 @@ def test_m4_required_ci_lane_executes_the_complete_installed_gate():
     complete = complete.split("- name: ccache stats (MPI)", 1)[0]
     assert "POPS_REQUIRE_MPI_TESTS: \"1\"" in complete
     assert "POPS_REQUIRE_NATIVE_TESTS: \"1\"" in complete
+    assert 'OMPI_MCA_io: "^ompio"' in complete
     assert "vtkXMLPUnstructuredGridReader" in complete
     assert "vtkXMLUnstructuredGridReader" in complete
     assert "/usr/bin/python3 scripts/run_m4_gate.py \\" in complete
