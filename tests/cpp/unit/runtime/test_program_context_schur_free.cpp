@@ -633,9 +633,8 @@ void expect_shared_install_and_field_services(Context& context) {
   auto expect_invalid_point_before_dispatch = [&](const auto& invalid_point) {
     const int calls_before_invalid_point = context.field_solve_dispatch_count();
     const int level_queries_before_invalid_point = context.resource_level_query_count();
-    EXPECT_THROW(
-        (void)context.solve_fields_from_state_at(invalid_point, "field", 0, state),
-        std::invalid_argument);
+    EXPECT_THROW((void)context.solve_fields_from_state_at(invalid_point, "field", 0, state),
+                 std::invalid_argument);
     EXPECT_THROW(
         (void)context.solve_fields_from_blocks_at(invalid_point, 17, "field", {{0, &state}}),
         std::invalid_argument);

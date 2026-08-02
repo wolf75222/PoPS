@@ -185,12 +185,11 @@ class ProgramExecutionServices {
     return provider_().program_execution_runtime_state_();
   }
 
-  void require_field_evaluation_point_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view route) const {
+  void require_field_evaluation_point_(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                       std::string_view route) const {
     if (point.clock.empty() || point.tick < 0 || point.substep < 0 || point.stage < 0 ||
         !(point.dt > 0.0) || !std::isfinite(point.dt) || !std::isfinite(point.physical_time) ||
-        point.stage_fraction < amr::Rational(0, 1) ||
-        amr::Rational(1, 1) < point.stage_fraction)
+        point.stage_fraction < amr::Rational(0, 1) || amr::Rational(1, 1) < point.stage_fraction)
       throw std::invalid_argument(std::string(route) +
                                   " requires a complete exact BoundaryEvaluationPoint");
     const int active_level = provider_().program_execution_resource_level_();
