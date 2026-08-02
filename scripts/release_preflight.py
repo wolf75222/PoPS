@@ -23,10 +23,12 @@ import zipfile
 from final_release_contract import (
     FINAL_EXAMPLES,
     FINAL_EXAMPLE_REQUIRED_TESTS,
+    FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS,
     INSTALLED_COMPONENT_PACKAGE_NODEID,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
+    required_python_conformance_nodeids,
     require_release_matrix_source_contract,
     require_source_contract,
 )
@@ -35,7 +37,7 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 10
+EVIDENCE_SCHEMA_VERSION = 11
 PUBLIC_API_EVIDENCE_SCHEMA_VERSION = 3
 
 
@@ -563,14 +565,39 @@ def _examples_evidence(
         reopened = reopen["examples"][key]
         if not isinstance(reopened, dict) or set(reopened) != {"hdf5", "npz", "paraview"}:
             raise PreflightError("release evidence reopen record is malformed for %s" % key)
+        expected_outputs = FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]
         for format_name in ("hdf5", "npz", "paraview"):
             artifacts = reopened[format_name]
-            if not isinstance(artifacts, list) or not artifacts:
-                raise PreflightError("release evidence has no %s output for %s" % (format_name, key))
+            if not isinstance(artifacts, list):
+                raise PreflightError(
+                    "release evidence %s output ledger is malformed for %s"
+                    % (format_name, key)
+                )
+            if bool(artifacts) != bool(expected_outputs[format_name]):
+                raise PreflightError(
+                    "release evidence %s output coverage drifted for %s"
+                    % (format_name, key)
+                )
             for artifact in artifacts:
                 if not isinstance(artifact, dict) or set(artifact) != {"path", "sha256"}:
                     raise PreflightError("release evidence %s output is malformed for %s" %
                                         (format_name, key))
+                if not isinstance(artifact["path"], str) or not isinstance(
+                    artifact["sha256"], str
+                ):
+                    raise PreflightError(
+                        "release evidence %s output identity is malformed for %s"
+                        % (format_name, key)
+                    )
+                relative_artifact = Path(artifact["path"])
+                if not any(
+                    relative_artifact.is_relative_to(Path(target))
+                    for target in expected_outputs[format_name]
+                ):
+                    raise PreflightError(
+                        "release evidence %s output escaped its authored target for %s"
+                        % (format_name, key)
+                    )
                 _artifact_file(output_root, artifact["path"], artifact["sha256"],
                                label="%s %s" % (format_name, key))
         restarted = restart["examples"][key]
@@ -763,6 +790,7 @@ def _evidence(
             else {
                 "required_lane",
                 "selection",
+                "nodeids",
                 "final_example_nodeids",
                 "installed_component_package",
             }
@@ -784,12 +812,40 @@ def _evidence(
             report,
             lane,
             required_nodeids=(
-                FINAL_EXAMPLE_REQUIRED_TESTS if name == "python_conformance" else ()
+                required_python_conformance_nodeids(ROOT)
+                if name == "python_conformance"
+                else ()
             ),
         )
-    if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
+    python_evidence = gates["python_conformance"]["evidence"]
+    if python_evidence["selection"] != PYTHON_REQUIRED_SELECTION:
         raise PreflightError("release evidence Python required-lane selection drifted")
-    _final_example_test_evidence(gates["python_conformance"]["evidence"])
+    expected_python_nodeids = list(required_python_conformance_nodeids(ROOT))
+    if python_evidence["nodeids"] != expected_python_nodeids:
+        raise PreflightError("release evidence Python conformance ledger drifted")
+    python_lane = python_evidence["required_lane"]
+    python_commands = [
+        command
+        for command in gates["python_conformance"]["commands"]
+        if python_lane["path"] in command["argv"]
+    ]
+    if len(python_commands) != 1:
+        raise PreflightError("release evidence must execute one exact Python conformance lane")
+    expected_python_suffix = [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-s",
+        "-o",
+        "xfail_strict=true",
+        *expected_python_nodeids,
+        "--junitxml",
+        python_lane["path"],
+    ]
+    if python_commands[0]["argv"][-len(expected_python_suffix):] != expected_python_suffix:
+        raise PreflightError("release evidence Python conformance command drifted")
+    _final_example_test_evidence(python_evidence)
     _installed_component_package_evidence(directory, gates["python_conformance"])
     _examples_evidence(directory, gates, runtime)
     return payload

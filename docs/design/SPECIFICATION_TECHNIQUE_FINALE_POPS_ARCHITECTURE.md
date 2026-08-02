@@ -1327,9 +1327,10 @@ provider déclare aussi `validate_snapshot()` et doit produire une préparation 
 `discard()` et `rollback()` ; ce protocole est vérifié avant qu'un effet accepté puisse être publié.
 
 Les formats livrés sont des descripteurs (`HDF5`, `NPZ`, `ParaView`) abaissés vers des writers réels.
-La gate finale rouvre indépendamment chaque HDF5 et ParaView émis et vérifie leur contenu structurel ;
-l'existence du fichier seule n'est pas une preuve. La route NPZ est exercée par l'exemple IMEX-AMR et
-ses tests de format, sans être présentée comme une réouverture supplémentaire de la gate groupée.
+La gate finale rouvre indépendamment chaque HDF5 et ParaView scientifique émis et vérifie leur contenu
+structurel ; l'existence du fichier seule n'est pas une preuve. La route NPZ scientifique est exercée
+et rouverte uniquement par l'exemple IMEX-AMR. Les archives NPZ de checkpoint appartiennent à la
+preuve `strict_restart` et ne peuvent jamais satisfaire cette preuve de format scientifique.
 La cible d'un `ScientificOutput` est toujours un chemin logique sans suffixe ; le provider possède
 seul l'extension. `schedule=every(100, clock=program.clock)` publie donc un artefact distinct après
 chaque centième pas accepté, visible pendant la poursuite du run. Une petite capability de catalogue,
@@ -1591,22 +1592,27 @@ refuse d'écraser une evidence existante et produit une evidence JSON liée au c
 package, au digest du release contract et au SHA-256 de l'extension native installée. L'evidence est
 générée depuis les retours de commandes et ne contient pas de booléens fournis à la main.
 
-La séquence groupée couvre exactement les onze lignes authentifiées suivantes :
+La séquence groupée couvre exactement les douze lignes authentifiées suivantes :
 
 1. `official_build` : `scripts/setup_env.sh`, `scripts/build_python.sh`, puis configure/build du preset
    CMake `serial` avec les headers `POPS_INCLUDE` du checkout validé ;
-2. `doctor` : `pops.runtime.doctor.doctor()` sur le package installé, sans échec ;
-3. `codesign` : `scripts/codesign_pops_extensions.py` sur les extensions installées ;
-4. `native_conformance` : CTest complet avec JUnit non vide, sans skip, xfail, failure ni error ;
-5. `python_conformance` : suite Python complète, puis lane obligatoire
-   `not mpi and not hdf5` avec JUnit all-pass et sans skip caché ;
-6. `examples` : les quatre scripts exacts depuis le package installé et leurs quatre marqueurs de preuve ;
-7. `artifact_reopen` : parsing indépendant de chaque HDF5/NPZ/ParaView, puis réouverture de chaque
-   HDF5 par `h5py` et de chaque archive/array NPZ par NumPy avec `allow_pickle=False` ;
-8. `strict_restart` : checkpoint réel et digest complet de son arbre pour chaque exemple ;
-9. `documentation` : `docs/check_docs.py` ;
-10. `generated_products` : release contract et component catalog régénérés avec `--check` ;
-11. `diff` : `git diff --check`, `git diff --cached --check` et checkout encore propre.
+2. `installed_wheel` : installation du wheel retenu puis preuve byte-identical de son extension native,
+   de ses métadonnées et de son arbre installé ;
+3. `codesign` : `scripts/codesign_pops_extensions.py` sur les extensions installées, sans modifier les
+   octets natifs retenus ;
+4. `doctor` : `pops.runtime.doctor.doctor()` sur le package installé, sans échec ;
+5. `native_conformance` : CTest complet avec JUnit non vide, sans skip, xfail, failure ni error ;
+6. `python_conformance` : ledger Pytest fermé de M4 plus les huit preuves finales d'exemples, exécuté
+   une fois contre le wheel avec JUnit all-pass, sans skip caché. La suite source complète reste la
+   responsabilité du job parallèle `full-source-matrix` et n'est pas rejouée en série dans ce job ;
+7. `examples` : les quatre scripts exacts depuis le package installé et leurs quatre marqueurs de preuve ;
+8. `artifact_reopen` : parsing indépendant des HDF5 et ParaView scientifiques de chaque exemple, plus
+   du NPZ scientifique IMEX-AMR, puis réouverture HDF5 par `h5py` et NPZ par NumPy avec
+   `allow_pickle=False` ;
+9. `strict_restart` : checkpoint réel et digest complet de son arbre pour chaque exemple ;
+10. `documentation` : `docs/check_docs.py` ;
+11. `generated_products` : release contract et component catalog régénérés avec `--check` ;
+12. `diff` : `git diff --check`, `git diff --cached --check` et checkout encore propre.
 
 `scripts/release_preflight.py --release --tag <tag> --installed --evidence <json>` refuse une
 evidence incomplète, issue d'un autre commit, d'un autre digest, d'un autre script de gate ou d'une autre

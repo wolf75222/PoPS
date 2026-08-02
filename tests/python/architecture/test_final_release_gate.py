@@ -82,9 +82,16 @@ def _write_final_source_tree(root: Path) -> None:
     for example in contract.FINAL_EXAMPLES:
         path = root / example
         path.parent.mkdir(parents=True, exist_ok=True)
+        output_targets = [
+            target
+            for targets in contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example].values()
+            for target in targets
+        ]
         path.write_text(
             "--output-dir\n"
             + "\n".join(contract.REQUIRED_PROOF_MARKERS)
+            + "\n"
+            + "\n".join('# target="%s"' % target for target in output_targets)
             + "\nif __name__ == \"__main__\":\n    pass\n",
             encoding="utf-8",
         )
@@ -140,6 +147,24 @@ def test_final_release_source_contract_requires_executable_restart_output_proof(
 
     assert any("--output-dir" in error for error in errors)
     assert any("lacks final proof markers" in error for error in errors)
+
+
+def test_final_release_source_contract_requires_exact_scientific_output_targets(tmp_path):
+    _write_final_source_tree(tmp_path)
+    example = contract.FINAL_EXAMPLES[2]
+    path = tmp_path / example
+    required_target = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]["npz"][0]
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '# target="%s"' % required_target,
+            '# scientific target removed',
+        ),
+        encoding="utf-8",
+    )
+
+    errors = contract.source_contract_errors(tmp_path)
+
+    assert any("lacks its exact npz scientific-output target" in error for error in errors)
 
 
 def test_final_release_source_contract_requires_exact_mandatory_example_tests(tmp_path):
@@ -349,6 +374,28 @@ def test_required_python_lane_makes_xpass_fatal():
     assert '"-o", "xfail_strict=true"' in source
 
 
+def test_required_python_lane_is_the_closed_m4_and_final_example_ledger():
+    nodeids = contract.required_python_conformance_nodeids(ROOT)
+
+    assert nodeids
+    assert nodeids[-len(contract.FINAL_EXAMPLE_REQUIRED_TESTS):] == (
+        contract.FINAL_EXAMPLE_REQUIRED_TESTS
+    )
+    assert contract.INSTALLED_COMPONENT_PACKAGE_NODEID not in nodeids
+    assert len(nodeids) == len(set(nodeids))
+
+
+def test_release_workflow_does_not_serialize_the_complete_python_suite_twice():
+    gate_source = (SCRIPTS / "run_final_gate.py").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert '["python", "-m", "pytest", "-q"]' not in gate_source
+    assert "required_python_conformance_nodeids(ROOT)" in gate_source
+    assert "timeout-minutes: 180" in workflow
+
+
 def test_release_preflight_requires_the_exact_final_example_test_ledger():
     evidence = {
         "final_example_nodeids": list(contract.FINAL_EXAMPLE_REQUIRED_TESTS),
@@ -529,21 +576,54 @@ def test_final_gate_honours_explicit_conda_executable(monkeypatch, tmp_path):
 
 
 def test_artifact_reopen_requires_and_records_npz(tmp_path):
-    (tmp_path / "state.h5").write_bytes(b"\x89HDF\r\n\x1a\ncontent")
-    (tmp_path / "state.vtu").write_text("<VTKFile/>", encoding="utf-8")
-    npz = tmp_path / "state.npz"
+    example = contract.FINAL_EXAMPLES[2]
+    hdf5 = tmp_path / "hdf5" / "state" / "state.h5"
+    hdf5.parent.mkdir(parents=True)
+    hdf5.write_bytes(b"\x89HDF\r\n\x1a\ncontent")
+    paraview = tmp_path / "paraview" / "state" / "state.vtu"
+    paraview.parent.mkdir(parents=True)
+    paraview.write_text("<VTKFile/>", encoding="utf-8")
+    npz = tmp_path / "npz" / "state" / "state.npz"
+    npz.parent.mkdir(parents=True)
     with zipfile.ZipFile(npz, "w") as archive:
         archive.writestr("state.npy", b"payload")
 
     evidence, hdf5_paths, npz_paths = gate._reopen_outputs(
-        tmp_path, example=Path("final.py"))
+        tmp_path, example=example)
 
     assert set(evidence) == {"hdf5", "npz", "paraview"}
-    assert hdf5_paths == (tmp_path / "state.h5",)
+    assert hdf5_paths == (hdf5,)
     assert npz_paths == (npz,)
     npz.unlink()
-    with pytest.raises(gate.FinalGateError, match="HDF5, NPZ and ParaView"):
-        gate._reopen_outputs(tmp_path, example=Path("final.py"))
+    checkpoint = tmp_path / "checkpoints" / "restart" / "state.npz"
+    checkpoint.parent.mkdir(parents=True)
+    with zipfile.ZipFile(checkpoint, "w") as archive:
+        archive.writestr("state.npy", b"checkpoint")
+    with pytest.raises(gate.FinalGateError, match="npz scientific artifact"):
+        gate._reopen_outputs(tmp_path, example=example)
+
+
+def test_artifact_reopen_does_not_label_checkpoint_npz_as_scientific_output(tmp_path):
+    example = contract.FINAL_EXAMPLES[0]
+    for format_name, suffix, payload in (
+        ("hdf5", ".h5", b"\x89HDF\r\n\x1a\ncontent"),
+        ("paraview", ".vtu", b"<VTKFile/>"),
+    ):
+        target = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example][format_name][0]
+        artifact = tmp_path / target / ("state" + suffix)
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(payload)
+    checkpoint = tmp_path / "checkpoints" / "restart" / "state.npz"
+    checkpoint.parent.mkdir(parents=True)
+    with zipfile.ZipFile(checkpoint, "w") as archive:
+        archive.writestr("state.npy", b"checkpoint")
+
+    evidence, _hdf5_paths, npz_paths = gate._reopen_outputs(
+        tmp_path, example=example
+    )
+
+    assert evidence["npz"] == []
+    assert npz_paths == ()
 
 
 def test_release_evidence_authenticates_the_exact_retained_wheel(tmp_path):
@@ -1007,12 +1087,21 @@ def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_pat
         key = example.as_posix()
         output_root = tmp_path / "examples" / example.stem
         output_root.mkdir(parents=True)
-        hdf5 = output_root / "state.h5"
+        targets = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]
+        hdf5 = output_root / targets["hdf5"][0] / "state.h5"
+        hdf5.parent.mkdir(parents=True)
         hdf5.write_bytes(b"\x89HDF\r\n\x1a\npayload")
-        npz = output_root / "state.npz"
-        with zipfile.ZipFile(npz, "w") as archive:
-            archive.writestr("state.npy", b"payload")
-        paraview = output_root / "state.vtu"
+        npz = (
+            output_root / targets["npz"][0] / "state.npz"
+            if targets["npz"]
+            else None
+        )
+        if npz is not None:
+            npz.parent.mkdir(parents=True)
+            with zipfile.ZipFile(npz, "w") as archive:
+                archive.writestr("state.npy", b"payload")
+        paraview = output_root / targets["paraview"][0] / "state.vtu"
+        paraview.parent.mkdir(parents=True)
         paraview.write_text("<VTKFile/>", encoding="utf-8")
         checkpoint = output_root / "checkpoint.bin"
         checkpoint.write_bytes(b"restart")
@@ -1053,19 +1142,23 @@ def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_pat
         reopened[key] = {
             "hdf5": [
                 {
-                    "path": hdf5.name,
+                    "path": str(hdf5.relative_to(output_root)),
                     "sha256": hashlib.sha256(hdf5.read_bytes()).hexdigest(),
                 }
             ],
-            "npz": [
-                {
-                    "path": npz.name,
-                    "sha256": hashlib.sha256(npz.read_bytes()).hexdigest(),
-                }
-            ],
+            "npz": (
+                [
+                    {
+                        "path": str(npz.relative_to(output_root)),
+                        "sha256": hashlib.sha256(npz.read_bytes()).hexdigest(),
+                    }
+                ]
+                if npz is not None
+                else []
+            ),
             "paraview": [
                 {
-                    "path": paraview.name,
+                    "path": str(paraview.relative_to(output_root)),
                     "sha256": hashlib.sha256(paraview.read_bytes()).hexdigest(),
                 }
             ],
@@ -1082,9 +1175,31 @@ def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_pat
     }
 
     preflight._examples_evidence(tmp_path, gates, runtime)
+    checkpoint_as_npz = copy.deepcopy(gates)
+    first_key = contract.FINAL_EXAMPLES[0].as_posix()
+    first_checkpoint = Path(restarted[first_key]["checkpoint"])
+    checkpoint_as_npz["artifact_reopen"]["evidence"]["examples"][first_key]["npz"] = [
+        {
+            "path": str(first_checkpoint.relative_to(first_checkpoint.parents[1])),
+            "sha256": hashlib.sha256(first_checkpoint.read_bytes()).hexdigest(),
+        }
+    ]
+    with pytest.raises(preflight.PreflightError, match="output coverage drifted"):
+        preflight._examples_evidence(tmp_path, checkpoint_as_npz, runtime)
+
+    imex_key = contract.FINAL_EXAMPLES[2].as_posix()
+    escaped_npz = copy.deepcopy(gates)
+    escaped_npz["artifact_reopen"]["evidence"]["examples"][imex_key]["npz"][0][
+        "path"
+    ] = "checkpoints/restart/state.npz"
+    with pytest.raises(preflight.PreflightError, match="escaped its authored target"):
+        preflight._examples_evidence(tmp_path, escaped_npz, runtime)
+
     commands[0]["argv"][commands[0]["argv"].index(runtime["native_sha256"])] = "d" * 64
     with pytest.raises(preflight.PreflightError, match="command drifted"):
         preflight._examples_evidence(tmp_path, gates, runtime)
+
+
 def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate():
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text()
     wheels = (ROOT / ".github" / "workflows" / "wheels.yml").read_text()

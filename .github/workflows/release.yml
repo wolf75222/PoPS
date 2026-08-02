@@ -35,7 +35,10 @@ jobs:
     name: Validate the exact published wheel
     needs: wheel
     runs-on: macos-14
-    timeout-minutes: 40
+    # The complete source suite is already the parallel ``full-source-matrix`` dependency. This
+    # wheel lane runs the bounded M4/final-example ledger once, then CTest and artifact/restart
+    # proofs against the exact retained wheel. Keep enough room for an uncached native build.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
         with:

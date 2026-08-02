@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import tomllib
 
 
 FINAL_SPECIFICATION = Path("docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md")
@@ -44,6 +45,28 @@ FINAL_EXAMPLE_REQUIRED_TESTS = (
     *FINAL_EXAMPLE_ACCEPTANCE_TESTS,
     *FINAL_EXAMPLE_QUALIFICATION_TESTS,
 )
+FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS = {
+    FINAL_EXAMPLES[0]: {
+        "hdf5": ("state/tracer",),
+        "npz": (),
+        "paraview": ("solution/tracer",),
+    },
+    FINAL_EXAMPLES[1]: {
+        "hdf5": ("state/two_fluid",),
+        "npz": (),
+        "paraview": ("visualization/two_fluid",),
+    },
+    FINAL_EXAMPLES[2]: {
+        "hdf5": ("hdf5/state",),
+        "npz": ("npz/state",),
+        "paraview": ("paraview/state",),
+    },
+    FINAL_EXAMPLES[3]: {
+        "hdf5": ("state/hyqmom15",),
+        "npz": (),
+        "paraview": ("visualization/hyqmom15",),
+    },
+}
 REQUIRED_PROOF_MARKERS = (
     "HDF5:",
     "ParaView:",
@@ -57,9 +80,11 @@ FORBIDDEN_FINAL_IMPORTS = (
     "pops.runtime.integrate",
     "CartesianMesh",
 )
-# The published wheel matrix is CPU/Kokkos Serial without MPI or parallel HDF5. The full suite still
-# runs; this supported-platform subset is repeated with a strict all-pass/no-hidden-skip policy.
-PYTHON_REQUIRED_SELECTION = "not mpi and not hdf5"
+# The complete source suite is authenticated by the release workflow's ``full-source-matrix`` job.
+# The exact published wheel repeats the closed M4 Python ledger plus the final-example ledger; it
+# must not serialize the complete suite a second time under a short release timeout.
+PYTHON_CONFORMANCE_MANIFEST = Path("tests/gates/m4_runtime_io.toml")
+PYTHON_REQUIRED_SELECTION = "m4-runtime-io-pytest+final-example-ledger"
 INSTALLED_COMPONENT_PACKAGE_NODEID = (
     "tests/python/integration/native_loader/test_external_component_package.py"
     "::test_source_component_executes_through_generic_native_loader_and_flux_consumer"
@@ -78,6 +103,49 @@ REQUIRED_RELEASE_GATES = (
     "generated_products",
     "diff",
 )
+
+
+def required_python_conformance_nodeids(root: Path) -> tuple[str, ...]:
+    """Return the exact installed-wheel Python ledger for the final gate.
+
+    MPI-only rows stay proved by ``full-source-matrix`` because the published wheel is Serial.
+    The external component row is executed separately with checkout headers explicitly cleared,
+    which is a strictly stronger installed-wheel proof than repeating it in the main lane.
+    """
+
+    path = root / PYTHON_CONFORMANCE_MANIFEST
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError("cannot read final Python conformance manifest: %s" % exc) from exc
+    if data.get("schema_version") != 1 or data.get("gate") != "m4-runtime-io":
+        raise ValueError("final Python conformance manifest identity drifted")
+    if data.get("deferred") != []:
+        raise ValueError("final Python conformance manifest must be closed")
+    checks = data.get("check")
+    if not isinstance(checks, list) or not checks:
+        raise ValueError("final Python conformance manifest has no executable checks")
+
+    nodeids: list[str] = []
+    manifest_nodeids: set[str] = set()
+    for row in checks:
+        if not isinstance(row, dict):
+            raise ValueError("final Python conformance manifest contains a malformed row")
+        if row.get("kind") != "pytest":
+            continue
+        nodeid = row.get("nodeid")
+        if not isinstance(nodeid, str) or "::" not in nodeid:
+            raise ValueError("final Python conformance manifest contains an invalid pytest nodeid")
+        if nodeid in manifest_nodeids:
+            raise ValueError("final Python conformance manifest contains duplicate pytest nodeids")
+        manifest_nodeids.add(nodeid)
+        if nodeid != INSTALLED_COMPONENT_PACKAGE_NODEID \
+                and nodeid not in FINAL_EXAMPLE_REQUIRED_TESTS:
+            nodeids.append(nodeid)
+    nodeids.extend(FINAL_EXAMPLE_REQUIRED_TESTS)
+    if len(nodeids) != len(set(nodeids)):
+        raise ValueError("final Python conformance ledger contains duplicate nodeids")
+    return tuple(nodeids)
 
 
 def release_matrix_source_errors(root: Path) -> list[str]:
@@ -353,6 +421,8 @@ def source_contract_errors(root: Path) -> list[str]:
     expected = tuple(sorted(FINAL_EXAMPLES))
     if actual != expected:
         errors.append("final examples must be exactly %s (found %s)" % (expected, actual))
+    if set(FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS) != set(FINAL_EXAMPLES):
+        errors.append("final scientific-output ledger must cover exactly the final examples")
 
     for relative in FINAL_EXAMPLES:
         path = root / relative
@@ -371,6 +441,25 @@ def source_contract_errors(root: Path) -> list[str]:
             errors.append(
                 "%s imports transitional/internal authoring names %s" % (relative, forbidden)
             )
+        formats = FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS.get(relative)
+        if not isinstance(formats, dict) or set(formats) != {"hdf5", "npz", "paraview"}:
+            errors.append("%s has no exact scientific-output format ledger" % relative)
+            continue
+        for format_name, targets in formats.items():
+            if not isinstance(targets, tuple) or any(
+                not isinstance(target, str) or not target for target in targets
+            ):
+                errors.append(
+                    "%s has a malformed %s scientific-output target ledger"
+                    % (relative, format_name)
+                )
+                continue
+            for target in targets:
+                if 'target="%s"' % target not in text:
+                    errors.append(
+                        "%s lacks its exact %s scientific-output target %s"
+                        % (relative, format_name, target)
+                    )
     ledgers = (
         ("acceptance", FINAL_EXAMPLE_ACCEPTANCE_TESTS),
         ("qualification", FINAL_EXAMPLE_QUALIFICATION_TESTS),

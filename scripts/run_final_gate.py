@@ -2,8 +2,8 @@
 """Produce reproducible, integrity-checked evidence for the final PoPS release.
 
 The gate has no success switches.  It first verifies the exact final source
-contract, then builds the installed package, exercises the complete native and
-Python conformance suites, executes every final example, independently reopens
+contract, then builds the installed package, exercises complete native conformance and the exact
+M4/final-example Python release ledger, executes every final example, independently reopens
 their scientific artifacts, checks their restart evidence, and writes an
 attestation outside the checkout.  ``release_preflight.py --release`` verifies
 the attestation again against the live installed extension.
@@ -29,18 +29,20 @@ import xml.etree.ElementTree as ET
 from final_release_contract import (
     FINAL_EXAMPLES,
     FINAL_EXAMPLE_REQUIRED_TESTS,
+    FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS,
     FINAL_SPECIFICATION,
     INSTALLED_COMPONENT_PACKAGE_NODEID,
     PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
+    required_python_conformance_nodeids,
     require_release_matrix_source_contract,
     require_source_contract,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 10
+EVIDENCE_SCHEMA_VERSION = 11
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -376,12 +378,27 @@ def _require_no_hidden_skip(stdout: str) -> None:
 def _reopen_outputs(
     output_dir: Path, *, example: Path,
 ) -> tuple[dict[str, Any], tuple[Path, ...], tuple[Path, ...]]:
-    hdf5_paths = sorted(path for path in output_dir.rglob("*.h5") if path.is_file() and path.stat().st_size)
-    npz_paths = sorted(path for path in output_dir.rglob("*.npz") if path.is_file() and path.stat().st_size)
-    paraview_paths = sorted(path for path in output_dir.rglob("*.vtu") if path.is_file() and path.stat().st_size)
-    if not hdf5_paths or not npz_paths or not paraview_paths:
-        raise FinalGateError(
-            "%s did not produce non-empty HDF5, NPZ and ParaView artifacts" % example)
+    targets = FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS.get(example)
+    if targets is None:
+        raise FinalGateError("%s has no scientific-output release ledger" % example)
+
+    def files(format_name: str, suffix: str) -> list[Path]:
+        paths = sorted(
+            path
+            for target in targets[format_name]
+            for path in (output_dir / target).rglob("*" + suffix)
+            if path.is_file() and path.stat().st_size
+        )
+        if targets[format_name] and not paths:
+            raise FinalGateError(
+                "%s did not produce a non-empty %s scientific artifact in %s"
+                % (example, format_name, targets[format_name])
+            )
+        return paths
+
+    hdf5_paths = files("hdf5", ".h5")
+    npz_paths = files("npz", ".npz")
+    paraview_paths = files("paraview", ".vtu")
     for path in hdf5_paths:
         if path.read_bytes()[:8] != b"\x89HDF\r\n\x1a\n":
             raise FinalGateError("HDF5 artifact has an invalid signature: %s" % path)
@@ -593,15 +610,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder.rows["native_conformance"]["evidence"] = {
             "required_lane": _junit_summary(native_junit),
         }
-        recorder.run("python_conformance", _conda_command(
-            ["python", "-m", "pytest", "-q"]))
+        python_nodeids = required_python_conformance_nodeids(ROOT)
         python_junit = evidence_root / "reports" / "python-required-conformance.xml"
         required_stdout = recorder.run("python_conformance", _conda_command([
-            "python", "-m", "pytest", "-q", "-s", "-m", PYTHON_REQUIRED_SELECTION,
+            "python", "-m", "pytest", "-q", "-s",
             "-o", "xfail_strict=true",
+            *python_nodeids,
             "--junitxml", str(python_junit),
         ]))
         _require_no_hidden_skip(required_stdout)
+        authenticated_python_nodeids = _require_junit_nodeids(
+            python_junit, python_nodeids
+        )
         installed_component_junit = (
             evidence_root / "reports" / "installed-component-package.xml"
         )
@@ -628,9 +648,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder.rows["python_conformance"]["evidence"] = {
             "required_lane": _junit_summary(python_junit),
             "selection": PYTHON_REQUIRED_SELECTION,
-            "final_example_nodeids": _require_junit_nodeids(
-                python_junit, FINAL_EXAMPLE_REQUIRED_TESTS
-            ),
+            "nodeids": authenticated_python_nodeids,
+            "final_example_nodeids": list(FINAL_EXAMPLE_REQUIRED_TESTS),
             "installed_component_package": {
                 "nodeid": INSTALLED_COMPONENT_PACKAGE_NODEID,
                 "headers": "installed-wheel",
