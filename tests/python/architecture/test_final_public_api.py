@@ -257,6 +257,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
             "patch_rectangles",
             "post_commit_diagnostics",
             "post_commit_reports",
+            "program_accepted_state",
             "program_report",
         "restart",
         "restore_consumer_recovery",
