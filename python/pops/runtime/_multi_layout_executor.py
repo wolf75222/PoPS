@@ -443,8 +443,12 @@ class _MultiLayoutUniformExecutor:
                     or not isinstance(index, int)
                     for index in parameter_blocks
                 )
-                or tuple(sorted(parameter_blocks)) != tuple(range(len(local_map)))
             ):
+                raise RuntimeError(
+                    "multi-layout child Program parameter report is not exact"
+                )
+            exact_parameter_blocks = cast(tuple[int, ...], parameter_blocks)
+            if tuple(sorted(exact_parameter_blocks)) != tuple(range(len(local_map))):
                 raise RuntimeError(
                     "multi-layout child Program parameter report is not exact"
                 )
