@@ -439,7 +439,7 @@ class PreparedFieldSolverComponent final {
               geometry.ylo + static_cast<double>(box.lo[1]) * geometry.dy() ||
           patch.cell_spacing[0] != geometry.dx() || patch.cell_spacing[1] != geometry.dy() ||
           patch.layout_identity == nullptr || patch.patch_identity == nullptr ||
-          materialized_layout_identity_ != patch.layout_identity ||
+          spec_.source_layout_identity != patch.layout_identity ||
           patch_identities_[index] != patch.patch_identity)
         throw std::runtime_error(
             "prepared external field topology cannot be reused after a layout change");
