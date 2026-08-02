@@ -455,8 +455,9 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=gpu,
             status="unavailable",
             limitation=(
-                "the prepared boundary component ABI has ghost, residual, and JVP operations "
-                "but no post-Riemann numerical-flux transformation port"
+                "the typed NumericalFlux port and immutable no_flux provider law resolve without "
+                "semantic inference, but the prepared boundary component ABI has ghost, residual, "
+                "and JVP operations and no post-Riemann numerical-flux transformation port"
             ),
             requested="post-Riemann transport-boundary flux provider",
             available_route="prepared ghost-state/exterior-state transport boundary",

@@ -30,8 +30,9 @@ from .ports import (
     ConstraintResidual, ExteriorTrace, GhostState, IncomingMultiplicity, NumericalFlux,
     RepresentationFlow, SignDependence, SonicPolicy)
 from .providers import (
-    BoundaryProvider, BoundaryProviderRegistry, DirectionalTransport, Dirichlet, GhostFormula,
-    Inflow, Mixed, Neumann, NoFlux, Outflow, ResolvedBoundaryBinding, ResolvedBoundaryPlan)
+    BoundaryProvider, BoundaryProviderKind, BoundaryProviderRegistry, DirectionalTransport,
+    Dirichlet, GhostFormula, Inflow, Mixed, Neumann, NoFlux, Outflow,
+    ResolvedBoundaryBinding, ResolvedBoundaryPlan)
 from .topology import (
     BoundaryHandle, BoundaryOrientation, BoundarySide, BoundaryTopology,
     PeriodicIdentification, PeriodicOrientation)
@@ -122,8 +123,9 @@ __all__ = [
     "PeriodicIdentification", "PeriodicOrientation", "BoundaryDependencies", "BoundaryPort",
     "CharacteristicClosure", "ClosureMode", "ConstraintResidual", "ExteriorTrace", "GhostState",
     "IncomingMultiplicity", "NumericalFlux", "RepresentationFlow", "SignDependence",
-    "SonicPolicy", "BoundaryProvider", "BoundaryProviderRegistry", "DirectionalTransport",
-    "Dirichlet", "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow",
+    "SonicPolicy", "BoundaryProvider", "BoundaryProviderKind", "BoundaryProviderRegistry",
+    "DirectionalTransport", "Dirichlet", "GhostFormula", "Inflow", "Mixed", "Neumann",
+    "NoFlux", "Outflow",
     "ResolvedBoundaryBinding", "ResolvedBoundaryPlan",
     "BoundaryComponentBinding", "BoundaryLinearizationContribution",
     "BoundaryResidualContribution",

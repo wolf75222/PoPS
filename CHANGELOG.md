@@ -36,6 +36,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   descriptors. Characteristic closures without a prepared eigenstructure, forged representation
   converters, unsupported analytic dependencies, and mixed logical clocks can no longer survive as
   inert metadata and fail only during compile or bind.
+- Boundary provider identities now retain an immutable typed law such as inflow, ghost formula,
+  directional transport, or no-flux. Resolution no longer has to infer semantics from a handle name
+  or output port, while the still-missing post-Riemann execution ABI remains explicitly unavailable.
 - Strict AMR checkpoint payload v7 now persists the accepted shared-interface flux audit together
   with Program clocks, histories, tagging state, conservative ledger and synchronization report.
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved

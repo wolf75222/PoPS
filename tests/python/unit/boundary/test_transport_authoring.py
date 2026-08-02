@@ -407,6 +407,26 @@ def test_directional_characteristic_provider_cannot_fall_back_to_native_inflow()
         case._resolved_numerics_for("tracer")
 
 
+def test_resolved_transport_condition_rejects_a_forged_provider_law():
+    from pops.mesh.boundaries import BoundaryProviderKind
+
+    frame, _, _, inlet_value, numerics, case, block, block_state = _authoring()
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: Inflow(state=block_state, value=inlet_value),
+        frame.boundaries.x_max: Outflow(state=block_state),
+        frame.boundaries.y_min: Inflow(state=block_state, value=inlet_value),
+        frame.boundaries.y_max: Outflow(state=block_state),
+    }))
+    case.numerics(numerics, block=block)
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    condition = next(
+        row for row in authority.conditions if row.condition_type == "inflow")
+    forged = replace(condition.provider, kind=BoundaryProviderKind.OUTFLOW)
+
+    with pytest.raises(ValueError, match="condition 'inflow'.*provider law 'outflow'"):
+        replace(condition, provider=forged)
+
+
 def test_slip_wall_requires_roles_and_lowers_one_model_aware_face_law():
     frame, _, _, _, numerics, case, block, block_state = _authoring()
     numerics.boundaries.add(TransportBoundarySet({

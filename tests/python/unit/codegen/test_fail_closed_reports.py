@@ -137,6 +137,8 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
         assert limitation in route.limitation
         assert alternative in route.alternative
         assert route.error_message
+    assert "immutable no_flux provider law" in \
+        routes["boundary:post_riemann_flux"].limitation
 
 
 def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy():
