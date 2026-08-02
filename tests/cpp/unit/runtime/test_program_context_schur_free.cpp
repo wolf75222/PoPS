@@ -187,8 +187,8 @@ class ExecutionServicesFixture
     return solved_field_outcome_("default-blocks");
   }
   pops::SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
-      const pops::runtime::multiblock::BoundaryEvaluationPoint&, std::int64_t, std::string_view,
-      std::initializer_list<typename SharedServices::FieldStageOverride>) const {
+      const pops::runtime::multiblock::BoundaryEvaluationPoint&, const std::string&,
+      const std::vector<const pops::MultiFab*>&) const {
     return solved_field_outcome_("generated-blocks");
   }
   LogicalRollback program_execution_capture_logical_evaluation_() const noexcept {
@@ -323,6 +323,9 @@ class ExecutionServicesFixture
   pops::runtime::program::ProgramRuntimeState& program_execution_runtime_state_() const {
     return program_runtime_state_;
   }
+  pops::MultiFab& program_execution_state_(int runtime_block) const {
+    return runtime_states_.at(static_cast<std::size_t>(runtime_block));
+  }
   typename SharedServices::ProgramClockCoordinate program_execution_clock_coordinate_() const {
     return {pops::Real(3.5), 4, active_level_};
   }
@@ -404,6 +407,7 @@ class ExecutionServicesFixture
   mutable std::uint64_t resource_materialization_generation_ = 17;
   mutable int resource_levels_ = Amr ? 3 : 1;
   mutable pops::runtime::program::ProgramRuntimeState program_runtime_state_;
+  mutable std::vector<pops::MultiFab> runtime_states_ = std::vector<pops::MultiFab>(2);
   mutable int field_update_count_ = 0;
   mutable FieldFacade field_facade_{&field_update_count_};
   mutable int history_register_count_ = 0;

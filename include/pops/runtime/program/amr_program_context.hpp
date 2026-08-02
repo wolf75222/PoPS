@@ -330,15 +330,12 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
   /// Generated allocation-free route. The static initializer-list request is mapped into one
-  /// context-owned runtime-block pointer workspace keyed by the exact IR identity. The evaluation
-  /// point, provider, active level and ordered block pack cannot drift across replays.
+  /// shared runtime-block pointer workspace keyed by the exact IR identity. The provider receives
+  /// the already authenticated runtime ordering and owns only the hierarchy solve dispatch.
   SolveOutcome program_execution_solve_generated_field_from_blocks_outcome_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
-      std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
-    const std::vector<const MultiFab*>& stages =
-        generated_field_solve_stages_(value_id, field, overrides);
-    return eng_->solve_named_fields_from_states_at(
-        point, generated_field_solve_workspaces_.at(value_id).field_identity, stages);
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+      const std::vector<const MultiFab*>& runtime_stages) const {
+    return eng_->solve_named_fields_from_states_at(point, field, runtime_stages);
   }
 
  public:
@@ -750,103 +747,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         !capture_flux_scratch_[index]->key.matches(block, level, generation, prototype))
       throw std::logic_error("AMR Program face-flux workspace layout contract mismatch");
     return CaptureFluxScratchLease(*capture_flux_scratch_[index]);
-  }
-
-  struct GeneratedFieldSolveWorkspace {
-    std::string field_identity;
-    std::vector<int> program_to_system;
-    std::vector<const MultiFab*> runtime_stages;
-    std::vector<int> expected_program_blocks;
-    bool expected_program_blocks_initialized = false;
-  };
-
-  const std::vector<const MultiFab*>& generated_field_solve_stages_(
-      std::int64_t value_id, std::string_view field,
-      std::initializer_list<FieldStageOverride> overrides) const {
-    if (value_id < 0)
-      throw std::invalid_argument(
-          "generated AMR simultaneous field solve requires a non-negative IR identity");
-    if (field.empty())
-      throw std::invalid_argument(
-          "generated AMR simultaneous field solve requires a field identity");
-    if (overrides.size() == 0)
-      throw std::invalid_argument(
-          "generated AMR simultaneous field solve requires at least one stage override");
-
-    auto [entry, inserted] = generated_field_solve_workspaces_.try_emplace(value_id);
-    GeneratedFieldSolveWorkspace& workspace = entry->second;
-    if (inserted)
-      workspace.field_identity.assign(field.data(), field.size());
-    else if (std::string_view(workspace.field_identity) != field)
-      throw std::logic_error(
-          "generated AMR simultaneous field solve IR identity was reused for a different field");
-
-    const std::vector<int>& block_map = facade_->program_block_map();
-    if (block_map.empty())
-      throw block_map_error_(
-          "AmrProgramContext::solve_fields_from_blocks: no explicit program-to-AMR block map is "
-          "installed; positional block identity is not supported");
-    bool structure_matches =
-        workspace.program_to_system.size() == block_map.size() &&
-        workspace.runtime_stages.size() == static_cast<std::size_t>(n_blocks());
-    for (std::size_t p = 0; structure_matches && p < block_map.size(); ++p)
-      structure_matches = workspace.program_to_system[p] == sys_block(static_cast<int>(p));
-    if (!structure_matches) {
-      workspace.program_to_system.resize(block_map.size());
-      for (std::size_t p = 0; p < block_map.size(); ++p)
-        workspace.program_to_system[p] = sys_block(static_cast<int>(p));
-      workspace.runtime_stages.assign(static_cast<std::size_t>(n_blocks()), nullptr);
-      workspace.expected_program_blocks.clear();
-      workspace.expected_program_blocks_initialized = false;
-    }
-
-    const bool learn_blocks = !workspace.expected_program_blocks_initialized;
-    if (learn_blocks) {
-      workspace.expected_program_blocks.clear();
-      workspace.expected_program_blocks.reserve(overrides.size());
-    } else if (workspace.expected_program_blocks.size() != overrides.size()) {
-      throw std::logic_error(
-          "generated AMR simultaneous field solve IR identity changed its block pack");
-    }
-    std::fill(workspace.runtime_stages.begin(), workspace.runtime_stages.end(), nullptr);
-    std::size_t ordinal = 0;
-    for (const FieldStageOverride& override_value : overrides) {
-      if (override_value.program_block < 0 ||
-          static_cast<std::size_t>(override_value.program_block) >= block_map.size())
-        throw std::out_of_range(
-            "generated AMR simultaneous field solve Program block is out of range");
-      if (override_value.state == nullptr)
-        throw std::invalid_argument(
-            "generated AMR simultaneous field solve stage override cannot be null");
-      const std::size_t program_slot = static_cast<std::size_t>(override_value.program_block);
-      const std::size_t runtime_slot =
-          static_cast<std::size_t>(workspace.program_to_system[program_slot]);
-      if (workspace.runtime_stages[runtime_slot] != nullptr)
-        throw std::invalid_argument(
-            "generated AMR simultaneous field solve contains a duplicate Program block");
-      if (learn_blocks)
-        workspace.expected_program_blocks.push_back(override_value.program_block);
-      else if (workspace.expected_program_blocks[ordinal] != override_value.program_block)
-        throw std::logic_error(
-            "generated AMR simultaneous field solve IR identity changed its ordered block pack");
-      const MultiFab& live = state(override_value.program_block);
-      const MultiFab& stage = *override_value.state;
-      if (stage.box_array().boxes() != live.box_array().boxes() ||
-          stage.dmap().ranks() != live.dmap().ranks() || stage.ncomp() != live.ncomp() ||
-          stage.n_grow() != live.n_grow())
-        throw std::invalid_argument(
-            "generated AMR simultaneous field solve stage does not match its exact level layout");
-      for (std::size_t other = 0; other < static_cast<std::size_t>(n_blocks()); ++other) {
-        if (other != runtime_slot && &stage == &eng_->level_state(other, level_))
-          throw std::invalid_argument(
-              "generated AMR simultaneous field solve cannot use another block's live state as a "
-              "stage override");
-      }
-      workspace.runtime_stages[runtime_slot] = override_value.state;
-      ++ordinal;
-    }
-    workspace.expected_program_blocks_initialized = true;
-    return workspace.runtime_stages;
   }
 
   /// Fail loud for an op the codegen can emit but the installed AMR Program path does not wire (named-flux /
@@ -3308,7 +3208,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   AmrSystem* facade_;
   AmrRuntime* eng_;
   mutable int level_ = 0;
-  mutable std::map<std::int64_t, GeneratedFieldSolveWorkspace> generated_field_solve_workspaces_;
   mutable std::vector<std::pair<MultiFab*, MultiFab*>> stage_restore_scratch_;
   // Eager, exact-layout face fields used by flux-materialising residuals. Indexed block-major by
   // [runtime block * capture_flux_scratch_levels_ + level]; never resized from a stage.
