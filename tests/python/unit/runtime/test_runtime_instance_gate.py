@@ -1875,6 +1875,65 @@ def test_root_output_lane_is_materialized_and_closed_once_per_run():
         publisher.begin_post_commit_consumers(run_identity)
 
 
+def test_clean_failed_run_close_releases_its_deterministic_identity_for_retry():
+    from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
+
+    class _Lane:
+        active = True
+        closed = False
+
+        def close_collectively(self):
+            self.active = False
+            self.closed = True
+
+    class _World:
+        def __init__(self):
+            self.lanes = []
+
+        def duplicate_observer_lane(self, _identity):
+            lane = _Lane()
+            self.lanes.append(lane)
+            return lane
+
+    run_identity = make_identity("run", {"case": "retryable-root-output-lane"})
+    world = _World()
+    publisher = object.__new__(RuntimeConsumerPublisher)
+    publisher._root_output_consumers = ("scientific_output/root",)
+    publisher._root_output_lanes = {}
+    publisher._communicator = world
+    publisher._closed_observer_runs = set()
+    publisher._builtin_catalyst_consumers = ()
+    publisher._builtin_catalyst_run_started = False
+    publisher._owner = SimpleNamespace(
+        _consumer_graph=SimpleNamespace(nodes=()),
+    )
+    publisher._observer_diagnostics = []
+    publisher._observer_workers = {}
+    publisher._observer_reports = {}
+    publisher._observer_queues = {}
+    publisher._observer_pending_failures = {}
+
+    publisher.begin_post_commit_consumers(run_identity)
+    publisher.close_failed_run_consumers(run_identity, release_identity=True)
+    assert run_identity.token not in publisher._closed_observer_runs
+    assert world.lanes[0].closed is True
+
+    publisher.begin_post_commit_consumers(run_identity)
+    assert publisher._root_output_communicator() is world.lanes[1]
+    publisher.close_live_visualizations(run_identity)
+    assert run_identity.token in publisher._closed_observer_runs
+    publisher.close_failed_run_consumers(run_identity, release_identity=True)
+    assert run_identity.token in publisher._closed_observer_runs
+
+    published_identity = make_identity("run", {"case": "published-at-start"})
+    publisher.begin_post_commit_consumers(published_identity)
+    publisher.close_failed_run_consumers(
+        published_identity,
+        release_identity=False,
+    )
+    assert published_identity.token in publisher._closed_observer_runs
+
+
 def test_diagnostic_component_requires_one_explicit_role_for_multicomponent_state():
     from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 

@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from pops.identity import make_identity
+from pops.runtime._multi_layout_executor import _MultiLayoutUniformExecutor
 from pops.runtime.program_report import ProgramRuntimeReport, build_program_report
 
 
@@ -184,6 +186,48 @@ def test_report_serialization_is_array_free_and_detached():
 
     data["histories"].clear()
     assert report.histories
+
+
+def test_multi_layout_report_preserves_the_common_temporal_partition():
+    partition = {
+        "kind": "global",
+        "provider_identity": "pops.temporal-partition.global.v1",
+    }
+
+    def child(layout_id, block):
+        layout_program = SimpleNamespace(
+            layout_id=layout_id,
+            identity=make_identity("layout-program", {"layout": layout_id}),
+        )
+        report = ProgramRuntimeReport(
+            installed=True,
+            program_hash="sha256:%s" % layout_id,
+            step_transaction={"strategy": {"kind": "fixed"}},
+            block_map=[0],
+            params=[{"program_block": 0, "count": 0, "limit": 8}],
+            diagnostics={},
+            histories=[],
+            cache=[],
+            profiler={"enabled": False},
+            clocks=[],
+            level_relations=[],
+            flux_ledger=[],
+            synchronization=[],
+            temporal_partition=partition,
+            temporal={"schema_version": 1, "accepted_step": 0},
+        )
+        return layout_program, (block,), report
+
+    executor = object.__new__(_MultiLayoutUniformExecutor)
+    executor._ordered_program_reports = lambda: (
+        child("layout-a", "fluid"),
+        child("layout-b", "field"),
+    )
+    executor.block_names = lambda: ("fluid", "field")
+
+    report = executor.program_report()
+
+    assert report.temporal_partition == partition
 
 
 if __name__ == "__main__":

@@ -2307,6 +2307,33 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             run_identity, close=True, raise_on_failure=raise_on_failure
         )
 
+    def close_failed_run_consumers(
+        self,
+        run_identity: Identity,
+        *,
+        release_identity: bool,
+    ) -> tuple[ObserverDeliveryReport, ...]:
+        """Close a zero-progress failed run and release its deterministic identity.
+
+        ``RunManifest`` identities intentionally describe execution semantics rather than an
+        invocation nonce.  A run that fails before its first accepted step therefore receives the
+        same identity when the caller fixes the external fault and retries from the restored entry
+        boundary.  Reuse is safe only when no accepted start consumer published and after every
+        run-scoped observer and ROOT MPI lane closed cleanly.  An already-closed identity, any
+        observer delivery, or a caller-reported start publication denotes a prior visible effect
+        and remains sealed.
+        """
+
+        already_closed = run_identity.token in self._closed_observer_runs
+        reports = self.flush_live_visualizations(
+            run_identity,
+            close=True,
+            raise_on_failure=True,
+        )
+        if release_identity and not already_closed and not reports:
+            self._closed_observer_runs.discard(run_identity.token)
+        return reports
+
     def _root_output_communicator(self) -> Any:
         """Return the one active duplicated lane used by native ROOT snapshot gathers."""
 

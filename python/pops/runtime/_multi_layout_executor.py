@@ -590,6 +590,13 @@ class _MultiLayoutUniformExecutor:
             level_relations=level_relations,
             flux_ledger=flux_ledger,
             synchronization=synchronization,
+            temporal_partition=_common_exact(
+                (
+                    report.temporal_partition
+                    for _row, _blocks, report in children
+                ),
+                where="multi-layout Program temporal-partition report",
+            ),
             temporal=_common_exact(
                 (report.temporal for _row, _blocks, report in children),
                 where="multi-layout Program temporal report",
