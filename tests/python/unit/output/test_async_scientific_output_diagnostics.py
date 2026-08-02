@@ -30,6 +30,7 @@ from pops.output._consumer_contracts import (
 from pops.output._restart_provider import RestartAuthority
 from pops.output._writers.common import writer_session_authority
 from pops.problem.handles import BlockHandle
+from pops.runtime._runtime_consumers import RuntimeConsumerPublisher
 from pops.runtime._runtime_instance import RuntimeInstance
 from pops.time import Clock, every
 from tests.python.support.layout_plan import cartesian_grid
@@ -280,6 +281,43 @@ class _BalanceExecutor(_Executor):
             "reflux": 1.0,
             "projection": 0.5,
         }
+
+
+def test_selected_native_balance_forwards_exact_owner_coordinates():
+    class _SelectedExecutor:
+        def __init__(self):
+            self.call = None
+
+        def _selected_accepted_balance_terms(
+            self, route, block, component, levels, automatic_terms
+        ):
+            self.call = (route, block, component, levels, automatic_terms)
+            return {
+                "storage_change": 7.0,
+                "outward_boundary_flux": 2.0,
+                "sources": 3.0,
+                "reflux": 1.0,
+                "projection": 0.5,
+            }
+
+    executor = _SelectedExecutor()
+    terms = RuntimeConsumerPublisher._native_balance_terms(
+        executor,
+        "route",
+        block="fluid",
+        component=2,
+        levels=(0, 1),
+        automatic_terms=("projection", "reflux"),
+    )
+
+    assert executor.call == (
+        "route",
+        "fluid",
+        2,
+        [0, 1],
+        ["projection", "reflux"],
+    )
+    assert terms.residual == pytest.approx(4.5)
 
 
 def _async_balance_runtime(tmp_path: Path):

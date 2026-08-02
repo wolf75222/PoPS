@@ -126,6 +126,39 @@ def test_balance_uses_one_typed_native_attempt_route():
         ConservationCheck(balance).diagnostic_execution()
 
 
+def test_balance_ledger_selects_exact_native_component_terms():
+    ledger = BalanceLedger(
+        "mass-native",
+        role=Density(),
+        automatic_terms=("projection", "reflux"),
+    )
+    balance = Balance(ledger, block=_NE_BLOCK)
+    execution = balance.diagnostic_execution()
+    operation, = execution["operations"]
+
+    assert execution["role"] == "Density"
+    assert operation["automatic_terms"] == ["projection", "reflux"]
+    assert operation["balance_component"] == 0
+    assert balance.options()["role"] == "Density"
+    assert ledger.to_data()["role"] == "Density"
+    assert ledger.to_data()["component"] == 0
+    assert ledger.to_data()["automatic_terms"] == ["projection", "reflux"]
+    assert ledger.identity != BalanceLedger("mass-native").identity
+
+    with pytest.raises(TypeError, match="ComponentRole"):
+        BalanceLedger("bad-role", role="Density")
+    reordered = BalanceLedger(
+        "canonical-order", automatic_terms=("reflux", "projection")
+    )
+    assert reordered.automatic_terms == ("projection", "reflux")
+    with pytest.raises(ValueError, match="must be unique"):
+        BalanceLedger("duplicate", automatic_terms=("reflux", "reflux"))
+    with pytest.raises(ValueError, match="only reflux and projection"):
+        BalanceLedger("bad-producer", automatic_terms=("sources",))
+    with pytest.raises(TypeError, match="non-negative int"):
+        BalanceLedger("bad-component", component=-1, automatic_terms=("projection",))
+
+
 # --- Integral / MinMax ------------------------------------------------------------------
 def test_integral_is_a_sum_reduction():
     mass = Integral(role=Density())

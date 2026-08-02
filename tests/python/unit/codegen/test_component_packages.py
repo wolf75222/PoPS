@@ -121,6 +121,32 @@ def test_fixed_binary_cannot_claim_template_genericity():
     assert error.value.code == "fixed_generic_claim"
 
 
+def test_fixed_binary_bytes_are_authenticated_before_package_use(tmp_path):
+    platform = proven_serial_manifest(
+        backend="aot-component", target="component", abi="headers|clang|c++20")
+    component = _manifest(generic=False)
+    binary = b"authenticated-fixed-component"
+    data = build_fixed_binary_manifest(
+        components={"average": component},
+        platform=platform,
+        binary_path="average.so",
+        binary=binary,
+        symbols=("pops_component_interface_v1",),
+    )
+    binary_path = tmp_path / "average.so"
+    manifest_path = tmp_path / "average.pops.json"
+    binary_path.write_bytes(binary)
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    package = load(manifest_path)
+    assert package.binary == binary
+
+    binary_path.write_bytes(binary + b"-tampered")
+    with pytest.raises(ComponentPackageError) as error:
+        load(manifest_path)
+    assert error.value.code == "binary_digest"
+
+
 def test_compiled_registry_refuses_source_values_and_freezes():
     registry = CompiledArtifactRegistry()
     with pytest.raises(TypeError, match="CompiledComponentArtifact"):

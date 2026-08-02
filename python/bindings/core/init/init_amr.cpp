@@ -789,6 +789,15 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
+      // Exact Program-index -> AMR-block-index map established by name at install.  Expose only
+      // immutable report metadata, never a structural mutation route.
+      .def("program_block_map", &AmrSystem::program_block_map)
+      .def(
+          "program_param_count",
+          [](const AmrSystem& system, int program_block) {
+            return system.program_params(program_block).count;
+          },
+          py::arg("program_block"))
       .def("program_accepted_state",
            [](const AmrSystem& s) {
              const auto bytes = s.program_accepted_state();
@@ -824,6 +833,9 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
       .def("_accepted_balance_terms", &AmrSystem::accepted_balance_terms, py::arg("route"))
+      .def("_selected_accepted_balance_terms", &AmrSystem::selected_accepted_balance_terms,
+           py::arg("route"), py::arg("block"), py::arg("component"), py::arg("levels"),
+           py::arg("automatic_terms"))
       .def("_consume_step_projections", &AmrSystem::consume_step_projections)
       .def("record_program_diagnostic", &AmrSystem::record_program_diagnostic, py::arg("name"),
            py::arg("value"))

@@ -68,6 +68,20 @@ TEST(PlatformManifest, UnknownIsMissingProofAndThreeDimensionsRemainRepresentabl
                pops::platform::ContractError);
 }
 
+TEST(PlatformManifest, UnknownCapabilityRefusesBeforeKernel) {
+  auto missing = platform();
+  missing.device = pops::platform::CapabilityProof::unknown();
+  int launches = 0;
+  EXPECT_THROW(pops::platform::launch_checked(missing, context(), {field()},
+                                              [&](const auto&, const auto&) {
+                                                ++launches;
+                                                return 0;
+                                              },
+                                              {field()}),
+               pops::platform::ContractError);
+  EXPECT_EQ(launches, 0);
+}
+
 TEST(PlatformManifest, FieldAndCommunicatorMismatchesRefuseBeforeKernel) {
   int launches = 0;
   auto kernel = [&](const auto&, const auto&) { return ++launches; };

@@ -14,6 +14,7 @@ restart can rebind that history, publish its weaker continuation identity, and a
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -226,6 +227,73 @@ def _assert_same_accepted_image(runtime, expected):
         assert len(current_slots) == len(recorded_slots)
         for current, recorded in zip(current_slots, recorded_slots, strict=True):
             np.testing.assert_array_equal(current, recorded)
+
+
+def test_authenticated_amr_contract_refusal_rolls_back_native_restart_transaction(
+    native_cxx,
+    kokkos_root,
+    tmp_path,
+):
+    """A real post-apply checkpoint-provider refusal restores the previous accepted image."""
+    del kokkos_root
+    artifact = pops.compile(_resolved(native_cxx))
+    source = _bind(artifact)
+    report = pops.run(
+        source,
+        t_end=NSTEPS * DT,
+        max_steps=NSTEPS,
+        console=False,
+    )
+    assert report.accepted_steps == NSTEPS
+    checkpoint = Path(source.checkpoint(tmp_path / "provider-contract-source"))
+
+    # Preserve a fully valid, content-addressed checkpoint envelope while making only its dynamic
+    # accepted-ledger claim inconsistent with the opaque Program image. Static preflight therefore
+    # succeeds; the real AMR provider can refuse only after applying the checkpoint inside its
+    # native restart transaction.
+    from pops.runtime._checkpoint_manifest import (
+        IDENTITY_KEY,
+        MANIFEST_KEY,
+        seal_checkpoint_payload,
+    )
+
+    with np.load(checkpoint, allow_pickle=False) as stored:
+        payload = {
+            name: np.asarray(stored[name]).copy()
+            for name in stored.files
+            if name not in {MANIFEST_KEY, IDENTITY_KEY}
+        }
+    contract = json.loads(str(payload["amr_accepted_contract"]))
+    contract["ledger"]["accepted_entries"] = int(
+        contract["ledger"]["accepted_entries"]
+    ) + 1
+    payload["amr_accepted_contract"] = np.asarray(
+        json.dumps(contract, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    )
+    seal_checkpoint_payload(source, payload, runtime_kind="amr")
+    refused_checkpoint = tmp_path / "provider-contract-refusal.npz"
+    with refused_checkpoint.open("wb") as stream:
+        np.savez_compressed(stream, **payload)
+
+    restarted = _bind(artifact)
+    rollback_image = _accepted_image(restarted)
+    with pytest.raises(
+        ValueError,
+        match="restored AMR accepted-state image differs from its authenticated contract",
+    ):
+        restarted.restart(refused_checkpoint)
+
+    _assert_same_accepted_image(restarted, rollback_image)
+    assert restarted._executor.last_restart_regrid_receipt() is None
+    assert "_checkpoint_restart_python_snapshot" not in restarted._executor.__dict__
+
+    # The same real provider remains usable after compensation: retrying the unmodified checkpoint
+    # succeeds and publishes one transformed-hierarchy restart receipt.
+    restart_identity = restarted.restart(checkpoint)
+    receipt = restarted._executor.last_restart_regrid_receipt()
+    assert restart_identity == restarted.last_restart_identity
+    assert receipt["changed"] is True
+    assert receipt["before"]["topology_identity"] != receipt["after"]["topology_identity"]
 
 
 def test_regrid_on_restart_changes_real_boxes_and_rolls_back_post_regrid_fault(

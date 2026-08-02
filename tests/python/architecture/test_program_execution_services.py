@@ -364,8 +364,11 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_set_field_parameters_",
             "program_execution_set_field_kernel_",
         ):
-            assert source.count(hook) == 1, (
-                "%s must provide exactly one explicit provider hook %s" % (context, hook)
+            definitions = re.findall(
+                rf"(?m)^  [^\n;=]*\b{re.escape(hook)}\s*\(", source
+            )
+            assert len(definitions) == 1, (
+                "%s must define exactly one explicit provider hook %s" % (context, hook)
             )
 
 
@@ -668,7 +671,12 @@ def test_shared_projection_maps_the_program_block_once_and_leaves_native_dispatc
     shared = _read(SHARED)
     uniform = _read(UNIFORM)
     amr = _read(AMR)
-    assert "program_execution_apply_projection_(sys_block(block), state)" in shared
+    projection = shared.split("void apply_projection(int block, MultiFab& state) const {", 1)[
+        1
+    ].split("\n  }", 1)[0]
+    assert projection.count("const int runtime_block = sys_block(block);") == 1
+    assert "program_execution_apply_projection_(runtime_block, state)" in projection
+    assert "program_execution_apply_projection_(sys_block(block), state)" not in projection
     assert "sys_->block_project(runtime_block, state);" in uniform
     assert (
         "eng_->project_level_state(static_cast<std::size_t>(runtime_block), level_, state);" in amr
