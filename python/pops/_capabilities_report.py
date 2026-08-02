@@ -593,21 +593,23 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "amr:shared_interface_implicit_jacvec_pair",
             layout="amr",
-            backend="production",
+            backend="none",
             platform="host",
             mpi=False,
             gpu=False,
-            status="partial",
+            status="unavailable",
             limitation=(
-                "one frozen exactly materialized (L0, L1) hierarchy with two blocks, one shared "
-                "interface and one packed state-only rhs_jacvec pair; MPI is refused before "
-                "native interface installation"
+                "the host/serial level_rhs_jacvec_pair primitive and resolve-evidence-gated "
+                "compile route exist, but no generated Program executes the implicit "
+                "solve/matvec end to end"
             ),
-            requested="shared-interface implicit JVP on arbitrary AMR and MPI execution",
-            available_route="frozen two-level host/serial shared-interface implicit JVP",
+            requested="generated shared-interface implicit JVP solve",
+            available_route=(
+                "native host/serial pair primitive plus compile-only generated route"
+            ),
             alternative=(
-                "use the proved host/serial route or implement collective pair admission, "
-                "packing-failure consensus and a two-rank deadlock proof"
+                "keep ADC-758 open and add an end-to-end generated bind/solve/matvec proof "
+                "before advertising a production route"
             ),
             source=source,
         ),
