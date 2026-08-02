@@ -124,7 +124,8 @@ def _weno5(name: str, epsilon: Any = None) -> Any:
 
     ``None`` (the default) keeps the native ``kWenoEpsilon`` literal -- the descriptor options are
     unchanged (omit-when-default) and the emitted stencil is bit-identical. A finite positive value
-    is carried in the descriptor options and threaded to the native ``Weno5::eps`` by ``add_block``.
+    is carried in the descriptor options and threaded to the native ``Weno5::eps`` by the
+    private ``add_equation`` installation seam.
     On AMR, descriptor availability is conditional on the resolved coarse/fine authority: it must
     certify order 5 and ghost depth 3. The builtin capability family selects its conservative
     order-5 route from that resolved requirement; an insufficient external provider is refused

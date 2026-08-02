@@ -144,7 +144,8 @@ def emit_cpp_program(
     the blocks are first declared via ``T.state``). The .so also exports its block NAMES in that
     order (``pops_program_block_count`` / ``pops_program_block_name``); ``System::install_program``
     binds them to the instantiated System blocks BY NAME (Spec 3 criterion 23, ADC-457), so the
-    System blocks (``sim.add_equation`` / ``sim.add_block``) may be added in ANY order -- a Program
+    System blocks (through the private ``sim.add_equation`` install seam) may be added in ANY
+    order -- a Program
     block whose name has no instantiated System block fails loud (``Program requires block instance
     '<name>', but simulation did not instantiate it``). A block declared but never committed is a
     READ-ONLY block (allowed; e.g. a passive field whose charge couples the others through the shared

@@ -39,7 +39,7 @@ else:
 # structural after bind: only BindSchema may populate them. State/field/clock data remain mutable.
 FROZEN_STRUCTURAL = frozenset({
     # blocks / field problems / aux LAYOUT
-    "add_block", "add_equation", "_install_native_block",
+    "add_equation", "_install_native_block",
     "set_poisson", "set_epsilon_field", "set_epsilon_anisotropic_field", "set_reaction_field",
     "set_aux_field_halo_component", "set_electron_temperature_from", "register_elliptic_field",
     "set_block_elliptic_field", "set_compiled_block",
@@ -54,13 +54,18 @@ FROZEN_STRUCTURAL = frozenset({
     "set_program_params",
 })
 
+# Native facades still expose this ABI entry, but it is no longer a Python runtime-authoring
+# spelling. Keep it out of ``__getattr__`` in both assembling and bound phases so deleting the
+# duplicate mixin methods cannot accidentally reveal the C++ method as a compatibility fallback.
+RETIRED_NATIVE_PASSTHROUGH = frozenset({"add_block"})
+
 
 def freeze_error(what: Any) -> Any:
     """The precise :class:`RuntimeError` for a structural mutation attempted after ``pops.bind``.
 
     @p what names the refused operation (a method / attribute name). The message speaks the BIND
     vocabulary and points at the assembly path (``pops.Case`` + ``pops.compile`` + ``pops.bind``);
-    it NEVER recommends a legacy setter as the remedy (no ``add_block`` / ``set_poisson`` /
+    it NEVER recommends a legacy setter as the remedy (no ``add_equation`` / ``set_poisson`` /
     ``install_program`` as an alternative), so it cannot be read as a
     validation bypass.
     """
@@ -75,7 +80,7 @@ def freeze_error(what: Any) -> Any:
 def guard_assembling(engine: Any, what: Any) -> Any:
     """Raise :func:`freeze_error` when @p engine is already bound (the Python-layer structural guard).
 
-    Called at the TOP of each Python-implemented structural method (add_block / add_equation /
+    Called at the TOP of each Python-implemented structural method (add_equation /
     set_poisson / set_disc_domain / _install_compiled / ...). Enforces the freeze
     at the Python layer WITHOUT the native ``mark_bound`` (bypass-proof on a prebuilt ``.so``): it
     reads the engine's ``_lifecycle`` flag, defaulting to ``assembling`` (so an engine constructed
@@ -196,5 +201,11 @@ class _LifecycleMixin(_System):
         return getattr(self, "_last_restart_identity", None)
 
 
-__all__ = ["FROZEN_STRUCTURAL", "freeze_error", "guard_assembling", "derive_lifecycle_state",
-           "_LifecycleMixin"]
+__all__ = [
+    "FROZEN_STRUCTURAL",
+    "RETIRED_NATIVE_PASSTHROUGH",
+    "freeze_error",
+    "guard_assembling",
+    "derive_lifecycle_state",
+    "_LifecycleMixin",
+]

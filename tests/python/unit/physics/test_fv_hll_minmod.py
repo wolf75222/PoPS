@@ -91,7 +91,7 @@ except RuntimeError as e:
     chk("hllc" in str(e), f"erreur explicite : {e}")
 
 # --- 4. AmrSystem : hll + minmod accepte (alignement de surface System/AMR) ------
-print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
+print("== AmrSystem : add_equation(riemann='hll') accepte sur isotherme ==")
 amr = AmrSystem(n=32, L=1.0, periodicity=(True, True), regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr_rho0 = gaussian(32)

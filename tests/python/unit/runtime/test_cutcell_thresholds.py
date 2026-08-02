@@ -55,20 +55,20 @@ def test_transport_mask_thresholds_require_typed_mask():
 # --- runtime tier (needs _pops) ----------------------------------------------
 
 pops = pytest.importorskip("pops")
-from pops.runtime._engine_descriptors import (
+from pops.runtime._engine_descriptors import (  # noqa: E402
     ChargeDensity, FluidState, IsothermalFlux, Model, NoSource, Spatial,
 )
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # noqa: E402  # ADC-545 advanced runtime seam
 
 
 def _sim():
     sim = System(n=16, L=1.0, periodicity=(False, False))
-    sim.add_block("ion", Model(FluidState.isothermal(cs2=0.7), IsothermalFlux(),
-                               NoSource(), ChargeDensity(charge=1.0)),
-                  # The native embedded-boundary facade currently provides a geometry-aware
-                  # first-order reconstruction. Higher-order neighbor stencils are rejected
-                  # instead of reading inactive cells.
-                  spatial=Spatial(none=True))
+    sim.add_equation("ion", Model(FluidState.isothermal(cs2=0.7), IsothermalFlux(),
+                                  NoSource(), ChargeDensity(charge=1.0)),
+                     # The native embedded-boundary facade currently provides a geometry-aware
+                     # first-order reconstruction. Higher-order neighbor stencils are rejected
+                     # instead of reading inactive cells.
+                     spatial=Spatial(none=True))
     return sim
 
 

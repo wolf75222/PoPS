@@ -61,10 +61,10 @@ __all__ = ["_lower_wall", "_lower_bc"]
 
 def _weno_kwargs(spatial):
     """ADC-645: WENO5(epsilon=...) rides along the Spatial; None (the default) forwards NOTHING so
-    the native add_block keeps its kWenoEpsilon default (byte-identical historical call)."""
+    the native ABI keeps its kWenoEpsilon default (byte-identical historical call)."""
     weps = getattr(spatial, "weno_epsilon", None)
     return {} if weps is None else {
-        "weno_epsilon": native_real(weps, where="System.add_block.weno_epsilon")}
+        "weno_epsilon": native_real(weps, where="System.add_equation.weno_epsilon")}
 
 
 def _mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth, post_smooth, bottom_sweeps,

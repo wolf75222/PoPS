@@ -17,7 +17,11 @@ from pops._bootstrap import SystemConfig, _System  # noqa: F401  (SystemConfig r
 from pops._bootstrap import AmrSystemConfig  # noqa: F401  (re-exported via this module)
 from pops.runtime import _threading
 from pops.runtime._lifecycle import (
-    FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error, _LifecycleMixin)
+    FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL,
+    RETIRED_NATIVE_PASSTHROUGH as _RETIRED_NATIVE_PASSTHROUGH,
+    freeze_error as _freeze_error,
+    _LifecycleMixin,
+)
 from pops.runtime._amr_system import AmrSystem  # noqa: F401  (re-exported via this module)
 from pops.runtime._system_aux_state import _SystemAuxState
 from pops.runtime._system_diagnostics import _SystemDiagnostics
@@ -76,11 +80,11 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
 
     Low-level runtime. The documented PUBLIC path is the typed ``pops.Case`` assembly lowered by
     ``pops.compile`` and wired by ``pops.bind`` -> ``pops.run(sim, ...)``; the per-step native methods
-    (and ``add_block`` / ``add_equation`` / ``set_poisson``)
+    (and ``add_equation`` / ``set_poisson``)
     are the low-level seam ``pops.bind`` builds on and the tests use, not the recommended front
     door.
 
-    ``add_block`` takes a private native ``ModelSpec`` plus private spatial and time adapters.
+    ``add_equation`` dispatches a private native ``ModelSpec`` or a compiled production package.
     Public authoring uses ``pops.Model`` through ``pops.Case``; discretization and reusable
     integration Programs live in ``pops.numerics`` and ``pops.lib.time`` respectively.
     Everything else (set_poisson, set_density, step, step_cfl, diagnostics,
@@ -271,6 +275,11 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 "with no AMR hierarchy. Declare layout=AMR(...) on the pops.Case for a refined run "
                 "(its sim.amr returns an AmrRuntimeView), or pops.inspect(layout) for the "
                 "static authoring report.")
+        if attr in _RETIRED_NATIVE_PASSTHROUGH:
+            raise AttributeError(
+                "System.%s is not an authoring route; declare the block with pops.Case.block(...)"
+                % attr
+            )
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
         # passthrough (instance.install_program / ...) with the bind-vocabulary
         # RuntimeError -- NOT AttributeError -- so the bypass is closed even under a prebuilt .so whose

@@ -1162,13 +1162,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             compiled = pops.compile(resolved)
 
         ``pops.compile`` captures the operator-first Module and validates ONCE internally; ``lower``
-        (and its ``to_module`` alias) stay ADVANCED / inspection-only. Identical to :pyattr:`module`."""
+        stays ADVANCED / inspection-only and is identical to :pyattr:`module`."""
         return self.module
-
-    # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). ADVANCED / inspection only
-    # (ADC-557): the standard case.block(model=m) -> pops.compile flow captures the Module itself;
-    # neither is REQUIRED (pops.compile does the lowering once, internally).
-    to_module = lower
 
     # --- introspection ---
 

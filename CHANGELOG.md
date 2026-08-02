@@ -18,6 +18,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Canonical authoring now keeps one explicit projection/construction route: use
+  `pops.physics.Model.lower()` for advanced Module inspection and
+  `MomentModel.build()` for recorded moment specifications. The duplicate facade aliases were
+  removed instead of deprecated.
+- Private uniform and AMR Python runtime wrappers no longer expose `add_block`; native-brick and
+  compiled-package installation share the existing type-dispatched `add_equation` seam used below
+  `pops.bind`, while public authoring remains `Case.block(...)`.
 - Strict AMR checkpoint payload v7 now persists the accepted shared-interface flux audit together
   with Program clocks, histories, tagging state, conservative ledger and synchronization report.
   Restart validates every fragment's topology epoch, level pair, exact clock window, resolved

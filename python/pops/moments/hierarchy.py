@@ -282,10 +282,6 @@ class MomentModel:
             self._apply_poisson(m, registered)
         return m
 
-    def check(self, name: Any = "moments") -> Any:
-        """Alias of :meth:`build` (build + the engine's own validation on construction)."""
-        return self.build(name)
-
     # --- internals ----------------------------------------------------------
     def _apply_poisson(self, m: Any, registered: dict[str, Any]) -> None:
         """Author ``-laplacian(phi) == eps * M00`` and its gradient outputs."""
