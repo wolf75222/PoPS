@@ -81,9 +81,9 @@ def _validate(
     *,
     target: str = "system",
     resolved_hierarchy: object | None = None,
-) -> None:
+) -> tuple[bool, bool]:
     blocks, layout_plan = _resolved_context()
-    validate_shared_interface_program(
+    return validate_shared_interface_program(
         blocks, layout_plan, program, target=target, resolved_hierarchy=resolved_hierarchy
     )
 
@@ -168,9 +168,15 @@ def test_amr_shared_interface_accepts_two_frozen_levels() -> None:
 def test_amr_shared_interface_accepts_and_emits_one_packed_two_sided_jacvec() -> None:
     program = _implicit_interface_program()
     hierarchy = _resolved_amr_hierarchy(levels=2, program=program)
-    _validate(program, target="amr_system", resolved_hierarchy=hierarchy)
+    _, has_shared_interface_implicit_jacvec = _validate(
+        program, target="amr_system", resolved_hierarchy=hierarchy
+    )
 
-    source = emit_cpp_program(program, target="amr_system")
+    source = emit_cpp_program(
+        program,
+        target="amr_system",
+        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+    )
     assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
     assert source.count("ctx.copy_component_span(") >= 7
     assert "ctx.rhs_core_into_at(" not in source
@@ -179,6 +185,16 @@ def test_amr_shared_interface_accepts_and_emits_one_packed_two_sided_jacvec() ->
     assert group_identity is not None
     left_r0 = next(value for value in program._values if value.name == "left_r0")
     assert str(_rhs_evaluation_identity(program, left_r0)) == group_identity.group(1)
+
+
+def test_two_block_jacvec_shape_without_resolved_interface_evidence_fails_closed() -> None:
+    program = _implicit_interface_program()
+
+    with pytest.raises(
+        NotImplementedError,
+        match="authenticated shared-interface implicit-JVP evidence from resolve",
+    ):
+        emit_cpp_program(program, target="amr_system")
 
 
 @pytest.mark.parametrize(

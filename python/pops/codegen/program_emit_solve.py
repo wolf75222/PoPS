@@ -311,12 +311,23 @@ def _rhs_jacvec_field_slot(r0: Any, field_plans: Any) -> str:
     return slot
 
 
-def _coupled_interface_jacvec_plan(v: Any, block: Any, *, target: str) -> Any:
+def _coupled_interface_jacvec_plan(
+    v: Any,
+    block: Any,
+    *,
+    target: str,
+    has_shared_interface_implicit_jacvec: bool,
+) -> Any:
     jac_ops = [value for value in block if value.op == "rhs_jacvec"]
     if target != "amr_system" or len(jac_ops) != 2:
         return None
     if jac_ops[0].inputs[2].block == jac_ops[1].inputs[2].block:
         return None
+    if not has_shared_interface_implicit_jacvec:
+        raise NotImplementedError(
+            "two-block rhs_jacvec lowering requires authenticated shared-interface "
+            "implicit-JVP evidence from resolve"
+        )
     unsupported = [
         value.op for value in block
         if value.op not in {"apply_in", "apply_out", "rhs_jacvec"}
@@ -354,7 +365,8 @@ def _coupled_interface_jacvec_plan(v: Any, block: Any, *, target: str) -> Any:
 
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                                lines: Any = None, *, field_plans: Any = None,
-                               target: str = "system") -> None:
+                               target: str = "system",
+                               has_shared_interface_implicit_jacvec: bool = False) -> None:
     """Lower a matrix_free_operator to an authenticated factory of C++ execution sessions. Each
     session owns a fresh ``ApplyFn`` and deep-copied scratch snapshot; its body re-emits the apply
     sub-block:
@@ -389,7 +401,14 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     out_sf = v.attrs["apply_out"]
     block = v.attrs["apply_block"]
     result = v.attrs["apply_result"]
-    coupled_jacvec = _coupled_interface_jacvec_plan(v, block, target=target)
+    coupled_jacvec = _coupled_interface_jacvec_plan(
+        v,
+        block,
+        target=target,
+        has_shared_interface_implicit_jacvec=(
+            has_shared_interface_implicit_jacvec
+        ),
+    )
     # Sub-scope token map: the lambda params + persistent scratch. `in` is the const lambda param;
     # `out` is the (non-const) lambda param the result is written into.
     sub = {in_sf.id: "in", out_sf.id: "out"}

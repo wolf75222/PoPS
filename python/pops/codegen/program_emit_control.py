@@ -171,7 +171,8 @@ def _emit_contiguous_rhs_group(
 
 
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
-               field_plans: Any = None, balance_due_contract: Any = None) -> tuple:
+               field_plans: Any = None, balance_due_contract: Any = None,
+               has_shared_interface_implicit_jacvec: bool = False) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
@@ -282,7 +283,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
         _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx,
-                 target=target, field_plans=field_plans)
+                 target=target, field_plans=field_plans,
+                 has_shared_interface_implicit_jacvec=(
+                     has_shared_interface_implicit_jacvec
+                 ))
         index += 1
     # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
     # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already

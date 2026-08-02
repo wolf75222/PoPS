@@ -118,6 +118,7 @@ def emit_cpp_program(
     model_graph: Any = None,
     field_plans: Any = None,
     balance_due_contract: Any = None,
+    has_shared_interface_implicit_jacvec: bool = False,
 ) -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
@@ -204,6 +205,10 @@ def emit_cpp_program(
     authority = model_graph if model_graph is not None else model
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
+    if type(has_shared_interface_implicit_jacvec) is not bool:
+        raise TypeError(
+            "emit_cpp_program shared-interface implicit-JVP evidence must be an exact bool"
+        )
     from pops._balance_due_contract import BalanceDueContract
     if balance_due_contract is None:
         balance_due_contract = BalanceDueContract.from_consumer_graph(None)
@@ -219,6 +224,7 @@ def emit_cpp_program(
         target=target,
         field_plans=field_plans or {},
         balance_due_contract=balance_due_contract,
+        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime

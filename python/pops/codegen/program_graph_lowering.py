@@ -8,6 +8,7 @@ def emit_program_graph(
     graph: Any, *, lowering_program: Any, model: Any = None,
     model_graph: Any = None, target: str = "system", field_plans: Any = None,
     balance_due_contract: Any = None,
+    has_shared_interface_implicit_jacvec: bool = False,
 ) -> str:
     """Lower exactly ``graph`` through its frozen, graph-equivalent Program adapter."""
     from pops.time import ProgramGraph
@@ -23,6 +24,7 @@ def emit_program_graph(
     source = emit_cpp_program(
         lowering_program, model=model, model_graph=model_graph, target=target,
         field_plans=field_plans, balance_due_contract=balance_due_contract,
+        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
     )
     if lowering_program.to_graph().graph_hash != graph.graph_hash:
         raise RuntimeError("ProgramGraph lowering mutated or diverged from its compiler input")

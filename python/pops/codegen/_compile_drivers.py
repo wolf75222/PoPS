@@ -186,7 +186,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
                     libraries: Any = None, problem_snapshot: Any = None,
-                    field_plans: Any = None, balance_due_contract: Any = None) -> Any:
+                    field_plans: Any = None, balance_due_contract: Any = None,
+                    has_shared_interface_implicit_jacvec: Any = False) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
 
     Only the production backend is supported; ``target`` selects system or AMR entrypoints. An
@@ -212,6 +213,10 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     if target not in ("system", "amr_system"):
         raise ValueError("compiled time programs support target='system' | 'amr_system' "
                          "(received %r)" % (target,))
+    if type(has_shared_interface_implicit_jacvec) is not bool:
+        raise TypeError(
+            "compile_problem shared-interface implicit-JVP evidence must be an exact bool"
+        )
 
     if libraries:
         raise TypeError(
@@ -247,7 +252,9 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     src = emit_program_graph(
         program_graph, lowering_program=time, model=model,
         model_graph=model_graph, target=target, field_plans=field_plans,
-        balance_due_contract=balance_due_contract)
+        balance_due_contract=balance_due_contract,
+        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
+    )
 
     include = include or pops_include()
     sig = pops_header_signature(include)
