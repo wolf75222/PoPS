@@ -108,7 +108,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int b, MultiFab& u_stage) const {
     count_kernel();
-    require_field_evaluation_point_(point, 0, "Program single-state field solve");
     if (provider_slot.empty())
       throw std::invalid_argument(
           "System::solve_fields_from_state_at requires an exact provider slot");
@@ -163,7 +162,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const runtime::multiblock::BoundaryEvaluationPoint& point, std::int64_t value_id,
       std::string_view field, std::initializer_list<FieldStageOverride> overrides) const {
     count_kernel();
-    require_field_evaluation_point_(point, 0, "Program simultaneous field solve");
     FieldSolveWorkspace& workspace = generated_field_solve_workspace_(value_id, field, overrides);
     sys_->prepare_named_field_publication_storage_(workspace.generated_field_identity);
     return run_field_solve_transaction_([&]() {
@@ -494,16 +492,6 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->solve_fields_from_blocks_at_in_place_(point, field, workspace.system_stages);
   }
 
-  static void require_field_evaluation_point_(
-      const runtime::multiblock::BoundaryEvaluationPoint& point, int expected_level,
-      const char* route) {
-    if (point.clock.empty() || point.tick < 0 || point.level != expected_level ||
-        point.substep < 0 || point.stage < 0 || !(point.dt > 0.0) || !std::isfinite(point.dt) ||
-        !std::isfinite(point.physical_time) || point.stage_fraction < amr::Rational(0, 1) ||
-        amr::Rational(1, 1) < point.stage_fraction)
-      throw std::invalid_argument(std::string(route) +
-                                  " requires a complete exact BoundaryEvaluationPoint");
-  }
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
