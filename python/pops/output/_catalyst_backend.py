@@ -5,6 +5,7 @@ modules; focused tests inject API-compatible modules without pretending that Cat
 The native runtime currently supplies rank-2 cell-centered fields.  Live visualization accepts a
 serial frame or collective rank-local frames on an authenticated duplicated MPI observer lane.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -20,7 +21,12 @@ from pops._geometry_contracts import (
 )
 from pops.output._consumer_contracts import ParallelMode
 from pops.output.data import FieldPayload, LevelGeometry, _field_family_identity
-from pops.output.observers import ObserverFrame, ObserverReceipt, ObserverRun
+from pops.output.observers import (
+    ObserverFrame,
+    ObserverReceipt,
+    ObserverRun,
+    ObserverWorkerCollectiveLost,
+)
 from pops.output._writers.paraview import _field_display_names, _field_families
 
 
@@ -43,15 +49,15 @@ def _piece_for_box(field: FieldPayload, box_index: int) -> Any:
     if len(rows) != 1:
         raise ValueError(
             "Catalyst complete snapshot requires exactly one field piece for geometry box %d"
-            % box_index)
+            % box_index
+        )
     return rows[0]
 
 
 def _block_name(geometry: LevelGeometry) -> str:
     """Name one logical PDC block identically on every MPI rank."""
 
-    return "layout_%s_level_%04d" % (
-        geometry.layout_identity.hexdigest[:16], geometry.level)
+    return "layout_%s_level_%04d" % (geometry.layout_identity.hexdigest[:16], geometry.level)
 
 
 class CatalystPythonProvider:
@@ -89,7 +95,8 @@ class CatalystPythonProvider:
         except (ImportError, ModuleNotFoundError) as error:
             raise RuntimeError(
                 "Catalyst live visualization requires the optional catalyst Python module "
-                "built against the selected ParaView installation") from error
+                "built against the selected ParaView installation"
+            ) from error
         if conduit is None:
             errors = []
             for module_name in ("catalyst_conduit", "conduit"):
@@ -101,24 +108,31 @@ class CatalystPythonProvider:
             if conduit is None:
                 raise RuntimeError(
                     "Catalyst live visualization requires catalyst_conduit (ParaView builds) "
-                    "or an external conduit Python module") from errors[-1]
+                    "or an external conduit Python module"
+                ) from errors[-1]
         if not callable(getattr(conduit, "Node", None)):
             raise RuntimeError("Conduit Python module does not expose Node")
         missing = [
-            name for name in ("initialize", "execute", "finalize", "about")
+            name
+            for name in ("initialize", "execute", "finalize", "about")
             if not callable(getattr(catalyst, name, None))
         ]
         if missing:
             raise RuntimeError(
                 "Catalyst Python module does not expose callable lifecycle methods: %s"
-                % ", ".join(missing))
+                % ", ".join(missing)
+            )
         return catalyst, conduit
 
     def open_session(
-        self, configuration: Mapping[str, Any], execution_context: Any,
+        self,
+        configuration: Mapping[str, Any],
+        execution_context: Any,
     ) -> _CatalystPythonSession:
-        if not isinstance(configuration, Mapping) \
-                or configuration.get("observer_kind") != "catalyst":
+        if (
+            not isinstance(configuration, Mapping)
+            or configuration.get("observer_kind") != "catalyst"
+        ):
             raise TypeError("Catalyst provider received an invalid observer configuration")
         pipeline = configuration.get("pipeline")
         if not isinstance(pipeline, str) or not pipeline:
@@ -133,29 +147,41 @@ class CatalystPythonProvider:
         if current_digest != expected_digest:
             raise RuntimeError("Catalyst pipeline changed after its declaration was authenticated")
         implementation = configuration.get("implementation")
-        if not isinstance(implementation, str) or not implementation \
-                or implementation.strip() != implementation:
+        if (
+            not isinstance(implementation, str)
+            or not implementation
+            or implementation.strip() != implementation
+        ):
             raise TypeError("Catalyst configuration requires a canonical implementation name")
         search_paths = configuration.get("search_paths")
         args = configuration.get("args")
-        if not isinstance(search_paths, (tuple, list)) \
-                or any(not isinstance(value, str) or not value for value in search_paths):
+        if not isinstance(search_paths, (tuple, list)) or any(
+            not isinstance(value, str) or not value for value in search_paths
+        ):
             raise TypeError("Catalyst configuration search_paths must be a list of strings")
-        if not isinstance(args, (tuple, list)) \
-                or any(not isinstance(value, str) or not value for value in args):
+        if not isinstance(args, (tuple, list)) or any(
+            not isinstance(value, str) or not value for value in args
+        ):
             raise TypeError("Catalyst configuration args must be a list of strings")
         inherited_async = os.environ.get("CATALYST_ASYNC_ENABLED")
-        if inherited_async is not None \
-                and inherited_async.strip().lower() not in {"", "0", "false", "off", "no"}:
+        if inherited_async is not None and inherited_async.strip().lower() not in {
+            "",
+            "0",
+            "false",
+            "off",
+            "no",
+        }:
             raise RuntimeError(
                 "PoPS owns the post-commit worker and requires Catalyst internal async to be "
-                "disabled; unset CATALYST_ASYNC_ENABLED or set it to 0")
+                "disabled; unset CATALYST_ASYNC_ENABLED or set it to 0"
+            )
         prefer_environment = os.environ.get("CATALYST_IMPLEMENTATION_PREFER_ENV")
         if prefer_environment:
             raise RuntimeError(
                 "PoPS authenticates catalyst_load/implementation and rejects "
                 "CATALYST_IMPLEMENTATION_PREFER_ENV; unset it instead of overriding the "
-                "declaration")
+                "declaration"
+            )
         communicator = getattr(execution_context, "communicator", None)
         communicator_id = getattr(communicator, "identity", None)
         worker_communicator = configuration.get("_pops_worker_communicator")
@@ -167,15 +193,18 @@ class CatalystPythonProvider:
             world = require_world(getattr(communicator, "handle", None))
             lane = require_communicator(worker_communicator, allow_world=False)
             if int(world.rank) != int(lane.rank) or int(world.size) != int(lane.size):
-                raise ValueError(
-                    "Catalyst worker lane topology differs from MPI_COMM_WORLD")
+                raise ValueError("Catalyst worker lane topology differs from MPI_COMM_WORLD")
         else:
             raise ValueError(
                 "Catalyst requires either serial execution or an exact duplicated "
-                "MPI_COMM_WORLD observer lane")
+                "MPI_COMM_WORLD observer lane"
+            )
         catalyst, conduit = self._modules()
         return _CatalystPythonSession(
-            catalyst, conduit, path, self._channel,
+            catalyst,
+            conduit,
+            path,
+            self._channel,
             pipeline_sha256=expected_digest,
             implementation=implementation,
             search_paths=tuple(search_paths),
@@ -239,26 +268,44 @@ class _CatalystPythonSession:
         from pops._native_collectives import allgather_value, rank, size
 
         rendered = None if error is None else "%s: %s" % (type(error).__name__, error)
-        rows = allgather_value(self._worker_communicator, {
-            "rank": rank(self._worker_communicator),
-            "error": rendered,
-        })
-        if len(rows) != size(self._worker_communicator) or any(
+        try:
+            owner = rank(self._worker_communicator)
+            peers = size(self._worker_communicator)
+            rows = allgather_value(
+                self._worker_communicator,
+                {
+                    "rank": owner,
+                    "error": rendered,
+                },
+            )
+        except BaseException as collective_error:
+            raise ObserverWorkerCollectiveLost(
+                "Catalyst %s lost its worker collective: %s: %s"
+                % (phase, type(collective_error).__name__, collective_error)
+            ) from collective_error
+        if (
+            not isinstance(rows, (tuple, list))
+            or len(rows) != peers
+            or any(
                 not isinstance(row, dict)
                 or set(row) != {"rank", "error"}
                 or row["rank"] != owner
                 or (row["error"] is not None and not isinstance(row["error"], str))
-                for owner, row in enumerate(rows)):
-            raise RuntimeError(
-                "Catalyst %s returned malformed rank evidence" % phase)
+                for owner, row in enumerate(rows)
+            )
+        ):
+            raise ObserverWorkerCollectiveLost(
+                "Catalyst %s returned malformed worker-lane evidence" % phase
+            )
         failures = [
             "rank %d: %s" % (owner, row["error"])
-            for owner, row in enumerate(rows) if row["error"] is not None
+            for owner, row in enumerate(rows)
+            if row["error"] is not None
         ]
         if failures:
             collective = RuntimeError(
-                "Catalyst %s failed collectively: %s"
-                % (phase, "; ".join(failures)))
+                "Catalyst %s failed collectively: %s" % (phase, "; ".join(failures))
+            )
             if error is not None:
                 raise collective from error
             raise collective
@@ -270,25 +317,42 @@ class _CatalystPythonSession:
             return
         from pops._native_collectives import allgather_value, rank, size
 
-        rows = allgather_value(self._worker_communicator, {
-            "rank": rank(self._worker_communicator),
-            "value": dict(value),
-        })
-        if len(rows) != size(self._worker_communicator) or any(
+        try:
+            owner = rank(self._worker_communicator)
+            peers = size(self._worker_communicator)
+            rows = allgather_value(
+                self._worker_communicator,
+                {
+                    "rank": owner,
+                    "value": dict(value),
+                },
+            )
+        except BaseException as collective_error:
+            raise ObserverWorkerCollectiveLost(
+                "Catalyst %s lost its worker collective: %s: %s"
+                % (phase, type(collective_error).__name__, collective_error)
+            ) from collective_error
+        if (
+            not isinstance(rows, (tuple, list))
+            or len(rows) != peers
+            or any(
                 not isinstance(row, dict)
                 or set(row) != {"rank", "value"}
                 or row["rank"] != owner
                 or not isinstance(row["value"], dict)
-                for owner, row in enumerate(rows)):
-            raise RuntimeError("Catalyst %s returned malformed rank evidence" % phase)
+                for owner, row in enumerate(rows)
+            )
+        ):
+            raise ObserverWorkerCollectiveLost(
+                "Catalyst %s returned malformed worker-lane evidence" % phase
+            )
         canonical = rows[0]["value"]
-        divergent = [
-            owner for owner, row in enumerate(rows) if row["value"] != canonical
-        ]
+        divergent = [owner for owner, row in enumerate(rows) if row["value"] != canonical]
         if divergent:
             raise RuntimeError(
                 "Catalyst %s differs across ranks: %s"
-                % (phase, ", ".join(str(owner) for owner in divergent)))
+                % (phase, ", ".join(str(owner) for owner in divergent))
+            )
 
     def initialize(self, run: ObserverRun) -> None:
         node = None
@@ -296,10 +360,10 @@ class _CatalystPythonSession:
         try:
             if self._initialized or self._finalized:
                 raise RuntimeError("Catalyst observer session cannot be initialized twice")
-            if hashlib.sha256(self._pipeline.read_bytes()).hexdigest() \
-                    != self._pipeline_sha256:
+            if hashlib.sha256(self._pipeline.read_bytes()).hexdigest() != self._pipeline_sha256:
                 raise RuntimeError(
-                    "Catalyst pipeline changed between session authentication and initialize")
+                    "Catalyst pipeline changed between session authentication and initialize"
+                )
             node = self._node()
             node["catalyst_load/implementation"] = self._implementation
             if self._search_paths:
@@ -312,29 +376,29 @@ class _CatalystPythonSession:
             # Catalyst's environment default.
             node["catalyst/async/enabled"] = 0
             if self._worker_communicator is not None:
-                node["catalyst/mpi_comm"] = int(
-                    self._worker_communicator.fortran_handle)
+                node["catalyst/mpi_comm"] = int(self._worker_communicator.fortran_handle)
             node["catalyst/pops/run_identity"] = run.run_identity.token
             for index, identity in enumerate(run.recovery_run_identities):
-                node[
-                    "catalyst/pops/recovery_run_identities/%06d" % index
-                ] = identity.token
+                node["catalyst/pops/recovery_run_identities/%06d" % index] = identity.token
         except BaseException as error:
             local_error = error
         self._agree_local_phase("initialize", local_error)
         if node is None:  # collective agreement cannot clear a local construction failure
             raise RuntimeError("Catalyst initialize lost its local node authority")
-        self._agree_exact_value("initialize authority", {
-            "args": list(self._args),
-            "channel": self._channel,
-            "implementation": self._implementation,
-            "pipeline_sha256": self._pipeline_sha256,
-            "recovery_run_identities": [
-                identity.token for identity in run.recovery_run_identities
-            ],
-            "run_identity": run.run_identity.token,
-            "search_paths": list(self._search_paths),
-        })
+        self._agree_exact_value(
+            "initialize authority",
+            {
+                "args": list(self._args),
+                "channel": self._channel,
+                "implementation": self._implementation,
+                "pipeline_sha256": self._pipeline_sha256,
+                "recovery_run_identities": [
+                    identity.token for identity in run.recovery_run_identities
+                ],
+                "run_identity": run.run_identity.token,
+                "search_paths": list(self._search_paths),
+            },
+        )
         # Catalyst may allocate process-global state and then raise.  Mark entry before the call so
         # the queue's partial-initialize abort can still invoke finalize exactly once.
         self._initialize_entered = True
@@ -354,7 +418,8 @@ class _CatalystPythonSession:
             if reported != self._implementation:
                 raise RuntimeError(
                     "Catalyst loaded implementation %r instead of requested %r"
-                    % (reported, self._implementation))
+                    % (reported, self._implementation)
+                )
             if not isinstance(version, str) or not version:
                 raise RuntimeError("Catalyst about() returned no implementation version")
             implementation_evidence = {
@@ -369,25 +434,28 @@ class _CatalystPythonSession:
         self._agree_local_phase("implementation authentication", about_error)
         if implementation_evidence is None:
             raise RuntimeError("Catalyst implementation authentication lost its evidence")
-        self._agree_exact_value(
-            "implementation evidence", implementation_evidence)
+        self._agree_exact_value("implementation evidence", implementation_evidence)
         self._implementation_evidence = implementation_evidence
         self._accepted_run_identities = frozenset(run.accepted_run_identities)
         self._initialized = True
 
     @staticmethod
     def _geometry_fields(
-        frame: ObserverFrame, geometry: LevelGeometry,
+        frame: ObserverFrame,
+        geometry: LevelGeometry,
     ) -> tuple[FieldPayload, ...]:
         selected = frame.snapshot.select(frame.request)
         fields = tuple(
-            field for field in selected
-            if (field.key.layout_identity.token, field.key.level) == geometry.key)
+            field
+            for field in selected
+            if (field.key.layout_identity.token, field.key.level) == geometry.key
+        )
         if not fields:
             raise ValueError("Catalyst selected geometry has no field payload")
         if any(field.centering != "cell" for field in fields):
             raise NotImplementedError(
-                "Catalyst Python provider currently proves cell-centered fields only")
+                "Catalyst Python provider currently proves cell-centered fields only"
+            )
         return fields
 
     def _add_domain(
@@ -414,43 +482,53 @@ class _CatalystPythonSession:
             root[base + "/coordsets/%s/dims/i" % coordset] = ihi - ilo + 1
             root[base + "/coordsets/%s/dims/j" % coordset] = jhi - jlo + 1
             root[base + "/coordsets/%s/origin/x" % coordset] = (
-                geometry.origin[0] + ilo * geometry.spacing[0])
+                geometry.origin[0] + ilo * geometry.spacing[0]
+            )
             root[base + "/coordsets/%s/origin/y" % coordset] = (
-                geometry.origin[1] + jlo * geometry.spacing[1])
+                geometry.origin[1] + jlo * geometry.spacing[1]
+            )
             root[base + "/coordsets/%s/spacing/dx" % coordset] = geometry.spacing[0]
             root[base + "/coordsets/%s/spacing/dy" % coordset] = geometry.spacing[1]
             root[base + "/topologies/%s/type" % topology] = "uniform"
             root[base + "/topologies/%s/coordset" % topology] = coordset
         elif geometry.coordinate_system == POLAR_ANNULUS_2D_COORDINATES:
-            radial = geometry.origin[0] + np.arange(
-                ilo, ihi + 1, dtype=np.float64) * geometry.spacing[0]
-            theta = geometry.origin[1] + np.arange(
-                jlo, jhi + 1, dtype=np.float64) * geometry.spacing[1]
+            radial = (
+                geometry.origin[0] + np.arange(ilo, ihi + 1, dtype=np.float64) * geometry.spacing[0]
+            )
+            theta = (
+                geometry.origin[1] + np.arange(jlo, jhi + 1, dtype=np.float64) * geometry.spacing[1]
+            )
             theta_grid, radial_grid = np.meshgrid(theta, radial, indexing="ij")
             root[base + "/coordsets/%s/type" % coordset] = "explicit"
             root[base + "/coordsets/%s/values/x" % coordset] = np.ascontiguousarray(
-                radial_grid * np.cos(theta_grid)).reshape(-1)
+                radial_grid * np.cos(theta_grid)
+            ).reshape(-1)
             root[base + "/coordsets/%s/values/y" % coordset] = np.ascontiguousarray(
-                radial_grid * np.sin(theta_grid)).reshape(-1)
+                radial_grid * np.sin(theta_grid)
+            ).reshape(-1)
             ni = ihi - ilo
             nj = jhi - jlo
             lower_left = np.arange(nj * ni, dtype=np.int64).reshape(nj, ni)
             lower_left += np.arange(nj, dtype=np.int64)[:, None]
-            connectivity = np.stack((
-                lower_left,
-                lower_left + 1,
-                lower_left + ni + 2,
-                lower_left + ni + 1,
-            ), axis=-1)
+            connectivity = np.stack(
+                (
+                    lower_left,
+                    lower_left + 1,
+                    lower_left + ni + 2,
+                    lower_left + ni + 1,
+                ),
+                axis=-1,
+            )
             root[base + "/topologies/%s/type" % topology] = "unstructured"
             root[base + "/topologies/%s/coordset" % topology] = coordset
             root[base + "/topologies/%s/elements/shape" % topology] = "quad"
-            root[base + "/topologies/%s/elements/connectivity" % topology] = \
-                np.ascontiguousarray(connectivity).reshape(-1)
+            root[base + "/topologies/%s/elements/connectivity" % topology] = np.ascontiguousarray(
+                connectivity
+            ).reshape(-1)
         else:
             raise NotImplementedError(
-                "Catalyst has no proved coordinate mapping for %s"
-                % geometry.coordinate_system)
+                "Catalyst has no proved coordinate mapping for %s" % geometry.coordinate_system
+            )
         root[base + "/state/level"] = geometry.level
         root[base + "/state/cycle"] = frame.macro_step
         root[base + "/state/time"] = frame.physical_time
@@ -463,8 +541,7 @@ class _CatalystPythonSession:
             component_names: tuple[str, ...] = (),
         ) -> str:
             nonlocal field_slot
-            internal_name = "array_%06d_partition_%06d" % (
-                field_slot, partition_index)
+            internal_name = "array_%06d_partition_%06d" % (field_slot, partition_index)
             field_slot += 1
             prefix = base + "/fields/" + internal_name
             root[prefix + "/association"] = "element"
@@ -473,7 +550,8 @@ class _CatalystPythonSession:
             if len(component_names) > 1:
                 for index, component in enumerate(component_names):
                     root[prefix + "/values/" + component] = np.ascontiguousarray(
-                        values[index]).reshape(-1)
+                        values[index]
+                    ).reshape(-1)
             else:
                 root[prefix + "/values"] = np.ascontiguousarray(values).reshape(-1)
             return internal_name
@@ -491,10 +569,7 @@ class _CatalystPythonSession:
         # VTK_REFINED_CELL=8; this hides covered coarse cells in ParaView without deleting their
         # scientific values from the live Blueprint domain.
         ghost_field = cell_field("vtkGhostType", coverage * np.uint8(8))
-        root[
-            base
-            + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field
-        ] = "Ghosts"
+        root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
         cell_field("pops_cell_volume", geometry.cell_volumes[jlo:jhi, ilo:ihi])
 
         names: set[str] = set()
@@ -530,7 +605,8 @@ class _CatalystPythonSession:
             raise NotImplementedError("Catalyst Python provider currently proves rank-2 meshes")
         if geometry.coordinate_system != CARTESIAN_2D_COORDINATES:
             raise NotImplementedError(
-                "collective Catalyst zero-cell peers currently prove Cartesian 2D only")
+                "collective Catalyst zero-cell peers currently prove Cartesian 2D only"
+            )
         base = "catalyst/channels/%s/data/%s" % (self._channel, domain_name)
         coordset = "coords_%06d" % box_index
         topology = "mesh_%06d" % box_index
@@ -568,9 +644,7 @@ class _CatalystPythonSession:
         empty_cell_field("pops_level", np.int32)
         empty_cell_field("pops_coverage", np.uint8)
         ghost_field = empty_cell_field("vtkGhostType", np.uint8)
-        root[
-            base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field
-        ] = "Ghosts"
+        root[base + "/state/metadata/vtk_fields/%s/attribute_type" % ghost_field] = "Ghosts"
         empty_cell_field("pops_cell_volume", np.float64)
 
         names: set[str] = set()
@@ -594,20 +668,23 @@ class _CatalystPythonSession:
         if self._execution_failed:
             raise RuntimeError("Catalyst observer session is poisoned after an execute failure")
         if frame.snapshot.provenance.run_identity not in self._accepted_run_identities:
-            raise ValueError(
-                "Catalyst frame is outside the active/recovery run authority")
+            raise ValueError("Catalyst frame is outside the active/recovery run authority")
         if self._worker_communicator is None:
-            if frame.request.parallel_mode is not ParallelMode.SERIAL \
-                    or frame.request.rank != 0 or frame.request.size != 1:
+            if (
+                frame.request.parallel_mode is not ParallelMode.SERIAL
+                or frame.request.rank != 0
+                or frame.request.size != 1
+            ):
                 raise ValueError("SERIAL Catalyst received a distributed frame")
         else:
             from pops._native_collectives import rank, size
 
-            if frame.request.parallel_mode is not ParallelMode.COLLECTIVE \
-                    or frame.request.rank != rank(self._worker_communicator) \
-                    or frame.request.size != size(self._worker_communicator):
-                raise ValueError(
-                    "COLLECTIVE Catalyst requires its exact worker MPI lane topology")
+            if (
+                frame.request.parallel_mode is not ParallelMode.COLLECTIVE
+                or frame.request.rank != rank(self._worker_communicator)
+                or frame.request.size != size(self._worker_communicator)
+            ):
+                raise ValueError("COLLECTIVE Catalyst requires its exact worker MPI lane topology")
         node = self._node()
         node["catalyst/state/timestep"] = frame.macro_step
         node["catalyst/state/time"] = frame.physical_time
@@ -621,16 +698,13 @@ class _CatalystPythonSession:
         families = _field_families(selected_fields)
         names = _field_display_names(families)
         display_names = {
-            family: name
-            for name, (family, _members) in zip(names, families, strict=True)
+            family: name for name, (family, _members) in zip(names, families, strict=True)
         }
-        geometry_keys = sorted({
-            (field.key.layout_identity.token, field.key.level)
-            for field in selected_fields
-        })
+        geometry_keys = sorted(
+            {(field.key.layout_identity.token, field.key.level) for field in selected_fields}
+        )
         geometries = [
-            geometry for geometry in frame.snapshot.geometries
-            if geometry.key in geometry_keys
+            geometry for geometry in frame.snapshot.geometries if geometry.key in geometry_keys
         ]
         if not geometries:
             raise ValueError("Catalyst frame has no selected geometry")
@@ -638,14 +712,12 @@ class _CatalystPythonSession:
         for layout_ordinal, geometry in enumerate(geometries):
             block_name = _block_name(geometry)
             fields = self._geometry_fields(frame, geometry)
-            local_boxes = {
-                piece.global_box_index for field in fields for piece in field.pieces
-            }
+            local_boxes = {piece.global_box_index for field in fields for piece in field.pieces}
             if any(
-                    {piece.global_box_index for piece in field.pieces} != local_boxes
-                    for field in fields):
-                raise ValueError(
-                    "Catalyst fields disagree on the local geometry-box ownership set")
+                {piece.global_box_index for piece in field.pieces} != local_boxes
+                for field in fields
+            ):
+                raise ValueError("Catalyst fields disagree on the local geometry-box ownership set")
             for box_index in range(len(geometry.boxes)):
                 # ParaView's multimesh protocol defines every data child as one Blueprint mesh.
                 # A global AMR box is that indivisible block; its qualified name stays unique and
@@ -654,15 +726,19 @@ class _CatalystPythonSession:
                 populated_blocks.append(domain_name)
                 if box_index in local_boxes:
                     self._add_domain(
-                        node, frame, geometry, layout_ordinal, box_index,
+                        node,
+                        frame,
+                        geometry,
+                        layout_ordinal,
+                        box_index,
                         box_index,
                         domain_name,
-                        display_names)
+                        display_names,
+                    )
                 else:
                     self._add_empty_domain(
-                        node, frame, geometry, box_index,
-                        domain_name,
-                        display_names)
+                        node, frame, geometry, box_index, domain_name, display_names
+                    )
 
         blueprint = getattr(self._conduit, "blueprint", None)
         mesh = getattr(blueprint, "mesh", None)
@@ -670,12 +746,12 @@ class _CatalystPythonSession:
         if callable(verify):
             for block_name in populated_blocks:
                 info = self._node()
-                domain = node[
-                    "catalyst/channels/%s/data/%s" % (self._channel, block_name)]
+                domain = node["catalyst/channels/%s/data/%s" % (self._channel, block_name)]
                 if verify(domain, info) is not True:
                     raise ValueError(
                         "Catalyst Conduit Blueprint verification failed for block %s: %s"
-                        % (block_name, info))
+                        % (block_name, info)
+                    )
         return node
 
     def execute(self, frame: ObserverFrame) -> ObserverReceipt:
@@ -742,8 +818,11 @@ class _CatalystPythonSession:
         return None
 
     def abort(self) -> None:
-        if self._initialize_entered and not self._finalized \
-                and not self._finalize_attempted:
+        if self._finalized:
+            return None
+        if self._finalize_attempted:
+            raise RuntimeError("Catalyst observer abort cannot retry failed finalization")
+        if self._initialize_entered:
             node = None
             local_error = None
             try:
