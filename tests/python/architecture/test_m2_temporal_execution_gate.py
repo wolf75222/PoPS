@@ -26,7 +26,7 @@ def _load_runner():
 def test_m2_manifest_references_only_real_mandatory_proofs():
     data, errors = _load_runner().validate_manifest(MANIFEST)
     assert not errors, "M2 gate matrix is incomplete:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 34
+    assert len(data["check"]) == 38
 
 
 def test_m2_final_gate_has_no_deferred_requirement():
@@ -115,6 +115,55 @@ def test_m2_pytest_nodeids_are_individually_collectible():
         and _requires_process_collection(ROOT / row["nodeid"].split("::", 1)[0])
     }
     assert process_collected == set()
+
+
+def test_m2_adc667_history_and_migration_routes_use_exact_proofs():
+    data, errors = _load_runner().validate_manifest(MANIFEST)
+    assert not errors
+    checks = {
+        (row["target"], row["polarity"], row["nodeid"])
+        for row in data["check"]
+        if row["issue"] == "ADC-667"
+        and row["requirement"] == "temporal_restart"
+    }
+    assert checks == {
+        (
+            "transaction",
+            "positive",
+            "tests/python/unit/runtime/test_temporal_restart_state.py"
+            "::test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state",
+        ),
+        (
+            "transaction",
+            "refusal",
+            "tests/python/unit/runtime/test_temporal_restart_state.py"
+            "::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible",
+        ),
+        (
+            "schedule",
+            "positive",
+            "tests/python/unit/time/test_multirate_history_contract.py"
+            "::test_history_interpolation_is_an_explicit_cross_clock_provider",
+        ),
+        (
+            "schedule",
+            "refusal",
+            "tests/python/unit/time/test_multirate_history_contract.py"
+            "::test_cross_clock_extension_without_provider_is_rejected",
+        ),
+        (
+            "restart",
+            "positive",
+            "tests/python/unit/codegen/test_checkpoint_migration.py"
+            "::test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts",
+        ),
+        (
+            "restart",
+            "refusal",
+            "tests/python/unit/runtime/test_temporal_restart_state.py"
+            "::test_frozen_release_v2_fixture_is_refused_offline_and_at_runtime_boundary",
+        ),
+    }
 
 
 def test_m2_restart_hierarchy_and_program_only_routes_use_real_exact_proofs():
