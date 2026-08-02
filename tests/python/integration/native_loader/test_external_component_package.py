@@ -28,6 +28,7 @@ from pops.external import (
     compile_component,
     load,
 )
+from pops.identity import make_identity
 from pops.model import ComponentManifest
 from pops.output import (
     CoarseOnly, ConsumerGraph, ExternalWriter, ParallelMode, ScientificOutput,
@@ -648,7 +649,29 @@ def _bind_writer_case(example, core, layout, artifacts, initial_state=None):
     return simulation
 
 
-def test_real_writer_collision_compensates_the_complete_consumer_graph_transaction(tmp_path):
+def _begin_direct_consumer_run(runtime, request):
+    """Open the run-scoped observer/ROOT lane required by direct transaction tests."""
+    engine = runtime._executor
+    run_identity = make_identity(
+        "run",
+        {
+            "runtime": runtime._runtime_plan.identity.token,
+            "time": float(engine.time()).hex(),
+            "macro_step": int(engine.macro_step()),
+        },
+    )
+    runtime._publisher.begin_post_commit_consumers(run_identity)
+    request.addfinalizer(
+        lambda: runtime._publisher.close_live_visualizations(
+            run_identity, raise_on_failure=False
+        )
+    )
+    return run_identity
+
+
+def test_real_writer_collision_compensates_the_complete_consumer_graph_transaction(
+    tmp_path, request
+):
     example = _load_example()
     first = _compile_writer(tmp_path / "transaction-one", "transaction_writer_one")
     second = _compile_writer(tmp_path / "transaction-two", "transaction_writer_two")
@@ -667,6 +690,7 @@ def test_real_writer_collision_compensates_the_complete_consumer_graph_transacti
     )
     output_root = tmp_path / "transaction-output"
     runtime._output_root = output_root
+    run_identity = _begin_direct_consumer_run(runtime, request)
 
     accepted_before = {
         "time": runtime.time(),
@@ -721,9 +745,12 @@ def test_real_writer_collision_compensates_the_complete_consumer_graph_transacti
     assert all("fields=1" in path.read_text(encoding="utf-8") for path in published)
     assert not tuple(output_root.rglob(".*.writer-stage*"))
     assert not tuple(output_root.rglob("*.component-published"))
+    runtime._publisher.close_live_visualizations(run_identity)
 
 
-def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_path):
+def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(
+    tmp_path, request
+):
     example = _load_example()
     first = _compile_writer(tmp_path / "source-one", "writer_one")
     second = _compile_writer(tmp_path / "source-two", "writer_two")
@@ -736,6 +763,7 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
 
     # Rejection owns and discards the verified native temporary without publishing it.
     runtime._output_root = tmp_path / "uniform-output"
+    run_identity = _begin_direct_consumer_run(runtime, request)
     transactions = runtime._stage_consumers(at_start=True)
     assert len(transactions) == 1
     stage_dir = runtime._output_root / "reject-stage"
@@ -776,6 +804,8 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
             _layout_plan=runtime._layout_plan,
             _retain_output_recoveries=runtime._retain_output_recoveries,
         ))
+
+    runtime._publisher.close_live_visualizations(run_identity)
 
     run_report = pops.run(
         uniform, t_end=1.0e-4, max_steps=1,

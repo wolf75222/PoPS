@@ -1430,6 +1430,7 @@ class RuntimeInstance:
         self._step_transaction_methods()
         entry_temporal = copy.deepcopy(getattr(native, "_temporal_restart_state", None))
         entry_controller = copy.deepcopy(getattr(native, "_step_controller", None))
+        entry_consumer_reports = self._consumer_reports
         previous_root, self._output_root = self._output_root, output_dir
         steps = 0
         rejected_steps = 0
@@ -1496,10 +1497,21 @@ class RuntimeInstance:
         except BaseException as error:
             if manifest is not None:
                 close_live = getattr(self._publisher, "close_live_visualizations", None)
+                close_failed_run = getattr(
+                    self._publisher, "close_failed_run_consumers", None
+                )
                 if callable(close_live):
                     before = len(self.post_commit_diagnostics)
                     try:
-                        close_live(manifest.run_identity, raise_on_failure=False)
+                        if steps == 0 and callable(close_failed_run):
+                            close_failed_run(
+                                manifest.run_identity,
+                                release_identity=(
+                                    self._consumer_reports == entry_consumer_reports
+                                ),
+                            )
+                        else:
+                            close_live(manifest.run_identity, raise_on_failure=False)
                     except BaseException as close_error:
                         add_note = getattr(error, "add_note", None)
                         if callable(add_note):
