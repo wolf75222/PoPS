@@ -201,7 +201,9 @@ def _json_evidence(stdout: str, *, gate: str) -> dict[str, Any]:
     return payload
 
 
-def _signed_runtime_sha256(evidence: dict[str, Any]) -> str:
+def _signed_runtime_sha256(
+    evidence: dict[str, Any], *, retained_native_sha256: str
+) -> str:
     if set(evidence) != {"schema_version", "platform", "extensions"} \
             or evidence["schema_version"] != 1 or evidence["platform"] != "darwin":
         raise FinalGateError("codesign evidence is not the Darwin release proof")
@@ -216,6 +218,11 @@ def _signed_runtime_sha256(evidence: dict[str, Any]) -> str:
     if not isinstance(digest, str) or len(digest) != 64 \
             or any(character not in "0123456789abcdef" for character in digest):
         raise FinalGateError("codesign extension sha256 is malformed")
+    if digest != retained_native_sha256:
+        raise FinalGateError(
+            "codesign changed the retained wheel native bytes; refusing to publish "
+            "an artifact different from the validated runtime"
+        )
     return digest
 
 
@@ -598,7 +605,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         }
         signed_runtime_sha256 = _signed_runtime_sha256(
-            recorder.rows["codesign"]["evidence"])
+            recorder.rows["codesign"]["evidence"],
+            retained_native_sha256=(
+                recorder.rows["installed_wheel"]["evidence"]["native_sha256"]
+            ),
+        )
         examples, reopened, restarted = _run_examples(
             recorder, runtime_sha256=signed_runtime_sha256)
         recorder.rows["examples"]["evidence"] = {"examples": examples}

@@ -400,6 +400,12 @@ def _codesign_evidence(
         "signature": "adhoc",
     }:
         raise PreflightError("codesign evidence does not authenticate the live native extension")
+    retained_native_sha256 = gates["installed_wheel"]["evidence"]["native_sha256"]
+    if extension["sha256"] != retained_native_sha256:
+        raise PreflightError(
+            "codesign changed the retained wheel native bytes; the published wheel "
+            "would differ from the validated runtime"
+        )
     commands = row["commands"]
     logs = _command_evidence(directory, commands, gate="codesign")
     suffix = ["python", "scripts/codesign_pops_extensions.py", "--json"]

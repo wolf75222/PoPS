@@ -681,6 +681,9 @@ def test_release_preflight_binds_codesign_to_live_runtime(tmp_path):
         "native_sha256": "a" * 64,
     }
     gates = {
+        "installed_wheel": {
+            "evidence": {"native_sha256": runtime["native_sha256"]},
+        },
         "codesign": {
             "commands": [
                 {
@@ -712,6 +715,11 @@ def test_release_preflight_binds_codesign_to_live_runtime(tmp_path):
     preflight._codesign_evidence(tmp_path, gates, runtime)
     gates["codesign"]["evidence"]["extensions"][0]["sha256"] = "b" * 64
     with pytest.raises(preflight.PreflightError, match="live native extension"):
+        preflight._codesign_evidence(tmp_path, gates, runtime)
+
+    gates["codesign"]["evidence"]["extensions"][0]["sha256"] = runtime["native_sha256"]
+    gates["installed_wheel"]["evidence"]["native_sha256"] = "b" * 64
+    with pytest.raises(preflight.PreflightError, match="published wheel"):
         preflight._codesign_evidence(tmp_path, gates, runtime)
 
 
@@ -759,7 +767,7 @@ def test_installed_example_authenticates_native_bytes_before_execution(
     assert "example_args=--output-dir|/proof/output" in output
 
 
-def test_final_gate_rejects_incomplete_or_non_darwin_codesign_runtime():
+def test_final_gate_rejects_incomplete_non_darwin_or_rewritten_codesign_runtime():
     evidence = {
         "schema_version": 1,
         "platform": "darwin",
@@ -772,10 +780,14 @@ def test_final_gate_rejects_incomplete_or_non_darwin_codesign_runtime():
         ],
     }
 
-    assert gate._signed_runtime_sha256(evidence) == "a" * 64
+    assert gate._signed_runtime_sha256(
+        evidence, retained_native_sha256="a" * 64
+    ) == "a" * 64
+    with pytest.raises(gate.FinalGateError, match="different from the validated runtime"):
+        gate._signed_runtime_sha256(evidence, retained_native_sha256="b" * 64)
     evidence["platform"] = "linux"
     with pytest.raises(gate.FinalGateError, match="Darwin release proof"):
-        gate._signed_runtime_sha256(evidence)
+        gate._signed_runtime_sha256(evidence, retained_native_sha256="a" * 64)
 
 
 def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_path):

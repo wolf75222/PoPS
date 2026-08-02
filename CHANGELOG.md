@@ -18,6 +18,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Release codesign now preserves an existing valid ad-hoc signature and refuses publication when
+  post-install signing changes the retained wheel's native bytes, so the published wheel and the
+  runtime exercised by conformance and final examples are byte-identical.
 - Final release evidence now authenticates one exact runtime acceptance and one exact qualification
   Pytest node for each normative example inside the all-pass installed-wheel JUnit lane. Missing,
   renamed, skipped, xfailed, mocked, duplicated, or unattested example proofs fail before release
