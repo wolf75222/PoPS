@@ -100,6 +100,7 @@ def test_async_scientific_output_accepts_diagnostic_only_and_resolves_balance():
             "reduction": "accepted_balance",
             "transform": "identity",
             "metric_weighted": False,
+            "coefficient": (1.0).hex(),
             "balance_route": ledger.route_identity(block).token,
         },
     )

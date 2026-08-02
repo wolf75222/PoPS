@@ -668,7 +668,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     // terms remain available and the future selector must fail closed on this missing producer.
     if (sys_->program_is_polar())
       return std::nullopt;
-    const GridContext context = program_execution_block_grid_context_(program_block);
+    const GridContext context = sys_->grid_context(sys_block(program_block));
     const Real cell_measure = context.geom.dx() * context.geom.dy();
     if (!std::isfinite(static_cast<double>(cell_measure)) || cell_measure <= Real(0))
       throw std::runtime_error(
@@ -805,8 +805,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
       const HistoryRegistration& registration) const {
     return sys_->history_initialized(registration.name);
   }
-  double program_execution_history_slot_dt_storage_(
-      const HistoryRegistration& registration, int lag) const {
+  double program_execution_history_slot_dt_storage_(const HistoryRegistration& registration,
+                                                    int lag) const {
     return sys_->history_slot_dt(registration.name, lag);
   }
   void program_execution_set_history_initialized_storage_(const HistoryRegistration& registration,
