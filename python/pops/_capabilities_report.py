@@ -375,6 +375,203 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
     gpu = bool(_flag_value(flags, "supports_gpu"))
     return [
         _row(
+            "boundary:prepared_transport",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "one prepared 2D model-aware plan serves Uniform/AMR native and compiled "
+                "transport boundaries; executable built-ins are periodic, extrapolation, "
+                "constant/RuntimeParam fixed state, conservative device-side analytic "
+                "(x,y,t,params) fixed state, model primitive-to-conservative fixed-state conversion, "
+                "and typed-role slip wall; dynamic AMR regrid keeps internal "
+                "coarse-fine ghosts under the prepared transfer authority on MPI ranks, with "
+                "double-physical corners explicitly not required by dimension-split FV stencils; "
+                "numerical resolution rejects every descriptor outside this executable envelope"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:characteristic_no_inflow",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "numerical resolution rejects characteristic closure until executable model "
+                "eigenstructure, incoming-mode data, and sonic/sign policies are installed"
+            ),
+            requested="characteristic no-inflow/outflow transport boundary",
+            available_route="explicit fixed-state inflow or extrapolated outflow",
+            alternative=(
+                "use the explicit built-in route or install a prepared characteristic kernel"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:representation_conversion",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "2D fixed-state primitive inflow may use the exact compiled block-model "
+                "to_conservative provider; conservative-to-primitive recovery and arbitrary "
+                "representation converters remain unavailable, and conversion does not invent "
+                "a boundary admissibility projection"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:analytic_xtp",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "2D conservative fixed-state inflow accepts data-only analytic ScalarExpr "
+                "programs over typed coordinates, one exact logical Clock, and bound parameters; "
+                "primitive per-point conversion and discrete state/field/input reads remain "
+                "unavailable, analytic ghost depth may not exceed the normal domain extent, and "
+                "axis-permuted periodic coordinates require a prepared coordinate map"
+            ),
+            source=source,
+        ),
+        _row(
+            "boundary:post_riemann_flux",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=False,
+            status="partial",
+            limitation=(
+                "one typed BoundaryFlux component transforms the already evaluated outward-normal "
+                "face flux between the Riemann solve and divergence/reflux through the same "
+                "prepared Uniform/AMR boundary plan; execution is currently a 2D Cartesian "
+                "host-batch route, the ordinary Uniform route materializes face fields when this "
+                "stage is selected, and no device-native or embedded/cut-cell metric ABI or "
+                "high-level TransportBoundarySet convenience exists yet"
+            ),
+            requested="post-Riemann transport-boundary flux provider",
+            available_route="PostRiemannFlux plus one qualified BoundaryFlux component",
+            source=source,
+        ),
+        _row(
+            "riemann:typed_failure_outcome",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "Rusanov, HLL, HLLC, and Roe return one device-copyable FluxEvaluation with "
+                "typed status, stability bound, and reason code; face failures are reduced and "
+                "reject the owning transaction, but no fallback solver can be selected"
+            ),
+            source=source,
+        ),
+        _row(
+            "riemann:prepared_recovery_policy",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "there is no prepared ordered Riemann recovery chain, requested-versus-used "
+                "solver outcome, block counter, or restart metadata; a typed candidate failure "
+                "rejects the step and never substitutes another solver"
+            ),
+            requested=(
+                "prepared Riemann recovery chain with requested/used solver diagnostics"
+            ),
+            available_route=(
+                "one explicitly selected Riemann solver with typed rejection and transactional "
+                "rollback"
+            ),
+            alternative=(
+                "select one supported Riemann route explicitly and consume rejection through "
+                "the step retry/failure policy"
+            ),
+            source=source,
+        ),
+        _row(
+            "recovery:prepared_variable",
+            layout="uniform|amr",
+            backend="production",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="partial",
+            limitation=(
+                "one block-prepared closed-form method returns a device-copyable "
+                "RecoveryOutcome/RecoveryReport retaining selected and last-attempted method "
+                "kinds across type erasure; System conservative-to-primitive "
+                "materialization and Cartesian, polar, masked, and embedded-boundary face "
+                "reconstruction consume publication permission before copying or flux "
+                "evaluation, with no implicit repair, fallback, or mutable cache"
+            ),
+            source=source,
+        ),
+        _row(
+            "recovery:complete_consumer_cutover",
+            layout="uniform|amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "initial and analytic materialization, model/source conversion, AMR "
+                "transfer/regrid, primitive boundary traces, fallible primitive-to-conservative "
+                "conversion, persistent warm starts, cache restart, and the backend/performance "
+                "matrix do not yet share one prepared recovery authority"
+            ),
+            requested="complete prepared variable-recovery consumer cutover",
+            available_route=(
+                "prepared closed-form recovery for System materialization and spatial face "
+                "reconstruction"
+            ),
+            alternative=(
+                "use the delivered conservative-to-primitive consumers or implement the missing "
+                "fallible provider and cache/restart contracts"
+            ),
+            source=source,
+        ),
+        _row(
+            "amr:external_field_solver_v2",
+            layout="amr",
+            backend="none",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="unavailable",
+            limitation=(
+                "FieldSolver@2 carries a level on patch metadata, but the installed external "
+                "component adapter owns one uniform System MultiFab and no AmrFieldSolverProvider "
+                "hierarchy materialization"
+            ),
+            requested="external FieldSolver@2 on an AMR hierarchy",
+            available_route="external FieldSolver@2 on one uniform host/serial level",
+            alternative=(
+                "implement an authenticated AMR component bridge that materializes all levels, "
+                "coarse-fine topology and collective solve ownership"
+            ),
+            source=source,
+        ),
+        _row(
             "amr:field_coupled_rhs_jacvec",
             layout="amr",
             backend="none",
@@ -679,7 +876,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             "reconstruction:muscl",
             layout="uniform|amr",
             backend="production",
-            limitation="ghost_depth=2; native limiters minmod/vanleer",
+            limitation="ghost_depth=2; native limiters minmod/vanleer/mc/superbee",
             source=source,
         ),
         _row(
@@ -695,23 +892,15 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         _row(
             "limiter:mc",
             layout="uniform|amr",
-            backend="none",
-            status="unavailable",
-            limitation="catalogued but no native C++ limiter symbol exists",
-            requested="limiter=MC()",
-            available_route="Minmod() or VanLeer()",
-            alternative="use pops.numerics.reconstruction.limiters.Minmod()",
+            backend="production",
+            limitation="native POPS_HD MC slope policy; formal_order=2; ghost_depth=2",
             source=source,
         ),
         _row(
             "limiter:superbee",
             layout="uniform|amr",
-            backend="none",
-            status="unavailable",
-            limitation="catalogued but no native C++ limiter symbol exists",
-            requested="limiter=Superbee()",
-            available_route="Minmod() or VanLeer()",
-            alternative="use pops.numerics.reconstruction.limiters.VanLeer()",
+            backend="production",
+            limitation="native POPS_HD Superbee slope policy; formal_order=2; ghost_depth=2",
             source=source,
         ),
         _row(

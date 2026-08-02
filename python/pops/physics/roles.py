@@ -9,8 +9,9 @@ from typing import Any
 _ROLE_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _RESERVED_ROLE_TOKENS = frozenset({"Custom"})
 _CANONICAL_ROLE_TOKENS = frozenset({
-    "Density", "Energy", "MomentumX", "MomentumY", "MomentumZ", "Pressure", "Scalar",
-    "Temperature", "VelocityX", "VelocityY", "VelocityZ",
+    "AxialX", "AxialY", "AxialZ", "Density", "Energy", "MomentumX", "MomentumY",
+    "MomentumZ", "Pressure", "Scalar", "Temperature", "VelocityX", "VelocityY",
+    "VelocityZ",
 })
 
 
@@ -86,6 +87,22 @@ class Velocity(ComponentRole):
 
 
 @dataclass(frozen=True, slots=True)
+class Axial(ComponentRole):
+    """One component of an axial (pseudo-)vector under reflection."""
+
+    axis: Any
+
+    def __post_init__(self) -> None:
+        name = getattr(self.axis, "name", None)
+        if name not in ("x", "y", "z"):
+            raise TypeError("Axial axis must be a typed Cartesian x/y/z axis")
+
+    @property
+    def native_name(self) -> str:
+        return "Axial" + str(self.axis.name).upper()
+
+
+@dataclass(frozen=True, slots=True)
 class Pressure(ComponentRole):
     @property
     def native_name(self) -> str:
@@ -107,6 +124,6 @@ class Scalar(ComponentRole):
 
 
 __all__ = [
-    "ComponentRole", "Density", "Energy", "Momentum", "Pressure", "Scalar",
+    "Axial", "ComponentRole", "Density", "Energy", "Momentum", "Pressure", "Scalar",
     "Temperature", "Velocity", "native_role_token",
 ]

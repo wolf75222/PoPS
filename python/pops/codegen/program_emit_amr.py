@@ -4,6 +4,7 @@ Split out of :mod:`pops.codegen.program_codegen` so that module stays under the 
 budget. ``_emit_amr_install`` is the only public name; ``program_codegen`` re-imports it and calls
 it from ``emit_cpp_program`` when ``target='amr_system'``.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -29,20 +30,28 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
 
     Shape: one macro-step recursively advances each child on its declared parent/child clock relation,
     with exact stage abscissae and mandatory temporal interpolation from parent old/new snapshots, then
-    synchronizes finest-first by conservative reflux followed by average-down. The
-    body's head-of-step ``ctx.solve_fields()`` fires EXACTLY ONCE per macro-step (a level-0 / not-yet-solved
-    guard inside the context), so the coarse Poisson is OncePerStep and injected to every level -- parity
-    with the native AMR cadence. The C/F interface is now conservative to round-off: the per-level effective
-    flux is captured through the Program's own linear combination and routed through the native
-    ``route_reflux`` at level sync (ADC-639), so mass/momentum/energy are conserved across the interface on a
-    genuinely multilevel run; a coarse-only / flat Program stays bit-identical."""
+    synchronizes finest-first by conservative reflux followed by average-down. Authored single-state
+    field nodes use the exact point/provider-qualified solve at each active level. The context exposes
+    only an explicitly level-0-only default-field route for legacy/manual drivers, so coarse auxiliary
+    injection can never masquerade as a requested fine-level solve. The C/F interface is now conservative to round-off: the
+    per-level effective flux is captured through the Program's own linear combination and routed
+    through the native ``route_reflux`` at level sync (ADC-639), so mass/momentum/energy are conserved
+    across the interface on a genuinely multilevel run; a coarse-only / flat Program stays
+    bit-identical."""
     if target != "amr_system":
         return ""
+
     def walk(values: Any) -> Any:
         for value in values:
             yield value
-            for key in ("cond_block", "body_block", "apply_block", "residual_block",
-                        "true_block", "false_block"):
+            for key in (
+                "cond_block",
+                "body_block",
+                "apply_block",
+                "residual_block",
+                "true_block",
+                "false_block",
+            ):
                 nested = value.attrs.get(key)
                 if isinstance(nested, (list, tuple)):
                     yield from walk(nested)
@@ -56,30 +65,32 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
             '    if (ctx.program_resource_topology().levels > 1)\n'
             '      throw std::runtime_error("local_transform on multi-level AMR requires a typed '
             'post-synchronization Program phase; refusing pre-reflux execution");\n'
-            '  };\n'
-            '  _require_local_transform_level_contract();\n')
-        transform_refresh_guard = (
-            '    _require_local_transform_level_contract();\n')
+            "  };\n"
+            "  _require_local_transform_level_contract();\n"
+        )
+        transform_refresh_guard = "    _require_local_transform_level_contract();\n"
     if hierarchy_bodies is None:
-        phase_fields = '    std::function<void(double)> step;\n'
+        phase_fields = "    std::function<void(double)> step;\n"
         phase_initializers = (
             '      [=](double dt) {\n'
             '        auto& ctx = *ctx_owner;\n'
             '        (void)dt;\n' + body + '\n'
             '      }\n')
         installed_driver = (
-            '    auto _advance_level = [&](double level_dt) {\n'
-            '      _refresh_level_programs();\n'
-            '      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n'
-            '    };\n'
-            '    ctx.advance_hierarchy(dt, _advance_level);\n')
+            "    auto _advance_level = [&](double level_dt) {\n"
+            "      _refresh_level_programs();\n"
+            "      _level_programs->at(static_cast<std::size_t>(ctx.level())).step(level_dt);\n"
+            "    };\n"
+            "    ctx.advance_hierarchy(dt, _advance_level);\n"
+        )
     else:
         gather, solve, publish = hierarchy_bodies
         phase_fields = (
-            '    std::function<void(double)> step;\n'
-            '    std::function<void(double)> gather;\n'
-            '    std::function<void(double)> solve;\n'
-            '    std::function<void(double)> publish;\n')
+            "    std::function<void(double)> step;\n"
+            "    std::function<void(double)> gather;\n"
+            "    std::function<void(double)> solve;\n"
+            "    std::function<void(double)> publish;\n"
+        )
         phase_initializers = (
             '      [=](double dt) {\n'
             '        auto& ctx = *ctx_owner;\n'

@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 4
 
-COMPONENT_CATALOG_SHA256 = '651f858030d8a17d2d9f0b7c5e4ef0ba4c20799f996be99ee94f75e37023b76b'
+COMPONENT_CATALOG_SHA256 = '70d4fca514bae5f479cc2f3f6e1a79b391fa8804ed1cabc0e6b354d45fd68f5f'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = '47c3a146c9d7e20d0786fa703fe5e6b9ba27f063065e39646f4a20bb4b0e97ec'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'a367ad2c24684dd232edd73ccee075d36b01132ba9ac2b740cfacfd44366dd61'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:47c3a146c9d7e20d0786fa703fe5e6b9ba27f063065e39646f4a20bb4b0e97ec'
+ROUTE_REGISTRY_SIGNATURE = 'v2:a367ad2c24684dd232edd73ccee075d36b01132ba9ac2b740cfacfd44366dd61'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -40,7 +40,9 @@ ROUTE_TABLES = {'riemann': (('rusanov',
  'limiter': (('none', 'pops::NoSlope', (), ()),
              ('minmod', 'pops::Minmod', (), ()),
              ('vanleer', 'pops::VanLeer', (), ()),
-             ('weno5', 'pops::Weno5', ('3-cell halo',), ())),
+             ('weno5', 'pops::Weno5', ('3-cell halo',), ()),
+             ('mc', 'pops::MC', (), ()),
+             ('superbee', 'pops::Superbee', (), ())),
  'recon': (('conservative', 'pops::make_block(recon_prim=false)', (), ()),
            ('primitive',
             'pops::make_block(recon_prim=true)',
@@ -125,7 +127,9 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
  'limiter': {'none': {'n_ghost': 1, 'formal_order': 1, 'muscl_compatible': False},
              'minmod': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
              'vanleer': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
-             'weno5': {'n_ghost': 3, 'formal_order': 5, 'muscl_compatible': False}},
+             'weno5': {'n_ghost': 3, 'formal_order': 5, 'muscl_compatible': False},
+             'mc': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
+             'superbee': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True}},
  'recon': {'conservative': {}, 'primitive': {}},
  'time': {'explicit': {}, 'ssprk3': {}, 'euler': {}, 'imex': {}, 'imexrk_ars222': {}},
  'field_solver': {'geometric_mg': {}, 'fft': {}, 'fft_spectral': {}, 'polar': {}},
@@ -168,7 +172,7 @@ ROUTE_CPP_BINDINGS = {'riemann': {'enum': 'RiemannRouteId',
              'ids': ('kRusanov', 'kHll', 'kHllc', 'kRoe')},
  'limiter': {'enum': 'LimiterRouteId',
              'table': 'kLimiterRoutes',
-             'ids': ('kNone', 'kMinmod', 'kVanLeer', 'kWeno5')},
+             'ids': ('kNone', 'kMinmod', 'kVanLeer', 'kWeno5', 'kMc', 'kSuperbee')},
  'recon': {'enum': 'ReconRouteId', 'table': 'kReconRoutes', 'ids': ('kConservative', 'kPrimitive')},
  'time': {'enum': 'TimeRouteId',
           'table': 'kTimeRoutes',

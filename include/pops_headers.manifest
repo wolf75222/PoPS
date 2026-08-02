@@ -52,6 +52,7 @@ api pops/mesh/boundary/periodicity.hpp
 api pops/mesh/boundary/physical_bc.hpp
 api pops/mesh/boundary/prepared_boundary_component.hpp
 api pops/mesh/boundary/prepared_boundary_plan.hpp
+api pops/mesh/boundary/prepared_hyperbolic_boundary.hpp
 api pops/mesh/execution/for_each.hpp
 api pops/mesh/geometry/geometry.hpp
 api pops/mesh/index/box2d.hpp
@@ -107,6 +108,7 @@ api pops/numerics/fv/spatial_discretisation.hpp
 api pops/numerics/linalg/block_inverse.hpp
 api pops/numerics/linalg/dense_eig.hpp
 api pops/numerics/nonlinear/prepared_local_nonlinear.hpp
+api pops/numerics/nonlinear/prepared_variable_recovery.hpp
 api pops/numerics/spatial/embedded_boundary/domain.hpp
 api pops/numerics/spatial/embedded_boundary/operator.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
@@ -211,6 +213,7 @@ sdk-support pops/runtime/output_piece_collective.hpp
 sdk-support pops/runtime/program/amr_program_checkpoint.hpp
 sdk-root pops/runtime/program/amr_program_context.hpp
 sdk-support pops/runtime/program/cache_manager.hpp
+sdk-support pops/runtime/program/cell_temporal_partition.hpp
 sdk-support pops/runtime/program/clock_schedule.hpp
 sdk-root pops/runtime/program/coeff_elliptic_ops.hpp
 sdk-root pops/runtime/program/component_package.hpp

@@ -36,7 +36,11 @@ enum class VariableRole {
   Pressure,
   Temperature,
   Scalar,
-  Custom
+  Custom,
+  // Append new canonical roles so the numeric values of the established role ABI stay stable.
+  AxialX,
+  AxialY,
+  AxialZ
 };
 
 /// Forward declaration: VariableSet::index_of(const std::string&) resolves a canonical role NAME via
@@ -120,6 +124,12 @@ inline const char* role_name(VariableRole r) {
       return "scalar";
     case VariableRole::Custom:
       return "custom";
+    case VariableRole::AxialX:
+      return "axial_x";
+    case VariableRole::AxialY:
+      return "axial_y";
+    case VariableRole::AxialZ:
+      return "axial_z";
   }
   return "custom";
 }
@@ -150,6 +160,12 @@ inline VariableRole role_from_name(const std::string& s) {
     return VariableRole::Temperature;
   if (s == "scalar")
     return VariableRole::Scalar;
+  if (s == "axial_x")
+    return VariableRole::AxialX;
+  if (s == "axial_y")
+    return VariableRole::AxialY;
+  if (s == "axial_z")
+    return VariableRole::AxialZ;
   return VariableRole::Custom;
 }
 

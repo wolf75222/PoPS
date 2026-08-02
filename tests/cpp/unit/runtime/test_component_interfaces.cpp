@@ -589,6 +589,66 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   EXPECT_THROW(pops::component::apply_ghost_boundary(ghost_api, nullptr, invalid_region, status),
                std::invalid_argument);
 
+  std::array<double, 2> transformed_outward_flux{};
+  const std::array<double, 2> lower_outward_normal{-1.0, 0.0};
+  const std::array<double, 1> face_measure{0.5};
+  PopsComponentActionV1 boundary_flux_action = POPS_COMPONENT_ABORT_RUN_V1;
+  PopsBoundaryFluxApiV1 boundary_flux_api{
+      abi_header(sizeof(PopsBoundaryFluxApiV1), POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1),
+      +[](void*, const PopsBoundaryFluxRequestV1* request, PopsBoundaryFluxResultV1* result) {
+        if (request->region.kind != POPS_BOUNDARY_FACE_V1 ||
+            request->outward_normals.component_count != 2 ||
+            values(request->outward_normals)[0] != -1.0 || request->face_measures[0] != 0.5)
+          return 12;
+        const auto* base = values(request->base_outward_normal_flux);
+        auto* output = values(result->outward_normal_flux);
+        for (std::size_t component = 0;
+             component < request->base_outward_normal_flux.component_count; ++component)
+          output[component] = base[component] + 3.0;
+        result->actions[0] = POPS_COMPONENT_CONTINUE_V1;
+        result->status = ok_status();
+        return 0;
+      }};
+  auto base_outward_flux_view = abi::const_field_view(left.data(), 1, 1, 2);
+  base_outward_flux_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  base_outward_flux_view.centering_axes = 1u;
+  auto transformed_outward_flux_view = abi::field_view(transformed_outward_flux.data(), 1, 1, 2);
+  transformed_outward_flux_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  transformed_outward_flux_view.centering_axes = 1u;
+  PopsBoundaryFluxRequestV1 boundary_flux_request{
+      sizeof(PopsBoundaryFluxRequestV1),
+      "case::boundary-flux-provider",
+      "case::state",
+      base_outward_flux_view,
+      abi::const_field_view(normal.data(), 1, 1, 2),
+      abi::const_field_view(lower_outward_normal.data(), 1, 1, 2),
+      face_measure.data(),
+      face_region,
+      0,
+      nullptr,
+      0,
+      nullptr,
+      abi::logical_time(),
+      execution};
+  PopsBoundaryFluxResultV1 boundary_flux_result{
+      sizeof(PopsBoundaryFluxResultV1), transformed_outward_flux_view, &boundary_flux_action, {}};
+  EXPECT_EQ(pops::component::transform_boundary_flux(boundary_flux_api, nullptr,
+                                                     boundary_flux_request, boundary_flux_result),
+            0);
+  EXPECT_EQ(transformed_outward_flux, (std::array<double, 2>{5.0, 7.0}));
+  EXPECT_EQ(boundary_flux_action, POPS_COMPONENT_CONTINUE_V1);
+  const std::array<double, 2> wrong_lower_normal{1.0, 0.0};
+  auto wrong_orientation = boundary_flux_request;
+  wrong_orientation.outward_normals = abi::const_field_view(wrong_lower_normal.data(), 1, 1, 2);
+  EXPECT_THROW(pops::component::transform_boundary_flux(boundary_flux_api, nullptr,
+                                                        wrong_orientation, boundary_flux_result),
+               std::invalid_argument);
+  auto mismatched_flux_output = boundary_flux_result;
+  mismatched_flux_output.outward_normal_flux.component_count = 1;
+  EXPECT_THROW(pops::component::transform_boundary_flux(
+                   boundary_flux_api, nullptr, boundary_flux_request, mismatched_flux_output),
+               std::invalid_argument);
+
   std::array<double, 2> direction{1.0, 2.0}, boundary_output{};
   const auto field_eval =
       +[](void*, const PopsFieldBoundaryRequestV1* request, PopsComponentStatusV1* result) {

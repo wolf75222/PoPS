@@ -60,6 +60,7 @@
   "tests/python/integration/native_loader/test_prepared_preconditioner_component.py": 120.0,
   "tests/python/integration/native_loader/test_ssprk3_production.py": 155.7,
   "tests/python/integration/native_loader/test_uniform_restart_missing_history.py": 30.0,
+  "tests/python/integration/runtime/test_axial_slip_wall_pipeline.py": 120.0,
   "tests/python/integration/runtime/test_coupling_preset_parity.py": 0.5,
   "tests/python/integration/runtime/test_diocotron_analytic_initial.py": 120.0,
   "tests/python/integration/runtime/test_dsl_runtime_params.py": 300.0,
@@ -173,6 +174,8 @@
   "tests/python/unit/codegen/test_program_emit_params_multimodel.py": 2.0,
   "tests/python/unit/codegen/test_program_graph_lowering.py": 2.0,
   "tests/python/unit/codegen/test_program_model_graph.py": 2.0,
+  "tests/python/unit/codegen/test_recovery_admissibility_codegen.py": 2.0,
+  "tests/python/unit/codegen/test_representation_arity.py": 2.0,
   "tests/python/unit/codegen/test_rhs_jacvec_boundary_emit.py": 2.0,
   "tests/python/unit/codegen/test_schedule_extension_protocol.py": 2.0,
   "tests/python/unit/codegen/test_scheduler_codegen.py": 0.5,
@@ -410,7 +413,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 225,
+    "estimated_count": 228,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_scalar_advection_final_example.py",
@@ -449,6 +452,7 @@
       "tests/python/integration/native_loader/test_prepared_preconditioner_component.py",
       "tests/python/integration/native_loader/test_ssprk3_production.py",
       "tests/python/integration/native_loader/test_uniform_restart_missing_history.py",
+      "tests/python/integration/runtime/test_axial_slip_wall_pipeline.py",
       "tests/python/integration/runtime/test_diocotron_analytic_initial.py",
       "tests/python/integration/runtime/test_dsl_runtime_params.py",
       "tests/python/integration/runtime/test_final_condensed_uniform_runtime.py",
@@ -515,6 +519,8 @@
       "tests/python/unit/codegen/test_program_emit_params_multimodel.py",
       "tests/python/unit/codegen/test_program_graph_lowering.py",
       "tests/python/unit/codegen/test_program_model_graph.py",
+      "tests/python/unit/codegen/test_recovery_admissibility_codegen.py",
+      "tests/python/unit/codegen/test_representation_arity.py",
       "tests/python/unit/codegen/test_rhs_jacvec_boundary_emit.py",
       "tests/python/unit/codegen/test_schedule_extension_protocol.py",
       "tests/python/unit/codegen/test_shared_interface_validation.py",
@@ -638,6 +644,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 406
+    "total_files": 409
   }
 }

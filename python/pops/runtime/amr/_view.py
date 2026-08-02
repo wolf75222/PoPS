@@ -172,7 +172,7 @@ class AmrRuntimeView:
             per_level_depth=None,
             requirement_note=(
                 "the reconstruction stencil sets the ghost depth "
-                "(minmod / vanleer -> 1, weno5 -> 3); the coarse-fine fine ghosts "
+                "(minmod / vanleer / mc / superbee -> 1, weno5 -> 3); the coarse-fine fine ghosts "
                 "are re-derived per path on the AMR transport."
             ),
             notes=["per-level ghost depth is not exposed by this native build."],
@@ -215,8 +215,10 @@ class AmrRuntimeView:
             "artifact-backed Program and unchanged MPI cardinality: it restores the exact accepted "
             "state first, then performs one scientific tag/regrid at the restored clock.",
             "RegridOnRestart() supports serial and exact-MPI-world rematerializable "
-            "shared-interface flux groups at unchanged MPI cardinality; it still refuses Uniform "
-            "and multi-layout runtimes, elliptic field providers, and bootstrap staggered caches.",
+            "depth-preserving shared-interface flux groups at unchanged MPI cardinality; it still "
+            "refuses Uniform and multi-layout runtimes, active-depth changes, unsupported "
+            "non-finest replacements at depth greater than two, elliptic field providers, and "
+            "bootstrap staggered caches.",
             "Its phase-local history consensus fingerprints are cold-restart collectives whose "
             "memory and communication cost scales with every dense history slot; they prove "
             "all-rank agreement per hierarchy, not bitwise equality across interpolation.",

@@ -259,9 +259,11 @@ corner, which stays coherent on both sides of zero (negative ghosts). With a rat
 level therefore has a mesh $dx_f = dx_c / 2$ at unchanged physical domain.
 
 The multi-block co-locates N species on a shared hierarchy (same `BoxArray`, same
-`DistributionMapping`, same $dx, dy$ per level); the multi-block supports `regrid_every > 0` (the union-tag regrid rebuilds the
-hierarchy from all blocks' tags; `regrid_every == 0` keeps it frozen). Conservation is guaranteed per block via reflux and average_down, described
-below.
+`DistributionMapping`, same $dx, dy$ per level); the multi-block supports `regrid_every > 0`.
+`AmrProgramContext` compares the accepted macro-step with that prepared interval, then calls the
+immediate spatial `AmrRuntime::regrid()` primitive when due; `AmrRuntime` does not decide cadence.
+The union-tag regrid rebuilds the hierarchy from all blocks' tags, while `regrid_every == 0` keeps it
+frozen. Conservation is guaranteed per block via reflux and average_down, described below.
 
 ## AMR coarse-fine stencil (reflux)
 
@@ -485,8 +487,11 @@ that same transaction: a failed transform restores its exact accepted bytes, whi
 transform advances one tagging cycle and publishes the transformed image. The bounded route requires
 one AMR layout and unchanged MPI cardinality. Serial and exact-`MPI_COMM_WORLD` shared-interface
 flux groups participate in the same topology rematerialization, all-rank identity consensus,
-conservation check, rollback and retry. Rank-changing dynamic interface rematerialization, elliptic
-providers and bootstrap staggered caches remain refused. The phase-local history consensus
+conservation check, rollback and retry. One rank-local post-transform failure is closed
+collectively; rollback restores the complete accepted image before a retry may publish one common
+receipt and resume the rematerialized interface. Active-depth changes, unsupported non-finest
+replacements at depth greater than two, rank-changing dynamic interface rematerialization,
+elliptic providers and bootstrap staggered caches remain refused. The phase-local history consensus
 fingerprints materialize each dense ring slot collectively; they prove exact all-rank agreement on
 each hierarchy, not bitwise equality across a topology-changing interpolation. Conservation is the
 separate native before/after invariant on every accepted solution component. This is a cold-restart
@@ -546,6 +551,15 @@ de l'artefact. Un run qui échoue lève une exception ; il ne retourne jamais un
 
 Strang and Lie composition are Program macros (`pops.lib.time.strang` / `lie`). They lower explicit
 sub-flows into the same IR rather than selecting a native `System` stepper branch.
+
+`ProgramContext` and `AmrProgramContext` consume the same `ProgramExecutionServices` authority for
+topology-independent generated operations. In particular, persistent RHS/state/scalar scratch is
+one shared resource service keyed by IR value, sub-slot and active level. Providers expose only the
+authenticated resource identity (topology epoch, process-local materialization generation and
+level); the shared service owns validation, invalidation, exact-layout allocation, zero-on-reuse and
+profiling for both Uniform and AMR execution. Prepared operator capabilities are likewise retained
+as complete evaluation snapshots: a probe re-authenticates the provider clock and topology against
+the exact active snapshot, so a provider transition cannot leave a stale nonzero revision usable.
 
 ### Adaptive runtime execution
 

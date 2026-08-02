@@ -15,6 +15,7 @@ from ._model import (
     constant,
     parameter,
     _program_input,
+    _time,
 )
 
 
@@ -34,6 +35,12 @@ def input(value_id: Any, component: Any) -> ScalarExpr:
     """Read one named discrete input supplied by a consuming initial map."""
 
     return _program_input(value_id, component)
+
+
+def time(clock: Any) -> ScalarExpr:
+    """Read physical time from one exact logical ``Clock`` at native evaluation."""
+
+    return _time(clock)
 
 
 def x(frame: Any) -> ScalarExpr:
@@ -210,6 +217,7 @@ __all__ = [
     "radius",
     "sin",
     "sqrt",
+    "time",
     "where",
     "x",
     "y",

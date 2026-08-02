@@ -3,7 +3,7 @@
 
 DIVERGENCE CORRIGEE (audit GENERICITY_2026-06 §8 "registry des tags") : les branches hllc et roe du
 dispatch AMR (detail::dispatch_amr_block, amr_dsl_block.hpp) n'avaient PAS de
-cas 'weno5' (seulement none/minmod/vanleer) alors que System::make_block (block_builder.hpp) le route.
+cas 'weno5' (seulement les routes de halo <= 2) alors que System::make_block (block_builder.hpp) le route.
 Resultat : un utilisateur AmrSystem demandant un schema compressible weno5+hllc (ou weno5+roe) recevait
 "limiter inconnu 'weno5'" la ou le MEME modele buildait sous System. Les deux branches AMR portent
 desormais le cas weno5 (build_amr_block supporte deja Weno5, cable sur

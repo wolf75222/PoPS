@@ -6,6 +6,7 @@
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -537,6 +538,187 @@ inline void apply_ghost_component(const PreparedGhostBoundaryComponent::Session&
       component::apply_ghost_boundary(component.ghost_api(), component.state(), request, status);
   PreparedGhostBoundaryComponent::require_success(code, status, "apply_region_batch");
   scatter_field(state, workspace.locations, workspace.ghosts);
+}
+
+struct PreparedBoundaryFluxWorkspace {
+  int axis = 0;
+  int side = 1;
+  int state_components = 0;
+  std::vector<BoundaryPointLocation> face_locations;
+  std::vector<BoundaryPointLocation> cell_locations;
+  std::vector<double> base_outward_flux;
+  std::vector<double> transformed_outward_flux;
+  std::vector<double> xy;
+  std::vector<double> outward_normals;
+  std::vector<double> face_measures;
+  std::vector<PackedConstBoundaryField> packed_dependencies;
+  std::vector<PopsQualifiedConstFieldV1> dependencies;
+  std::vector<PopsQualifiedScalarV1> parameters;
+  std::vector<PopsComponentActionV1> actions;
+};
+
+inline Box2D boundary_flux_face_box(Box2D cells, int axis) {
+  if (axis < 0 || axis >= 2)
+    throw std::invalid_argument("boundary flux face axis is invalid");
+  ++cells.hi[axis];
+  return cells;
+}
+
+inline PreparedBoundaryFluxWorkspace prepare_boundary_flux_workspace(
+    const PreparedBoundaryFluxComponent::Session& component, const MultiFab& prototype,
+    const BoundaryFieldRegistry& registry, const Geometry& geometry) {
+  const auto& spec = component.spec();
+  if (spec.region.kind != POPS_BOUNDARY_FACE_V1 || spec.region.codimension != 1 ||
+      spec.region.axes.size() != 1 || spec.region.sides.size() != 1)
+    throw std::invalid_argument("post-Riemann boundary flux requires one exact oriented face");
+  PreparedBoundaryFluxWorkspace workspace;
+  workspace.axis = spec.region.axes.front();
+  workspace.side = spec.region.sides.front();
+  workspace.state_components = prototype.ncomp();
+  if (workspace.axis < 0 || workspace.axis >= 2 || (workspace.side != -1 && workspace.side != 1))
+    throw std::invalid_argument("post-Riemann boundary flux face is invalid");
+  const int normal_face = workspace.side < 0 ? geometry.domain.lo[workspace.axis]
+                                             : geometry.domain.hi[workspace.axis] + 1;
+  const int normal_cell =
+      workspace.side < 0 ? geometry.domain.lo[workspace.axis] : geometry.domain.hi[workspace.axis];
+  for (int local = 0; local < prototype.local_size(); ++local) {
+    const Box2D valid = prototype.box(local);
+    const Box2D faces = boundary_flux_face_box(valid, workspace.axis);
+    if (normal_face < faces.lo[workspace.axis] || normal_face > faces.hi[workspace.axis])
+      continue;
+    const int tangent = 1 - workspace.axis;
+    const int lower = std::max(valid.lo[tangent], geometry.domain.lo[tangent]);
+    const int upper = std::min(valid.hi[tangent], geometry.domain.hi[tangent]);
+    for (int coordinate = lower; coordinate <= upper; ++coordinate) {
+      const int face_i = workspace.axis == 0 ? normal_face : coordinate;
+      const int face_j = workspace.axis == 1 ? normal_face : coordinate;
+      const int cell_i = workspace.axis == 0 ? normal_cell : coordinate;
+      const int cell_j = workspace.axis == 1 ? normal_cell : coordinate;
+      workspace.face_locations.push_back({local, face_i, face_j});
+      workspace.cell_locations.push_back({local, cell_i, cell_j});
+    }
+  }
+  const std::size_t count = workspace.face_locations.size();
+  const std::size_t components = static_cast<std::size_t>(prototype.ncomp());
+  workspace.base_outward_flux.resize(count * components);
+  workspace.transformed_outward_flux.resize(count * components);
+  workspace.xy.resize(count * 2u);
+  workspace.outward_normals.assign(count * 2u, 0.0);
+  workspace.face_measures.assign(
+      count, static_cast<double>(workspace.axis == 0 ? geometry.dy() : geometry.dx()));
+  workspace.actions.resize(count, POPS_COMPONENT_CONTINUE_V1);
+  for (std::size_t point = 0; point < count; ++point) {
+    const auto& face = workspace.face_locations[point];
+    workspace.xy[2u * point] =
+        workspace.axis == 0 ? static_cast<double>(workspace.side < 0 ? geometry.xlo : geometry.xhi)
+                            : static_cast<double>(geometry.x_cell(face.i));
+    workspace.xy[2u * point + 1u] =
+        workspace.axis == 1 ? static_cast<double>(workspace.side < 0 ? geometry.ylo : geometry.yhi)
+                            : static_cast<double>(geometry.y_cell(face.j));
+    workspace.outward_normals[2u * point + static_cast<std::size_t>(workspace.axis)] =
+        static_cast<double>(workspace.side);
+  }
+  workspace.packed_dependencies.reserve(spec.states.size() + spec.fields.size());
+  for (const std::string& identity : spec.states)
+    workspace.packed_dependencies.push_back(
+        prepare_const_field(BoundaryConstRole::State, registry.state_index(identity), identity,
+                            registry, count, spec.layout_identity, spec.region.identity));
+  for (const std::string& identity : spec.fields)
+    workspace.packed_dependencies.push_back(
+        prepare_const_field(BoundaryConstRole::Field, registry.field_index(identity), identity,
+                            registry, count, spec.layout_identity, spec.region.identity));
+  workspace.dependencies.reserve(workspace.packed_dependencies.size());
+  for (const auto& row : workspace.packed_dependencies)
+    workspace.dependencies.push_back(row.view);
+  workspace.parameters = scalar_table(spec);
+  return workspace;
+}
+
+inline void apply_boundary_flux_component(
+    const PreparedBoundaryFluxComponent::Session& component,
+    PreparedBoundaryFluxWorkspace& workspace, const MultiFab& state,
+    const BoundaryFieldRegistry& registry, const Geometry& geometry, MultiFab& fx, MultiFab& fy,
+    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  if (state.ncomp() != workspace.state_components || fx.ncomp() != state.ncomp() ||
+      fy.ncomp() != state.ncomp() || fx.local_size() != state.local_size() ||
+      fy.local_size() != state.local_size())
+    throw std::runtime_error(
+        "post-Riemann boundary flux layout changed after executor preparation");
+  if (workspace.face_locations.empty())
+    return;
+  const auto& spec = component.spec();
+  MultiFab& face_flux = workspace.axis == 0 ? fx : fy;
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Box2D expected = boundary_flux_face_box(state.box(local), workspace.axis);
+    if (face_flux.box(local) != expected)
+      throw std::runtime_error("post-Riemann boundary flux differs from the prepared face layout");
+  }
+  const std::size_t count = workspace.face_locations.size();
+  const std::size_t components = static_cast<std::size_t>(state.ncomp());
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto& location = workspace.face_locations[index];
+    const ConstArray4 values = face_flux.fab(location.local_fab).const_array();
+    for (std::size_t component_index = 0; component_index < components; ++component_index) {
+      const double outward =
+          static_cast<double>(workspace.side) *
+          static_cast<double>(values(location.i, location.j, static_cast<int>(component_index)));
+      workspace.base_outward_flux[index * components + component_index] = outward;
+      workspace.transformed_outward_flux[index * components + component_index] = outward;
+    }
+  }
+  for (auto& row : workspace.packed_dependencies)
+    pack_field_into(bound_const(registry, row.role, row.slot), workspace.cell_locations,
+                    geometry.domain, false, state, row.values);
+  std::fill(workspace.actions.begin(), workspace.actions.end(), POPS_COMPONENT_CONTINUE_V1);
+  PopsConstFieldViewV1 base_view = const_view(workspace.base_outward_flux, count, components,
+                                              spec.layout_identity, spec.region.identity);
+  base_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  base_view.centering_axes = 1u << static_cast<unsigned>(workspace.axis);
+  const PopsConstFieldViewV1 coordinate_view =
+      const_view(workspace.xy, count, 2, spec.layout_identity, spec.region.identity);
+  const PopsConstFieldViewV1 normal_view =
+      const_view(workspace.outward_normals, count, 2, spec.layout_identity, spec.region.identity);
+  PopsBoundaryFluxRequestV1 request{sizeof(PopsBoundaryFluxRequestV1),
+                                    spec.target_identity.c_str(),
+                                    spec.state_identity.c_str(),
+                                    base_view,
+                                    coordinate_view,
+                                    normal_view,
+                                    workspace.face_measures.data(),
+                                    spec.region.view(),
+                                    workspace.dependencies.size(),
+                                    workspace.dependencies.data(),
+                                    workspace.parameters.size(),
+                                    workspace.parameters.data(),
+                                    logical_time(point),
+                                    component.execution().view()};
+  PopsFieldViewV1 transformed_view =
+      field_view(workspace.transformed_outward_flux, count, components, spec.layout_identity,
+                 spec.region.identity);
+  transformed_view.centering = POPS_FIELD_CENTERING_FACE_V1;
+  transformed_view.centering_axes = 1u << static_cast<unsigned>(workspace.axis);
+  PopsBoundaryFluxResultV1 result{
+      sizeof(PopsBoundaryFluxResultV1),
+      transformed_view,
+      workspace.actions.data(),
+      {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
+  const int code = component::transform_boundary_flux(component.boundary_flux_api(),
+                                                      component.state(), request, result);
+  PreparedBoundaryFluxComponent::require_success(code, result.status, "transform_faces");
+  for (std::size_t index = 0; index < count; ++index) {
+    if (workspace.actions[index] != POPS_COMPONENT_CONTINUE_V1)
+      throw std::runtime_error("native BoundaryFlux returned a non-continue per-face action");
+    const auto& location = workspace.face_locations[index];
+    Array4 values = face_flux.fab(location.local_fab).array();
+    for (std::size_t component_index = 0; component_index < components; ++component_index) {
+      const double outward =
+          workspace.transformed_outward_flux[index * components + component_index];
+      if (!std::isfinite(outward))
+        throw std::runtime_error("native BoundaryFlux returned a non-finite flux");
+      values(location.i, location.j, static_cast<int>(component_index)) =
+          static_cast<Real>(static_cast<double>(workspace.side) * outward);
+    }
+  }
 }
 
 struct PreparedFieldBoundaryWorkspace {

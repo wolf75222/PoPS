@@ -201,6 +201,22 @@ nodeid = "tests/python/integration/amr/test_amr_regrid_on_restart.py::test_regri
 [[check]]
 issue = "ADC-678"
 requirement = "accepted_state"
+polarity = "positive"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/integration/amr/test_amr_composite_field_carrier.py::test_fac_overrides_propagate_through_a_refined_final_root_lifecycle"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
+polarity = "refusal"
+kind = "pytest"
+target = "accepted_state"
+nodeid = "tests/python/unit/amr/test_external_amr_providers.py::test_external_tagger_requires_exact_candidate_program_capability"
+
+[[check]]
+issue = "ADC-678"
+requirement = "accepted_state"
 polarity = "refusal"
 kind = "ctest"
 target = "test_amr_native_loader"

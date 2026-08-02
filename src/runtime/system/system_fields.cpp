@@ -4,14 +4,51 @@
 // accessors. This TU is a subdivision of system.cpp (state marshaling + field derivation surface).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/parallel/solve_report_consensus.hpp>
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
+#include <cmath>
 #include <exception>
 #include <tuple>
 
 namespace pops {
+namespace {
+
+void require_exact_field_evaluation_request(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view provider_slot,
+    std::string_view request_kind) {
+  const bool invalid =
+      request_kind.empty() || provider_slot.empty() || point.clock.empty() || point.tick < 0 ||
+      point.level != 0 || point.substep < 0 || point.stage < 0 || !std::isfinite(point.dt) ||
+      point.dt <= 0.0 || !std::isfinite(point.physical_time) ||
+      point.stage_fraction < amr::Rational(0, 1) || amr::Rational(1, 1) < point.stage_fraction;
+  if (all_reduce_max(invalid ? 1L : 0L) != 0)
+    throw std::invalid_argument(
+        "System exact field evaluation requires one complete level-zero point and provider slot");
+
+  ExactContractBuilder request;
+  request.text("pops.system.exact-field-evaluation")
+      .scalar(std::uint32_t{1})
+      .text(request_kind)
+      .text(provider_slot)
+      .text(point.clock)
+      .scalar(point.tick)
+      .scalar(static_cast<std::int32_t>(point.level))
+      .scalar(static_cast<std::int32_t>(point.substep))
+      .scalar(static_cast<std::int32_t>(point.stage))
+      .scalar(point.stage_fraction.numerator)
+      .scalar(point.stage_fraction.denominator)
+      .scalar(point.dt)
+      .scalar(point.physical_time);
+  const std::string exact_request = std::move(request).release();
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"system-exact-field-evaluation", exact_request}}))
+    throw std::invalid_argument(
+        "System exact field evaluation point differs between communicator ranks");
+}
+
+}  // namespace
 
 void System::set_density(const std::string& name, const std::vector<double>& rho) {
   Impl::Species& s = p_->find(name);
@@ -60,8 +97,16 @@ void System::set_density(const std::string& name, const std::vector<double>& rho
 }
 
 POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConvert prim_to_cons,
-                                              CellConvert cons_to_prim) {
+                                              CellRecovery cons_to_prim) {
   Impl::Species& s = p_->find(name);
+  const auto boundary = p_->boundary_plans_.find(name);
+  if (boundary != p_->boundary_plans_.end() &&
+      boundary->second->requires_fixed_state_conversion()) {
+    if (!prim_to_cons)
+      throw std::runtime_error(
+          "System primitive fixed-state boundary requires the block-model conversion");
+    boundary->second->prepare_fixed_state_conversion(prim_to_cons);
+  }
   s.prim_to_cons = std::move(prim_to_cons);
   s.cons_to_prim = std::move(cons_to_prim);
 }
@@ -118,7 +163,16 @@ std::vector<double> System::get_primitive_state(const std::string& name) {
   for (std::size_t k = 0; k < nn; ++k) {
     for (int c = 0; c < nc; ++c)
       cell_in[c] = cons[static_cast<std::size_t>(c) * nn + k];
-    s.cons_to_prim(cell_in.data(), cell_out.data());
+    const RecoveryReport recovery = s.cons_to_prim(cell_in.data(), cell_out.data());
+    if (!recovery.publication_permitted())
+      throw std::runtime_error(
+          "System::get_primitive_state : variable recovery failed for block '" + name +
+          "' at local cell " + std::to_string(k) + " (status=" +
+          recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
+          ", failing_component=" + std::to_string(recovery.failing_component) +
+          ", attempted_methods=" + std::to_string(recovery.attempted_methods) +
+          ", last_method=" + recovery_method_kind_name(recovery.last_method_kind) +
+          ", last_method_index=" + std::to_string(recovery.last_method) + ")");
     for (int c = 0; c < nc; ++c)
       prim[static_cast<std::size_t>(c) * nn + k] = cell_out[c];
   }
@@ -153,11 +207,9 @@ SolveReport System::solve_fields_from_state_in_place_(int block_idx, const Multi
 }
 
 SolveReport System::solve_fields_from_state_at_in_place_(
-    const runtime::multiblock::BoundaryEvaluationPoint& /*point*/, const std::string& provider_slot,
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
     int block_idx, const MultiFab& U_stage) {
-  if (provider_slot.empty())
-    throw std::invalid_argument(
-        "System::solve_fields_from_state_at requires an exact provider slot");
+  require_exact_field_evaluation_request(point, provider_slot, "single-stage");
   return p_->solve_named_field_from_state(provider_slot, block_idx, U_stage);
 }
 
@@ -192,6 +244,13 @@ POPS_EXPORT SolveReport System::solve_fields_from_state_in_place_(const std::str
 
 POPS_EXPORT SolveReport System::solve_fields_from_blocks_in_place_(
     const std::string& field, const std::vector<const MultiFab*>& U_stages) {
+  return p_->solve_named_field_from_blocks(field, U_stages);
+}
+
+POPS_EXPORT SolveReport System::solve_fields_from_blocks_at_in_place_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& field,
+    const std::vector<const MultiFab*>& U_stages) {
+  require_exact_field_evaluation_request(point, field, "simultaneous-stages");
   return p_->solve_named_field_from_blocks(field, U_stages);
 }
 
@@ -233,12 +292,11 @@ SolveOutcome System::solve_fields_from_state(const std::string& field, int block
   });
 }
 
-SolveOutcome System::solve_fields_from_blocks(
-    const std::string& field, const std::vector<const MultiFab*>& U_stages) {
+SolveOutcome System::solve_fields_from_blocks(const std::string& field,
+                                              const std::vector<const MultiFab*>& U_stages) {
   prepare_named_field_publication_storage_(field);
-  return run_field_publication_outcome_([this, &field, &U_stages]() {
-    return solve_fields_from_blocks_in_place_(field, U_stages);
-  });
+  return run_field_publication_outcome_(
+      [this, &field, &U_stages]() { return solve_fields_from_blocks_in_place_(field, U_stages); });
 }
 
 void System::prepare_default_field_publication_storage_() {
@@ -365,8 +423,7 @@ void System::validate_field_publication_candidate() {
       !p_->candidate_field_publication_ || !p_->field_publication_candidate_ready_)
     throw std::logic_error("System field publication has no staged candidate");
   if (!p_->candidate_field_publication_->publication_layout_matches(*p_))
-    throw std::logic_error(
-        "System field publication snapshot layout changed before Accept");
+    throw std::logic_error("System field publication snapshot layout changed before Accept");
 }
 
 void System::accept_field_publication_candidate() noexcept {

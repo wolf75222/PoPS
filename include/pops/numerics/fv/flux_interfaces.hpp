@@ -105,6 +105,31 @@ struct QualifiedProviderRequirement {
 enum class EvaluationStatus : std::uint8_t { kOk, kRetry, kReject, kFailed };
 enum class TransactionFailureAction : std::uint8_t { kNone, kRetryStep, kRejectStep, kAbortRun };
 
+/// Stable, device-copyable causes emitted by the built-in Riemann candidates.
+///
+/// External numerical-flux providers may retain their own qualified reason codes.  Built-ins use
+/// this enum instead of scattering untyped literals through face kernels, so one rejected candidate
+/// remains attributable after device/MPI reduction and step-transaction rollback.
+enum class RiemannFailureCause : std::uint32_t {
+  kRusanovInvalidStability = UINT32_C(0x53544201),
+  kHllInvalidWaveInterval = UINT32_C(0x484c4c01),
+  kHllInvalidStability = UINT32_C(0x53544202),
+  kHllcInvalidWaveInterval = UINT32_C(0x484c4c02),
+  kHllcInvalidStability = UINT32_C(0x53544203),
+  kHllcNonFinitePhysicalFlux = UINT32_C(0x484c4301),
+  kHllcNonFinitePressure = UINT32_C(0x484c4302),
+  kHllcNonFiniteContact = UINT32_C(0x484c4303),
+  kHllcNonFiniteStarState = UINT32_C(0x484c4304),
+  kHllcNonFiniteFlux = UINT32_C(0x484c4305),
+  kRoeInvalidStability = UINT32_C(0x53544204),
+  kRoeNonFiniteDissipation = UINT32_C(0x524f4501),
+  kRoeNonFiniteFlux = UINT32_C(0x524f4502),
+};
+
+POPS_HD constexpr std::uint32_t riemann_reason_code(RiemannFailureCause cause) {
+  return static_cast<std::uint32_t>(cause);
+}
+
 POPS_HD constexpr TransactionFailureAction transaction_action(EvaluationStatus status) {
   switch (status) {
     case EvaluationStatus::kOk:
@@ -308,6 +333,9 @@ struct FluxEvaluation {
   }
   POPS_HD static FluxEvaluation reject(std::uint32_t reason) {
     return FluxEvaluation(EvaluationStatus::kReject, {}, reason, invalid_density());
+  }
+  POPS_HD static FluxEvaluation reject(RiemannFailureCause cause) {
+    return reject(riemann_reason_code(cause));
   }
   POPS_HD static FluxEvaluation failed(std::uint32_t reason) {
     return FluxEvaluation(EvaluationStatus::kFailed, {}, reason, invalid_density());

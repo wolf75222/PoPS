@@ -41,6 +41,14 @@ else:
     _System = object
 
 
+def _reject_unpublished_newton_diagnostics(time: Any, *, where: str) -> None:
+    if getattr(time, "newton_diagnostics", False):
+        raise ValueError(
+            f"{where}: newton_diagnostics=True is unavailable on the Program-only System "
+            "runtime because no typed implicit Program consumer publishes that report"
+        )
+
+
 class _SystemInstall(_System):
     """Block/equation/coupling installation methods of System."""
 
@@ -75,6 +83,7 @@ class _SystemInstall(_System):
         _guard_assembling(self, "add_block")  # frozen once pops.bind completes (ADC-592)
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
+        _reject_unpublished_newton_diagnostics(time, where="System.add_block")
         # Native ABI conversion happens here; descriptors above this seam stay exact.
         rel_tol, abs_tol, fd_eps, damping, positivity_floor = native_block_scalars(
             time, spatial, where="System.add_block")
@@ -117,6 +126,7 @@ class _SystemInstall(_System):
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
+        _reject_unpublished_newton_diagnostics(time, where="System.add_equation")
         nsub = positive_int(substeps if substeps is not None else getattr(time, "substeps", 1), where="System.add_equation.substeps")
         nstride = positive_int(stride if stride is not None else getattr(time, "stride", 1), where="System.add_equation.stride")
 

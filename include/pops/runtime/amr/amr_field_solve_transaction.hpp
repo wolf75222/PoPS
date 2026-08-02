@@ -54,6 +54,19 @@ inline std::vector<int> AmrRuntime::named_aux_components(const std::string* sele
   return {components.begin(), components.end()};
 }
 
+inline std::vector<int> AmrRuntime::named_aux_components(
+    const std::vector<std::string>& selected) const {
+  std::set<int> components;
+  for (const auto& [name, field] : named_fields_) {
+    if (std::find(selected.begin(), selected.end(), name) == selected.end())
+      continue;
+    detail::add_aux_component(components, field.phi_comp, aux_ncomp_);
+    detail::add_aux_component(components, field.gx_comp, aux_ncomp_);
+    detail::add_aux_component(components, field.gy_comp, aux_ncomp_);
+  }
+  return {components.begin(), components.end()};
+}
+
 inline std::vector<int> AmrRuntime::field_solve_aux_components(const FieldSolveScope& scope) const {
   std::set<int> components;
   if (scope.default_field) {
@@ -61,10 +74,9 @@ inline std::vector<int> AmrRuntime::field_solve_aux_components(const FieldSolveS
     components.insert(defaults.begin(), defaults.end());
   }
   if (scope.named_fields != NamedFieldSnapshotScope::kNone) {
-    const std::string* selected = scope.named_fields == NamedFieldSnapshotScope::kSelected
-                                      ? scope.selected_named_field
-                                      : nullptr;
-    const std::vector<int> named = named_aux_components(selected);
+    const std::vector<int> named = scope.named_fields == NamedFieldSnapshotScope::kSelected
+                                       ? named_aux_components(scope.selected_named_fields)
+                                       : named_aux_components(nullptr);
     components.insert(named.begin(), named.end());
   }
   return {components.begin(), components.end()};
@@ -239,20 +251,21 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
                                ? "AmrRuntime field candidate capture requires an active transaction"
                                : "AmrRuntime field solves are sequential and cannot be re-entered");
   if (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
-      scope.selected_named_field == nullptr)
-    throw std::invalid_argument("selected field-solve scope requires an exact field identity");
+      scope.selected_named_fields.empty())
+    throw std::invalid_argument(
+        "selected field-solve scope requires a non-empty dependency closure");
 
-  const std::string selected =
-      scope.selected_named_field == nullptr ? std::string{} : *scope.selected_named_field;
   const std::vector<int> components = field_solve_aux_components(scope);
   const auto includes = [&](const std::string& name) {
     return scope.named_fields == NamedFieldSnapshotScope::kAll ||
-           (scope.named_fields == NamedFieldSnapshotScope::kSelected && name == selected);
+           (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
+            std::find(scope.selected_named_fields.begin(), scope.selected_named_fields.end(),
+                      name) != scope.selected_named_fields.end());
   };
   const auto same_scope = [&](const FieldSolveSnapshot& snapshot) {
     return snapshot.scope_default_field == scope.default_field &&
            snapshot.scope_named_fields == scope.named_fields &&
-           snapshot.scope_selected_named_field == selected &&
+           snapshot.scope_selected_named_fields == scope.selected_named_fields &&
            snapshot.candidate_slot == candidate_slot;
   };
   const auto compatible = [&](const FieldSolveSnapshot& snapshot) {
@@ -314,7 +327,7 @@ inline AmrRuntime::FieldSolveSnapshot& AmrRuntime::capture_field_solve_snapshot(
     candidate.topology_generation = topology_materialization_generation_;
     candidate.scope_default_field = scope.default_field;
     candidate.scope_named_fields = scope.named_fields;
-    candidate.scope_selected_named_field = selected;
+    candidate.scope_selected_named_fields = scope.selected_named_fields;
     candidate.candidate_slot = candidate_slot;
     candidate.aux_components = components;
     candidate.packed_aux = allocate_aux_component_carriers_(components);
@@ -441,7 +454,9 @@ inline void AmrRuntime::validate_field_solve_snapshot(const FieldSolveSnapshot& 
   const auto includes = [&](const std::string& name) {
     return snapshot.scope_named_fields == NamedFieldSnapshotScope::kAll ||
            (snapshot.scope_named_fields == NamedFieldSnapshotScope::kSelected &&
-            name == snapshot.scope_selected_named_field);
+            std::find(snapshot.scope_selected_named_fields.begin(),
+                      snapshot.scope_selected_named_fields.end(),
+                      name) != snapshot.scope_selected_named_fields.end());
   };
   std::size_t expected_named = 0;
   for (auto& [name, field] : named_fields_) {
@@ -481,30 +496,36 @@ inline SolveOutcome AmrRuntime::run_field_solve_transaction(const FieldSolveScop
     throw std::logic_error(
         "AmrRuntime field solves are sequential until their prior SolveOutcome is consumed");
   const long invalid_scope = scope.named_fields == NamedFieldSnapshotScope::kSelected &&
-                                     scope.selected_named_field == nullptr
+                                     scope.selected_named_fields.empty()
                                  ? 1L
                                  : 0L;
   if (all_reduce_max(invalid_scope) != 0)
-    throw std::invalid_argument("selected field-solve scope requires an exact field identity");
+    throw std::invalid_argument(
+        "selected field-solve scope requires a non-empty dependency closure");
 
-  bool selected_found = scope.named_fields != NamedFieldSnapshotScope::kSelected;
-  for (const auto& entry : named_fields_) {
-    const std::string& name = entry.first;
-    const bool included = scope.named_fields == NamedFieldSnapshotScope::kAll ||
-                          (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
-                           name == *scope.selected_named_field);
-    selected_found = selected_found || included;
+  long selection_invalid_local = 0;
+  if (scope.named_fields == NamedFieldSnapshotScope::kSelected) {
+    std::set<std::string> unique;
+    for (const std::string& name : scope.selected_named_fields) {
+      selection_invalid_local = std::max(selection_invalid_local,
+                                         named_fields_.find(name) == named_fields_.end() ? 1L : 0L);
+      selection_invalid_local =
+          std::max(selection_invalid_local, unique.insert(name).second ? 0L : 2L);
+    }
   }
-  if (all_reduce_min(selected_found ? 1L : 0L) == 0)
-    throw std::runtime_error("selected field-solve scope names an unknown AMR field");
+  if (all_reduce_max(selection_invalid_local) != 0)
+    throw std::runtime_error(
+        "selected field-solve scope has an unknown or duplicate AMR dependency");
 
   std::exception_ptr materialization_error;
   long materialization_failed_local = 0;
   try {
     for (auto& [name, field] : named_fields_) {
-      const bool included = scope.named_fields == NamedFieldSnapshotScope::kAll ||
-                            (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
-                             name == *scope.selected_named_field);
+      const bool included =
+          scope.named_fields == NamedFieldSnapshotScope::kAll ||
+          (scope.named_fields == NamedFieldSnapshotScope::kSelected &&
+           std::find(scope.selected_named_fields.begin(), scope.selected_named_fields.end(),
+                     name) != scope.selected_named_fields.end());
       if (!included)
         continue;
       // Accept must be a copy-only operation. Materialize lazy providers before the immutable

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 NATIVE_COMPONENT_ABI_VERSION = 1
 NATIVE_COMPONENT_COMMON_ABI_VERSION = 1
-NATIVE_COMPONENT_CATALOG_SHA256 = '651f858030d8a17d2d9f0b7c5e4ef0ba4c20799f996be99ee94f75e37023b76b'
-NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = '47c3a146c9d7e20d0786fa703fe5e6b9ba27f063065e39646f4a20bb4b0e97ec'
+NATIVE_COMPONENT_CATALOG_SHA256 = '70d4fca514bae5f479cc2f3f6e1a79b391fa8804ed1cabc0e6b354d45fd68f5f'
+NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'a367ad2c24684dd232edd73ccee075d36b01132ba9ac2b740cfacfd44366dd61'
 NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
  'execution_modes': {'native_backend': 1, 'host': 2},
  'collective_scopes': {'none': 0},
@@ -103,13 +103,22 @@ NATIVE_COMPONENT_INTERFACES = ({'id': 0,
   'cpp_table': 'PopsFieldTopologyApiV2',
   'hot_path': False,
   'facets': ('provider', 'report'),
-  'operations': ('prepare_topology',)})
+  'operations': ('prepare_topology',)},
+ {'id': 10,
+  'name': 'boundary_flux',
+  'uri': 'pops://interfaces/boundary-flux',
+  'version': 1,
+  'cpp_table': 'PopsBoundaryFluxApiV1',
+  'hot_path': True,
+  'facets': ('provider', 'lowering', 'fallible_evaluation'),
+  'operations': ('transform_faces',)})
 NATIVE_COMPONENT_INTERFACE_BY_NAME = {row['name']: row for row in NATIVE_COMPONENT_INTERFACES}
 NATIVE_COMPONENT_INTERFACE_BY_URI = {row['uri']: row for row in NATIVE_COMPONENT_INTERFACES}
 NATIVE_COMPONENT_BOUNDARY_HANDLE_ROUTES = {'boundary_provider': ('ghost_boundary', 'apply_region_batch'),
  'corner_resolver': ('ghost_boundary', 'apply_region_batch'),
  'numerical_closure': ('ghost_boundary', 'apply_region_batch'),
  'conservative_flux': ('numerical_flux', 'evaluate_faces'),
+ 'boundary_flux_provider': ('boundary_flux', 'transform_faces'),
  'residual_operator': ('field_boundary_closure', 'residual'),
  'linearization_operator': ('field_boundary_closure', 'jvp')}
 

@@ -312,7 +312,8 @@ class AmrSystem(
         @param model private ``ModelSpec`` engine value composed from native bricks.
         @param spatial private engine adapter lowered from ``pops.numerics.FiniteVolume(...)``
             (default minmod + rusanov + conservative). The native seam accepts limiter tokens
-            none / minmod / vanleer / weno5, Riemann fluxes rusanov / hll / hllc / roe, and
+            none / minmod / vanleer / weno5 / mc / superbee, Riemann fluxes
+            rusanov / hll / hllc / roe, and
             conservative / primitive variables. This low-level WENO5 stencil route is not an AMR
             availability guarantee: a resolved Case also requires an owner-qualified coarse/fine
             provider certified for order 5 and ghost depth 3. The native catalogue contains that

@@ -109,6 +109,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
     execution_data = component_execution_data(install_plan.execution_context)
     component_installers = {
         "apply_region_batch": getattr(native, "_install_ghost_boundary_component", None),
+        "transform_faces": getattr(native, "_install_boundary_flux_component", None),
         "residual": getattr(native, "_install_field_boundary_residual_component", None),
         "jvp": getattr(native, "_install_field_boundary_jvp_component", None),
     }
@@ -158,16 +159,91 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 or [row.get("ordinal") for row in faces] != [0, 1, 2, 3]:
             raise ValueError("prepared boundary plan must contain canonical xlo/xhi/ylo/yhi rows")
         types = [row.get("type") for row in faces]
-        if any(value not in {"periodic", "foextrap", "dirichlet", "external"}
+        if any(value not in {
+                "periodic", "foextrap", "dirichlet", "slip_wall", "external"}
                for value in types):
             raise NotImplementedError("prepared boundary plan selected an unavailable face producer")
+        representations = [row.get("representation", "conservative") for row in faces]
+        converter_identities = [row.get("converter") for row in faces]
+        for face, (face_type, representation, converter) in enumerate(zip(
+                types, representations, converter_identities, strict=True)):
+            if representation == "conservative":
+                if converter is not None:
+                    raise ValueError(
+                        "prepared conservative boundary face must not carry a converter")
+            elif representation == "primitive":
+                if face_type != "dirichlet" or not isinstance(converter, str) or not converter:
+                    raise ValueError(
+                        "prepared primitive boundary face %d requires an exact fixed-state "
+                        "converter identity" % face)
+            else:
+                raise NotImplementedError(
+                    "prepared boundary selected unavailable representation %r" % representation)
+        face_identities = [row.get("producer") for row in faces]
+        if any(not isinstance(value, str) or not value for value in face_identities):
+            raise TypeError(
+                "prepared boundary faces require non-empty owner-qualified producer identities")
+        component_roles = getattr(component, "cons_roles", None)
+        if not isinstance(component_roles, (list, tuple)) \
+                or len(component_roles) != ncomp \
+                or any(not isinstance(role, str) or not role for role in component_roles):
+            raise TypeError(
+                "compiled block must expose one authenticated physical role per component")
         values = []
+        analytic_opcodes = []
+        analytic_literals = []
+        analytic_clocks = []
+        plan_clocks = set()
         for comp in range(ncomp):
             for row in faces:
                 row_values = row.get("values")
                 if not isinstance(row_values, list) or len(row_values) != ncomp:
                     raise ValueError("prepared boundary face values must exactly cover every component")
                 values.append(float(row_values[comp]))
+        for face, row in enumerate(faces):
+            programs = row.get("analytic_programs", [])
+            clock = row.get("analytic_clock")
+            if not isinstance(programs, list) or len(programs) not in (0, ncomp):
+                raise ValueError(
+                    "prepared boundary analytic programs must be empty or cover every component"
+                )
+            if programs and (types[face] != "dirichlet" or representations[face] != "conservative"):
+                raise NotImplementedError(
+                    "prepared analytic boundary programs require conservative fixed-state inflow"
+                )
+            if clock is not None and (not isinstance(clock, str) or not clock or not programs):
+                raise TypeError(
+                    "prepared boundary analytic Clock must be non-empty text on an analytic face"
+                )
+            analytic_clocks.append("" if clock is None else clock)
+            if clock is not None:
+                plan_clocks.add(clock)
+            for component in range(ncomp):
+                if not programs:
+                    analytic_opcodes.append([])
+                    analytic_literals.append([])
+                    continue
+                program = programs[component]
+                if not isinstance(program, dict) or set(program) != {"opcodes", "literals"}:
+                    raise TypeError(
+                        "prepared boundary analytic program must contain opcodes and literals"
+                    )
+                opcodes = program["opcodes"]
+                literals = program["literals"]
+                if (
+                    not isinstance(opcodes, list)
+                    or not opcodes
+                    or any(not isinstance(opcode, str) or not opcode for opcode in opcodes)
+                    or not isinstance(literals, list)
+                    or len(literals) != len(opcodes)
+                ):
+                    raise ValueError(
+                        "prepared boundary analytic opcode/literal rows must be non-empty and aligned"
+                    )
+                analytic_opcodes.append(opcodes)
+                analytic_literals.append([float(value) for value in literals])
+        if len(plan_clocks) > 1:
+            raise ValueError("prepared analytic boundary plan cannot mix several logical Clocks")
         boundary_state_identity = _canonical_qualified_id(
             first.get("state"), where="prepared boundary state")
         if boundary_state_identity != state_identity:
@@ -182,10 +258,16 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             required_depth,
             types,
             values,
-            ncomp,
+            face_identities,
+            list(component_roles),
             list(first.get("omitted_interface_faces", [])),
             state_identity,
             periodic_identifications,
+            representations,
+            ["" if value is None else value for value in converter_identities],
+            analytic_opcodes,
+            analytic_literals,
+            analytic_clocks,
         )
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):
@@ -252,6 +334,12 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             if operation in {"residual", "jvp"} and len(row["outputs"]) != 1:
                 raise NotImplementedError(
                     "native boundary residual/JVP currently requires one exact mutable output")
+            if operation == "transform_faces" and (
+                    len(row["outputs"]) != 1 or
+                    row["outputs"][0] != row["state_identity"] or row["directions"]):
+                raise NotImplementedError(
+                    "native post-Riemann boundary flux requires one exact state output and no "
+                    "JVP direction table")
             component_jobs.append((
                 install_component,
                 block.name,
@@ -380,7 +468,12 @@ def _validate_refined_shared_interface_execution(
     *,
     dynamic_regrid: bool = False,
 ) -> None:
-    """Require one contiguous materialized prefix on the selected communicator."""
+    """Require one contiguous materialized prefix on the selected communicator.
+
+    Frozen and depth-preserving dynamic hierarchies share this exact execution contract.  Native
+    rematerialization prepares a detached collective registry and publishes it only after every
+    ``MPI_COMM_WORLD`` rank agrees on the replacement layout identity.
+    """
     if not levels or levels != tuple(range(len(levels))):
         raise ValueError("shared-interface materialized levels must be a contiguous L0 prefix")
     if type(rank_count) is not int or rank_count < 1:

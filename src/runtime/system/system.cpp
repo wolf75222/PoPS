@@ -59,11 +59,9 @@ void System::commit_step_transaction() {
 }
 std::map<std::string, double> System::step_change_l2() const {
   if (!p_->external_step_transaction_)
-    throw std::runtime_error(
-        "System::step_change_l2 requires an active external step transaction");
+    throw std::runtime_error("System::step_change_l2 requires an active external step transaction");
   if (p_->polar_)
-    throw std::runtime_error(
-        "System::step_change_l2 does not yet define the polar cell measure");
+    throw std::runtime_error("System::step_change_l2 does not yet define the polar cell measure");
   const auto& previous = p_->external_step_transaction_->states;
   if (previous.size() != p_->sp.size())
     throw std::runtime_error("System::step_change_l2 snapshot composition mismatch");
@@ -73,12 +71,11 @@ std::map<std::string, double> System::step_change_l2() const {
     if (p_->geometry_mode_ == GeometryMode::CutCell)
       measure.inverse_volume_fraction = &p_->eb_inverse_volume_fraction_;
   }
-  const double cell_area =
-      static_cast<double>(p_->geom.dx()) * static_cast<double>(p_->geom.dy());
+  const double cell_area = static_cast<double>(p_->geom.dx()) * static_cast<double>(p_->geom.dy());
   std::map<std::string, double> result;
   for (std::size_t block = 0; block < p_->sp.size(); ++block) {
-    const double sum_sq = static_cast<double>(
-        pops::difference_sum_sq_all(p_->sp[block].U, previous[block], measure));
+    const double sum_sq =
+        static_cast<double>(pops::difference_sum_sq_all(p_->sp[block].U, previous[block], measure));
     result.emplace(p_->sp[block].name, std::sqrt(cell_area * sum_sq));
   }
   return result;
@@ -134,8 +131,7 @@ void System::mark_bound() {
       throw std::runtime_error(
           "System::mark_bound: materialized block lacks its exact state route");
   for (const auto& [name, plan] : p_->boundary_plans_) {
-    if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None &&
-        plan->has_component_boundaries())
+    if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None && plan->has_component_boundaries())
       throw std::runtime_error(
           "System::mark_bound: embedded-boundary block '" + name +
           "' has a native boundary component without a geometry-aware provider");
@@ -148,11 +144,19 @@ void System::mark_bound() {
       throw std::runtime_error(
           "System::mark_bound: prepared boundary component count differs from block '" + name +
           "'");
-    if (!same_periodicity(plan->periodicity(), p_->per_))
+    const auto axis_periodicity = plan->axis_aligned_periodicity();
+    if (axis_periodicity) {
+      if (!same_periodicity(*axis_periodicity, p_->per_))
+        throw std::runtime_error(
+            "System::mark_bound: prepared boundary plan periodicity disagrees with the domain "
+            "topology for block '" +
+            name + "'");
+    } else if (p_->per_.x || p_->per_.y) {
       throw std::runtime_error(
-          "System::mark_bound: prepared boundary plan periodicity disagrees with the domain "
-          "topology for block '" +
+          "System::mark_bound: an axis-permuted boundary plan cannot be combined with an "
+          "axis-periodic domain topology for block '" +
           name + "'");
+    }
     (void)plan->has_boundary_linearization();
     runtime::multiblock::BoundaryEvaluationPoint preparation_point;
     preparation_point.clock = plan->identity() + "::bound-runtime";

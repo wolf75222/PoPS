@@ -14,7 +14,7 @@ from pops.model import ComponentManifest
 
 def test_all_required_native_families_are_generated_data_only_contracts():
     expected = {
-        "numerical_flux", "ghost_boundary", "field_boundary_closure", "tagger",
+        "numerical_flux", "ghost_boundary", "boundary_flux", "field_boundary_closure", "tagger",
         "clustering", "transfer", "reflux", "field_solver", "writer", "field_topology",
     }
     resolved = {name: interfaces.resolve(name) for name in expected}
@@ -31,6 +31,7 @@ def test_all_required_native_families_are_generated_data_only_contracts():
         "field_solver": 7,
         "writer": 8,
         "field_topology": 9,
+        "boundary_flux": 10,
     }
     assert all(value.table_symbol == "pops_component_interface_v1"
                for value in resolved.values())
@@ -135,6 +136,7 @@ def test_boundary_handle_native_routes_are_generated_from_exact_interfaces():
         "corner_resolver": ("ghost_boundary", "apply_region_batch"),
         "numerical_closure": ("ghost_boundary", "apply_region_batch"),
         "conservative_flux": ("numerical_flux", "evaluate_faces"),
+        "boundary_flux_provider": ("boundary_flux", "transform_faces"),
         "residual_operator": ("field_boundary_closure", "residual"),
         "linearization_operator": ("field_boundary_closure", "jvp"),
     }
