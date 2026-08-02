@@ -31,6 +31,7 @@ from pops.mesh.boundaries import (
     Outflow,
     PeriodicIdentification,
     PeriodicOrientation,
+    PostRiemannFlux,
     RepresentationFlow,
     SignDependence,
     SonicPolicy,
@@ -103,6 +104,10 @@ def _dependencies(representation=None):
 
 def _provider_handle(name):
     return Handle(name, kind="boundary_provider", owner=OwnerPath.case("main"))
+
+
+def _flux_provider_handle(name):
+    return Handle(name, kind="boundary_flux_provider", owner=OwnerPath.case("main"))
 
 
 def _case_instance(case_name):
@@ -332,6 +337,38 @@ def test_noflux_satisfies_numerical_flux_only():
         BoundaryProvider(
             _provider_handle("forged_flux"), (ghost,), _dependencies(),
             BoundaryProviderKind.NO_FLUX)
+
+
+def test_post_riemann_flux_has_one_exact_typed_component_route():
+    boundary = _topology().physical[0]
+    state, _, _ = _model_values()
+    _, conservative = _representations()
+    flux = NumericalFlux(boundary, state, conservative)
+    ghost = GhostState(boundary, state, conservative)
+    provider = PostRiemannFlux(
+        handle=_flux_provider_handle("wall_flux"),
+        output=flux,
+        dependencies=_dependencies(),
+    )
+
+    assert provider.outputs == (flux,)
+    assert provider.kind is BoundaryProviderKind.POST_RIEMANN_FLUX
+    assert provider.handle.kind == "boundary_flux_provider"
+    assert provider.canonical_identity()["provider_kind"] == "post_riemann_flux"
+    assert BoundaryProviderRegistry(provider).resolve(_topology(), (flux,)).bindings
+
+    with pytest.raises(TypeError, match="boundary_flux_provider"):
+        PostRiemannFlux(
+            handle=_provider_handle("wrong_component_route"),
+            output=flux,
+            dependencies=_dependencies(),
+        )
+    with pytest.raises(TypeError, match="NumericalFlux only"):
+        PostRiemannFlux(
+            handle=_flux_provider_handle("wrong_output"),
+            output=ghost,
+            dependencies=_dependencies(),
+        )
 
 
 def test_resolution_diagnostics_cover_missing_double_extra_ambiguous_and_periodic_physical():
