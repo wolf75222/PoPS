@@ -133,6 +133,9 @@ def test_parser_finds_only_explicit_known_deferrals():
     )
     assert "solve_fields_from_blocks_at" not in CONTEXT_HPP.read_text(encoding="utf-8")
     assert "solve_fields_from_blocks_at" in SERVICES_HPP.read_text(encoding="utf-8")
+    assert "program_execution_solve_generated_field_from_blocks_outcome_" in (
+        CONTEXT_HPP.read_text(encoding="utf-8")
+    )
     assert "named_solve_reports_" not in CONTEXT_HPP.read_text(encoding="utf-8")
     assert "fine_level_field_perturbation" not in module.DEFERRED_GROUPS
     assert "refined_shared_block_interfaces" not in module.DEFERRED_GROUPS

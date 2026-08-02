@@ -30,6 +30,7 @@ CODEGEN_CONTEXT_ROUTES = (
 
 SHARED_SIGNATURES = (
     "struct FieldStageOverride",
+    "struct GeneratedFieldSolveWorkspace",
     "struct CouplingStateOverride",
     "struct RhsGroupRequest",
     "struct RhsGroupBatch",
@@ -44,6 +45,7 @@ SHARED_SIGNATURES = (
     "struct ProgramClockCoordinate",
     "class ExclusiveUseGuard",
     "static bool field_layout_matches_(",
+    "void prepare_generated_field_solve_workspace_(",
     "void require_field_evaluation_point_(",
     "ProgramRuntimeState& program_runtime_state_()",
     "void install(std::function<void(double)> step)",
@@ -380,6 +382,43 @@ def test_field_state_evaluation_consumes_outcomes_in_the_shared_service():
     )
 
 
+def test_generated_field_stage_workspace_is_one_shared_program_authority():
+    shared = _read(SHARED)
+    uniform = _read(UNIFORM)
+    amr = _read(AMR)
+
+    for authority in (
+        "struct GeneratedFieldSolveWorkspace",
+        "prepare_generated_field_solve_workspace_",
+        "generated_field_solve_workspaces_",
+        "expected_program_blocks",
+    ):
+        assert authority in shared
+        assert authority not in uniform
+        assert authority not in amr
+
+    for invariant in (
+        "requires a non-negative IR identity",
+        "requires at least one stage override",
+        "IR identity was reused for a different field",
+        "block map is not injective",
+        "changed its ordered block pack",
+        "contains a duplicate Program block",
+        "generated field-solve stage does not match its exact runtime-block layout",
+        "generated field-solve stage cannot alias another block's live state",
+    ):
+        assert shared.count(invariant) == 1
+        assert invariant not in uniform
+        assert invariant not in amr
+
+    assert "ExclusiveUseGuard use(workspace.in_use," in shared
+    assert "struct WorkspaceUse" not in shared
+    assert "struct WorkspaceUse" not in uniform
+    assert "struct WorkspaceUse" not in amr
+    assert "sys_->solve_fields_from_blocks_at_in_place_(point, field, runtime_stages)" in uniform
+    assert "eng_->solve_named_fields_from_states_at(point, field, runtime_stages)" in amr
+
+
 def test_field_evaluation_point_validation_is_shared_before_provider_dispatch():
     shared = _read(SHARED)
     providers = (_read(UNIFORM), _read(AMR))
@@ -419,7 +458,7 @@ def test_grid_free_program_state_services_are_shared_not_mirrored():
     runtime_state = _read(PROGRAM_RUNTIME_STATE)
     providers = (_read(UNIFORM), _read(AMR))
 
-    assert shared.count("program_runtime_state_().block_map()") == 2
+    assert shared.count("program_runtime_state_().block_map()") == 3
     assert shared.count("program_runtime_state_().record_diagnostic(name, value)") == 1
     assert shared.count("program_runtime_state_().note_step_projection(name)") == 1
     assert shared.count("program_runtime_state_().params(block)") == 1
@@ -836,6 +875,8 @@ def test_shared_coupling_owns_workspace_mapping_layout_alias_and_reentrancy():
         "cannot alias accepted live states",
     ):
         assert invariant in shared
+    assert "ExclusiveUseGuard use(coupling_workspace_.in_use," in shared
+    assert "struct WorkspaceUse" not in shared
     assert "program_execution_apply_coupling_(" in shared
     assert "sys_->apply_coupling_operators(dt, runtime_states)" in uniform
     assert "eng_->apply_coupling_operators_at_level(level_, dt, runtime_states)" in amr
