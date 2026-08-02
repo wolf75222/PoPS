@@ -502,6 +502,15 @@ def _validate_refined_shared_interface_execution(
     if type(implicit_jacvec_pair) is not bool or type(complete_bind) is not bool:
         raise TypeError(
             "shared-interface implicit-JVP and complete-bind contracts must be exact bools")
+    device = execution_data.get("device_identity")
+    memory_space = execution_data.get("memory_space")
+    if implicit_jacvec_pair and (
+        device not in ("host", "cpu") or memory_space != 1
+    ):
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP is currently host-memory-only; device or "
+            "managed-memory execution is refused until its paired packing and residual "
+            "evaluation have a native portability proof")
     if implicit_jacvec_pair and complete_bind and levels != (0, 1):
         raise NotImplementedError(
             "shared NumericalFlux implicit JVP requires exactly materialized levels (L0, L1) "

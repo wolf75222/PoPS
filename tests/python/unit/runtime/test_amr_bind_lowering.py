@@ -72,7 +72,11 @@ def test_dynamic_refined_shared_interface_bind_accepts_serial_and_exact_mpi_worl
 
 
 def test_implicit_pair_requires_exact_frozen_two_level_prefix_at_complete_bind() -> None:
-    serial = {"communicator_identity": "serial"}
+    serial = {
+        "communicator_identity": "serial",
+        "device_identity": "host",
+        "memory_space": 1,
+    }
     _validate_refined_shared_interface_execution(
         (0,), serial, 1, implicit_jacvec_pair=True, complete_bind=False
     )
@@ -89,9 +93,21 @@ def test_implicit_pair_requires_exact_frozen_two_level_prefix_at_complete_bind()
 @pytest.mark.parametrize(
     ("execution", "ranks"),
     [
-        ({"communicator_identity": "MPI_COMM_WORLD"}, 1),
-        ({"communicator_identity": "MPI_COMM_WORLD"}, 2),
-        ({"communicator_identity": "serial"}, 2),
+        ({
+            "communicator_identity": "MPI_COMM_WORLD",
+            "device_identity": "host",
+            "memory_space": 1,
+        }, 1),
+        ({
+            "communicator_identity": "MPI_COMM_WORLD",
+            "device_identity": "host",
+            "memory_space": 1,
+        }, 2),
+        ({
+            "communicator_identity": "serial",
+            "device_identity": "host",
+            "memory_space": 1,
+        }, 2),
     ],
 )
 def test_implicit_pair_refuses_mpi_before_native_interface_install(execution, ranks) -> None:
@@ -99,6 +115,31 @@ def test_implicit_pair_refuses_mpi_before_native_interface_install(execution, ra
         _validate_refined_shared_interface_execution(
             (0, 1), execution, ranks,
             implicit_jacvec_pair=True, complete_bind=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "execution",
+    [
+        {
+            "communicator_identity": "serial",
+            "device_identity": "gpu",
+            "memory_space": 2,
+        },
+        {
+            "communicator_identity": "serial",
+            "device_identity": "cpu",
+            "memory_space": 3,
+        },
+    ],
+)
+def test_implicit_pair_refuses_device_or_managed_memory_before_native_install(
+    execution,
+) -> None:
+    with pytest.raises(NotImplementedError, match="currently host-memory-only"):
+        _validate_refined_shared_interface_execution(
+            (0,), execution, 1,
+            implicit_jacvec_pair=True, complete_bind=False,
         )
 
 
