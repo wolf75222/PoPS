@@ -86,6 +86,22 @@ def test_implicit_pair_requires_exact_frozen_two_level_prefix_at_complete_bind()
             )
 
 
+@pytest.mark.parametrize(
+    ("execution", "ranks"),
+    [
+        ({"communicator_identity": "MPI_COMM_WORLD"}, 1),
+        ({"communicator_identity": "MPI_COMM_WORLD"}, 2),
+        ({"communicator_identity": "serial"}, 2),
+    ],
+)
+def test_implicit_pair_refuses_mpi_before_native_interface_install(execution, ranks) -> None:
+    with pytest.raises(NotImplementedError, match="currently serial-only"):
+        _validate_refined_shared_interface_execution(
+            (0, 1), execution, ranks,
+            implicit_jacvec_pair=True, complete_bind=True,
+        )
+
+
 def test_shared_interface_bind_rejects_non_prefix_and_unknown_communicator() -> None:
     with pytest.raises(ValueError, match="contiguous L0 prefix"):
         _validate_refined_shared_interface_execution((), {}, 1)

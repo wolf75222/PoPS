@@ -507,6 +507,10 @@ def _validate_refined_shared_interface_execution(
             "shared NumericalFlux implicit JVP requires exactly materialized levels (L0, L1) "
             "at bind")
     communicator = execution_data.get("communicator_identity")
+    if implicit_jacvec_pair and (communicator != "serial" or rank_count != 1):
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP is currently serial-only; MPI execution is "
+            "refused until its pair admission and local packing have a collective deadlock proof")
     if communicator == "serial":
         if rank_count != 1:
             raise RuntimeError(

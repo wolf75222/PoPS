@@ -316,6 +316,16 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("program_context:amr", status_from_bool(caps.supports_amr),
                        "AMR program install requires target='amr_system'", "amr", "production",
                        "host", mpi, gpu),
+      capability_route(
+          "amr:shared_interface_implicit_jacvec_pair", "partial",
+          "one frozen exactly materialized (L0, L1) hierarchy with two blocks, one shared "
+          "interface and one packed state-only rhs_jacvec pair; MPI is refused before native "
+          "interface installation",
+          "amr", "production", "host", false, false,
+          "shared-interface implicit JVP on arbitrary AMR and MPI execution",
+          "frozen two-level host/serial shared-interface implicit JVP",
+          "use the proved host/serial route or implement collective pair admission, "
+          "packing-failure consensus and a two-rank deadlock proof"),
       capability_route("output:scientific_v1", "available",
                        "typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format advertises "
                        "its exact supported modes",
