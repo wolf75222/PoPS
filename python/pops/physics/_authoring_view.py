@@ -30,7 +30,23 @@ class _OperatorViewMixin(_HyperbolicModel):
     def _aux_requirements(self, exprs: Any) -> Any:
         """{'aux': [...]} of the aux fields the expressions read, or {} if none."""
         aux_set = self._aux_name_set()
-        read = sorted(_dependencies(exprs) & aux_set)
+        dependencies = _dependencies(exprs)
+        pending = [name for name in dependencies if name in self.prim_defs]
+        expanded = set(dependencies)
+        visited = set()
+        while pending:
+            name = pending.pop()
+            if name in visited:
+                continue
+            visited.add(name)
+            nested = _dependencies((self.prim_defs[name],))
+            expanded.update(nested)
+            pending.extend(
+                dependency
+                for dependency in nested
+                if dependency in self.prim_defs and dependency not in visited
+            )
+        read = sorted(expanded & aux_set)
         return {"aux": read} if read else {}
 
     def state_space(self, name: str = "U") -> Any:
@@ -85,25 +101,68 @@ class _OperatorViewMixin(_HyperbolicModel):
         reg = _model.OperatorRegistry(owner=self.owner_path)
         state = self.state_space(state_name)
         fields = self.field_space()
-        aux_set = self._aux_name_set()
 
         def reads_fields(exprs: Any) -> bool:
-            return bool(_dependencies(exprs) & aux_set)
+            return bool(self._aux_requirements(exprs))
+
+        stability_exprs = [
+            *self._eig.get("x", ()),
+            *self._eig.get("y", ()),
+        ]
+        if self._wave_speeds is not None:
+            stability_exprs.extend(self._wave_speeds["x"])
+            stability_exprs.extend(self._wave_speeds["y"])
+        if self._ws_jacobian is not None and self._ws_jacobian["rows"] is not None:
+            for direction in ("x", "y"):
+                stability_exprs.extend(
+                    expression
+                    for row in self._ws_jacobian["rows"][direction]
+                    for expression in row
+                )
+        if self._roe_rows is not None:
+            stability_exprs.extend(self._roe_rows["x"])
+            stability_exprs.extend(self._roe_rows["y"])
+        if self._roe_jacobian is not None:
+            for direction in ("x", "y"):
+                stability_exprs.extend(
+                    expression
+                    for row in self._roe_jacobian[direction]
+                    for expression in row
+                )
 
         # Flux divergence (grid_operator: State -> Rate(State)).
         if self._flux:
+            exprs = [
+                *self._flux.get("x", ()),
+                *self._flux.get("y", ()),
+                *stability_exprs,
+            ]
+            rf = reads_fields(exprs)
             reg.register(_model.Operator(
                 "flux_default", "grid_operator",
-                _model.Signature([state], _model.Rate(state)),
+                _model.Signature([state, fields] if rf else [state],
+                                 _model.Rate(state)),
                 capabilities={"local": False, "linear": False, "produces_rate": True,
                               "requires_ghosts": 1, "supports_device": True,
-                              "default": True},
+                              "requires_fields": rf, "default": True},
+                requirements=self._aux_requirements(exprs),
                 source=None))
         for nm in sorted(self._flux_terms):
+            term = self._flux_terms[nm]
+            exprs = [
+                *term.get("x", ()),
+                *term.get("y", ()),
+                *stability_exprs,
+            ]
+            rf = reads_fields(exprs)
             reg.register(_model.Operator(
-                nm, "grid_operator", _model.Signature([state], _model.Rate(state)),
+                nm, "grid_operator",
+                _model.Signature([state, fields] if rf else [state],
+                                 _model.Rate(state)),
                 capabilities={"local": False, "linear": False, "produces_rate": True,
-                              "requires_ghosts": 1, "supports_device": True},
+                              "requires_ghosts": 1, "supports_device": True,
+                              "requires_fields": rf},
+                requirements=self._aux_requirements(exprs),
                 source=None))
 
         # Local sources (local_source: State[, Fields] -> Rate(State)).

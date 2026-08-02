@@ -96,6 +96,7 @@ struct QualifiedProviderRequirement {
   const char* layout;
   const char* value_kind;
   const char* producer;
+  bool available;
   int storage_slot;
 };
 
