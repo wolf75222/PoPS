@@ -259,7 +259,7 @@ def _accepted_tagging_hysteresis(payload):
     cursor += provider_size
     cursor += 3 * 8  # topology epoch, synchronization tick, tick denominator
     cell_count = read_size()
-    cursor += cell_count * 24  # level, cell id, rung, accepted tick
+    cursor += cell_count * 32  # level, cell id, rung, accepted tick (four i64 words)
     assert cursor <= len(encoded), "accepted-state temporal partition is truncated"
     tagging_size = read_size()
     assert cursor + tagging_size <= len(encoded), "accepted-state tagging image is truncated"
