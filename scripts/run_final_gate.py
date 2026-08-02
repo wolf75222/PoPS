@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -378,37 +379,88 @@ def _require_no_hidden_skip(stdout: str) -> None:
 def _reopen_outputs(
     output_dir: Path, *, example: Path,
 ) -> tuple[dict[str, Any], tuple[Path, ...], tuple[Path, ...]]:
-    targets = FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS.get(example)
-    if targets is None:
+    expectations = FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS.get(example)
+    if expectations is None:
         raise FinalGateError("%s has no scientific-output release ledger" % example)
+    output_root = output_dir.resolve()
+
+    def roots(format_name: str) -> tuple[Path, ...]:
+        resolved = tuple(
+            (output_dir / expectation["artifact_root"]).resolve()
+            for expectation in expectations[format_name]
+        )
+        if any(not root.is_relative_to(output_root) for root in resolved):
+            raise FinalGateError(
+                "%s has an escaping %s scientific artifact root"
+                % (example, format_name)
+            )
+        return resolved
 
     def files(format_name: str, suffix: str) -> list[Path]:
-        paths = sorted(
-            path
-            for target in targets[format_name]
-            for path in (output_dir / target).rglob("*" + suffix)
-            if path.is_file() and path.stat().st_size
-        )
-        if targets[format_name] and not paths:
-            raise FinalGateError(
-                "%s did not produce a non-empty %s scientific artifact in %s"
-                % (example, format_name, targets[format_name])
+        paths = []
+        for expectation, artifact_root in zip(
+            expectations[format_name], roots(format_name), strict=True,
+        ):
+            matches = sorted(
+                path
+                for path in artifact_root.rglob("*" + suffix)
+                if path.is_file() and path.stat().st_size
             )
+            if not matches:
+                raise FinalGateError(
+                    "%s did not produce a non-empty %s scientific artifact %s in %s"
+                    % (example, format_name, suffix, expectation["artifact_root"])
+                )
+            paths.extend(matches)
         return paths
 
     hdf5_paths = files("hdf5", ".h5")
     npz_paths = files("npz", ".npz")
-    paraview_paths = files("paraview", ".vtu")
+    paraview_vtu_paths = files("paraview", ".vtu")
+    paraview_pvd_paths = files("paraview", ".pvd")
+    paraview_paths = sorted((*paraview_vtu_paths, *paraview_pvd_paths))
     for path in hdf5_paths:
         if path.read_bytes()[:8] != b"\x89HDF\r\n\x1a\n":
             raise FinalGateError("HDF5 artifact has an invalid signature: %s" % path)
-    for path in paraview_paths:
+    for path in paraview_vtu_paths:
         try:
             root = ET.parse(path).getroot()
         except ET.ParseError as exc:
             raise FinalGateError("invalid ParaView XML %s: %s" % (path, exc)) from exc
-        if root.tag != "VTKFile":
-            raise FinalGateError("ParaView artifact is not a VTKFile: %s" % path)
+        if root.tag != "VTKFile" or root.attrib.get("type") != "UnstructuredGrid":
+            raise FinalGateError("ParaView artifact is not an UnstructuredGrid VTKFile: %s" % path)
+    expected_vtu_paths = {path.resolve() for path in paraview_vtu_paths}
+    paraview_roots = roots("paraview")
+    for path in paraview_pvd_paths:
+        try:
+            root = ET.parse(path).getroot()
+        except ET.ParseError as exc:
+            raise FinalGateError("invalid ParaView collection XML %s: %s" % (path, exc)) from exc
+        collection = root.find("Collection")
+        datasets = () if collection is None else tuple(collection.findall("DataSet"))
+        if root.tag != "VTKFile" or root.attrib.get("type") != "Collection" or not datasets:
+            raise FinalGateError("ParaView artifact is not a non-empty PVD collection: %s" % path)
+        containing_roots = tuple(
+            artifact_root for artifact_root in paraview_roots
+            if path.resolve().is_relative_to(artifact_root)
+        )
+        if len(containing_roots) != 1:
+            raise FinalGateError("ParaView collection has an ambiguous artifact root: %s" % path)
+        for dataset in datasets:
+            relative = dataset.attrib.get("file")
+            timestep = dataset.attrib.get("timestep")
+            try:
+                time_value = float(timestep) if timestep is not None else float("nan")
+            except ValueError:
+                time_value = float("nan")
+            if not relative or not math.isfinite(time_value):
+                raise FinalGateError("ParaView collection has an invalid DataSet row: %s" % path)
+            referenced = (path.parent / relative).resolve()
+            if not referenced.is_relative_to(containing_roots[0]) \
+                    or referenced not in expected_vtu_paths:
+                raise FinalGateError(
+                    "ParaView collection references an absent or escaping VTU: %s" % referenced
+                )
     for path in npz_paths:
         if path.read_bytes()[:4] != b"PK\x03\x04":
             raise FinalGateError("NPZ artifact has an invalid ZIP signature: %s" % path)
@@ -483,7 +535,8 @@ def _run_examples(
         reopened[example.as_posix()], hdf5_paths, npz_paths = _reopen_outputs(
             destination, example=example)
         _reopen_hdf5_with_installed_runtime(recorder, hdf5_paths)
-        _reopen_npz_with_installed_runtime(recorder, npz_paths)
+        if npz_paths:
+            _reopen_npz_with_installed_runtime(recorder, npz_paths)
         restarted[example.as_posix()] = {
             "checkpoint": str(checkpoint),
             "tree_sha256": _tree_hash(checkpoint),

@@ -573,11 +573,18 @@ def _examples_evidence(
                     "release evidence %s output ledger is malformed for %s"
                     % (format_name, key)
                 )
-            if bool(artifacts) != bool(expected_outputs[format_name]):
+            expectations = expected_outputs[format_name]
+            if bool(artifacts) != bool(expectations):
                 raise PreflightError(
                     "release evidence %s output coverage drifted for %s"
                     % (format_name, key)
                 )
+            artifact_roots = tuple(
+                Path(expectation["artifact_root"]) for expectation in expectations
+            )
+            covered_roots: dict[Path, set[str]] = {
+                artifact_root: set() for artifact_root in artifact_roots
+            }
             for artifact in artifacts:
                 if not isinstance(artifact, dict) or set(artifact) != {"path", "sha256"}:
                     raise PreflightError("release evidence %s output is malformed for %s" %
@@ -590,16 +597,30 @@ def _examples_evidence(
                         % (format_name, key)
                     )
                 relative_artifact = Path(artifact["path"])
-                if not any(
-                    relative_artifact.is_relative_to(Path(target))
-                    for target in expected_outputs[format_name]
-                ):
+                containing_roots = tuple(
+                    artifact_root for artifact_root in artifact_roots
+                    if relative_artifact.is_relative_to(artifact_root)
+                )
+                if len(containing_roots) != 1:
                     raise PreflightError(
-                        "release evidence %s output escaped its authored target for %s"
+                        "release evidence %s output escaped its exact artifact root for %s"
                         % (format_name, key)
                     )
+                covered_roots[containing_roots[0]].add(relative_artifact.suffix)
                 _artifact_file(output_root, artifact["path"], artifact["sha256"],
                                label="%s %s" % (format_name, key))
+            required_suffixes = {
+                "hdf5": {".h5"},
+                "npz": {".npz"},
+                "paraview": {".pvd", ".vtu"},
+            }[format_name]
+            for artifact_root, suffixes in covered_roots.items():
+                if not required_suffixes.issubset(suffixes):
+                    raise PreflightError(
+                        "release evidence %s output root %s lacks %s for %s"
+                        % (format_name, artifact_root,
+                           sorted(required_suffixes - suffixes), key)
+                    )
         restarted = restart["examples"][key]
         if not isinstance(restarted, dict) or set(restarted) != {
                 "checkpoint", "tree_sha256", "proof_markers"}:

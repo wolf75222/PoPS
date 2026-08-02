@@ -83,9 +83,9 @@ def _write_final_source_tree(root: Path) -> None:
         path = root / example
         path.parent.mkdir(parents=True, exist_ok=True)
         output_targets = [
-            target
-            for targets in contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example].values()
-            for target in targets
+            expectation["consumer_target"]
+            for expectations in contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example].values()
+            for expectation in expectations
         ]
         path.write_text(
             "--output-dir\n"
@@ -121,6 +121,23 @@ def _write_final_source_tree(root: Path) -> None:
         )
 
 
+def _write_paraview_series(root: Path) -> tuple[Path, Path]:
+    root.mkdir(parents=True, exist_ok=True)
+    vtu = root / "state.vtu"
+    vtu.write_text(
+        '<VTKFile type="UnstructuredGrid"><UnstructuredGrid/></VTKFile>',
+        encoding="utf-8",
+    )
+    pvd = root / "state.pvd"
+    pvd.write_text(
+        '<VTKFile type="Collection"><Collection>'
+        '<DataSet timestep="0" file="state.vtu"/>'
+        "</Collection></VTKFile>",
+        encoding="utf-8",
+    )
+    return vtu, pvd
+
+
 def test_final_release_source_contract_accepts_exact_canonical_set(tmp_path):
     _write_final_source_tree(tmp_path)
 
@@ -153,7 +170,9 @@ def test_final_release_source_contract_requires_exact_scientific_output_targets(
     _write_final_source_tree(tmp_path)
     example = contract.FINAL_EXAMPLES[2]
     path = tmp_path / example
-    required_target = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]["npz"][0]
+    required_target = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]["npz"][0][
+        "consumer_target"
+    ]
     path.write_text(
         path.read_text(encoding="utf-8").replace(
             '# target="%s"' % required_target,
@@ -165,6 +184,55 @@ def test_final_release_source_contract_requires_exact_scientific_output_targets(
     errors = contract.source_contract_errors(tmp_path)
 
     assert any("lacks its exact npz scientific-output target" in error for error in errors)
+
+
+def test_final_release_source_contract_separates_consumer_targets_from_artifact_roots(
+    tmp_path,
+):
+    _write_final_source_tree(tmp_path)
+    expected_roots = {
+        contract.FINAL_EXAMPLES[0]: {"manual/accepted/state/tracer",
+                                     "manual/accepted/solution/tracer"},
+        contract.FINAL_EXAMPLES[1]: {"accepted/state/two_fluid",
+                                     "accepted/visualization/two_fluid"},
+        contract.FINAL_EXAMPLES[2]: {"manual/accepted/hdf5/state",
+                                     "manual/accepted/npz/state",
+                                     "manual/accepted/paraview/state"},
+        contract.FINAL_EXAMPLES[3]: {"accepted/state/hyqmom15",
+                                     "accepted/visualization/hyqmom15"},
+    }
+
+    for example, formats in contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS.items():
+        rows = tuple(row for expectations in formats.values() for row in expectations)
+        assert {row["artifact_root"] for row in rows} == expected_roots[example]
+        assert all(
+            Path(row["artifact_root"]).parts[-len(Path(row["consumer_target"]).parts):]
+            == Path(row["consumer_target"]).parts
+            for row in rows
+        )
+
+    assert contract.source_contract_errors(tmp_path) == []
+
+
+@pytest.mark.parametrize("artifact_root", ("../state/tracer", "accepted/wrong"))
+def test_final_release_source_contract_refuses_escaping_or_mismatched_artifact_roots(
+    monkeypatch, tmp_path, artifact_root
+):
+    _write_final_source_tree(tmp_path)
+    outputs = copy.deepcopy(contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS)
+    outputs[contract.FINAL_EXAMPLES[0]]["hdf5"] = ({
+        "consumer_target": "state/tracer",
+        "artifact_root": artifact_root,
+    },)
+    monkeypatch.setattr(contract, "FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS", outputs)
+
+    errors = contract.source_contract_errors(tmp_path)
+
+    assert any(
+        "escaping hdf5 scientific-output expectation" in error
+        or "does not end with consumer target" in error
+        for error in errors
+    )
 
 
 def test_final_release_source_contract_requires_exact_mandatory_example_tests(tmp_path):
@@ -577,13 +645,14 @@ def test_final_gate_honours_explicit_conda_executable(monkeypatch, tmp_path):
 
 def test_artifact_reopen_requires_and_records_npz(tmp_path):
     example = contract.FINAL_EXAMPLES[2]
-    hdf5 = tmp_path / "hdf5" / "state" / "state.h5"
+    outputs = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]
+    hdf5 = tmp_path / outputs["hdf5"][0]["artifact_root"] / "state.h5"
     hdf5.parent.mkdir(parents=True)
     hdf5.write_bytes(b"\x89HDF\r\n\x1a\ncontent")
-    paraview = tmp_path / "paraview" / "state" / "state.vtu"
-    paraview.parent.mkdir(parents=True)
-    paraview.write_text("<VTKFile/>", encoding="utf-8")
-    npz = tmp_path / "npz" / "state" / "state.npz"
+    paraview, collection = _write_paraview_series(
+        tmp_path / outputs["paraview"][0]["artifact_root"]
+    )
+    npz = tmp_path / outputs["npz"][0]["artifact_root"] / "state.npz"
     npz.parent.mkdir(parents=True)
     with zipfile.ZipFile(npz, "w") as archive:
         archive.writestr("state.npy", b"payload")
@@ -594,6 +663,10 @@ def test_artifact_reopen_requires_and_records_npz(tmp_path):
     assert set(evidence) == {"hdf5", "npz", "paraview"}
     assert hdf5_paths == (hdf5,)
     assert npz_paths == (npz,)
+    assert {row["path"] for row in evidence["paraview"]} == {
+        str(paraview.relative_to(tmp_path)),
+        str(collection.relative_to(tmp_path)),
+    }
     npz.unlink()
     checkpoint = tmp_path / "checkpoints" / "restart" / "state.npz"
     checkpoint.parent.mkdir(parents=True)
@@ -603,16 +676,37 @@ def test_artifact_reopen_requires_and_records_npz(tmp_path):
         gate._reopen_outputs(tmp_path, example=example)
 
 
+def test_artifact_reopen_requires_a_nonempty_pvd_collection(tmp_path):
+    example = contract.FINAL_EXAMPLES[0]
+    outputs = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]
+    hdf5 = tmp_path / outputs["hdf5"][0]["artifact_root"] / "state.h5"
+    hdf5.parent.mkdir(parents=True)
+    hdf5.write_bytes(b"\x89HDF\r\n\x1a\ncontent")
+    _paraview, collection = _write_paraview_series(
+        tmp_path / outputs["paraview"][0]["artifact_root"]
+    )
+    collection.unlink()
+
+    with pytest.raises(gate.FinalGateError, match=r"\.pvd"):
+        gate._reopen_outputs(tmp_path, example=example)
+
+    collection.write_text(
+        '<VTKFile type="Collection"><Collection>'
+        '<DataSet timestep="0" file="missing.vtu"/>'
+        "</Collection></VTKFile>",
+        encoding="utf-8",
+    )
+    with pytest.raises(gate.FinalGateError, match="absent or escaping VTU"):
+        gate._reopen_outputs(tmp_path, example=example)
+
+
 def test_artifact_reopen_does_not_label_checkpoint_npz_as_scientific_output(tmp_path):
     example = contract.FINAL_EXAMPLES[0]
-    for format_name, suffix, payload in (
-        ("hdf5", ".h5", b"\x89HDF\r\n\x1a\ncontent"),
-        ("paraview", ".vtu", b"<VTKFile/>"),
-    ):
-        target = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example][format_name][0]
-        artifact = tmp_path / target / ("state" + suffix)
-        artifact.parent.mkdir(parents=True, exist_ok=True)
-        artifact.write_bytes(payload)
+    outputs = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]
+    hdf5 = tmp_path / outputs["hdf5"][0]["artifact_root"] / "state.h5"
+    hdf5.parent.mkdir(parents=True, exist_ok=True)
+    hdf5.write_bytes(b"\x89HDF\r\n\x1a\ncontent")
+    _write_paraview_series(tmp_path / outputs["paraview"][0]["artifact_root"])
     checkpoint = tmp_path / "checkpoints" / "restart" / "state.npz"
     checkpoint.parent.mkdir(parents=True)
     with zipfile.ZipFile(checkpoint, "w") as archive:
@@ -1088,11 +1182,11 @@ def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_pat
         output_root = tmp_path / "examples" / example.stem
         output_root.mkdir(parents=True)
         targets = contract.FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS[example]
-        hdf5 = output_root / targets["hdf5"][0] / "state.h5"
+        hdf5 = output_root / targets["hdf5"][0]["artifact_root"] / "state.h5"
         hdf5.parent.mkdir(parents=True)
         hdf5.write_bytes(b"\x89HDF\r\n\x1a\npayload")
         npz = (
-            output_root / targets["npz"][0] / "state.npz"
+            output_root / targets["npz"][0]["artifact_root"] / "state.npz"
             if targets["npz"]
             else None
         )
@@ -1100,9 +1194,9 @@ def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_pat
             npz.parent.mkdir(parents=True)
             with zipfile.ZipFile(npz, "w") as archive:
                 archive.writestr("state.npy", b"payload")
-        paraview = output_root / targets["paraview"][0] / "state.vtu"
-        paraview.parent.mkdir(parents=True)
-        paraview.write_text("<VTKFile/>", encoding="utf-8")
+        paraview, collection = _write_paraview_series(
+            output_root / targets["paraview"][0]["artifact_root"]
+        )
         checkpoint = output_root / "checkpoint.bin"
         checkpoint.write_bytes(b"restart")
         transcript = "\n".join(
@@ -1160,7 +1254,11 @@ def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_pat
                 {
                     "path": str(paraview.relative_to(output_root)),
                     "sha256": hashlib.sha256(paraview.read_bytes()).hexdigest(),
-                }
+                },
+                {
+                    "path": str(collection.relative_to(output_root)),
+                    "sha256": hashlib.sha256(collection.read_bytes()).hexdigest(),
+                },
             ],
         }
         restarted[key] = {
@@ -1192,8 +1290,19 @@ def test_release_preflight_requires_exact_runtime_bound_example_commands(tmp_pat
     escaped_npz["artifact_reopen"]["evidence"]["examples"][imex_key]["npz"][0][
         "path"
     ] = "checkpoints/restart/state.npz"
-    with pytest.raises(preflight.PreflightError, match="escaped its authored target"):
+    with pytest.raises(preflight.PreflightError, match="escaped its exact artifact root"):
         preflight._examples_evidence(tmp_path, escaped_npz, runtime)
+
+    missing_pvd = copy.deepcopy(gates)
+    missing_pvd["artifact_reopen"]["evidence"]["examples"][first_key]["paraview"] = [
+        artifact
+        for artifact in missing_pvd["artifact_reopen"]["evidence"]["examples"][
+            first_key
+        ]["paraview"]
+        if Path(artifact["path"]).suffix != ".pvd"
+    ]
+    with pytest.raises(preflight.PreflightError, match=r"lacks.*\.pvd"):
+        preflight._examples_evidence(tmp_path, missing_pvd, runtime)
 
     commands[0]["argv"][commands[0]["argv"].index(runtime["native_sha256"])] = "d" * 64
     with pytest.raises(preflight.PreflightError, match="command drifted"):

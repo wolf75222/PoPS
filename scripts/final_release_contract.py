@@ -47,24 +47,51 @@ FINAL_EXAMPLE_REQUIRED_TESTS = (
 )
 FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS = {
     FINAL_EXAMPLES[0]: {
-        "hdf5": ("state/tracer",),
+        "hdf5": ({
+            "consumer_target": "state/tracer",
+            "artifact_root": "manual/accepted/state/tracer",
+        },),
         "npz": (),
-        "paraview": ("solution/tracer",),
+        "paraview": ({
+            "consumer_target": "solution/tracer",
+            "artifact_root": "manual/accepted/solution/tracer",
+        },),
     },
     FINAL_EXAMPLES[1]: {
-        "hdf5": ("state/two_fluid",),
+        "hdf5": ({
+            "consumer_target": "state/two_fluid",
+            "artifact_root": "accepted/state/two_fluid",
+        },),
         "npz": (),
-        "paraview": ("visualization/two_fluid",),
+        "paraview": ({
+            "consumer_target": "visualization/two_fluid",
+            "artifact_root": "accepted/visualization/two_fluid",
+        },),
     },
     FINAL_EXAMPLES[2]: {
-        "hdf5": ("hdf5/state",),
-        "npz": ("npz/state",),
-        "paraview": ("paraview/state",),
+        "hdf5": ({
+            "consumer_target": "hdf5/state",
+            "artifact_root": "manual/accepted/hdf5/state",
+        },),
+        "npz": ({
+            "consumer_target": "npz/state",
+            "artifact_root": "manual/accepted/npz/state",
+        },),
+        "paraview": ({
+            "consumer_target": "paraview/state",
+            "artifact_root": "manual/accepted/paraview/state",
+        },),
     },
     FINAL_EXAMPLES[3]: {
-        "hdf5": ("state/hyqmom15",),
+        "hdf5": ({
+            "consumer_target": "state/hyqmom15",
+            "artifact_root": "accepted/state/hyqmom15",
+        },),
         "npz": (),
-        "paraview": ("visualization/hyqmom15",),
+        "paraview": ({
+            "consumer_target": "visualization/hyqmom15",
+            "artifact_root": "accepted/visualization/hyqmom15",
+        },),
     },
 }
 REQUIRED_PROOF_MARKERS = (
@@ -445,20 +472,62 @@ def source_contract_errors(root: Path) -> list[str]:
         if not isinstance(formats, dict) or set(formats) != {"hdf5", "npz", "paraview"}:
             errors.append("%s has no exact scientific-output format ledger" % relative)
             continue
-        for format_name, targets in formats.items():
-            if not isinstance(targets, tuple) or any(
-                not isinstance(target, str) or not target for target in targets
-            ):
+        artifact_roots: set[str] = set()
+        for format_name, expectations in formats.items():
+            if not isinstance(expectations, tuple):
                 errors.append(
                     "%s has a malformed %s scientific-output target ledger"
                     % (relative, format_name)
                 )
                 continue
-            for target in targets:
-                if 'target="%s"' % target not in text:
+            consumer_targets: set[str] = set()
+            for expectation in expectations:
+                if not isinstance(expectation, dict) or set(expectation) != {
+                    "consumer_target", "artifact_root",
+                }:
+                    errors.append(
+                        "%s has a malformed %s scientific-output expectation"
+                        % (relative, format_name)
+                    )
+                    continue
+                consumer_target = expectation["consumer_target"]
+                artifact_root = expectation["artifact_root"]
+                if not isinstance(consumer_target, str) or not consumer_target \
+                        or not isinstance(artifact_root, str) or not artifact_root:
+                    errors.append(
+                        "%s has an invalid %s scientific-output expectation"
+                        % (relative, format_name)
+                    )
+                    continue
+                consumer_path = Path(consumer_target)
+                artifact_path = Path(artifact_root)
+                if consumer_path.is_absolute() or ".." in consumer_path.parts \
+                        or artifact_path.is_absolute() or ".." in artifact_path.parts:
+                    errors.append(
+                        "%s has an escaping %s scientific-output expectation"
+                        % (relative, format_name)
+                    )
+                    continue
+                if len(artifact_path.parts) < len(consumer_path.parts) or tuple(
+                    artifact_path.parts[-len(consumer_path.parts):]
+                ) != consumer_path.parts:
+                    errors.append(
+                        "%s %s artifact root %s does not end with consumer target %s"
+                        % (relative, format_name, artifact_root, consumer_target)
+                    )
+                    continue
+                if consumer_target in consumer_targets or artifact_root in artifact_roots:
+                    errors.append(
+                        "%s has duplicate %s scientific-output expectations"
+                        % (relative, format_name)
+                    )
+                    continue
+                consumer_targets.add(consumer_target)
+                artifact_roots.add(artifact_root)
+                if 'target="%s"' % consumer_target not in text:
                     errors.append(
                         "%s lacks its exact %s scientific-output target %s"
-                        % (relative, format_name, target)
+                        % (relative, format_name, consumer_target)
                     )
     ledgers = (
         ("acceptance", FINAL_EXAMPLE_ACCEPTANCE_TESTS),
