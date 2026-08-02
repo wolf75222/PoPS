@@ -91,7 +91,7 @@ def _program(model):
     _case, states = program_states(program, model, ("blk",))
     state = states["blk"]
     program.keep_history(state, depth=4, checkpoint_policy=Interval(2))
-    total = program.sum(state)
+    total = program.sum(state.n)
     ledger = BalanceLedger("uniform-selective-replay")
     program.record_balance(
         ledger,
