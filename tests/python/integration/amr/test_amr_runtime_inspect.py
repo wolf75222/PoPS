@@ -294,11 +294,20 @@ def test_inspect_before_build_reports_unbuilt_patches_honestly():
     assert report.regrid.frozen is True
 
 
-def test_inspect_no_longer_lists_the_served_fine_level_field_jacvec_as_a_limitation():
+def test_inspect_separates_served_field_jacvec_from_partial_composite_boundary():
     report = AmrSystem(n=16, L=1.0, periodicity=(True, True)).amr.inspect()
-    rows = [row for row in report.limitations if row["feature"] == "amr:field_coupled_rhs_jacvec"]
+    field_rows = [
+        row for row in report.limitations if row["feature"] == "amr:field_coupled_rhs_jacvec"
+    ]
+    boundary_rows = [
+        row for row in report.limitations if row["feature"] == "amr:composite_dynamic_boundary"
+    ]
 
-    assert rows == []
+    assert field_rows == []
+    assert len(boundary_rows) == 1
+    assert boundary_rows[0]["status"] == "partial"
+    assert "partially refined CompositeFAC hierarchy is refused" in boundary_rows[0]["reason"]
+    assert "level-qualified homogeneous/JVP boundary operator" in boundary_rows[0]["reason"]
 
 
 # --- compiled static delegation ------------------------------------------------

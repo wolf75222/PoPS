@@ -574,19 +574,37 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "amr:field_coupled_rhs_jacvec",
             layout="amr",
-            backend="none",
+            backend="production",
             platform="host",
-            mpi=mpi,
-            gpu=gpu,
-            status="unavailable",
+            mpi=False,
+            gpu=False,
+            status="available",
             limitation=(
-                "field-coupled rhs_jacvec has no level-qualified tangent-field provider ABI "
-                "for AMR level > 0"
+                "field-coupled finite-difference rhs_jacvec re-solves the exact prepared field "
+                "provider from the perturbed state on level zero and every refined level, then "
+                "restores the frozen primal publication transactionally; the proved execution "
+                "envelope is host single-process, with no multi-rank MPI route claimed"
             ),
-            requested="field_coupled rhs_jacvec on AMR level > 0",
-            available_route="field_coupled rhs_jacvec on AMR level 0",
+            source=source,
+        ),
+        _row(
+            "amr:composite_dynamic_boundary",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="partial",
+            limitation=(
+                "a fully refined hierarchy passes the exact finest-level logical time, state "
+                "dependencies and nonlinear/JVP context to its dynamic field boundary; a "
+                "partially refined CompositeFAC hierarchy is refused because its coarse-fine "
+                "correction lacks a level-qualified homogeneous/JVP boundary operator"
+            ),
+            available_route="fully refined host single-process CompositeFAC hierarchy",
             alternative=(
-                "use the level-0 route or implement a level-qualified tangent-field provider ABI"
+                "use a fully refined hierarchy or implement the level-qualified homogeneous/JVP "
+                "coarse-fine correction boundary"
             ),
             source=source,
         ),

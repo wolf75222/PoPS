@@ -415,11 +415,15 @@ registry lookup.
 For field-coupled finite-difference JVPs, the exact boundary evaluation level must also equal the
 active Program resource level before the perturbed field solve or the frozen-field restoration is
 allowed to dispatch. A fine-level caller therefore cannot forge a coarse point and reuse level 0.
-This identity guard does not create a fine-level tangent-field solve. Supporting a boundary JVP that
-reads solved fields requires a provider contract that materializes the field tangent from the state
-direction on every participating level, couples those tangents across CompositeFAC when requested,
-and restores the frozen primal field transactionally. Reusing the primal field pointer would omit
-the derivative of the field solve and is therefore not a valid fallback.
+The generated finite-difference route materializes that derivative by re-solving the exact prepared
+provider from the perturbed state on every participating level, evaluating the complete residual,
+and restoring the frozen primal field transactionally; it never reuses the unperturbed field pointer
+as a tangent. This proof currently covers host execution in a single process only; PoPS does not
+advertise this route as MPI-capable until a real multi-rank oracle is part of the validation matrix.
+A partially refined CompositeFAC hierarchy with a dynamic physical boundary remains a separate
+explicit refusal until its correction owns a level-qualified homogeneous/JVP boundary operator.
+The public report exposes that unsupported subcase separately as
+`amr:composite_dynamic_boundary`; it is not hidden behind the available level-qualified JVP row.
 Linear and nonlinear field routes both retain the accepted warm start until their `SolveReport` is
 consumed; an invalid boundary evaluation or iteration limit restores that value and cannot update the
 published aux channel.

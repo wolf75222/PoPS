@@ -91,6 +91,31 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert external_amr.available_route == (
         "external FieldSolver@2 on one uniform host/serial level"
     )
+    field_jacvec = routes["amr:field_coupled_rhs_jacvec"]
+    assert field_jacvec.status == "available"
+    assert field_jacvec.layout == "amr"
+    assert field_jacvec.backend == "production"
+    assert field_jacvec.mpi is False
+    assert field_jacvec.gpu is False
+    assert "level zero and every refined level" in field_jacvec.limitation
+    assert "restores the frozen primal publication transactionally" in field_jacvec.limitation
+    assert "host single-process" in field_jacvec.limitation
+    assert "no multi-rank MPI route claimed" in field_jacvec.limitation
+    assert field_jacvec.available_route == ""
+    assert field_jacvec.alternative == ""
+    composite_boundary = routes["amr:composite_dynamic_boundary"]
+    assert composite_boundary.status == "partial"
+    assert composite_boundary.layout == "amr"
+    assert composite_boundary.backend == "production"
+    assert composite_boundary.mpi is False
+    assert composite_boundary.gpu is False
+    assert "fully refined hierarchy" in composite_boundary.limitation
+    assert "partially refined CompositeFAC hierarchy is refused" in composite_boundary.limitation
+    assert "level-qualified homogeneous/JVP boundary operator" in composite_boundary.limitation
+    assert composite_boundary.available_route == (
+        "fully refined host single-process CompositeFAC hierarchy"
+    )
+    assert "coarse-fine correction boundary" in composite_boundary.alternative
 
 
 def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_kernels():
