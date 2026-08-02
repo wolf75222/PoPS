@@ -32,6 +32,7 @@ from pops.solvers.providers import (
     prepared_hierarchy_solver_provider_from_attrs,
 )
 from pops.time import Program
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
 _HIERARCHY_BASE_CELLS = 8
@@ -1227,6 +1228,7 @@ extern "C" POPS_EXPORT std::uint64_t pops_test_hierarchy_second_guess_calls() no
                 if bound_plasma
                 else None
             ),
+            resources={"execution_context": artifact_execution_context(compiled)},
         )
         bound_register, bound_prepare, bound_execution, bound_solve = (
             _external_hierarchy_counters(compiled.so_path)
