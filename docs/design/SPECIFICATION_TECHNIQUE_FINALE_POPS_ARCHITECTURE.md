@@ -437,6 +437,10 @@ manifests déclarent leur variant CPU+MPI, que le contexte installe exactement
 `MPI_COMM_WORLD`/`MPI_DOUBLE` et que le niveau grossier soit distribué. Embedded/cut-cell,
 multimatériau, GPU, conditions de bord dépendantes d'un état/champ/temps, réaction et outer solve non
 linéaire/JVP restent refusés ; les accepter dans un manifest ne suffit pas à rendre l'adapter capable.
+La preuve exécutable MPI actuelle est bornée à deux rangs : chacun possède réellement des patches L0
+et L1, le couple est rematérialisé après un regrid qui change le layout, un échec scientifique
+collectif restaure puis réessaie l'état accepté, et une publication divergente sur un seul rang est
+refusée par consensus exact. Les tailles de communicateur supérieures à deux restent à qualifier.
 
 Cette route sélectionne, pour chacun des deux composants, exactement un variant cible
 `{dimension: 2, scalar: "float64", device: "cpu"}`. Un variant uniquement 3D, ou plusieurs variants

@@ -2,7 +2,7 @@
 
 The evidence ledger is **SOURCE-CLOSED AND REQUIRED BY CI**. The ledger in
 `tests/gates/m4_runtime_io.toml` records exact executable evidence for
-ADC-679 through ADC-687. It contains exactly 53 executable checks and
+ADC-679 through ADC-687. It contains exactly 54 executable checks and
 `deferred = []`. Milestone closure is accepted only for a commit whose required MPI job
 successfully executes the complete installed gate; source audit alone is not
 the acceptance evidence.
@@ -28,6 +28,9 @@ The source audit already authenticates real proofs for:
   parity;
 - a prepared native FieldSolver whose invalid first result is refused through
   RuntimeInstance with exact accepted-state rollback and a successful retry;
+- a two-rank external AMR FieldTopology/FieldSolver solve with distributed L0/L1,
+  layout-changing rematerialization, exact consensus, rollback/retry, and rank-local divergence
+  refusal;
 - accepted scientific publication, diagnostics including qualified native
   projection/reflux term selection, two-rank collective HDF5,
   and a two-rank PVD/PVTU/rank-VTU hierarchy reopened by native VTK readers.
@@ -99,10 +102,13 @@ component returns a finite result and the unchanged RuntimeInstance accepts the
 retry. The selected test defines no step wrapper and never replaces a native
 engine or step target.
 
-That installed proof uses the MPI-enabled module with a one-rank
-`MPI_COMM_WORLD`. The System adapter authenticates and accepts this singleton
-communicator explicitly; it still refuses multi-rank external FieldSolver
-execution until a collective distributed solve contract is proved.
+The Uniform refusal proof uses the MPI-enabled module with a one-rank
+`MPI_COMM_WORLD`. A separate required entrypoint now launches the AMR adapter with
+`mpiexec -n 2`: both levels are distributed across both ranks, a moving refinement region forces
+component rematerialization, and every provider report is identical before publication. It then
+proves a typed collective FailRun rollback and retry, followed by fail-closed refusal of a
+rank-local non-finite candidate whose report differs across ranks. No candidate field, conservative
+state, clock, topology, ownership, or provider evidence is published by either failure.
 
 The positive RuntimeInstance proof is also a compiled route. It builds and
 executes one Uniform artifact, one AMR artifact, and one two-layout artifact

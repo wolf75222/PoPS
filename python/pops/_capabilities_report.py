@@ -584,14 +584,16 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             limitation=(
                 "host float64 and ratio-2 AMR only; MPI requires both components to declare "
                 "MPI_COMM_WORLD and "
-                "a distributed coarse level; "
+                "a distributed coarse level; executable MPI qualification currently covers "
+                "exactly two ranks with distributed L0/L1 and regrid rematerialization; "
                 "embedded/cut-cell topology, dynamic boundaries, reaction terms, nonlinear/JVP "
                 "solves and GPU execution remain explicit refusals"
             ),
             requested="external FieldSolver@2 on an AMR hierarchy",
             available_route=(
                 "authenticated FieldTopology@2 + FieldSolver@2 composite hierarchy batch with "
-                "metadata.level, binary coarse/fine coverage and one collective solve"
+                "metadata.level, binary coarse/fine coverage, one collective solve, exact "
+                "materialization/report consensus and transactional candidate publication"
             ),
             alternative="",
             source=source,

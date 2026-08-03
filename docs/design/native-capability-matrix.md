@@ -333,10 +333,14 @@ Explicit unsupported rows include:
   `SolveOutcome` publication, restricts solved fine values into covered coarse cells, materializes
   same-level/physical/coarse-fine potential halos before centered gradients, and
   destroys/rematerializes both component states when regridding invalidates the prepared solver.
-  The current transfer proof is ratio-2. Host serial is available; MPI is available
-  only when both component manifests declare the host/MPI variant, the installed execution
+  The current transfer proof is ratio-2. Host serial is available. The executable
+  `test_external_amr_field_solver_mpi.py` oracle proves `mpiexec -n 2` with local patches on both
+  ranks at L0 and L1, a layout-changing regrid/rematerialization, exact provider evidence, typed
+  collective rollback/retry, and refusal of a rank-local non-finite candidate before publication.
+  MPI is available only when both component manifests declare the host/MPI variant, the installed execution
   authority is exact `MPI_COMM_WORLD`/`MPI_DOUBLE`, and the coarse level is distributed (the v2 ABI
-  has no replicated-coarse ownership marker). GPU/device memory, embedded or cut-cell topology,
+  has no replicated-coarse ownership marker); rank counts above two remain unqualified.
+  GPU/device memory, embedded or cut-cell topology,
   dynamic/dependent boundaries, reaction coefficients and nonlinear/JVP solves remain fail-closed.
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and
