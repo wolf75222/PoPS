@@ -899,7 +899,6 @@ struct AmrRuntimeBlock {
   /// per-level closures of this block.
   std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
   std::shared_ptr<GridContext::BoundaryFieldRegistryFactory> boundary_field_registry;
-  std::shared_ptr<const AmrBoundaryFillAuthority> transport_boundary_fill;
   /// Prepared topology workspaces replaced transactionally after every hierarchy generation.
   std::optional<PreparedAmrFillPatchPlan> fill_patch_plan;
   std::vector<detail::PreparedConservativeCellTransferWorkspace> coarse_fine_spatial_workspaces;
@@ -1202,12 +1201,9 @@ class AmrRuntime {
       if (block.boundary_plan && !same_periodicity(block.boundary_plan->periodicity(), base_per_))
         throw std::runtime_error(
             "AmrRuntime prepared boundary topology differs from the shared hierarchy");
-      if (block.transport_boundary_fill)
-        validate_amr_boundary_fill_authority(base_per_, block.transport_boundary_fill.get(),
-                                             *block.levels);
-      else if (!block.boundary_plan && (!base_per_.x || !base_per_.y))
+      if (!block.boundary_plan && (!base_per_.x || !base_per_.y))
         throw std::runtime_error(
-            "AmrRuntime non-periodic hierarchy has no physical boundary authority");
+            "AmrRuntime non-periodic hierarchy has no prepared physical boundary plan");
     }
 
     AmrHierarchyLayout coarse_hierarchy;
@@ -5048,15 +5044,9 @@ class AmrRuntime {
         }
         continue;
       }
-      if (!block.transport_boundary_fill)
+      if (!base_per_.x || !base_per_.y)
         throw std::runtime_error(
             "non-periodic AMR regrid requires a prepared boundary authority for every block");
-      validate_amr_boundary_fill_authority(base_per_, block.transport_boundary_fill.get(),
-                                           *block.levels);
-      if (!block.transport_boundary_fill->fills_all_allocated_ghosts) {
-        all_depths_supported = false;
-        shared_depth = std::min(shared_depth, block.transport_boundary_fill->provided_depth);
-      }
     }
     if (!all_depths_supported && shared_depth == std::numeric_limits<int>::max())
       throw std::runtime_error("non-periodic AMR regrid has no state boundary authority");
