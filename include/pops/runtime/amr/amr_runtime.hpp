@@ -1481,26 +1481,34 @@ class AmrRuntime {
                               const DistributionMapping& distribution, const MultiFab& parent,
                               const MultiFab& old_fine, int parent_level, int ghost_depth,
                               int refinement_ratio) const {
-    if (block >= block_transfer_authorities_.size())
-      throw std::runtime_error("AmrRuntime::regrid_block_field block out of range");
+    const CommunicatorView communicator = world_communicator_view();
+    regrid_detail::collective_stage("AMR regrid block authority", communicator, [&] {
+      if (block >= block_transfer_authorities_.size())
+        throw std::runtime_error("AmrRuntime::regrid_block_field block out of range");
+      const auto& candidate_authority = block_transfer_authorities_[block];
+      if (!candidate_authority.prepared || !candidate_authority.prolongation.spatial ||
+          candidate_authority.refinement_ratio != refinement_ratio)
+        throw std::runtime_error(
+            "AmrRuntime regrid has no compatible prepared prolongation authority");
+    });
     const auto& authority = block_transfer_authorities_[block];
-    if (!authority.prepared || !authority.prolongation.spatial ||
-        authority.refinement_ratio != refinement_ratio)
-      throw std::runtime_error(
-          "AmrRuntime regrid has no compatible prepared prolongation authority");
-    RegridProlongation prolong = [this, &authority](
-                                     const MultiFab& coarse, MultiFab& fine, int coarse_level,
-                                     int ratio, bool replicated_parent, const CommunicatorView&) {
-      authority.prolongation.spatial(
-          coarse, fine,
-          bootstrap_transfer_context(coarse, fine, coarse_level, coarse_level + 1, ratio,
-                                     replicated_parent, base_per_));
-    };
+    RegridProlongation prolong;
+    regrid_detail::collective_stage("AMR regrid block closure", communicator, [&] {
+      prolong = [this, &authority](const MultiFab& coarse, MultiFab& fine, int coarse_level,
+                                   int ratio, bool replicated_parent, const CommunicatorView&) {
+        authority.prolongation.spatial(
+            coarse, fine,
+            bootstrap_transfer_context(coarse, fine, coarse_level, coarse_level + 1, ratio,
+                                       replicated_parent, base_per_));
+      };
+    });
     MultiFab candidate = regrid_field_on_layout_with_provider(
-        boxes, distribution, parent, old_fine, parent_level, ghost_depth, prolong,
-        world_communicator_view(), replicated_coarse_, refinement_ratio);
-    require_recoverable_block_candidate_(block, candidate,
-                                         "AmrRuntime regrid prolongation publication");
+        boxes, distribution, parent, old_fine, parent_level, ghost_depth, prolong, communicator,
+        replicated_coarse_, refinement_ratio);
+    regrid_detail::collective_stage("AMR regrid candidate admissibility", communicator, [&] {
+      require_recoverable_block_candidate_(block, candidate,
+                                           "AmrRuntime regrid prolongation publication");
+    });
     return candidate;
   }
 
@@ -5124,54 +5132,91 @@ class AmrRuntime {
   void materialize_regrid_transition_(int parent_level, const BoxArray& boxes,
                                       const DistributionMapping& distribution,
                                       int refinement_ratio) {
+    const CommunicatorView communicator = world_communicator_view();
     const int fine_level = parent_level + 1;
     const bool existed = fine_level < nlev_;
-    if (!existed)
-      require_coarse_fine_reconstruction_contract_();
     std::vector<MultiFab> remapped;
-    remapped.reserve(blocks_.size());
+    regrid_detail::collective_stage("AMR regrid transition contract", communicator, [&] {
+      if (parent_level < 0 || parent_level >= nlev_ || refinement_ratio < 2 || boxes.size() <= 0 ||
+          distribution.size() != boxes.size())
+        throw std::runtime_error("AMR regrid transition has an invalid layout contract");
+      if (!existed)
+        require_coarse_fine_reconstruction_contract_();
+      require_complete_history_structure_("AMR regrid transition source");
+      remapped.reserve(blocks_.size());
+    });
+    std::array<long, 6> transition_contract{
+        static_cast<long>(parent_level),    static_cast<long>(fine_level),
+        static_cast<long>(existed ? 1 : 0), static_cast<long>(nlev_),
+        static_cast<long>(blocks_.size()),  static_cast<long>(boxes.size())};
+    std::array<long, 6> transition_min = transition_contract;
+    std::array<long, 6> transition_max = transition_contract;
+    all_reduce_min_inplace(transition_min.data(), transition_min.size(), communicator);
+    all_reduce_max_inplace(transition_max.data(), transition_max.size(), communicator);
+    if (transition_min != transition_max)
+      throw std::runtime_error("AMR regrid transition contract differs between MPI ranks");
+
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
-      auto& levels = *blocks_[block].levels;
+      std::optional<MultiFab> empty;
+      regrid_detail::collective_stage("AMR regrid transition block binding", communicator, [&] {
+        if (!blocks_[block].levels ||
+            blocks_[block].levels->size() <= static_cast<std::size_t>(parent_level) ||
+            (existed && blocks_[block].levels->size() <= static_cast<std::size_t>(fine_level)))
+          throw std::runtime_error("AMR regrid transition block levels are incomplete");
+        if (!existed) {
+          const MultiFab& parent =
+              (*blocks_[block].levels)[static_cast<std::size_t>(parent_level)].U;
+          empty.emplace(BoxArray{}, DistributionMapping{}, parent.ncomp(), parent.n_grow());
+        }
+      });
+      const auto& levels = *blocks_[block].levels;
       const MultiFab& parent = levels[static_cast<std::size_t>(parent_level)].U;
       const int ghost_depth =
           existed ? levels[static_cast<std::size_t>(fine_level)].U.n_grow() : parent.n_grow();
-      MultiFab empty(BoxArray{}, DistributionMapping{}, parent.ncomp(), ghost_depth);
-      const MultiFab& old_fine = existed ? levels[static_cast<std::size_t>(fine_level)].U : empty;
-      remapped.push_back(regrid_block_field(block, boxes, distribution, parent, old_fine,
-                                            parent_level, ghost_depth, refinement_ratio));
+      const MultiFab& old_fine = existed ? levels[static_cast<std::size_t>(fine_level)].U : *empty;
+      MultiFab candidate = regrid_block_field(block, boxes, distribution, parent, old_fine,
+                                              parent_level, ghost_depth, refinement_ratio);
+      regrid_detail::collective_stage("AMR regrid transition candidate retention", communicator,
+                                      [&] { remapped.push_back(std::move(candidate)); });
     }
 
-    if (!existed) {
-      hierarchy_.ba.push_back(boxes);
-      hierarchy_.dm.push_back(distribution);
-      hierarchy_.dx.push_back(hierarchy_.dx[static_cast<std::size_t>(parent_level)] /
-                              Real(refinement_ratio));
-      hierarchy_.dy.push_back(hierarchy_.dy[static_cast<std::size_t>(parent_level)] /
-                              Real(refinement_ratio));
-      hierarchy_.refinement_ratios.push_back(refinement_ratio);
-      aux_.emplace_back(boxes, distribution, aux_ncomp_, 1);
-      ++nlev_;
-      refresh_active_temporal_relations_();
-      for (std::size_t block = 0; block < blocks_.size(); ++block) {
-        auto& levels = *blocks_[block].levels;
-        levels.push_back(
-            AmrLevelMP{std::move(remapped[block]), &aux_.back(),
-                       levels[static_cast<std::size_t>(parent_level)].dx / Real(refinement_ratio),
-                       levels[static_cast<std::size_t>(parent_level)].dy / Real(refinement_ratio)});
-      }
-    } else {
-      hierarchy_.ba[static_cast<std::size_t>(fine_level)] = boxes;
-      hierarchy_.dm[static_cast<std::size_t>(fine_level)] = distribution;
-      aux_[static_cast<std::size_t>(fine_level)] = MultiFab(boxes, distribution, aux_ncomp_, 1);
-      for (std::size_t block = 0; block < blocks_.size(); ++block)
-        (*blocks_[block].levels)[static_cast<std::size_t>(fine_level)].U =
-            std::move(remapped[block]);
-    }
+    regrid_detail::collective_stage(
+        "AMR regrid transition hierarchy publication", communicator, [&] {
+          if (!existed) {
+            hierarchy_.ba.push_back(boxes);
+            hierarchy_.dm.push_back(distribution);
+            hierarchy_.dx.push_back(hierarchy_.dx[static_cast<std::size_t>(parent_level)] /
+                                    Real(refinement_ratio));
+            hierarchy_.dy.push_back(hierarchy_.dy[static_cast<std::size_t>(parent_level)] /
+                                    Real(refinement_ratio));
+            hierarchy_.refinement_ratios.push_back(refinement_ratio);
+            aux_.emplace_back(boxes, distribution, aux_ncomp_, 1);
+            ++nlev_;
+            refresh_active_temporal_relations_();
+            for (std::size_t block = 0; block < blocks_.size(); ++block) {
+              auto& levels = *blocks_[block].levels;
+              levels.push_back(AmrLevelMP{
+                  std::move(remapped[block]), &aux_.back(),
+                  levels[static_cast<std::size_t>(parent_level)].dx / Real(refinement_ratio),
+                  levels[static_cast<std::size_t>(parent_level)].dy / Real(refinement_ratio)});
+            }
+          } else {
+            hierarchy_.ba[static_cast<std::size_t>(fine_level)] = boxes;
+            hierarchy_.dm[static_cast<std::size_t>(fine_level)] = distribution;
+            aux_[static_cast<std::size_t>(fine_level)] =
+                MultiFab(boxes, distribution, aux_ncomp_, 1);
+            for (std::size_t block = 0; block < blocks_.size(); ++block)
+              (*blocks_[block].levels)[static_cast<std::size_t>(fine_level)].U =
+                  std::move(remapped[block]);
+          }
+        });
     remap_history_rings_(boxes, distribution, fine_level, parent_level, /*prolong=*/true);
-    for (auto& block : blocks_)
-      for (int level = 0; level < nlev_; ++level)
-        (*block.levels)[static_cast<std::size_t>(level)].aux =
-            &aux_[static_cast<std::size_t>(level)];
+    regrid_detail::collective_stage("AMR regrid transition carrier rebinding", communicator, [&] {
+      for (auto& block : blocks_)
+        for (int level = 0; level < nlev_; ++level)
+          (*block.levels)[static_cast<std::size_t>(level)].aux =
+              &aux_[static_cast<std::size_t>(level)];
+    });
   }
 
   void remove_levels_above_(int parent_level) {
