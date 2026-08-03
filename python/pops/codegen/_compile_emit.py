@@ -150,6 +150,9 @@ def model_hash(model: Any, params: Any = None) -> str:
         parts.append("roe_rows=%s" % ";".join(repr(e) for k in ("x", "y")
                                               for e in m._roe_rows[k]))
     if getattr(m, "_roe_jacobian", None) is not None:
+        from pops.codegen.module_emit_riemann import has_characteristic_no_inflow_provider
+        if has_characteristic_no_inflow_provider(m):
+            parts.append("characteristic_no_inflow=flux_jacobian_v1")
         parts.append("roe_jac=%s" % ";".join(repr(e) for k in ("x", "y")
                                              for row in m._roe_jacobian[k] for e in row))
         entropy_fix = m._roe_jacobian.get("entropy_fix")

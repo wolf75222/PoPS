@@ -160,9 +160,16 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             raise ValueError("prepared boundary plan must contain canonical xlo/xhi/ylo/yhi rows")
         types = [row.get("type") for row in faces]
         if any(value not in {
-                "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall", "external"}
+                "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall", "external",
+                "characteristic_no_inflow"}
                for value in types):
             raise NotImplementedError("prepared boundary plan selected an unavailable face producer")
+        if "characteristic_no_inflow" in types and not bool(
+                getattr(component, "has_characteristic_no_inflow", False)):
+            raise NotImplementedError(
+                "characteristic no-inflow requires a compiled model prepared with "
+                "m.roe_from_jacobian(); no component-wise or Euler-specific fallback exists"
+            )
         representations = [row.get("representation", "conservative") for row in faces]
         converter_identities = [row.get("converter") for row in faces]
         for face, (face_type, representation, converter) in enumerate(zip(
@@ -179,6 +186,10 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             else:
                 raise NotImplementedError(
                     "prepared boundary selected unavailable representation %r" % representation)
+            if face_type == "characteristic_no_inflow" and representation != "conservative":
+                raise NotImplementedError(
+                    "characteristic no-inflow requires a conservative reference state"
+                )
         face_identities = [row.get("producer") for row in faces]
         if any(not isinstance(value, str) or not value for value in face_identities):
             raise TypeError(

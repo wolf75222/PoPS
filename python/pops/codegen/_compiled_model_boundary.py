@@ -15,7 +15,8 @@ _SEQUENCE_FIELDS = (
     "state_spaces",
 )
 _SCALAR_FIELDS = (
-    "has_hllc", "has_roe", "has_wave_speeds", "so_path", "backend", "target",
+    "has_hllc", "has_roe", "has_wave_speeds", "has_characteristic_no_inflow",
+    "so_path", "backend", "target",
     "n_vars", "gamma", "n_aux", "abi_key", "model_hash", "cxx", "std",
     "wave_speed_provider",
 )

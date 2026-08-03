@@ -148,7 +148,7 @@ class CharacteristicClosure:
                                 (name, expected.__name__))
         rows = _unique_handles(
             self.characteristics, where="CharacteristicClosure.characteristics",
-            kinds=frozenset(("state", "field")))
+            kinds=frozenset(("state", "field", "boundary_eigenstructure")))
         if self.mode is ClosureMode.NONE and rows:
             raise ValueError("ClosureMode.NONE cannot carry characteristic data")
         if self.mode is ClosureMode.NONE and (

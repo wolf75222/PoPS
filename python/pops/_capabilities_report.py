@@ -398,19 +398,28 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "boundary:characteristic_no_inflow",
             layout="uniform|amr",
-            backend="none",
+            backend="production",
             platform="host",
-            mpi=mpi,
-            gpu=gpu,
-            status="unavailable",
+            mpi=False,
+            gpu=False,
+            status="partial",
             limitation=(
-                "numerical resolution rejects characteristic closure until executable model "
-                "eigenstructure, incoming-mode data, and sonic/sign policies are installed"
+                "2D Cartesian conservative constant/RuntimeParam fixed-reference no-inflow uses "
+                "the exact compiled "
+                "flux-Jacobian provider emitted by m.roe_from_jacobian() (1..16 components); "
+                "the Kokkos kernel projects only outward-normal incoming modes, treats the "
+                "scale-relative sonic subspace as neutral, preflights the real spectrum "
+                "collectively, and rolls back ghosts on refusal; primitive/analytic references, "
+                "runtime/field-dependent eigenstructure, sonic-error policy, 3D, polar/embedded "
+                "geometry, and qualified MPI/GPU execution remain unavailable"
             ),
             requested="characteristic no-inflow/outflow transport boundary",
-            available_route="explicit fixed-state inflow or extrapolated outflow",
+            available_route=(
+                "Inflow(state=U, value=U_ref, "
+                "characteristic=model_characteristic_no_inflow(U))"
+            ),
             alternative=(
-                "use the explicit built-in route or install a prepared characteristic kernel"
+                "use fixed-state inflow/extrapolated outflow outside the qualified envelope"
             ),
             source=source,
         ),

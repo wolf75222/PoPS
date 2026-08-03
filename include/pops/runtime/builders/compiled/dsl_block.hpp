@@ -88,6 +88,10 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   // recompiled against this header (ABI key verified) carries them too.
   auto conv = make_cell_convert(model);
   sys.set_block_conversion(name, std::move(conv.first), std::move(conv.second));
+  if (ctx.boundary_plan && ctx.boundary_plan->requires_characteristic_no_inflow())
+    sys.set_block_characteristic_no_inflow(
+        name, detail::make_characteristic_no_inflow_fill(model,
+                                                         ctx.boundary_plan->hyperbolic_boundary()));
   sys.set_block_batch_recovery(name, make_uniform_recovery_consumer(model));
   // OPTIONAL step bounds of the model (HasSourceFrequency / HasStabilityDt traits, see
   // core/physical_model.hpp): compiled here like flux/source (a DSL model declaring

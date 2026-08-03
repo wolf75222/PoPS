@@ -656,11 +656,16 @@ class System {
   /// Fallible conservative -> primitive conversion. A failed report forbids writing @p out.
   using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
   using CellBatchRecovery = UniformCellRecovery;
+  using CharacteristicNoInflowFill = PreparedBoundaryPlan::CharacteristicNoInflowFill;
   /// Installs the pointwise cons <-> prim conversions of a block (after install_block). Called by
   /// the header template add_compiled_model (compiled model); the native path add_block and the dynamic
   /// .so path set them directly. POPS_EXPORT: resolved by the native loader through dlopen.
   POPS_EXPORT void set_block_conversion(const std::string& name, CellConvert prim_to_cons,
                                         CellRecovery cons_to_prim);
+  /// Finalize a requested characteristic no-inflow face with the exact compiled block model.
+  /// Plans that did not request the route and models without the prepared Jacobian both refuse it.
+  POPS_EXPORT void set_block_characteristic_no_inflow(const std::string& name,
+                                                      CharacteristicNoInflowFill fill);
 
   /// Installs the generation-qualified host/Uniform batch consumer used by
   /// get_primitive_state. The callback owns one warm-start slot per local cell and publishes the

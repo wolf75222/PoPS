@@ -217,6 +217,10 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
   if (prepared_boundary_plan) {
     if (prepared_boundary_plan->requires_fixed_state_conversion())
       prepared_boundary_plan->prepare_fixed_state_conversion(conversion.first);
+    if (prepared_boundary_plan->requires_characteristic_no_inflow())
+      prepared_boundary_plan->prepare_characteristic_no_inflow(
+          detail::make_characteristic_no_inflow_fill(
+              model, prepared_boundary_plan->hyperbolic_boundary()));
     prepared_boundary_plan->prepare_trace_recovery(conversion.second);
   }
   std::shared_ptr<const PreparedBoundaryPlan> boundary_plan = prepared_boundary_plan;
