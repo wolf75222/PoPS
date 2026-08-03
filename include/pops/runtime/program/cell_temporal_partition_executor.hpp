@@ -424,9 +424,9 @@ class PreparedBatchedCellTemporalExecutor {
       throw std::logic_error("prepared cell-local rung crosses its synchronization barrier");
     }
 
-    const CellTemporalRungBatchDescriptor descriptor{
-        batch.rung, begin_tick, end_tick, partition_.accepted_state().tick_denominator,
-        batch.indices.size()};
+    const CellTemporalRungBatchDescriptor descriptor{batch.rung, begin_tick, end_tick,
+                                                     partition_.accepted_state().tick_denominator,
+                                                     batch.indices.size()};
     std::uint64_t aggregate = 0;
     try {
       if constexpr (CellTemporalRungBatchLifecycle<Provider>)
@@ -454,8 +454,8 @@ class PreparedBatchedCellTemporalExecutor {
         kernel(static_cast<std::int64_t>(index), aggregate);
 #endif
       if (aggregate != 0) {
-        const auto disposition = static_cast<CellTemporalStageDisposition>(
-            static_cast<std::uint32_t>(aggregate >> 32u));
+        const auto disposition =
+            static_cast<CellTemporalStageDisposition>(static_cast<std::uint32_t>(aggregate >> 32u));
         const std::uint32_t reason = static_cast<std::uint32_t>(aggregate);
         throw CellTemporalStageFailure(disposition, reason);
       }
