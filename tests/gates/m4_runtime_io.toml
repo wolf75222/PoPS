@@ -358,6 +358,14 @@ nodeid = "tests/python/integration/native_loader/test_external_field_solver_runt
 
 [[check]]
 issue = "ADC-687"
+requirement = "external_solver"
+polarity = "positive"
+kind = "pytest"
+target = "external_solver"
+nodeid = "tests/python/integration/native_loader/test_external_field_solver_runtime.py::test_external_field_pair_executes_binary_coverage_across_amr_regrid"
+
+[[check]]
+issue = "ADC-687"
 requirement = "tamper_capability_abi"
 polarity = "refusal"
 kind = "ctest"
