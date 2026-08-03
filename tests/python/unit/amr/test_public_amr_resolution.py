@@ -86,6 +86,12 @@ def _resolved_target(
     return target, layout, layout_plan, layout.resolve_amr_authorities(context)
 
 
+def _native_layout(layout_plan):
+    normalized, = layout_plan.layouts
+    assert normalized.native_spatial_layout is not None
+    return normalized.native_spatial_layout
+
+
 @pytest.mark.parametrize("value", [0, 1, "true", None, object()])
 def test_patch_layout_requires_an_exact_bool(value):
     from pops.amr import PatchLayout
@@ -125,7 +131,7 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
     )
 
     authored = PatchLayout(distribute_coarse=True, coarse_max_grid=7)
-    _, layout, _, authorities = _resolved_target(patch_layout=authored)
+    _, layout, layout_plan, authorities = _resolved_target(patch_layout=authored)
     public_data = {
         "schema_version": 1,
         "authority_type": "amr_patch_layout",
@@ -142,7 +148,11 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
         "distribute_coarse": True,
         "coarse_max_grid": 7,
     }
-    config = amr_config_from_layout(layout, hierarchy=authorities.hierarchy)
+    config = amr_config_from_layout(
+        layout,
+        hierarchy=authorities.hierarchy,
+        native_layout=_native_layout(layout_plan),
+    )
     assert config.distribute_coarse is True
     assert config.coarse_max_grid == 7
     assert config.load_balance_provider[:3] == (
@@ -151,11 +161,13 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
         "pops.amr.load-balance.space-filling-curve@1",
     )
 
-    _, automatic_layout, _, automatic = _resolved_target(
+    _, automatic_layout, automatic_plan, automatic = _resolved_target(
         patch_layout=PatchLayout(distribute_coarse=True)
     )
     automatic_config = amr_config_from_layout(
-        automatic_layout, hierarchy=automatic.hierarchy
+        automatic_layout,
+        hierarchy=automatic.hierarchy,
+        native_layout=_native_layout(automatic_plan),
     )
     assert automatic_config.distribute_coarse is True
     assert automatic_config.coarse_max_grid == 0
@@ -178,7 +190,7 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
         "pops._bootstrap",
         SimpleNamespace(AmrSystemConfig=NativeConfigProbe),
     )
-    _, layout, _, authorities = _resolved_target()
+    _, layout, layout_plan, authorities = _resolved_target()
     frame = Rectangle("rectangular", (-2.0, 1.5), (4.0, 4.5)).frame(Cartesian2D())
     grid = CartesianGrid(
         frame=frame,
@@ -193,8 +205,22 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
         def runtime_layout_data():
             return dict(runtime_data)
 
+    from pops.mesh import NativeSpatialLayout
+
+    normalized, = layout_plan.layouts
+    spatial_data = grid.native_spatial_data()
+    rectangular_native = NativeSpatialLayout.from_geometry(
+        layout=normalized.handle,
+        geometry=grid.normalized_geometry(),
+        periodicity=spatial_data["periodicity"],
+        centering=spatial_data["centering"],
+        decomposition={"kind": "adaptive", "source": "rectangular-test"},
+    )
     config = amr_config_from_layout(
-        RectangularRuntimeLayout(), hierarchy=authorities.hierarchy)
+        RectangularRuntimeLayout(),
+        hierarchy=authorities.hierarchy,
+        native_layout=rectangular_native,
+    )
     assert (config.n, config.ny) == (30, 12)
     assert (config.L, config.Ly) == (6.0, 3.0)
     assert (config.xlo, config.ylo) == (-2.0, 1.5)
@@ -254,8 +280,12 @@ def test_measured_knapsack_roundtrips_exact_native_decision_policy(monkeypatch):
         migration_bandwidth_bytes_per_second=25_000_000_000,
         per_patch_migration_latency_nanoseconds=2_500,
     )
-    _, layout, _, authorities = _resolved_target(load_balance=policy)
-    config = amr_config_from_layout(layout, hierarchy=authorities.hierarchy)
+    _, layout, layout_plan, authorities = _resolved_target(load_balance=policy)
+    config = amr_config_from_layout(
+        layout,
+        hierarchy=authorities.hierarchy,
+        native_layout=_native_layout(layout_plan),
+    )
     assert config.load_balance_provider == (
         "measured_knapsack",
         policy.load_balance_provider_data()["provider_identity"],

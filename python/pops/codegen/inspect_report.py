@@ -197,8 +197,16 @@ def build_requirements(compiled: Any) -> Any:
     }
     from pops.runtime_environment import compiled_runtime_facts
     runtime = compiled_runtime_facts(supports_mpi=layout_runtime.get("supports_mpi"))
+    artifact = getattr(compiled, "artifact", compiled)
+    selected_dimension = getattr(artifact, "resolved_dimension", None)
+    if isinstance(selected_dimension, bool) or not isinstance(selected_dimension, int):
+        raise TypeError("compiled requirements require one exact resolved_dimension")
+    runtime["dimension"] = selected_dimension
     constraints.update({
         "dimension": runtime["dimension"],
+        "supported_dimensions": list(
+            artifact.platform_manifest.capabilities["supported_dimensions"].require(
+                "compiled.platform.supported_dimensions")),
         "amr_refinement_ratio": runtime["amr_refinement_ratio"],
         "precision": runtime["precision"],
         "communicator": runtime["communicator"],

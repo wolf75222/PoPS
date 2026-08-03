@@ -1204,7 +1204,8 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             )
         strategies.append(strategy)
         transaction_plans.append(authored.transaction_plan())
-        configs[layout_id] = system_config_from_layout(row.descriptor)
+        configs[layout_id] = system_config_from_layout(
+            plan.artifact.native_layouts[layout_id])
     if any(value != strategies[0] for value in strategies[1:]) or any(
         value != transaction_plans[0] for value in transaction_plans[1:]
     ):

@@ -234,10 +234,10 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         )
         from pops.runtime._system import System
 
-        config = system_config_from_layout(plan.layout)
+        normalized_layout, = plan.artifact.layout_plan.layouts
+        config = system_config_from_layout(normalized_layout.native_spatial_layout)
         engine = System(config)
         cast(Any, engine)._execution_context = plan.execution_context
-        normalized_layout, = plan.artifact.layout_plan.layouts
         install_uniform_embedded_boundary(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
@@ -276,7 +276,12 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         artifact = plan.artifact
         assert artifact.program is not None, \
             "resolved single-layout AMR artifact lost its compiled Program"
-        engine = AmrSystem(amr_config_from_layout(plan.layout, hierarchy=plan.resolved_hierarchy))
+        normalized_layout, = artifact.layout_plan.layouts
+        engine = AmrSystem(amr_config_from_layout(
+            plan.layout,
+            hierarchy=plan.resolved_hierarchy,
+            native_layout=normalized_layout.native_spatial_layout,
+        ))
         engine._execution_context = plan.execution_context
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
