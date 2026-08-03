@@ -208,6 +208,14 @@ Supported native routes include:
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.
 - ProgramContext install on System, and AMR program install when compiled for `target="amr_system"`.
+- Generated local implicit-source Programs on synchronous two-level 2D AMR. `pops.lib.time.IMEX`
+  lowers its local residual to the sole prepared `LocalNewton` service on every active level and
+  consumes the returned `SolveOutcome`; it does not invoke a spatial-runtime time integrator. The
+  executable route covers dynamic regridding, covered and uncovered coarse cells, active fine cells,
+  finite no-root and non-finite failures, exact all-level/clock/topology rollback, and a rank-local
+  failure reduced consistently over two MPI ranks. The capability remains `partial`: subcycled local
+  solves, GPU qualification, field/global implicit coupling and performance evidence are not inferred
+  from this pointwise synchronous route and require their own prepared execution proof.
 - Prepared state-boundary residual/JVP pairs on Program matrix-free solves. The exact base
   `BoundaryEvaluationPoint` is transported into the apply closure, the core RHS is
   finite-differenced, and the authenticated state-only boundary JVP is added once with persistent

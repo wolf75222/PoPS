@@ -628,18 +628,27 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "amr:source_implicit_program",
             layout="amr",
-            backend="none",
+            backend="production",
             platform="host",
             mpi=mpi,
-            gpu=gpu,
-            status="unavailable",
+            gpu=False,
+            status="partial",
             limitation=(
-                "AMR has no typed local implicit-source/Newton Program primitive; block IMEX "
-                "descriptors are metadata and the spatial runtime has no temporal fallback"
+                "a generated IMEX Program executes one prepared LocalNewton solve over every "
+                "active cell on a synchronous, dynamically regridded two-level 2D hierarchy; "
+                "SolveOutcome/FailRun rollback is exact across covered and uncovered coarse "
+                "cells, fine cells, clocks, topology and MPI ranks, but GPU qualification, "
+                "subcycled local solves, field/global implicit coupling and performance evidence "
+                "remain outside the proved envelope"
             ),
-            requested="local implicit source solve on AMR",
-            available_route="explicit AMR Program primitives",
-            alternative="implement and install the typed AMR implicit-source Program primitive",
+            available_route=(
+                "generated Program local implicit source solve with LocalNewton and a consumed "
+                "SolveOutcome on synchronous two-level 2D AMR"
+            ),
+            alternative=(
+                "use the proved synchronous local-source route, or add an explicit capability "
+                "and execution proof for subcycled, GPU, field-coupled or global implicit solves"
+            ),
             source=source,
         ),
     ]

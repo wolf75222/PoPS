@@ -80,9 +80,18 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
         assert limiter.available_route == ""
         assert limiter.alternative == ""
     amr_implicit = routes["amr:source_implicit_program"]
-    assert amr_implicit.status == "unavailable"
-    assert "no temporal fallback" in amr_implicit.limitation
+    assert amr_implicit.status == "partial"
+    assert amr_implicit.backend == "production"
+    assert amr_implicit.mpi is supports_mpi
+    assert amr_implicit.gpu is False
+    assert "prepared LocalNewton" in amr_implicit.limitation
+    assert "SolveOutcome/FailRun rollback is exact" in amr_implicit.limitation
+    assert "subcycled local solves" in amr_implicit.limitation
     assert amr_implicit.layout == "amr"
+    assert amr_implicit.available_route == (
+        "generated Program local implicit source solve with LocalNewton and a consumed "
+        "SolveOutcome on synchronous two-level 2D AMR"
+    )
     external_amr = routes["amr:external_field_solver_v2"]
     assert external_amr.status == "unavailable"
     assert external_amr.layout == "amr"
