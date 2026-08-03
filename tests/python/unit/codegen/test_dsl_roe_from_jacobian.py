@@ -166,3 +166,36 @@ def test_roe_dense_spectral_capacity_fails_during_authoring() -> None:
     assert "model.wave_speeds" in str(caught.value)
     assert "native Roe spectral provider" in str(caught.value)
     assert too_large._dsl._m._roe_jacobian is None
+
+
+def test_flux_jacobian_roe_emits_generic_characteristic_no_inflow_provider() -> None:
+    model = _diagonal_roe_model("dense_characteristic_boundary", 2)
+    model.wave_speeds_from_jacobian()
+    model.roe_from_jacobian()
+    source = model._dsl._m.emit_cpp_brick(name="DenseCharacteristicBoundary")
+    assert "bool characteristic_no_inflow(" in source
+    assert "pops::characteristic_incoming_apply" in source
+    assert "outward_sign" in source
+    assert "Euler" not in source
+
+
+def test_auxiliary_dependent_jacobian_does_not_advertise_characteristic_provider() -> None:
+    frame = Rectangle(
+        "aux-characteristic-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("aux_characteristic_boundary", frame=frame)
+    state = model.state("U", components=("q",))
+    (q,) = state
+    coefficient = model._dsl._m.aux_field("coefficient")
+    model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (coefficient * q,), y_axis: (coefficient * q,)},
+    )
+    model.wave_speeds_from_jacobian()
+    model.roe_from_jacobian()
+
+    source = model._dsl._m.emit_cpp_brick(name="AuxCharacteristicBoundary")
+    assert "bool characteristic_no_inflow(" not in source
