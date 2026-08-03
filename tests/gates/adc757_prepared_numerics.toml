@@ -195,6 +195,20 @@ target = "test_flux_interfaces"
 test_regex = "^test_flux_interfaces\\.prepared_riemann_recovery_exhaustion_is_typed_and_cannot_publish$"
 
 [[check]]
+requirement = "public_prepared_riemann_recovery"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/descriptors/test_lib_descriptors.py"
+test = "test_riemann_recovery_is_the_exact_prepared_native_policy"
+
+[[check]]
+requirement = "public_prepared_riemann_recovery"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/descriptors/test_lib_descriptors.py"
+test = "test_riemann_recovery_refuses_external_and_forged_native_candidates"
+
+[[check]]
 requirement = "runtime_recovery_consumer_publication"
 polarity = "positive"
 target = "test_block_builder"

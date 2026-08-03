@@ -31,6 +31,7 @@ EXPECTED_REQUIREMENTS = {
     "mpi_collective_execution",
     "typed_flux_recovery_consumption",
     "prepared_riemann_recovery_policy",
+    "public_prepared_riemann_recovery",
     "runtime_recovery_consumer_publication",
     "uniform_recovery_warm_start",
     "analytic_initial_recovery_publication",
