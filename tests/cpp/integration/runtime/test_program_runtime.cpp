@@ -64,6 +64,16 @@ struct UnitDensitySource {
 };
 using SourcedGasModel = CompositeModel<Euler, UnitDensitySource, NoEll>;
 
+struct DrainingDensitySource {
+  template <class State>
+  POPS_HD State apply(const State&, const Aux&) const {
+    State source{};
+    source[0] = Real(-1);
+    return source;
+  }
+};
+using DrainingGasModel = CompositeModel<Euler, DrainingDensitySource, NoEll>;
+
 struct ProjectingEuler : Euler {
   POPS_HD State project(const State& input, const Aux&) const {
     State output = input;
@@ -103,6 +113,12 @@ static void add_gas(System& s, double gamma, const std::string& limiter = "minmo
 static void add_sourced_gas(System& system, double gamma) {
   add_compiled_model(system, "gas", SourcedGasModel{Euler{gamma}, UnitDensitySource{}, NoEll{}},
                      "none", "rusanov", "conservative", "explicit", gamma);
+}
+
+static void add_draining_gas(System& system, double gamma) {
+  add_compiled_model(
+      system, "gas", DrainingGasModel{Euler{gamma}, DrainingDensitySource{}, NoEll{}}, "none",
+      "rusanov", "conservative", "explicit", gamma);
 }
 
 static void add_projecting_gas(System& system, double gamma) {
@@ -968,6 +984,59 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
   }
   EXPECT_GT(active_cells, 0);
   EXPECT_GT(inactive_cells, 0);
+}
+
+TEST(ProgramRuntime, TerminalSourcePublicationConsumesPreparedRecoveryBeforeCommit) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  const std::size_t cells = static_cast<std::size_t>(n) * n;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+
+  System system(cfg);
+  add_draining_gas(system, gamma);
+  std::vector<double> initial(4 * cells);
+  fill_ic(initial, n, gamma);
+  system.set_state("gas", initial);
+  system.set_program_block_map({0});
+  runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("test.clock.source-recovery");
+  context.install([context](double step) {
+    context.begin_step(step);
+    MultiFab& live = context.state(0);
+    MultiFab& source = context.rhs_scratch(920001, 0, live);
+    MultiFab& candidate = context.scratch_state(920002, 0, live);
+    context.source_default_into(0, live, source);
+    context.lincomb(candidate, Real(1), live, Real(0), live);
+    context.axpy(candidate, Real(step), source);
+    context.commit_many({{&live, &candidate}});
+  });
+  system.set_program_block_map({0});
+
+  system.step(0.25);
+  const std::vector<double> accepted = system.get_state("gas");
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    EXPECT_DOUBLE_EQ(accepted[cell], 0.75);
+  EXPECT_DOUBLE_EQ(system.time(), 0.25);
+  EXPECT_EQ(system.macro_step(), 1);
+
+  // A second source update reaches rho=0 exactly. Euler recovery would divide momentum by rho;
+  // commit_many must therefore refuse the whole candidate before copying one live component.
+  try {
+    system.step(0.75);
+    FAIL() << "an unrecoverable model-source endpoint must not publish";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+  EXPECT_EQ(system.get_state("gas"), accepted);
+  EXPECT_DOUBLE_EQ(system.time(), 0.25);
+  EXPECT_EQ(system.macro_step(), 1);
 }
 
 TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells) {

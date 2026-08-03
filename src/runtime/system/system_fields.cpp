@@ -19,16 +19,16 @@ namespace pops {
 namespace {
 
 template <class Species>
-void publish_recovered_initial_candidate(Species& state, MultiFab& candidate,
-                                         std::string_view operation) {
+void require_recoverable_system_candidate(const Species& state, const MultiFab& candidate,
+                                          std::string_view operation) {
   const long missing_recovery = all_reduce_sum(state.cons_to_prim ? 0L : 1L);
   if (missing_recovery != 0)
     throw std::runtime_error(std::string(operation) +
                              ": target block has no prepared variable-recovery authority");
 
-  // Analytic kernels may execute asynchronously.  The type-erased prepared recovery is a host
-  // closure over one cell, so complete candidate production before inspecting unified storage.
-  device_fence();
+  // Candidate kernels may execute asynchronously. The type-erased prepared recovery is a host
+  // closure over one cell, so make the latest device values visible before inspecting storage.
+  candidate.sync_host();
   std::vector<double> conserved(static_cast<std::size_t>(state.ncomp));
   std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
   long local_failures = 0;
@@ -41,7 +41,12 @@ void publish_recovered_initial_candidate(Species& state, MultiFab& candidate,
           conserved[static_cast<std::size_t>(component)] = values(i, j, component);
         try {
           const RecoveryReport report = state.cons_to_prim(conserved.data(), primitive.data());
-          if (!report.publication_permitted())
+          const bool finite_candidate =
+              std::all_of(conserved.begin(), conserved.end(),
+                          [](double value) { return std::isfinite(value); }) &&
+              std::all_of(primitive.begin(), primitive.end(),
+                          [](double value) { return std::isfinite(value); });
+          if (!report.publication_permitted() || !finite_candidate)
             ++local_failures;
         } catch (...) {
           // Do not let a rank-local provider exception strand peers before the collective verdict.
@@ -53,9 +58,15 @@ void publish_recovered_initial_candidate(Species& state, MultiFab& candidate,
   const long failures = all_reduce_sum(local_failures);
   if (failures != 0)
     throw std::runtime_error(std::string(operation) +
-                             ": prepared variable recovery rejected the analytic initial state "
-                             "before publication (failed cells=" +
+                             ": prepared variable recovery rejected the candidate before "
+                             "publication (failed cells=" +
                              std::to_string(failures) + ")");
+}
+
+template <class Species>
+void publish_recovered_initial_candidate(Species& state, MultiFab& candidate,
+                                         std::string_view operation) {
+  require_recoverable_system_candidate(state, candidate, operation);
 
   PureFieldAlgebra::copy(state.U, candidate);
   // candidate is setup-local storage; publication must finish before it is destroyed.
@@ -95,6 +106,26 @@ void require_exact_field_evaluation_request(
 }
 
 }  // namespace
+
+void System::validate_program_state_publication_candidate(int block,
+                                                          const MultiFab& candidate) const {
+  const long invalid_block =
+      all_reduce_sum(block >= 0 && block < static_cast<int>(p_->sp.size()) ? 0L : 1L);
+  if (invalid_block != 0)
+    throw std::out_of_range(
+        "System Program state publication block index differs across communicator ranks");
+  const Impl::Species& state = p_->sp[static_cast<std::size_t>(block)];
+  const bool exact_layout = candidate.box_array().boxes() == state.U.box_array().boxes() &&
+                            candidate.dmap().ranks() == state.U.dmap().ranks() &&
+                            candidate.ncomp() == state.U.ncomp() &&
+                            candidate.n_grow() == state.U.n_grow();
+  if (all_reduce_sum(exact_layout ? 0L : 1L) != 0)
+    throw std::invalid_argument(
+        "System Program state publication candidate differs from its block layout");
+  require_recoverable_system_candidate(
+      state, candidate,
+      "System Program terminal state publication for block '" + state.name + "'");
+}
 
 void System::set_density(const std::string& name, const std::vector<double>& rho) {
   Impl::Species& s = p_->find(name);
