@@ -49,15 +49,20 @@ EXPECTED_REQUIREMENTS = {
     "cell_local_temporal_scientific_provider",
     "python_ir_generated_abi_and_restart_parity",
     "host_workspace_reentrancy",
+    "native_spatial_provider_dimension_matrix",
+    "metric_spatial_provider_geometry_matrix",
+    "characteristic_boundary_geometry_matrix",
+    "polar_metric_spatial_provider_matrix",
+    "measured_load_balance_decision",
 }
 EXPECTED_DEFERRED = (
-    "remaining_3d_metric_eb_characteristic_and_spatial_provider_matrix",
+    "remaining_runtime_nd_metric_eb_characteristic_execution",
     "remaining_legacy_recovery_and_boundary_authority_deletion",
     "amr_regrid_migration_and_restart_coherence",
     "gpu_backend_execution",
     "accelerator_stream_partitioning",
     "performance_baselines_and_end_to_end_benchmarks",
-    "local_time_and_load_balance_provider_families",
+    "remaining_local_time_migration_and_load_balance_runtime_integration",
 )
 GTEST_PATTERN = re.compile(r"\bTEST(?:_F)?\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
 
@@ -170,6 +175,9 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         errors.append("issue must be exactly ADC-757")
     expected_evidence = [
         "ADC-682",
+        "ADC-711",
+        "ADC-733",
+        "ADC-737",
         "ADC-749",
         "ADC-750",
         "ADC-751",
