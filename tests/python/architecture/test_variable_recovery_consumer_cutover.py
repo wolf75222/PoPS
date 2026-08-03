@@ -54,6 +54,22 @@ def test_runtime_materialization_consumes_recovery_before_copying_candidate():
     assert "variable recovery failed" in materialization
 
 
+def test_runtime_materialization_prefers_generation_qualified_uniform_batch():
+    source = SYSTEM_FIELDS.read_text(encoding="utf-8")
+    materialization = _between(
+        source,
+        "std::vector<double> System::get_primitive_state",
+        "\nSolveReport System::solve_fields_in_place_",
+    )
+
+    batch = materialization.index("if (s.batch_cons_to_prim)")
+    recovery = materialization.index("s.batch_cons_to_prim(cons, prim)", batch)
+    refusal = materialization.index("if (!batch.publication_permitted())", recovery)
+    publication = materialization.index("return prim;", refusal)
+    compatibility = materialization.index("Compatibility path", publication)
+    assert batch < recovery < refusal < publication < compatibility
+
+
 def test_type_erased_recovery_report_preserves_actual_method_identity():
     source = RECOVERY.read_text(encoding="utf-8")
     report = _between(source, "struct RecoveryReport {", "\n};\n\nstatic_assert")
