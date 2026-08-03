@@ -182,12 +182,13 @@ Supported native routes include:
   requirements. Cartesian, AMR and annular-polar dispatch use the same provider identity; the
   native isothermal provider supplies HLLC/Roe on the polar route while scalar ExB refuses them.
   `riemann:typed_failure_outcome` is deliberately `partial`: every built-in returns the common
-  device-copyable `FluxEvaluation` with typed status, stability bound, and reason code, and a
-  reduced failure rejects the owning transaction instead of publishing a candidate or silently
-  selecting another solver. `riemann:prepared_recovery_policy` is separately `unavailable`:
-  there is no prepared ordered solver chain, requested-versus-used solver outcome, block counter,
-  or restart metadata yet. Callers can therefore request the single-solver typed-rejection route
-  explicitly, but cannot claim a configured fallback policy.
+  device-copyable `FluxEvaluation` with typed status, stability bound, reason code, requested/used/
+  last solver identity and attempt metadata. A single-solver route remains explicit, while a
+  statically instantiated C++ `PreparedRiemannRecoveryPolicy<RoeFlux, HLLFlux, RusanovFlux,
+  RejectRiemannRecovery>` can execute the declared ordered chain in the ordinary Uniform/AMR face
+  hot loop. Only a typed candidate rejection advances; retry and fatal outcomes remain terminal.
+  The route remains `partial`: Python/component preparation, block/team and MPI fallback counters,
+  restart publication metadata, backend matrices and performance budgets are not yet delivered.
 - Prepared variable recovery is explicitly `partial`. One block-prepared closed-form method returns
   a device-copyable `RecoveryOutcome`/`RecoveryReport`. Type erasure retains both the selected and
   last-attempted method kinds, so a successful fallback or a refusal cannot be reported as an opaque

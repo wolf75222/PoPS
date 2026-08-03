@@ -185,20 +185,20 @@ def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy
     assert typed.mpi is True
     assert typed.gpu is False
     assert "one device-copyable FluxEvaluation" in typed.limitation
-    assert "typed status, stability bound, and reason code" in typed.limitation
-    assert "reject the owning transaction" in typed.limitation
-    assert "no fallback solver can be selected" in typed.limitation
+    assert "requested/used/last solver identity" in typed.limitation
+    assert "single-solver routes remain explicit" in typed.limitation
+    assert "fallback counters and restart" in typed.limitation
 
     policy = routes["riemann:prepared_recovery_policy"]
-    assert policy.status == "unavailable"
+    assert policy.status == "partial"
     assert policy.layout == "uniform|amr"
-    assert policy.backend == "none"
-    assert "no prepared ordered Riemann recovery chain" in policy.limitation
-    assert "requested-versus-used solver outcome" in policy.limitation
-    assert "never substitutes another solver" in policy.limitation
-    assert "typed rejection and transactional rollback" in policy.available_route
+    assert policy.backend == "production"
+    assert "fixed device-copyable C++ PreparedRiemannRecoveryPolicy" in policy.limitation
+    assert "ordinary face hot loop" in policy.limitation
+    assert "only typed candidate rejection advances" in policy.limitation
+    assert "no public Python/component preparation route" in policy.limitation
+    assert "PreparedRiemannRecoveryPolicy<RoeFlux" in policy.available_route
     assert "consume rejection through the step retry/failure policy" in policy.alternative
-    assert policy.error_message
 
 
 def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cutover():
