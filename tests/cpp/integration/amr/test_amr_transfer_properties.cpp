@@ -543,6 +543,16 @@ TEST(test_amr_transfer_properties,
   EXPECT_GT(runtime.nlev(), 1);
   EXPECT_EQ(runtime.regrid_count(), 1);
   EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+}
+
+TEST(test_amr_transfer_properties,
+     RestrictionPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell) {
+  AmrRuntime runtime = bootstrap_runtime();
+  const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::recovery-accepted-restriction-bootstrap@1");
+  ASSERT_NO_THROW(runtime.regrid());
+  ASSERT_GT(runtime.nlev(), 1);
 
   test::install_prepared_threshold_decisions(
       runtime, {{0, 0, Real(1e9), test::PreparedThresholdRelation::Above}},
