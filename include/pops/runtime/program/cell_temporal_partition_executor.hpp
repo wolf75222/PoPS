@@ -453,6 +453,8 @@ class PreparedBatchedCellTemporalExecutor {
       for (std::size_t index = 0; index < batch.indices.size(); ++index)
         kernel(static_cast<std::int64_t>(index), aggregate);
 #endif
+      ++stats_.rung_batch_launches;
+      stats_.stage_evaluations += static_cast<std::uint64_t>(batch.indices.size());
       if (aggregate != 0) {
         const auto disposition =
             static_cast<CellTemporalStageDisposition>(static_cast<std::uint32_t>(aggregate >> 32u));
@@ -465,8 +467,6 @@ class PreparedBatchedCellTemporalExecutor {
       abort_attempt_();
       throw;
     }
-    ++stats_.rung_batch_launches;
-    stats_.stage_evaluations += static_cast<std::uint64_t>(batch.indices.size());
     try {
       partition_.advance_batch(batch.rung, batch.indices, end_tick);
     } catch (...) {
