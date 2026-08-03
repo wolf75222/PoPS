@@ -574,6 +574,37 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             source=source,
         ),
         _row(
+            "amr:cell_local_temporal_transport",
+            layout="amr",
+            backend="production",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="partial",
+            limitation=(
+                "native C++ only: one serial host rank, one 2D block, one level, one owned box, "
+                "one common cell rung, transport-only forward Euler and frozen attempt auxiliary "
+                "fields with built-in periodic/Foextrap boundaries; the provider reuses the exact "
+                "compiled AMR residual/face-flux closure "
+                "and commits real conservative state plus four time-integrated face records per "
+                "cell atomically at the synchronization barrier; its exact contract includes "
+                "model-owned transport parameters and the limiter/Riemann route; public "
+                "Program/AmrProgramContext wiring, prepared physical-boundary plans, heterogeneous "
+                "rungs, coarse/fine ledgers, sources, MPI, GPU, restart and performance proof "
+                "remain unavailable"
+            ),
+            requested="prepared cell-local scientific stage and space-time flux transaction",
+            available_route=(
+                "native PreparedSameLevelTransportEulerStageFluxProvider in its exact bounded "
+                "host/serial same-rung envelope"
+            ),
+            alternative=(
+                "use the synchronous AMR Program route outside that envelope, or implement the "
+                "missing prepared local-time provider family"
+            ),
+            source=source,
+        ),
+        _row(
             "amr:external_field_solver_v2",
             layout="amr",
             backend="none",

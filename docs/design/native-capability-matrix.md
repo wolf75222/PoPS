@@ -219,6 +219,16 @@ Supported native routes include:
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.
 - ProgramContext install on System, and AMR program install when compiled for `target="amr_system"`.
+- A native C++ `amr:cell_local_temporal_transport` route partially proves scientific consumption of
+  the prepared cell-local executor. On host/serial, one 2D block, one level, one rank-owned box and
+  one common rung, it calls the exact compiled AMR transport closure, advances the real conservative
+  state with forward Euler, and publishes the four time-integrated face fluxes per cell only at the
+  synchronization barrier. Its contract authenticates the model-owned spatial parameters and
+  selected limiter/Riemann route. It currently accepts only built-in periodic/Foextrap transport
+  boundaries; missing identities, prepared physical-boundary plans, MPI/GPU execution, topology
+  drift and mixed rungs fail closed. It is not yet wired through public
+  `Program`/`AmrProgramContext`, and does not claim heterogeneous local times, coarse/fine
+  conservation, source integration, restart or performance qualification.
 - Generated local implicit-source Programs on synchronous two-level 2D AMR. `pops.lib.time.IMEX`
   lowers its local residual to the sole prepared `LocalNewton` service on every active level and
   consumes the returned `SolveOutcome`; it does not invoke a spatial-runtime time integrator. The

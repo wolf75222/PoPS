@@ -91,22 +91,34 @@ time of each cell. The prepared hot loop does not allocate PoPS storage.
 
 The executor accepts only a typed provider exposing one combined device operation:
 `evaluate_local_stage_and_record_space_time_flux`. There are no independent Boolean declarations
-for a local stage or ledger. An accepted result therefore means that the provider evaluated the
-stage and wrote its attempt-local integrated-flux record before that cell clock advanced. All
-provider records and cell clocks commit together only at the synchronization barrier. A malformed
-outcome, rejection, provider-preparation refusal or kernel failure rolls back the complete attempt
-and leaves the accepted checkpoint unchanged.
+for a local stage or ledger. A provider that needs a coherent neighbouring-cell image additionally
+owns the optional `begin_rung_batch`/`complete_rung_batch` lifecycle; these hooks can materialize and
+rotate attempt-local storage but cannot publish it. An accepted result therefore means that the
+provider evaluated the stage and wrote its attempt-local integrated-flux record before that cell
+clock advanced. All provider records and cell clocks commit together only at the synchronization
+barrier. A malformed outcome, rejection, provider-preparation refusal or kernel failure rolls back
+the complete attempt and leaves the accepted checkpoint unchanged.
 
-This is not yet the complete production cell-local AMR route. The hierarchy-global
-`AmrProgramContext` has no prepared field-stage/flux provider and consequently still refuses a
-cell-local image before entering the Program body; it never substitutes a global `dt`. The delivered
-executor proves real Kokkos rung batching, exact local clock delivery and transactional provider
-consumption with a dedicated stage/ledger provider. ADC-756 still needs the concrete same-level,
-MPI and coarse/fine space-time flux ledgers, local-time boundary interpolation, collective provider
-contract consensus, device/GPU determinism and performance evidence. Regrid and rank-change
-rematerialization and persistence of the provider's exact parameter contract also remain open.
-ADC-707/ADC-708 continue to own the prepared patch/task graph. No end-to-end AMR conservation or
-restart-across-rematerialization claim is made by this bounded executor slice.
+`PreparedSameLevelTransportEulerStageFluxProvider` is the first scientific consumer of this
+executor. It reuses the selected AMR block's real compiled transport closure to materialize
+`-div(F)` and the exact x/y face-flux fields, advances the conservative candidate with forward
+Euler, and accumulates four time-integrated face records per valid cell. Both state and ledger stay
+in fixed attempt-local storage; the barrier commit is their sole accepted publication. The exact
+provider contract includes the block state identity, model-owned transport identity and parameters,
+limiter/Riemann route, spatial options, hierarchy/materialization identity, clock, tick scale,
+layout and distribution. A type-erased spatial closure without that builder-owned contract is
+refused rather than authenticated from a caller label.
+
+This first scientific route is deliberately bounded to a host/serial 2D hierarchy with exactly one
+block, one level, one rank-owned box, one common cell rung, frozen attempt auxiliary fields,
+built-in periodic/Foextrap transport boundaries and transport-only forward Euler. A prepared
+physical-boundary plan is refused until its exact executable contract can join the provider
+identity. The route also has no MPI, GPU, heterogeneous-rung interpolation, coarse/fine ledger,
+source-stage integration, regrid/rank-change rematerialization, restart persistence or performance
+proof. The public hierarchy-global `AmrProgramContext` consequently still refuses a
+cell-local image before entering the Program body; it never substitutes a global `dt` and does not
+silently select this native C++ provider. ADC-707/ADC-708 continue to own the prepared patch/task
+graph. No end-to-end locally subcycled AMR conservation claim is made by this bounded ADC-756 slice.
 
 Offline envelope inspection authenticates only the integrity of a canonical checkpoint; it is not
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
