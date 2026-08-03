@@ -19,6 +19,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tests/gates/adc757_prepared_numerics.toml"
 TEST_MANIFEST = ROOT / "tests/test_manifest.toml"
+HARDWARE_VERIFIER = ROOT / "benchmarks/adc757/verify.py"
 EXPECTED_REQUIREMENTS = {
     "prepared_local_nonlinear",
     "typed_fallible_evaluation",
@@ -382,6 +383,21 @@ def _run_pytest(relative: str, test_name: str) -> None:
             raise subprocess.CalledProcessError(completed.returncode, command)
 
 
+def _run_hardware_evidence(report: Path, expected_revision: str) -> None:
+    if not expected_revision:
+        raise RuntimeError("ADC-757 closure requires a non-empty expected revision")
+    command = [
+        sys.executable,
+        str(HARDWARE_VERIFIER),
+        "--input",
+        str(report),
+        "--expected-revision",
+        expected_revision,
+    ]
+    print("+", " ".join(command), flush=True)
+    subprocess.run(command, cwd=ROOT, check=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
@@ -390,7 +406,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--closure",
         action="store_true",
-        help="require full ADC-757 closure (intentionally refused while deferred remains)",
+        help="require every source proof plus revision-matched heterogeneous hardware evidence",
+    )
+    parser.add_argument(
+        "--hardware-report",
+        type=Path,
+        help="real GPU/MPI/ABBA report consumed only by --closure",
+    )
+    parser.add_argument(
+        "--expected-revision",
+        help="exact candidate commit recorded by the hardware report",
     )
     args = parser.parse_args(argv)
 
@@ -406,11 +431,24 @@ def main(argv: list[str] | None = None) -> int:
         % (len(data["check"]), len(data["deferred"]))
     )
     if args.closure:
-        print(
-            "ADC-757 closure refused: %d required families remain deferred" % len(data["deferred"]),
-            file=sys.stderr,
-        )
-        return 3
+        if data["deferred"]:
+            print(
+                "ADC-757 closure refused: %d required families remain deferred"
+                % len(data["deferred"]),
+                file=sys.stderr,
+            )
+            return 3
+        if args.hardware_report is None or not args.expected_revision:
+            print(
+                "ADC-757 closure refused: --hardware-report and --expected-revision are mandatory",
+                file=sys.stderr,
+            )
+            return 4
+        try:
+            _run_hardware_evidence(args.hardware_report, args.expected_revision)
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+            print("ADC-757 closure refused: %s" % error, file=sys.stderr)
+            return 4
     if args.check_only:
         return 0
     checks = sorted(

@@ -236,6 +236,39 @@ def test_adc757_slice_executes_exact_python_ir_and_restart_proofs():
     assert "python_ir_generated_abi_and_restart_parity" not in data["deferred"]
 
 
+def test_adc757_closure_requires_revision_matched_hardware_evidence(monkeypatch, tmp_path):
+    runner = _load_runner()
+    monkeypatch.setattr(
+        runner,
+        "validate_manifest",
+        lambda _manifest: ({"check": [], "deferred": []}, []),
+    )
+    assert runner.main(["--check-only", "--closure"]) == 4
+
+    report = tmp_path / "hardware.json"
+    report.write_text("{}", encoding="utf-8")
+    observed = []
+    monkeypatch.setattr(
+        runner,
+        "_run_hardware_evidence",
+        lambda path, revision: observed.append((path, revision)),
+    )
+    assert (
+        runner.main(
+            [
+                "--check-only",
+                "--closure",
+                "--hardware-report",
+                str(report),
+                "--expected-revision",
+                "candidate-sha",
+            ]
+        )
+        == 0
+    )
+    assert observed == [(report, "candidate-sha")]
+
+
 def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
     runner = _load_runner()
     source = MANIFEST.read_text(encoding="utf-8")
