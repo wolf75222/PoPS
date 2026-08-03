@@ -667,6 +667,33 @@ AmrRuntimeBlock dispatch_amr_block_roe(const Model& m, const std::string& lim,
   }
 }
 
+template <class Model>
+AmrRuntimeBlock dispatch_amr_block_roe_hll_rusanov_recovery(
+    const Model& m, const std::string& lim, const SharedAmrLayout& S, const std::string& name,
+    const std::vector<double>& density, bool has_density, double gamma, int substeps,
+    bool recon_prim, int stride, const std::vector<double>* state, double pos_floor,
+    double weno_epsilon, bool wave_speed_cache) {
+  if constexpr (!HasRoeDissipation<Model>) {
+    throw std::runtime_error(
+        "add_block(AmrSystem, multi-block): recovery policy 'roe -> hll -> rusanov' requires "
+        "the model's Roe capability (HasRoeDissipation); no candidate substitution");
+  } else if constexpr (!requires(const Model mm, typename Model::State s, Aux a, Real r) {
+                         mm.wave_speeds(s, a, 0, r, r);
+                       }) {
+    throw std::runtime_error(
+        "add_block(AmrSystem, multi-block): recovery policy 'roe -> hll -> rusanov' requires "
+        "signed wave speeds for its declared HLL candidate; no candidate substitution");
+  } else {
+    return dispatch_limiter(parse_limiter_route(lim, "add_block(AmrSystem, multi-block)"),
+                            "add_block(AmrSystem, multi-block)", [&](auto tag) {
+                              using L = typename decltype(tag)::type;
+                              return build_amr_block<Model, L, RoeHllRusanovRecoveryPolicy>(
+                                  m, S, name, density, has_density, gamma, substeps, recon_prim,
+                                  stride, state, pos_floor, weno_epsilon, wave_speed_cache);
+                            });
+  }
+}
+
 /// Dispatch of the spatial scheme (limiter x Riemann flux) -> build_amr_block. HLLC/Roe require
 /// the model's exact Riemann capability HasHLLCStructure / HasRoeDissipation. Time integration and
 /// implicit solves are not part of this spatial seam.
@@ -714,6 +741,10 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
       return dispatch_amr_block_roe(m, lim, S, name, density, has_density, gamma, substeps,
                                     recon_prim, stride, state, pos_floor, weno_epsilon,
                                     wave_speed_cache);
+    case RiemannRouteId::kRoeHllRusanovRecovery:
+      return dispatch_amr_block_roe_hll_rusanov_recovery(m, lim, S, name, density, has_density,
+                                                         gamma, substeps, recon_prim, stride, state,
+                                                         pos_floor, weno_epsilon, wave_speed_cache);
   }
   throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "flux", riem);
 }

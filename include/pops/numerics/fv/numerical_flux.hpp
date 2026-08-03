@@ -435,4 +435,8 @@ POPS_HD constexpr PreparedRiemannRecoveryPolicy<Candidates...> prepare_riemann_r
   return {};
 }
 
+/// Sole public fixed recovery route currently instantiated by the runtime builders.
+using RoeHllRusanovRecoveryPolicy =
+    PreparedRiemannRecoveryPolicy<RoeFlux, HLLFlux, RusanovFlux, RejectRiemannRecovery>;
+
 }  // namespace pops

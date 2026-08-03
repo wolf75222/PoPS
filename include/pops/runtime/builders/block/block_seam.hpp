@@ -112,15 +112,19 @@ BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& 
 // IsothermalFlux{cs2, vacuum_floor}).
 BuiltBlock build_block_exb(const ModelSpec& model, const BlockBuildArgs& a);
 
-// Isothermal (3-var fluid) carries all four public providers through its exact physical
+// Isothermal (3-var fluid) carries all four single-solver providers plus the fixed recovery policy
+// through its exact physical
 // capabilities. It stays FLUX-SUBDIVIDED like compressible (ADC-342): one generated .cpp per
 // reachable flux, with no alternate Euler-specific builder.
 BuiltBlock build_block_isothermal_rusanov(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_isothermal_hll(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_isothermal_hllc(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_isothermal_roe(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_isothermal_roe_hll_rusanov_recovery(const ModelSpec& model,
+                                                           const BlockBuildArgs& a);
 
-// Compressible (Euler, 4-var + pressure) is the heaviest transport: all four fluxes are valid, so it is
+// Compressible (Euler, 4-var + pressure) is the heaviest transport: all four single-solver fluxes
+// plus the fixed recovery policy are valid, so it is
 // FLUX-SUBDIVIDED into one .cpp per flux (ADC-335) -- each instantiates only its flux's build_block
 // leaves, so they compile in parallel. System dispatches on the riemann string to the right one (every
 // flux is valid for Euler, so no capability rejection to reproduce; an unknown flux is caught by the
@@ -129,6 +133,8 @@ BuiltBlock build_block_compressible_rusanov(const ModelSpec& model, const BlockB
 BuiltBlock build_block_compressible_hll(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_compressible_hllc(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_compressible_roe(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_compressible_roe_hll_rusanov_recovery(const ModelSpec& model,
+                                                             const BlockBuildArgs& a);
 
 // Polar (ring) seam: VERBATIM polar visitor body (make_block_polar + polar makers). IMEX is rejected on
 // the ring by add_block before this is called. @p aux is &System::Impl::aux (the polar makers read it).

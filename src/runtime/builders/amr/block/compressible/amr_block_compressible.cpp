@@ -13,6 +13,10 @@ AmrRuntimeBlock build_amr_block_compressible(const AmrBlockBuildArgs& a, const S
   // to one seam leaf; the default is the defense-in-depth registry/dispatch guard.
   validate_riemann(a.riemann, /*polar=*/false, "add_block(AmrSystem, multi-block)");
   validate_limiter(a.limiter, "add_block(AmrSystem, multi-block)");
+  if (a.wave_speed_cache && a.riemann != "hll")
+    throw std::runtime_error(
+        "add_block(AmrSystem, multi-block): wave_speed_cache requires flux='hll'; no alternate "
+        "flux");
   switch (parse_riemann_route(a.riemann, "add_block(AmrSystem, multi-block)")) {
     case RiemannRouteId::kRusanov:
       return build_amr_block_compressible_rusanov(a, S);
@@ -22,6 +26,8 @@ AmrRuntimeBlock build_amr_block_compressible(const AmrBlockBuildArgs& a, const S
       return build_amr_block_compressible_hllc(a, S);
     case RiemannRouteId::kRoe:
       return build_amr_block_compressible_roe(a, S);
+    case RiemannRouteId::kRoeHllRusanovRecovery:
+      return build_amr_block_compressible_roe_hll_rusanov_recovery(a, S);
   }
   throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "flux", a.riemann);
 }
