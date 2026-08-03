@@ -846,14 +846,29 @@ sources = ["tests/cpp/unit/mesh/test_nd_boundary_schedule.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_cluster"
+sources = ["tests/cpp/unit/mesh/test_nd_cluster.cpp"]
+labels = ["unit", "mesh", "amr", "fast"]
+
+[[cpp.suite]]
 name = "test_nd_distribution"
 sources = ["tests/cpp/unit/mesh/test_nd_distribution.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_hierarchy_plan"
+sources = ["tests/cpp/unit/mesh/test_nd_hierarchy_plan.cpp"]
+labels = ["unit", "mesh", "amr", "fast"]
+
+[[cpp.suite]]
 name = "test_nd_layout"
 sources = ["tests/cpp/unit/mesh/test_nd_layout.cpp"]
 labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_tag_mask"
+sources = ["tests/cpp/unit/mesh/test_nd_tag_mask.cpp"]
+labels = ["unit", "mesh", "amr", "fast"]
 
 [[cpp.suite]]
 name = "test_nd_topology"
