@@ -237,12 +237,16 @@ a non-finite dissipation or final candidate flux, while HLLC attributes non-fini
 pressure, contact speed, star state, and final candidate flux separately. Neither policy publishes a
 successful NaN result; the runtime rolls the owning step transaction back without selecting another
 solver. Every production result also carries typed requested, used and last-attempted solver
-identities plus the attempt count. A low-level C++ `PreparedRiemannRecoveryPolicy` may declare a
-fixed chain such as `RoeFlux -> HLLFlux -> RusanovFlux -> RejectRiemannRecovery`; only `kReject`
-advances to the next candidate, and the first recovery cause remains observable when a fallback
-succeeds. The policy is an empty, trivially-copyable template value instantiated directly in the
-face kernel: no per-face allocation, string dispatch, callback, exception or host round trip is
-introduced.
+identities plus the attempt count. The typed public
+`riemann.Recovery(primary=riemann.Roe(), fallbacks=(riemann.HLL(), riemann.Rusanov()))`
+descriptor lowers exactly to
+`PreparedRiemannRecoveryPolicy<RoeFlux, HLLFlux, RusanovFlux, RejectRiemannRecovery>` on Cartesian
+Uniform and AMR routes. Other orders, duplicate candidates, candidate options, external descriptors,
+and untyped values are refused during authoring; annular polar geometry is explicitly unavailable.
+Only `kReject` advances to the next candidate, and the first recovery cause remains observable when
+a fallback succeeds. The policy is an empty, trivially-copyable template value instantiated directly
+in the face kernel: no per-face allocation, string dispatch, callback, exception or host round trip
+is introduced.
 The compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to
 `RusanovFlux{}` for serial references. The flux is passed by template:
 `compute_face_fluxes<Limiter, NumericalFlux, Model>` and

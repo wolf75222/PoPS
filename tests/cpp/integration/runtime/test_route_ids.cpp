@@ -173,13 +173,13 @@ TEST(RouteIds, UnknownAndReservedNumericIdsAreRefused) {
 
 TEST(RouteIds, RegistrySignatureAuthenticatesFullContent) {
   const std::string signature = route_registry_signature();
-  EXPECT_TRUE(signature.rfind("v2:", 0) == 0) << signature;
-  EXPECT_TRUE(signature.size() == 67) << "v2: plus complete sha256 catalog digest";
+  EXPECT_TRUE(signature.rfind("v3:", 0) == 0) << signature;
+  EXPECT_TRUE(signature.size() == 67) << "v3: plus complete sha256 catalog digest";
   EXPECT_TRUE(throw_message([&] { verify_route_manifest("", "test"); }).find("missing") !=
               std::string::npos);
   EXPECT_TRUE(throw_message([&] {
                 verify_route_manifest(
-                    "v2:0000000000000000000000000000000000000000000000000000000000000000", "test");
+                    "v3:0000000000000000000000000000000000000000000000000000000000000000", "test");
               }).find("mismatch") != std::string::npos);
   EXPECT_NO_THROW(verify_route_manifest(signature, "test"));
 }
@@ -191,6 +191,16 @@ TEST(RouteIds, RouteInfoCarriesNativeEntryRequirementsAndLimitations) {
   EXPECT_TRUE(std::string(route_info(RiemannRouteId::kRoe).native_entry) == "pops::RoeFlux" &&
               contains(route_info(RiemannRouteId::kRoe).requirements, "roe_dissipation"))
       << "route_info(kRoe) : one generic Roe provider route";
+  const auto& recovery = route_info(RiemannRouteId::kRoeHllRusanovRecovery);
+  bool recovery_polar_ok = true;
+  for (const RiemannTag& tag : kRiemanns)
+    if (std::string(tag.name) == recovery.token)
+      recovery_polar_ok = tag.polar_ok;
+  EXPECT_TRUE(std::string(recovery.token) == "roe_hll_rusanov_recovery" &&
+              contains(recovery.native_entry, "PreparedRiemannRecoveryPolicy") &&
+              contains(recovery.requirements, "wave_speeds") &&
+              contains(recovery.requirements, "roe_dissipation") && !recovery_polar_ok)
+      << "route_info(kRoeHllRusanovRecovery): exact fixed Cartesian/AMR policy";
   EXPECT_TRUE(std::string(route_info(TimeRouteId::kSsprk3).native_entry) == "pops::SSPRK3" &&
               std::string(route_info(TimeRouteId::kSsprk3).limitations).empty())
       << "route_info(kSsprk3) : native production sans limitation obsolete";
