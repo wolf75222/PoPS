@@ -311,7 +311,7 @@ jobs:
   gate-cpp-prewarm:
     name: ubuntu-latest / Kokkos Serial (C++ prewarm ${{ matrix.lane }})
     runs-on: ubuntu-latest
-    timeout-minutes: 22
+    timeout-minutes: 30
     needs: [changes, set-mode]
     if: needs.set-mode.outputs.cpp_required == 'true'
     strategy:
@@ -371,7 +371,12 @@ jobs:
             return "$status"
           }
           lane_parallelism=4
+          lane_watchdog=18m
           case "${{ matrix.lane }}" in
+            system)
+              lane_parallelism=2
+              lane_watchdog=24m
+              ;;
             amr-base|amr-compressible) lane_parallelism=2 ;;
           esac
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
@@ -387,7 +392,7 @@ jobs:
               --contract-file "$RUNNER_TEMP/cpp-prewarm-contract-${{ matrix.lane }}.json"
           )
           test "${#object_targets[@]}" -gt 0
-          run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" 18m \
+          run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" "$lane_watchdog" \
             cmake --build --preset ci-kokkos --parallel "$lane_parallelism" \
               --target "${object_targets[@]}"
           ccache -s
@@ -752,7 +757,7 @@ jobs:
   gate-python-prewarm:
     name: ubuntu-latest / Kokkos Serial (Python prewarm ${{ matrix.lane }})
     runs-on: ubuntu-latest
-    timeout-minutes: 22
+    timeout-minutes: 30
     needs: [changes, set-mode]
     if: needs.set-mode.outputs.python_required == 'true'
     strategy:
@@ -848,15 +853,19 @@ jobs:
               --contract-file "$RUNNER_TEMP/python-prewarm-contract-${{ matrix.lane }}.json"
           )
           test "${#object_targets[@]}" -gt 0
-          # Four simultaneous GCC frontends for the heavy AMR block seams exhaust a 16 GiB hosted
-          # runner. Two semantic, disjoint lanes keep their independently measured critical paths
-          # below the watchdog; each uses two frontends and preserves O3. The lighter System lane
-          # retains all four runner cores.
+          # Four simultaneous GCC frontends now also exhaust the 16 GiB runner on the grown System
+          # seam. Bound that lane to two frontends and give its cold O3 path the same measured
+          # watchdog margin as OpenMP; the four semantic lanes still execute independently.
           lane_parallelism=4
+          lane_watchdog=18m
           case "${{ matrix.lane }}" in
+            system)
+              lane_parallelism=2
+              lane_watchdog=24m
+              ;;
             amr-base|amr-compressible) lane_parallelism=2 ;;
           esac
-          run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m \
+          run_with_heartbeat "Python prewarm ${{ matrix.lane }}" "$lane_watchdog" \
             cmake --build --preset ci-kokkos-python --parallel "$lane_parallelism" \
               --target "${object_targets[@]}"
           ccache -s
@@ -1458,8 +1467,8 @@ jobs:
     name: ubuntu-24.04 / MPI + Kokkos Serial (C++ prewarm ${{ matrix.lane }})
     runs-on: ubuntu-24.04
     # setup-kokkos can consume ~15 minutes on a cold runner. Keep enough room
-    # for the explicit 18-minute compile watchdog and artifact publication.
-    timeout-minutes: 40
+    # for the System lane's explicit 24-minute compile watchdog and artifact publication.
+    timeout-minutes: 50
     needs: [set-mode, changes]
     if: needs.set-mode.outputs.mpi_required == 'true'
     strategy:
@@ -1528,7 +1537,12 @@ jobs:
             return "$status"
           }
           lane_parallelism=4
+          lane_watchdog=18m
           case "${{ matrix.lane }}" in
+            system)
+              lane_parallelism=2
+              lane_watchdog=24m
+              ;;
             amr-base|amr-compressible) lane_parallelism=2 ;;
           esac
           mpi_cmake_args=()
@@ -1551,7 +1565,7 @@ jobs:
               --contract-file "$RUNNER_TEMP/mpi-prewarm-contract-${{ matrix.lane }}.json"
           )
           test "${#object_targets[@]}" -gt 0
-          run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" 18m \
+          run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" "$lane_watchdog" \
             cmake --build --preset ci-mpi --parallel "$lane_parallelism" \
               --target "${object_targets[@]}"
           ccache -s

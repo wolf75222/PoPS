@@ -866,7 +866,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n  # GATE C++", 1)[0]
     cpp_shards_block = workflow.split("\n  gate-cpp-shards:\n", 1)[1].split(
         "\n  # Check historique", 1)[0]
-    assert "timeout-minutes: 22" in cpp_prewarm_block
+    assert "timeout-minutes: 30" in cpp_prewarm_block
     assert (
         "lane: [system, amr-base, amr-block-base, amr-compressible]"
         in cpp_prewarm_block
@@ -874,8 +874,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "scripts/ci_python_module_objects.py" in cpp_prewarm_block
     assert "--contract-file" in cpp_prewarm_block
     assert "-DPOPS_HEAVY_TEST_TU_POOL=\"$lane_parallelism\"" in cpp_prewarm_block
+    assert "system)" in cpp_prewarm_block
+    assert "lane_watchdog=24m" in cpp_prewarm_block
     assert 'amr-base|amr-compressible) lane_parallelism=2 ;;' in cpp_prewarm_block
-    assert 'run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" 18m' in cpp_prewarm_block
+    assert (
+        'run_with_heartbeat "C++ prewarm ${{ matrix.lane }}" "$lane_watchdog"'
+        in cpp_prewarm_block
+    )
     assert "compression-level: 0" in cpp_prewarm_block
     assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
     assert "scripts/ci_select_tests.py verify-cpp-target-labels" in cpp_shards_block
@@ -925,7 +930,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n  # Agregation REQUISE", 1
     )[0]
     assert "runs-on: ubuntu-24.04" in mpi_prewarm_block
-    assert "timeout-minutes: 40" in mpi_prewarm_block
+    assert "timeout-minutes: 50" in mpi_prewarm_block
     assert "needs: [set-mode, changes]" in mpi_prewarm_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_prewarm_block
     assert (
@@ -935,7 +940,12 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "cmake --preset ci-mpi" in mpi_prewarm_block
     assert "scripts/ci_python_module_objects.py" in mpi_prewarm_block
     assert "--contract-file" in mpi_prewarm_block
-    assert 'run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" 18m' in mpi_prewarm_block
+    assert "system)" in mpi_prewarm_block
+    assert "lane_watchdog=24m" in mpi_prewarm_block
+    assert (
+        'run_with_heartbeat "MPI prewarm ${{ matrix.lane }}" "$lane_watchdog"'
+        in mpi_prewarm_block
+    )
     assert "compression-level: 0" in mpi_prewarm_block
 
     mpi_block = workflow.split("\n  mpi:\n", 1)[1].split(
@@ -1255,7 +1265,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         not in python_prewarm_block
     assert "lane: [system, amr-base, amr-block-base, amr-compressible]" \
         in python_prewarm_block
-    assert "timeout-minutes: 22" in python_prewarm_block
+    assert "timeout-minutes: 30" in python_prewarm_block
     assert "lookup-only: true" in python_prewarm_block
     assert "scripts/ci_python_module_objects.py" in python_prewarm_block
     assert "--contract-file" in python_prewarm_block
@@ -1263,10 +1273,14 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_prewarm_block
     assert "-DCMAKE_CXX_FLAGS=\"-ffile-prefix-map=${{ github.workspace }}=.\"" in python_prewarm_block
     assert python_prewarm_block.count("run_with_heartbeat() {") == 1
-    assert 'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" 18m' \
+    assert (
+        'run_with_heartbeat "Python prewarm ${{ matrix.lane }}" "$lane_watchdog"'
         in python_prewarm_block
+    )
     assert "mem_available=${mem_available_mib}MiB" in python_prewarm_block
     assert 'amr-base|amr-compressible) lane_parallelism=2 ;;' in python_prewarm_block
+    assert "system)" in python_prewarm_block
+    assert "lane_watchdog=24m" in python_prewarm_block
     assert 'lane_parallelism=2' in python_prewarm_block
     assert '--parallel "$lane_parallelism"' in python_prewarm_block
     # Lanes publish only their new, disjoint entries. Restoring the same historical cache in all
