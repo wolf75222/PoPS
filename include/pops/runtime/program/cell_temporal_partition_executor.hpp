@@ -171,6 +171,18 @@ concept CellTemporalRungBatchLifecycle =
       { provider.complete_rung_batch(batch) } noexcept -> std::same_as<void>;
     };
 
+/// Optional accepted-boundary resynchronization used when an outer Program transaction restores
+/// native state and accepted checkpoint bytes after this executor had already committed locally.
+///
+/// The executor validates the complete immutable prepared layout before invoking this hook.  The
+/// provider therefore only rebinds its accepted logical clock; it must not allocate, touch the live
+/// numerical state or publish fluxes.
+template <class Provider>
+concept CellTemporalAcceptedBoundaryLifecycle =
+    requires(Provider& provider, const CellTemporalPartitionAcceptedState& accepted) {
+      { provider.restore_accepted_boundary(accepted) } noexcept -> std::same_as<void>;
+    };
+
 struct CellTemporalExecutionStats {
   /// Number of combined stage/ledger kernels (or host batches without Kokkos), never per-cell.
   std::uint64_t rung_batch_launches = 0;
@@ -306,6 +318,49 @@ class PreparedBatchedCellTemporalExecutor {
 #else
     return false;
 #endif
+  }
+
+  /// Resynchronize this prepared executor with an exact accepted barrier restored by its owner.
+  ///
+  /// Preparation (cell identities, rungs, topology, denominator and provider) is immutable.  A
+  /// rollback may only move the common accepted tick backwards or forwards within that authority.
+  /// Providers without the explicit lifecycle hook cannot be safely retained and fail closed.
+  void restore_accepted_boundary(CellTemporalPartitionAcceptedState accepted) {
+    if (attempt_active_)
+      throw std::logic_error(
+          "cell-local temporal executor cannot restore an active attempt");
+    validate_cell_temporal_partition_state(accepted);
+    BatchedCellTemporalPartition candidate(accepted);
+    candidate.require_prepared_execution_route(provider_identity_);
+    const CellTemporalPartitionAcceptedState& current = partition_.accepted_state();
+    if (accepted.kind != current.kind || accepted.provider_identity != current.provider_identity ||
+        accepted.topology_epoch != current.topology_epoch ||
+        accepted.tick_denominator != current.tick_denominator ||
+        accepted.cells.size() != current.cells.size())
+      throw std::invalid_argument(
+          "cell-local temporal executor restore targets another prepared authority");
+    for (std::size_t index = 0; index < accepted.cells.size(); ++index) {
+      const CellTemporalPartitionRecord& next = accepted.cells[index];
+      const CellTemporalPartitionRecord& prepared = current.cells[index];
+      if (next.level != prepared.level || next.cell != prepared.cell || next.rung != prepared.rung)
+        throw std::invalid_argument(
+            "cell-local temporal executor restore changes a prepared cell or rung");
+    }
+    if constexpr (!CellTemporalAcceptedBoundaryLifecycle<Provider>) {
+      throw std::logic_error(
+          "cell-local temporal provider cannot resynchronize an accepted rollback boundary");
+    } else {
+      std::string restored_contract =
+          cell_temporal_detail::exact_execution_contract(accepted, provider_);
+      provider_.restore_accepted_boundary(accepted);
+      partition_.restore(std::move(accepted));
+      for (RungBatch& batch : batches_)
+        batch.current_tick = partition_.accepted_state().synchronization_tick;
+      for (std::size_t index = 0; index < partition_.accepted_state().cells.size(); ++index)
+        pending_ticks_[index] = partition_.accepted_state().cells[index].accepted_tick;
+      target_tick_ = 0;
+      exact_contract_ = std::move(restored_contract);
+    }
   }
 
   void begin_attempt(std::int64_t target_tick) {

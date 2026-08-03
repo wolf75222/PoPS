@@ -471,6 +471,21 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     current_is_a_ = true;
   }
 
+  /// Rebind only the accepted clock after the owning Program restored the matching native image.
+  /// The executor has already proved that topology, denominator, canonical cells and rungs are the
+  /// immutable prepared authority of this provider.
+  void restore_accepted_boundary(
+      const CellTemporalPartitionAcceptedState& accepted) noexcept {
+    synchronization_tick_ = accepted.synchronization_tick;
+    attempt_begin_tick_ = synchronization_tick_;
+    attempt_target_tick_ = synchronization_tick_;
+    current_tick_ = synchronization_tick_;
+    batch_end_tick_ = synchronization_tick_;
+    active_ = false;
+    batch_active_ = false;
+    current_is_a_ = true;
+  }
+
  private:
   static constexpr bool host_execution_() noexcept {
 #if defined(POPS_HAS_KOKKOS)
@@ -612,5 +627,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
 
 static_assert(CellTemporalStageFluxProvider<PreparedSameLevelTransportEulerStageFluxProvider>);
 static_assert(CellTemporalRungBatchLifecycle<PreparedSameLevelTransportEulerStageFluxProvider>);
+static_assert(
+    CellTemporalAcceptedBoundaryLifecycle<PreparedSameLevelTransportEulerStageFluxProvider>);
 
 }  // namespace pops::runtime::program
