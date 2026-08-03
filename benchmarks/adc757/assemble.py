@@ -253,6 +253,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--device-inventory-output", type=Path)
     parser.add_argument("--expected-revision", required=True)
     parser.add_argument("--minimum-speedup", type=float, default=1.01)
     args = parser.parse_args()
@@ -263,6 +264,13 @@ def main() -> int:
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.device_inventory_output is not None:
+        args.device_inventory_output.parent.mkdir(parents=True, exist_ok=True)
+        assignments = report["device"]["assignments"]
+        args.device_inventory_output.write_text(
+            "".join(f"{item['rank']}\t{item['uuid']}\n" for item in assignments),
+            encoding="utf-8",
+        )
     return 0
 
 
