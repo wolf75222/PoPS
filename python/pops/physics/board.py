@@ -908,7 +908,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._invalidate_authoring_views()
 
     def roe_from_jacobian(self, *, entropy_fix: Any = None) -> None:
-        """Install the generic dense-Jacobian Roe provider, with an optional Harten fix."""
+        """Install dense-Jacobian Roe with a typed Harten/NoEntropyFix policy."""
         self._dsl.roe_from_jacobian(entropy_fix=entropy_fix)
         self._invalidate_authoring_views()
 

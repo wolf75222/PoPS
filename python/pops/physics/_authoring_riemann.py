@@ -1,7 +1,7 @@
 """Authoring mixin: Riemann capabilities (HLLC, Roe) and hook overrides.
 
 Methods only; the touched attributes (``_hllc`` / ``_roe`` / ``_roe_rows`` /
-``_roe_jacobian`` / ``_riemann_hook_forms``) are created by
+``_roe_jacobian`` / ``_roe_entropy_policy`` / ``_riemann_hook_forms``) are created by
 ``HyperbolicModel.__init__``. ``roe_from_jacobian`` reuses ``flux_jacobian``
 (provided by the flux mixin) on ``self``. Codegen-free and ``_pops``-free at
 module scope: ``_roe_validate`` (a pure marker validator) is imported LAZILY
@@ -69,7 +69,7 @@ class _RiemannMixin(_HyperbolicModel):
             self._riemann_hook_forms[name] = form
         return self
 
-    def enable_roe(self) -> None:
+    def enable_roe(self, *, entropy_fix: Any = None) -> None:
         """Emits the ROE CAPABILITY (audit balance, GENERICITY_2026-06.md point 11):
         ``roe_dissipation(UL, AL, UR, AR, dir)`` = ``|A_roe| (UR - UL)`` GENERATED from the block's
         ROLES -- the core's Roe-like solver (C++ trait HasRoeDissipation, F = 1/2(FL+FR) - 1/2 d)
@@ -77,7 +77,7 @@ class _RiemannMixin(_HyperbolicModel):
 
         - roles Density/MomentumX/MomentumY + Energy: ideal-gas Roe algebra, exact
           TRANSCRIPTION of the canonical C++ path (sqrt(rho)-weighted averages, gamma-1 deduced from
-          ``p/(E - 1/2 rho |v|^2)``, Harten entropy fix on the acoustic waves);
+          ``p/(E - 1/2 rho |v|^2)``, with the selected typed entropy policy on the acoustic waves);
         - roles Density/MomentumX/MomentumY WITHOUT Energy (isothermal / pseudo-pressure): same
           decomposition without the energy row, LOCAL sound speed c = sqrt(p/rho) Roe-averaged
           (standard generalization outside ideal gas);
@@ -86,6 +86,10 @@ class _RiemannMixin(_HyperbolicModel):
 
         REQUIRES: roles Density/MomentumX/MomentumY declared + primitive 'p' (explicit error at
         emission otherwise). Without a call: nothing emitted, riemann='roe' stays Euler-4-var-only.
+
+        ``entropy_fix`` is a typed ``riemann.Harten(delta)`` or
+        ``riemann.NoEntropyFix()`` policy.  Omitting it retains the historical Harten delta 0.1;
+        bare numeric values are refused so the compiled provider never hides a magic scalar.
 
         EXCLUSIVE with m.roe_dissipation: the capability from the roles and the dissipation PROVIDED by
         the user are two providers of the SAME roe_dissipation hook -- declaring both
@@ -96,6 +100,13 @@ class _RiemannMixin(_HyperbolicModel):
         if self._roe_jacobian is not None:
             raise ValueError("enable_roe : roe_from_jacobian() already declared -- one single provider "
                              "of the roe_dissipation hook")
+        from pops.numerics.riemann.providers import Harten, require_entropy_policy
+
+        self._roe_entropy_policy = require_entropy_policy(
+            entropy_fix,
+            default=Harten(),
+            where="enable_roe.entropy_fix",
+        )
         self._roe = True
 
     def roe_dissipation(self, x: Any, y: Any) -> None:
@@ -146,8 +157,10 @@ class _RiemannMixin(_HyperbolicModel):
           Phi_delta(lambda) = |lambda|                              if |lambda| >= delta
                             = 0.5 * (lambda^2 / delta + delta)       otherwise
 
-        ``delta`` is an exact, finite, strictly-positive authoring scalar and participates in the
-        compiled-model identity.  This configured path handles a zero eigenvalue natively; a
+        The option is typed: pass ``riemann.Harten(delta)`` or
+        ``riemann.NoEntropyFix()``. ``delta`` is an exact, finite, strictly-positive authoring
+        scalar and participates in the compiled-model identity.  This configured path handles a
+        zero eigenvalue natively; a
         complex or non-converged spectrum is refused by the generated native residual instead of
         being silently replaced by another Riemann solver.  Without ``entropy_fix``, the native
         matrix absolute value uses a scale-relative zero-mode projector for a singular real
@@ -178,16 +191,19 @@ class _RiemannMixin(_HyperbolicModel):
                 "spectral provider whose declared capacity covers this state."
             ),
         )
-        selected_entropy_fix = None
-        if entropy_fix is not None:
-            from ._scalars import exact_physics_scalar, native_real
-            selected_entropy_fix = exact_physics_scalar(
-                entropy_fix, where="roe_from_jacobian.entropy_fix", positive=True)
-            lowered = native_real(
-                selected_entropy_fix, where="roe_from_jacobian.entropy_fix")
-            if not lowered > 0.0:
-                raise OverflowError(
-                    "roe_from_jacobian.entropy_fix underflows the positive pops::Real range")
+        from pops.numerics.riemann.providers import (
+            ENTROPY_HARTEN,
+            NoEntropyFix,
+            require_entropy_policy,
+        )
+
+        policy = require_entropy_policy(
+            entropy_fix,
+            default=NoEntropyFix(),
+            where="roe_from_jacobian.entropy_fix",
+        )
+        selected_entropy_fix = policy.delta if policy.kind == ENTROPY_HARTEN else None
+        self._roe_entropy_policy = policy
         self._roe_jacobian = {
             "x": self.flux_jacobian(0),
             "y": self.flux_jacobian(1),

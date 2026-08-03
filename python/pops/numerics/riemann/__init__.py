@@ -14,7 +14,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from pops.descriptors import BrickDescriptor, _native, _external_descriptor
-from . import waves
+from . import providers, waves
+from .providers import Harten, NoEntropyFix, RiemannProviderEvidence, RoeEntropyPolicy
 from .waves import (WaveSpeedProvider, ExplicitPair, FromJacobian, FromPressure,
                     Einfeldt, Davis, MaxWaveSpeed, provider_of)
 
@@ -195,6 +196,11 @@ _attach_capabilities(riemann)
 # The typed wave-speed provider layer (ADC-552): reachable as ``riemann.waves.ExplicitPair()``
 # (the real submodule exposes the factories) so ``HLL(waves=riemann.waves.ExplicitPair())`` works.
 riemann.waves = waves
+# Exact model-side provider policies.  They configure the existing generic Roe route; they do not
+# select a second solver implementation.
+riemann.providers = providers
+riemann.Harten = Harten
+riemann.NoEntropyFix = NoEntropyFix
 
 # Pre-runtime capability refusals (ADC-533): the model-aware available/validate that surface the
 # HLL/HLLC/Roe/Euler route refusals through the descriptor surface. They DELEGATE to the exact
@@ -215,6 +221,7 @@ Roe = riemann.Roe
 Recovery = riemann.Recovery
 User = riemann.User
 
-__all__ = ["riemann", "waves", "Rusanov", "ScalarUpwind", "HLL", "HLLC", "Roe",
+__all__ = ["riemann", "providers", "waves", "Rusanov", "ScalarUpwind", "HLL", "HLLC", "Roe",
            "Recovery", "User", "WaveSpeedProvider", "ExplicitPair", "FromJacobian", "FromPressure",
-           "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of", "available", "validate"]
+           "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of", "Harten", "NoEntropyFix",
+           "RoeEntropyPolicy", "RiemannProviderEvidence", "available", "validate"]

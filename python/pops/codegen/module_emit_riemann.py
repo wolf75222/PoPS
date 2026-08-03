@@ -148,6 +148,11 @@ def _emit_roe_roles(model: Any, nc: Any) -> list:
     E line, c = sqrt(p/rho) per side then Roe average (standard generalization). The
     components OUTSIDE the fluid roles are passive scalars carried by the entropy wave
     (tangential line, phi = q/rho). The core (HasRoeDissipation) does F = 1/2(FL+FR) - d/2."""
+    from pops.numerics.riemann.providers import ENTROPY_HARTEN, RoeEntropyPolicy
+
+    policy = getattr(model, "_roe_entropy_policy", None)
+    if type(policy) is not RoeEntropyPolicy:
+        raise ValueError("enable_roe: missing exact typed entropy policy")
     out = []
     roles_l = _roles_for(model.cons_names, model.cons_roles)
     if "p" not in model.prim_defs:
@@ -199,12 +204,20 @@ def _emit_roe_roles(model: Any, nc: Any) -> list:
     out.append("    const pops::Real a2 = dr - dp / c2;")
     out.append("    const pops::Real a3 = rho * dut;")
     out.append("    const pops::Real a5 = (dp + rho * c * dun) / (pops::Real(2) * c2);")
-    out.append("    // Politique d'entropie explicite du provider Roe.")
-    out.append("    const pops::HartenEntropyFix entropy_fix{pops::Real(0.1)};")
+    out.append("    // Politique d'entropie explicite du provider Roe (%s)." % policy.kind)
+    if policy.kind == ENTROPY_HARTEN:
+        out.append("    const pops::HartenEntropyFix entropy_fix{%s};"
+                   % scalar_cpp(policy.delta))
     out.append("    const pops::Real l1r = un - c, l5r = un + c;")
-    out.append("    const pops::Real al1 = entropy_fix(l1r, c);")
+    if policy.kind == ENTROPY_HARTEN:
+        out.append("    const pops::Real al1 = entropy_fix(l1r, c);")
+    else:
+        out.append("    const pops::Real al1 = l1r < 0 ? -l1r : l1r;")
     out.append("    const pops::Real al2 = un < 0 ? -un : un;")
-    out.append("    const pops::Real al5 = entropy_fix(l5r, c);")
+    if policy.kind == ENTROPY_HARTEN:
+        out.append("    const pops::Real al5 = entropy_fix(l5r, c);")
+    else:
+        out.append("    const pops::Real al5 = l5r < 0 ? -l5r : l5r;")
     out.append("    State d{};")
     out.append("    d[%d] = al1 * a1 + al2 * a2 + al5 * a5;" % iD)
     out.append("    d[in_] = al1 * a1 * (un - c) + al2 * a2 * un + al5 * a5 * (un + c);")

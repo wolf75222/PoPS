@@ -159,6 +159,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _RecoveryMixin, _FluxMi
         self._roe_rows = None    # {"x": [Expr], "y": [Expr]}: roe_dissipation PROVIDED (outside roles)
         self._roe_jacobian = None  # {"x"/"y": [[Expr]], "entropy_fix": exact scalar | None}:
                                    # generic dense-Jacobian Roe provider.
+        self._roe_entropy_policy = None  # exact immutable riemann.RoeEntropyPolicy selected by
+                                         # enable_roe / roe_from_jacobian; direct rows own theirs.
         self.prim_state = []    # ordered names of the primitive state (Prim layout); for the codegen
         self.cons_from = None   # list of Expr: conservative in terms of the primitives (to_conservative)
         self.cons_roles = None  # explicit override of the conservative roles (otherwise canonical mapping)
