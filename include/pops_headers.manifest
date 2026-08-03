@@ -172,6 +172,7 @@ sdk-support pops/runtime/builders/block/amr_block_seam.hpp
 sdk-support pops/runtime/builders/block/block_builder.hpp
 sdk-support pops/runtime/builders/block/block_builder_polar.hpp
 sdk-support pops/runtime/builders/block/block_seam.hpp
+sdk-support pops/runtime/builders/block/prepared_boundary_defaults.hpp
 sdk-root pops/runtime/builders/compiled/amr_dsl_block.hpp
 sdk-root pops/runtime/builders/compiled/dsl_block.hpp
 sdk-support pops/runtime/builders/compiled/flat_grid.hpp
