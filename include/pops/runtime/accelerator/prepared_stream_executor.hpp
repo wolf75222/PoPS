@@ -7,6 +7,18 @@
 #include <pops/core/foundation/types.hpp>
 
 #include <Kokkos_Core.hpp>
+#if __has_include(<impl/Kokkos_PartitionSpace.hpp>)
+#include <impl/Kokkos_PartitionSpace.hpp>
+#define POPS_KOKKOS_HAS_PARTITION_SPACE 1
+#else
+#define POPS_KOKKOS_HAS_PARTITION_SPACE 0
+#endif
+#if defined(KOKKOS_ENABLE_CUDA)
+#include <cuda_runtime_api.h>
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+#include <hip/hip_runtime_api.h>
+#endif
 
 #include <algorithm>
 #include <concepts>
@@ -38,7 +50,9 @@ inline constexpr bool authentic_partitioned_stream_backend =
     std::is_same_v<ExecutionSpace, Kokkos::HIP> ||
 #endif
 #if defined(KOKKOS_ENABLE_SYCL)
+#if POPS_KOKKOS_HAS_PARTITION_SPACE
     std::is_same_v<ExecutionSpace, Kokkos::Experimental::SYCL> ||
+#endif
 #endif
     false;
 
@@ -64,6 +78,118 @@ concept InstanceIdentifiedExecutionSpace = requires(const ExecutionSpace& instan
   { instance.impl_instance_id() } -> std::convertible_to<std::uint32_t>;
 };
 
+/// RAII ownership for the CUDA/HIP compatibility route used before Kokkos exposed
+/// ``Experimental::partition_space``.  Kokkos instances wrap, but do not own, these streams.
+template <class ExecutionSpace>
+class OwnedNativeStream {
+ public:
+  OwnedNativeStream() = default;
+  OwnedNativeStream(const OwnedNativeStream&) = delete;
+  OwnedNativeStream& operator=(const OwnedNativeStream&) = delete;
+  OwnedNativeStream(OwnedNativeStream&& other) noexcept
+      : handle_(std::exchange(other.handle_, 0)) {}
+  OwnedNativeStream& operator=(OwnedNativeStream&& other) noexcept {
+    if (this == &other)
+      return *this;
+    reset_();
+    handle_ = std::exchange(other.handle_, 0);
+    return *this;
+  }
+  ~OwnedNativeStream() { reset_(); }
+
+  [[nodiscard]] static OwnedNativeStream create() {
+    OwnedNativeStream owner;
+#if defined(KOKKOS_ENABLE_CUDA)
+    if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Cuda>) {
+      cudaStream_t stream = nullptr;
+      const cudaError_t status = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+      if (status != cudaSuccess)
+        throw PreparedStreamPartitionError(std::string("cudaStreamCreateWithFlags failed: ") +
+                                           cudaGetErrorString(status));
+      owner.handle_ = reinterpret_cast<std::uintptr_t>(stream);
+      return owner;
+    }
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+    if constexpr (std::is_same_v<ExecutionSpace, Kokkos::HIP>) {
+      hipStream_t stream = nullptr;
+      const hipError_t status = hipStreamCreateWithFlags(&stream, hipStreamNonBlocking);
+      if (status != hipSuccess)
+        throw PreparedStreamPartitionError(std::string("hipStreamCreateWithFlags failed: ") +
+                                           hipGetErrorString(status));
+      owner.handle_ = reinterpret_cast<std::uintptr_t>(stream);
+      return owner;
+    }
+#endif
+    throw PreparedStreamPartitionError(
+        "this Kokkos release cannot materialize native streams for the selected backend");
+  }
+
+  [[nodiscard]] ExecutionSpace execution_space() const {
+    if (handle_ == 0)
+      throw PreparedStreamPartitionError("cannot wrap an empty native accelerator stream");
+#if defined(KOKKOS_ENABLE_CUDA)
+    if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Cuda>)
+      return Kokkos::Cuda(reinterpret_cast<cudaStream_t>(handle_));
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+    if constexpr (std::is_same_v<ExecutionSpace, Kokkos::HIP>)
+      return Kokkos::HIP(reinterpret_cast<hipStream_t>(handle_));
+#endif
+    throw PreparedStreamPartitionError(
+        "native stream cannot be wrapped by the selected Kokkos execution space");
+  }
+
+ private:
+  void reset_() noexcept {
+    if (handle_ == 0)
+      return;
+    if (!Kokkos::is_initialized()) {
+      handle_ = 0;
+      return;
+    }
+#if defined(KOKKOS_ENABLE_CUDA)
+    if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Cuda>)
+      (void)cudaStreamDestroy(reinterpret_cast<cudaStream_t>(handle_));
+#endif
+#if defined(KOKKOS_ENABLE_HIP)
+    if constexpr (std::is_same_v<ExecutionSpace, Kokkos::HIP>)
+      (void)hipStreamDestroy(reinterpret_cast<hipStream_t>(handle_));
+#endif
+    handle_ = 0;
+  }
+
+  std::uintptr_t handle_ = 0;
+};
+
+template <class ExecutionSpace>
+struct PreparedExecutionInstances {
+  std::vector<OwnedNativeStream<ExecutionSpace>> owned_native_streams;
+  std::vector<ExecutionSpace> instances;
+  const char* mechanism = "unavailable";
+};
+
+template <class ExecutionSpace>
+[[nodiscard]] PreparedExecutionInstances<ExecutionSpace> prepare_execution_instances(
+    const ExecutionSpace& base_instance, const std::vector<double>& weights) {
+  PreparedExecutionInstances<ExecutionSpace> prepared;
+#if POPS_KOKKOS_HAS_PARTITION_SPACE
+  prepared.instances = Kokkos::Experimental::partition_space(base_instance, weights);
+  prepared.mechanism = "Kokkos::Experimental::partition_space";
+#else
+  (void)base_instance;
+  prepared.instances.reserve(weights.size());
+  prepared.owned_native_streams.reserve(weights.size());
+  for (std::size_t lane = 0; lane < weights.size(); ++lane) {
+    OwnedNativeStream<ExecutionSpace> owner = OwnedNativeStream<ExecutionSpace>::create();
+    prepared.instances.push_back(owner.execution_space());
+    prepared.owned_native_streams.push_back(std::move(owner));
+  }
+  prepared.mechanism = "Kokkos-native-stream-wrapper";
+#endif
+  return prepared;
+}
+
 }  // namespace detail
 
 /// Reviewable facts established while the stream/workspace partition is prepared.
@@ -78,6 +204,7 @@ struct PreparedStreamPartitionEvidence {
   bool independent_streams = false;
   bool disjoint_workspaces = false;
   std::size_t workspace_values_per_stream = 0;
+  std::string partition_mechanism;
 };
 
 /// Prepared authority for concurrent accelerator kernels.
@@ -100,8 +227,7 @@ class PreparedAcceleratorStreamExecutor {
   PreparedAcceleratorStreamExecutor(const PreparedAcceleratorStreamExecutor&) = delete;
   PreparedAcceleratorStreamExecutor& operator=(const PreparedAcceleratorStreamExecutor&) = delete;
   PreparedAcceleratorStreamExecutor(PreparedAcceleratorStreamExecutor&&) noexcept = default;
-  PreparedAcceleratorStreamExecutor& operator=(PreparedAcceleratorStreamExecutor&&) noexcept =
-      default;
+  PreparedAcceleratorStreamExecutor& operator=(PreparedAcceleratorStreamExecutor&&) = delete;
 
   /// Materialize an exact stream partition and all lane-private workspaces.
   ///
@@ -134,12 +260,13 @@ class PreparedAcceleratorStreamExecutor {
                     "authenticated stream backends must expose an instance identifier");
       pops::detail::ensure_kokkos_initialized();
       const execution_space base_instance{};
-      std::vector<execution_space> instances =
-          Kokkos::Experimental::partition_space(base_instance, weights);
-      if (instances.size() != stream_count)
+      auto prepared = detail::prepare_execution_instances(base_instance, weights);
+      if (prepared.instances.size() != stream_count)
         throw PreparedStreamPartitionError(
             "Kokkos returned an incomplete accelerator stream partition");
-      return PreparedAcceleratorStreamExecutor(std::move(instances), workspace_values_per_stream);
+      return PreparedAcceleratorStreamExecutor(std::move(prepared.owned_native_streams),
+                                               std::move(prepared.instances),
+                                               workspace_values_per_stream, prepared.mechanism);
     }
   }
 
@@ -200,11 +327,15 @@ class PreparedAcceleratorStreamExecutor {
     std::string identity;
   };
 
-  PreparedAcceleratorStreamExecutor(std::vector<execution_space> instances,
-                                    std::size_t workspace_values_per_stream) {
+  PreparedAcceleratorStreamExecutor(
+      std::vector<detail::OwnedNativeStream<execution_space>> owned_native_streams,
+      std::vector<execution_space> instances, std::size_t workspace_values_per_stream,
+      const char* partition_mechanism)
+      : owned_native_streams_(std::move(owned_native_streams)) {
     lanes_.reserve(instances.size());
     evidence_.backend = detail::stream_backend_name<execution_space>();
     evidence_.workspace_values_per_stream = workspace_values_per_stream;
+    evidence_.partition_mechanism = partition_mechanism;
     evidence_.stream_identities.reserve(instances.size());
 
     std::vector<std::uint32_t> instance_ids;
@@ -254,8 +385,13 @@ class PreparedAcceleratorStreamExecutor {
     return true;
   }
 
+  // Declared before ``lanes_`` so lane-owned Kokkos instances are destroyed before their external
+  // CUDA/HIP streams when the compatibility route for pre-partition_space Kokkos is active.
+  std::vector<detail::OwnedNativeStream<execution_space>> owned_native_streams_;
   std::vector<Lane> lanes_;
   PreparedStreamPartitionEvidence evidence_;
 };
 
 }  // namespace pops::runtime::accelerator
+
+#undef POPS_KOKKOS_HAS_PARTITION_SPACE

@@ -48,6 +48,9 @@ TEST(PreparedStreamExecutor, AcceleratorInstancesLaunchOnExplicitDisjointLanes) 
     EXPECT_EQ(executor.workspace_values_per_stream(), static_cast<std::size_t>(values));
     EXPECT_TRUE(executor.evidence().independent_streams);
     EXPECT_TRUE(executor.evidence().disjoint_workspaces);
+    EXPECT_TRUE(executor.evidence().partition_mechanism ==
+                    "Kokkos::Experimental::partition_space" ||
+                executor.evidence().partition_mechanism == "Kokkos-native-stream-wrapper");
     EXPECT_NE(executor.workspace_address(0), executor.workspace_address(1));
     EXPECT_EQ(std::set<std::string>(executor.evidence().stream_identities.begin(),
                                     executor.evidence().stream_identities.end())

@@ -17,6 +17,10 @@ errors. The stream probe runs five paired ABBA blocks and reports overlap only w
 pair is measurably faster. The outer SLURM driver runs at least five ABBA blocks for each scenario.
 `assemble.py` rejects incomplete or reordered measurements, and `verify.py` independently checks
 the final report. Neither program substitutes CPU measurements or inferred overlap for GPU data.
+When Kokkos provides `Experimental::partition_space`, PoPS consumes that API directly. The ROMEO
+CUDA installation currently uses Kokkos 4.4.1, so the compatibility route creates non-blocking CUDA
+streams explicitly, wraps them in Kokkos execution-space instances, and retains RAII ownership until
+all lane workspaces and instances have been destroyed.
 
 On ROMEO, after the candidate revision is available in the checkout configured by
 `POPS_ADC757_REPO_ROOT`, submit with:

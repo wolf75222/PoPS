@@ -26,7 +26,7 @@ CANDIDATE_SHA="$(git -C "${REPO_ROOT}" rev-parse "${CANDIDATE_REF}^{commit}")"
 
 WORK_ROOT="${POPS_ADC757_WORK_ROOT:-/scratch_p/${USER}/${SLURM_JOB_ID}/pops-adc757}"
 RESULTS_DIR="${POPS_ADC757_RESULTS_DIR:-${HOME}/pops-benchmark-results/adc757}"
-KOKKOS_ROOT="${POPS_KOKKOS_ROOT:-${Kokkos_ROOT:-${HOME}/pops_gpu_p1/kinstall}}"
+KOKKOS_ROOT="${POPS_KOKKOS_ROOT:-${Kokkos_ROOT:-${HOME}/adc_gpu_p1/kinstall}}"
 NVCC_WRAPPER="${POPS_NVCC_WRAPPER:-${KOKKOS_ROOT}/bin/nvcc_wrapper}"
 ABBA_BLOCKS="${POPS_ADC757_ABBA_BLOCKS:-5}"
 EXTENT="${POPS_ADC757_EXTENT:-32768}"
