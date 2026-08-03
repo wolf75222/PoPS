@@ -577,15 +577,33 @@ bool observe_stream_overlap(Executor& executor, const Config& config) {
 }
 
 std::vector<std::string> gather_device_uuids() {
-  const char* environment = std::getenv("POPS_ADC757_DEVICE_UUID");
   constexpr std::size_t capacity = 128;
-  const bool invalid = environment == nullptr || *environment == '\0' ||
-                       (environment != nullptr && std::strlen(environment) >= capacity);
+  std::string local_uuid;
+#if defined(KOKKOS_ENABLE_CUDA)
+  int device = -1;
+  cudaUUID_t uuid{};
+  const cudaError_t device_status = cudaGetDevice(&device);
+  const cudaError_t uuid_status =
+      device_status == cudaSuccess ? cudaDeviceGetUuid(&uuid, device) : device_status;
+  if (device_status == cudaSuccess && uuid_status == cudaSuccess) {
+    std::ostringstream encoded;
+    encoded << "GPU-" << std::hex << std::setfill('0');
+    for (const char byte : uuid.bytes)
+      encoded << std::setw(2) << static_cast<unsigned int>(static_cast<unsigned char>(byte));
+    local_uuid = encoded.str();
+  }
+#else
+  // CUDA supplies a stable physical UUID directly.  Other accelerator runtimes may inject an
+  // equivalent rank-local identifier until their Kokkos device API standardizes one.
+  const char* environment = std::getenv("POPS_ADC757_DEVICE_UUID");
+  if (environment != nullptr)
+    local_uuid = environment;
+#endif
+  const bool invalid = local_uuid.empty() || local_uuid.size() >= capacity;
   if (pops::all_reduce_max(static_cast<long>(invalid ? 1 : 0)) != 0)
-    throw std::runtime_error(
-        "every rank requires one bounded POPS_ADC757_DEVICE_UUID from the SLURM probe");
+    throw std::runtime_error("every rank requires one bounded physical accelerator UUID");
   std::array<char, capacity> local{};
-  std::memcpy(local.data(), environment, std::strlen(environment));
+  std::memcpy(local.data(), local_uuid.data(), local_uuid.size());
   std::vector<char> gathered(capacity * static_cast<std::size_t>(pops::n_ranks()));
   mpi_check(MPI_Allgather(local.data(), static_cast<int>(capacity), MPI_CHAR, gathered.data(),
                           static_cast<int>(capacity), MPI_CHAR, MPI_COMM_WORLD),

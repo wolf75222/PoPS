@@ -61,52 +61,19 @@ INVENTORY="${WORK_ROOT}/device-inventory.txt"
 REPORT="${WORK_ROOT}/report.json"
 : > "${RAW}"
 
-# Authenticate Slurm's one-GPU-per-rank placement before the timed campaign.
-# shellcheck disable=SC2016 # Expanded deliberately by each rank-local bash.
-srun --kill-on-bad-exit=1 --ntasks="${SLURM_NTASKS}" --gpus-per-task=1 \
-  bash -c '
-    set -euo pipefail
-    selector="${CUDA_VISIBLE_DEVICES:?Slurm did not assign a GPU to this rank}"
-    if [[ "${selector}" == *,* ]]; then
-      echo "rank ${SLURM_PROCID:?} sees more than one CUDA device: ${selector}" >&2
-      exit 4
-    fi
-    uuid="$(nvidia-smi --id="${selector}" --query-gpu=uuid --format=csv,noheader |
-      sed "s/^[[:space:]]*//;s/[[:space:]]*$//")"
-    test -n "${uuid}"
-    printf "%s\t%s\n" "${SLURM_PROCID}" "${uuid}"
-  ' | sort -n -k1,1 > "${INVENTORY}"
-test "$(cut -f2 "${INVENTORY}" | sort -u | wc -l)" -eq "${SLURM_NTASKS}"
-
 run_one() {
   local scenario="$1"
   local route="$2"
   local log="${WORK_ROOT}/${scenario}-${route}-${RUN_SERIAL}.log"
-  # Query the physical UUID inside each rank's Slurm GPU namespace and pass it to the native
-  # harness.  The harness gathers and checks all UUIDs collectively before measuring anything.
-  # shellcheck disable=SC2016
+  # cudaDeviceGetUuid authenticates the physical device selected by each rank. The executable
+  # gathers those UUIDs collectively and refuses aliased Slurm placement before measuring.
   srun --kill-on-bad-exit=1 --ntasks="${SLURM_NTASKS}" --gpus-per-task=1 \
-    bash -c '
-      set -euo pipefail
-      executable="$1"
-      shift
-      selector="${CUDA_VISIBLE_DEVICES:?Slurm did not assign a GPU to this rank}"
-      if [[ "${selector}" == *,* ]]; then
-        echo "rank ${SLURM_PROCID:?} sees more than one CUDA device: ${selector}" >&2
-        exit 4
-      fi
-      export POPS_ADC757_DEVICE_UUID="$(
-        nvidia-smi --id="${selector}" --query-gpu=uuid --format=csv,noheader |
-          sed "s/^[[:space:]]*//;s/[[:space:]]*$//"
-      )"
-      test -n "${POPS_ADC757_DEVICE_UUID}"
-      exec "${executable}" "$@"
-    ' bash "${EXECUTABLE}" \
-      --scenario="${scenario}" \
-      --route="${route}" \
-      --extent="${EXTENT}" \
-      --inner-iterations="${INNER_ITERATIONS}" \
-      --migration-values-per-task="${MIGRATION_VALUES_PER_TASK}" | tee "${log}"
+    "${EXECUTABLE}" \
+    --scenario="${scenario}" \
+    --route="${route}" \
+    --extent="${EXTENT}" \
+    --inner-iterations="${INNER_ITERATIONS}" \
+    --migration-values-per-task="${MIGRATION_VALUES_PER_TASK}" | tee "${log}"
   grep -E '^\{"schema":"pops\.adc757\.heterogeneous-numerics\.measurement\.v1"' \
     "${log}" >> "${RAW}"
   RUN_SERIAL=$((RUN_SERIAL + 1))
@@ -125,6 +92,7 @@ done
 python3 "${WORK_ROOT}/source/benchmarks/adc757/assemble.py" \
   --input "${RAW}" \
   --output "${REPORT}" \
+  --device-inventory-output "${INVENTORY}" \
   --expected-revision "${CANDIDATE_SHA}" \
   --minimum-speedup "${MINIMUM_SPEEDUP}"
 python3 "${WORK_ROOT}/source/benchmarks/adc757/verify.py" \
