@@ -856,6 +856,11 @@ sources = ["tests/cpp/unit/mesh/test_nd_execution.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_finite_volume"
+sources = ["tests/cpp/unit/numerics/test_nd_finite_volume.cpp"]
+labels = ["unit", "numerics", "spatial", "fast"]
+
+[[cpp.suite]]
 name = "test_nd_layout"
 sources = ["tests/cpp/unit/mesh/test_nd_layout.cpp"]
 labels = ["unit", "mesh", "fast"]
