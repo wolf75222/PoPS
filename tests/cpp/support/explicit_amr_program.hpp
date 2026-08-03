@@ -3,6 +3,7 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/program/amr_program_context.hpp>
 
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -14,7 +15,8 @@ namespace pops::test {
 ///
 /// AmrProgramContext owns level clocks and conservative catch-up. AmrRuntime remains the spatial
 /// engine inspected by tests and exposes no temporal step entry point.
-inline void install_forward_euler_program(AmrSystem& system) {
+inline std::shared_ptr<runtime::program::AmrProgramContext> install_forward_euler_program_context(
+    AmrSystem& system, const std::function<void(AmrSystem&)>& prepare_runtime = {}) {
   std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
   std::iota(block_map.begin(), block_map.end(), 0);
   // The facade selects the common AmrRuntime route during lazy construction only when a Program
@@ -23,6 +25,8 @@ inline void install_forward_euler_program(AmrSystem& system) {
   system.install_program_step([](double) {});
   if (!system.uses_runtime_engine() || system.engine() == nullptr)
     throw std::runtime_error("explicit AMR test Program requires the materialized runtime engine");
+  if (prepare_runtime)
+    prepare_runtime(system);
 
   auto context = std::make_shared<runtime::program::AmrProgramContext>(system.engine(), &system);
   context->configure_primary_clock("test.clock.macro");
@@ -51,6 +55,11 @@ inline void install_forward_euler_program(AmrSystem& system) {
   // A direct Program replacement revokes every artifact-derived binding authority, including the
   // block map. Publish this fixture's explicit identity map only after the final body is installed.
   system.set_program_block_map(block_map);
+  return context;
+}
+
+inline void install_forward_euler_program(AmrSystem& system) {
+  static_cast<void>(install_forward_euler_program_context(system));
 }
 
 }  // namespace pops::test

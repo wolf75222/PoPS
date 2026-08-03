@@ -392,6 +392,16 @@ future validators:
 - `amr:transition_envelope`: transitions are 2D/isotropic and buffer/lookahead are hierarchy-global.
 - `amr:hierarchy_policy_routes`: only the reported shared hierarchy, clustering, patch-generation,
   and load-balance routes are installed.
+- `amr:accepted_owner_migration`: a prepared `RebalanceDecision` can redistribute one active fine
+  level at a clean accepted Program boundary. The consumer revalidates the exact decision against
+  its prepared authority, source level, live topology epoch, materialization generation, boxes and
+  current owners, requires all-rank byte consensus, migrates every block/aux/history carrier,
+  rematerializes topology-bound providers, redistributes compact lagged-flux authority through the
+  checkpoint rematerializer, invalidates audit reports qualified by the replaced topology epoch and
+  republishes accepted Program state atomically. Stale, divergent, malformed and non-beneficial
+  decisions do not mutate state; failures restore the complete accepted runtime/Program image.
+  Level-zero migration, custom communicators, materialized staggered bootstrap fields and cell-local
+  stage/flux-ledger rematerialization remain unavailable.
 - `amr:transfer_contracts`: centering, representation, storage, operation, order and ghost depth
   must match an exact native transfer/materialization provider contract.
 - `parallel:mpi_world_communicator`: the native `RuntimeInstance` providers consume the exact

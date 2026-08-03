@@ -797,6 +797,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
   set(POPS_MPI_RANK_PARITY_test_mpi_amr_distributed_coarse 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_program_reflux 2 4)
+  set(POPS_MPI_RANKS_test_mpi_amr_rebalance_migration 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
@@ -841,6 +842,7 @@ if(POPS_HAS_MPI)
     test_mpi_amr_twoblock_parity
     test_mpi_amr_distributed_coarse
     test_mpi_amr_program_reflux
+    test_mpi_amr_rebalance_migration
     test_mpi_composite_fac
     test_amr_regrid_mpi_parity
     test_mpi_amr_dynamic_active_depth

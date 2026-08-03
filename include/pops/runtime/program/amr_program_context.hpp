@@ -251,6 +251,160 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     regrid_if_due_at_(macro_step, facade_->time());
   }
 
+  /// Publish one accepted fine-level owner migration through the same hierarchy/ledger authority as
+  /// scientific regrid. The spatial runtime owns field/history redistribution and provider
+  /// rematerialization; this Program layer redistributes compact lagged fluxes through the checkpoint
+  /// rematerializer and republishes the accepted clock/history image atomically. Cell-local temporal
+  /// providers remain refused until their stage/flux resources gain a restartable rematerializer.
+  bool apply_rebalance_decision(int level, const RebalanceDecision& decision) const {
+    std::exception_ptr local_failure;
+    HistoryFluxTopology before;
+    AmrProgramRankOwnership source_ownership;
+    AmrProgramRankOwnership target_ownership;
+    std::string local_program_payload;
+    std::string call_contract;
+    try {
+      if (facade_ == nullptr || eng_ == nullptr)
+        throw std::logic_error("AMR Program rebalance requires its runtime facade and engine");
+      require_restart_regrid_boundary_();
+      if (facade_->has_active_step_transaction())
+        throw std::logic_error("AMR Program rebalance cannot overlap a facade step transaction");
+      import_program_accepted_state_(true);
+      if (temporal_partition_.checkpoint().kind == TemporalPartitionKind::CellLocal)
+        throw std::logic_error(
+            "AMR Program rebalance does not yet support cell-local stage providers or flux "
+            "ledgers");
+      if (macro_step() < 0 || macro_step() > std::numeric_limits<int>::max() ||
+          !std::isfinite(facade_->time()))
+        throw std::logic_error("AMR Program rebalance requires a representable accepted clock");
+      if (decision.exact_contract.empty() ||
+          decision.exact_contract != pops::detail::exact_rebalance_decision(decision))
+        throw std::invalid_argument("AMR Program rebalance decision exact contract is invalid");
+      ExactContractBuilder call;
+      call.text("pops.amr.program-rebalance-call")
+          .scalar(std::uint32_t{1})
+          .scalar(level)
+          .bytes(decision.exact_contract);
+      call_contract = std::move(call).release();
+
+      before = history_flux_topology_snapshot_();
+      if (history_flux_topology_.bound() &&
+          !same_history_flux_topology_(history_flux_topology_, before))
+        throw std::logic_error(
+            "AMR Program rebalance history authority differs from the accepted hierarchy");
+      source_ownership = {n_ranks(), before.owners};
+      target_ownership = source_ownership;
+      if (decision.accepted) {
+        if (level <= 0 || level >= nlev())
+          throw std::out_of_range("AMR Program rebalance targets an inactive fine level");
+        const std::size_t index = static_cast<std::size_t>(level);
+        if (decision.proposed_mapping.size() !=
+            static_cast<int>(target_ownership.level_patch_owners[index].size()))
+          throw std::invalid_argument(
+              "AMR Program rebalance mapping differs from the accepted patch count");
+        target_ownership.level_patch_owners[index] = decision.proposed_mapping.ranks();
+        const std::vector<std::uint8_t>& local_bytes = facade_->program_accepted_state();
+        local_program_payload.reserve(local_bytes.size());
+        for (const std::uint8_t byte : local_bytes)
+          local_program_payload.push_back(static_cast<char>(byte));
+      }
+    } catch (...) {
+      local_failure = std::current_exception();
+    }
+    require_collective_rebalance_program_success_(local_failure,
+                                                  "AMR Program rebalance rank-local preflight");
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"pops.amr.program-rebalance-call", call_contract}}))
+      throw std::invalid_argument("AMR Program rebalance call differs across MPI ranks");
+
+    std::optional<std::vector<std::uint8_t>> rematerialized_program_state;
+    if (decision.accepted) {
+      const std::vector<std::string> gathered_payloads =
+          ExecutionLane::world().allgather_bytes(local_program_payload);
+      local_failure = nullptr;
+      try {
+        std::vector<std::vector<std::uint8_t>> source_payloads;
+        source_payloads.reserve(gathered_payloads.size());
+        for (const std::string& payload : gathered_payloads) {
+          std::vector<std::uint8_t> bytes;
+          bytes.reserve(payload.size());
+          for (const char byte : payload)
+            bytes.push_back(static_cast<std::uint8_t>(byte));
+          source_payloads.push_back(std::move(bytes));
+        }
+        AmrProgramAcceptedState rematerialized =
+            deserialize_amr_program_accepted_state(rematerialize_amr_program_accepted_state_bytes(
+                source_payloads, source_ownership, target_ownership, my_rank()));
+        // Lagged flux strips are ownership-rematerialized above. Accepted reports are different:
+        // their keys certify the old topology epoch, so retaining them after publication would make
+        // the otherwise exact accepted image fail its own topology qualification.
+        rematerialized.accepted_flux_ledger.clear();
+        rematerialized.accepted_interface_flux_ledger.clear();
+        rematerialized.accepted_sync.clear();
+        rematerialized_program_state = serialize_amr_program_accepted_state(rematerialized);
+      } catch (...) {
+        local_failure = std::current_exception();
+      }
+      require_collective_rebalance_program_success_(
+          local_failure, "AMR Program rebalance accepted-state rematerialization");
+    }
+
+    AttemptSnapshot saved;
+    local_failure = nullptr;
+    try {
+      capture_engine_attempt_snapshot_(saved, /*borrows_facade_snapshot=*/false);
+      capture_program_attempt_snapshot_(saved);
+    } catch (...) {
+      local_failure = std::current_exception();
+    }
+    require_collective_rebalance_program_success_(local_failure,
+                                                  "AMR Program rebalance snapshot capture");
+    attempt_snapshot_active_ = true;
+    struct RebalanceAttemptLease {
+      bool& active;
+      ~RebalanceAttemptLease() { active = false; }
+    } lease{attempt_snapshot_active_};
+
+    bool applied = false;
+    local_failure = nullptr;
+    try {
+      if (decision.accepted)
+        eng_->set_component_logical_time(macro_step(), facade_->time());
+      applied = eng_->apply_rebalance_decision(level, decision);
+      if (applied) {
+        if (!rematerialized_program_state)
+          throw std::logic_error(
+              "AMR Program rebalance lost its prepared accepted-state rematerialization");
+        materialize_capture_flux_scratch_();
+        facade_->restore_program_accepted_state(*rematerialized_program_state);
+        import_program_accepted_state_(true);
+        automatic_regrid_macro_step_ = saved.automatic_regrid_macro_step;
+        ++history_flux_topology_rebind_count_;
+        ensure_level_clocks_();
+      }
+    } catch (...) {
+      local_failure = std::current_exception();
+    }
+    const long attempt_failures =
+        n_ranks() > 1 ? all_reduce_sum(local_failure ? 1L : 0L) : (local_failure ? 1L : 0L);
+    if (attempt_failures == 0)
+      return applied;
+
+    const bool accepted_state_mutated =
+        facade_->program_accepted_state_revision() != saved.program_accepted_state_revision;
+    if (saved.engine_captured)
+      eng_->restore_step_snapshot(saved.engine);
+    if (eng_->topology_materialization_generation() != saved.engine_topology_generation)
+      invalidate_capture_flux_scratch_();
+    if (accepted_state_mutated)
+      facade_->restore_program_accepted_state(saved.program_accepted_state);
+    restore_program_attempt_snapshot_(saved);
+    accepted_state_revision_ = saved.program_accepted_state_revision;
+    if (local_failure)
+      std::rethrow_exception(local_failure);
+    throw std::runtime_error("AMR Program rebalance failed on another MPI rank");
+  }
+
  private:
   void regrid_if_due_at_(std::int64_t macro_step, double physical_time) const {
     if (!std::isfinite(physical_time))
@@ -1302,6 +1456,17 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         (interface_flux_ledger_ &&
          (interface_flux_ledger_->in_transaction() || !interface_flux_ledger_->empty())))
       throw std::logic_error("AMR RegridOnRestart requires a clean accepted Program boundary");
+  }
+
+  static void require_collective_rebalance_program_success_(const std::exception_ptr& local_failure,
+                                                            const char* context) {
+    const long failure_count =
+        n_ranks() > 1 ? all_reduce_sum(local_failure ? 1L : 0L) : (local_failure ? 1L : 0L);
+    if (failure_count == 0)
+      return;
+    if (local_failure)
+      std::rethrow_exception(local_failure);
+    throw std::runtime_error(std::string(context) + " failed on another MPI rank");
   }
 
   /// Validate every rank-local prerequisite before peers enter the native scientific regrid.
