@@ -664,8 +664,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   return bc;
 }
 
-/// Dispatch of the spatial scheme (limiter x Riemann flux) -> compiled closures. HLLC / Roe guarded
-/// by requires: they demand a 4-variable transport exposing pressure (otherwise an explicit error).
+/// Dispatch of the spatial scheme (limiter x Riemann flux) -> compiled closures. HLLC / Roe are
+/// guarded only by their exact physical-provider capabilities (otherwise an explicit error).
 /// "weno5" = WENO5-Z reconstruction (order 5, 5-point stencil, 3 ghosts); spatial_operator routes
 /// through the policy's explicit stencil protocol (the caller allocates its declared ghost radius,
 /// cf. block_n_ghost).

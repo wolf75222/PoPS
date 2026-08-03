@@ -25,6 +25,8 @@ _COMBINATIONS = (
     ("exb", None),
     ("isothermal", "rusanov"),
     ("isothermal", "hll"),
+    ("isothermal", "hllc"),
+    ("isothermal", "roe"),
     ("compressible", "rusanov"),
     ("compressible", "hll"),
     ("compressible", "hllc"),
