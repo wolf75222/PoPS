@@ -9,11 +9,13 @@ import pytest
 from pops import interfaces
 from pops.external import build_source_package_manifest, load
 from pops.fields import ExternalFieldSolver
+from pops.lib.initial import Gaussian
 from pops.model import ComponentManifest
 from pops.time import FailRun, FixedDt
 from tests.python.integration._final_field_program import (
     passive_field_model,
     resolve_periodic_field_program,
+    scalar_advection_field_model,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
 
@@ -34,7 +36,7 @@ def _manifest(name, interface, parameters=()):
             "dimension": 2,
             "scalar": "float64",
             "device": "cpu",
-            "features": [],
+            "features": ["mpi"],
         }]},
         entry_points={"interface_table": "pops_component_interface_v1"},
     )
@@ -59,13 +61,16 @@ def _component(
     return factory(**({} if instance_parameters is None else instance_parameters))
 
 
-def _topology_source(manifest):
+def _topology_source(manifest, *, require_multilevel=False, periodic_axes=3):
     return f'''#include <pops/runtime/config/generated_component_abi.hpp>
 #include <cstddef>
 #include <cstring>
+#include <string>
 
 namespace {{
 struct State {{ int prepare_count; int topology_count; }};
+std::string previous_multilevel_layout;
+std::string previous_multilevel_signature;
 
 PopsComponentStatusV1 ok() {{
   return {{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
@@ -90,14 +95,46 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
       !request || !result || !request->topology.topology_recipe_identity ||
       !request->topology.source_layout_identity ||
       !request->topology.materialized_layout_identity ||
-      request->topology.dimension != 2 || request->topology.periodic_axes != 3 ||
+      request->topology.dimension != 2 ||
+      request->topology.periodic_axes != {periodic_axes} ||
       request->topology.patch_count == 0 ||
       request->local_patch_count > request->topology.patch_count) return 3;
+  bool saw_level_zero = false;
+  bool saw_level_one = false;
+  std::string topology_signature;
+  for (std::size_t patch = 0; patch < request->topology.patch_count; ++patch) {{
+    const auto& metadata = request->topology.patches[patch];
+    saw_level_zero = saw_level_zero || metadata.level == 0;
+    saw_level_one = saw_level_one || metadata.level == 1;
+    topology_signature += std::to_string(metadata.level) + ":" +
+        std::to_string(metadata.owner_rank) + ":" + std::to_string(metadata.lower[0]) + ":" +
+        std::to_string(metadata.lower[1]) + ":" + std::to_string(metadata.upper[0]) + ":" +
+        std::to_string(metadata.upper[1]) + ";";
+  }}
+  const bool multilevel = saw_level_one;
+  if ({str(require_multilevel).lower()} && !saw_level_zero) return 6;
+  if ({str(require_multilevel).lower()} && !previous_multilevel_signature.empty() &&
+      topology_signature != previous_multilevel_signature &&
+      previous_multilevel_layout == request->topology.materialized_layout_identity) return 10;
+  if ({str(require_multilevel).lower()}) {{
+    previous_multilevel_signature = topology_signature;
+    previous_multilevel_layout = request->topology.materialized_layout_identity;
+  }}
+  if ({str(require_multilevel).lower()} &&
+      request->local_patch_count != request->topology.patch_count) return 8;
+  bool saw_masked_coarse_cell = false;
+  bool saw_active_fine_cell = false;
   for (std::size_t local = 0; local < request->local_patch_count; ++local) {{
     const auto& patch = request->local_patches[local];
-    if (patch.metadata_index >= request->topology.patch_count ||
-        patch.material_representation != POPS_FIELD_MATERIAL_FULL_V1 ||
-        patch.material_coverage.data || patch.cut_cell_volume_fraction.data ||
+    const bool full = patch.material_representation == POPS_FIELD_MATERIAL_FULL_V1;
+    const bool binary =
+        patch.material_representation == POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1;
+    if (patch.metadata_index >= request->topology.patch_count || (!full && !binary) ||
+        ({str(require_multilevel).lower()} && multilevel && !binary) ||
+        (full && patch.material_coverage.data) ||
+        (binary && (!patch.material_coverage.data ||
+                    patch.material_coverage.size != patch.material_mask.size)) ||
+        patch.cut_cell_volume_fraction.data ||
         patch.material_ids.data ||
         patch.material_mask.size != patch.component_labels.size) return 4;
     const auto& metadata = request->topology.patches[patch.metadata_index];
@@ -107,10 +144,18 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
         std::strcmp(metadata.layout_identity,
                     request->topology.source_layout_identity) != 0) return 5;
     for (std::size_t point = 0; point < patch.material_mask.size; ++point) {{
-      patch.material_mask.data[point] = 1;
-      patch.component_labels.data[point] = 1;
+      const auto active = binary ? patch.material_coverage.data[point] : 1;
+      if (active > 1) return 7;
+      saw_masked_coarse_cell =
+          saw_masked_coarse_cell || (metadata.level == 0 && active == 0);
+      saw_active_fine_cell =
+          saw_active_fine_cell || (metadata.level > 0 && active == 1);
+      patch.material_mask.data[point] = active;
+      patch.component_labels.data[point] = active == 1 ? 1 : 0;
     }}
   }}
+  if ({str(require_multilevel).lower()} && multilevel &&
+      (!saw_masked_coarse_cell || !saw_active_fine_cell)) return 9;
   static const PopsTopologyLabelV2 labels[] = {{
     {{sizeof(PopsTopologyLabelV2), 1, "material", "external-test-topology"}}
   }};
@@ -225,12 +270,12 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
     for (std::size_t j = 0; j < patch.solution.extents[1]; ++j) {{
       for (std::size_t i = 0; i < patch.solution.extents[0]; ++i) {{
         const std::size_t point = j * patch.solution.extents[0] + i;
-        if (mask[point] != 1 || labels[point] != 1) return 5;
+        if (mask[point] > 1 || labels[point] != (mask[point] == 1 ? 1 : 0)) return 5;
         const auto index = static_cast<std::ptrdiff_t>(i) *
                                patch.solution.axis_strides[0] +
                            static_cast<std::ptrdiff_t>(j) *
                                patch.solution.axis_strides[1];
-        solution[index] = {solution_expression};
+        if (mask[point] == 1) solution[index] = {solution_expression};
       }}
     }}
   }}
@@ -290,6 +335,15 @@ def _program(state, rate, field):
     program = ForwardEuler(
         state, rate=rate, fields=field, solve_action=FailRun())
     program.step_strategy(FixedDt(1.0e-4))
+    return program
+
+
+def _moving_amr_program(state, rate, field):
+    from pops.lib.time import ForwardEuler
+
+    program = ForwardEuler(
+        state, rate=rate, fields=field, solve_action=FailRun())
+    program.step_strategy(FixedDt(8.0e-2))
     return program
 
 
@@ -355,6 +409,83 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
     assert provider_report["patches"][0]["patch_identity"].startswith(
         "pops.runtime-field-patch.v1:sha256:")
     assert simulation.inspect().to_dict()["instance"]["field_providers"] == providers
+
+
+def test_external_field_pair_executes_binary_coverage_across_amr_regrid(tmp_path):
+    topology = _component(
+        tmp_path,
+        name="amr-topology",
+        interface=interfaces.FieldTopology,
+        source_factory=lambda manifest: _topology_source(
+            manifest, require_multilevel=True, periodic_axes=0
+        ),
+    )
+    solver = _component(
+        tmp_path,
+        name="amr-solver",
+        interface=interfaces.FieldSolver,
+        source_factory=_solver_source,
+        manifest_parameters=({"name": "answer", "kind": "runtime"},),
+        instance_parameters={"answer": 7},
+    )
+    provider = ExternalFieldSolver(
+        topology=topology,
+        solver=solver,
+        relative_tolerance=1.0e-11,
+        absolute_tolerance=0.0,
+        max_iterations=23,
+    )
+    model = scalar_advection_field_model("external-amr-field-runtime")
+    x_axis, y_axis = model.frame.axes
+    center_x, center_y = 0.25, 0.5
+    background = 0.8
+    amplitude = 4.0
+    inverse_width = 80.0
+    # A compact super-threshold region moves far enough to replace the fine layout at step 2.
+    resolved = resolve_periodic_field_program(
+        model,
+        _moving_amr_program,
+        name="external-amr-field-runtime",
+        block_name="material",
+        target="amr_system",
+        n=8,
+        regrid_every=2,
+        field_solver=provider,
+        initial_profile=Gaussian(
+            frame=model.frame,
+            center={x_axis: center_x, y_axis: center_y},
+            background=background,
+            amplitude=amplitude,
+            inverse_width=inverse_width,
+        ),
+        components=(topology, solver),
+        anchored_field=True,
+    )
+
+    threshold, = (
+        slot.handle for slot in resolved.bind_schema.runtime_slots
+        if slot.handle.local_id == "external-amr-field-runtime_refine_threshold"
+    )
+    artifact = pops.compile(resolved)
+    simulation = pops.bind(
+        artifact,
+        params={threshold: 1.2},
+        resources={"execution_context": artifact_execution_context(artifact)},
+    )
+    slot, = simulation.field_provider_slots()
+    providers = simulation.inspect().to_dict()["instance"]["field_providers"]
+    assert providers[0]["provider_slot"] == slot
+    assert providers[0]["solver_configuration"]["hierarchy_policy"]["policy_id"] == (
+        "pops.field-hierarchy.composite"
+    )
+    assert simulation.n_levels() == 2
+    boxes_before = tuple(simulation.patch_boxes())
+    regrids_before = simulation.amr.explain_regrid().regrid_count
+    report = pops.run(simulation, t_end=2.4e-1, max_steps=3)
+    assert report.accepted_steps == 3
+    assert report.final_time == pytest.approx(2.4e-1)
+    assert simulation.amr.explain_regrid().regrid_count > regrids_before
+    assert tuple(simulation.patch_boxes()) != boxes_before
 
 
 def test_real_prepared_field_solver_failure_rolls_back_runtime_instance_and_retries(
