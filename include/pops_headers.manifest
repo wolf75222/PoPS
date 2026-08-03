@@ -132,6 +132,10 @@ api pops/numerics/nonlinear/prepared_local_nonlinear.hpp
 api pops/numerics/nonlinear/prepared_variable_recovery.hpp
 api pops/numerics/spatial/embedded_boundary/domain.hpp
 api pops/numerics/spatial/embedded_boundary/operator.hpp
+api pops/numerics/spatial/nd/conservation_laws.hpp
+api pops/numerics/spatial/nd/face_field.hpp
+api pops/numerics/spatial/nd/finite_volume.hpp
+api pops/numerics/spatial/nd/state_schema.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
 api pops/numerics/spatial/operators/masked_operator.hpp
 api pops/numerics/spatial/operators/polar_operator.hpp
