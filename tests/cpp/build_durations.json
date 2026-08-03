@@ -143,6 +143,7 @@
   "test_module_metadata": 2.0,
   "test_multiblock_interface_scheduler": 296.26,
   "test_multifab": 2.0,
+  "test_nd_boundary_schedule": 2.0,
   "test_nd_distribution": 2.0,
   "test_nd_layout": 2.0,
   "test_nd_topology": 2.0,
