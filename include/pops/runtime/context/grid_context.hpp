@@ -174,6 +174,7 @@ class PreparedGridBoundarySession final {
     if (!context_.boundary_plan)
       return;
     plan_session_.emplace(context_.boundary_plan->make_session(lane));
+    plan_session_->prepare_trace_recovery_workspace(prototype);
     configure_registry_();
     // Resolve every declared read route once while the session is materialized. Subsequent RHS
     // applications only advance the registry epoch and rebind pointers into these stable slots.

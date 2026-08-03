@@ -146,24 +146,26 @@ POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConve
                                               CellRecovery cons_to_prim) {
   Impl::Species& s = p_->find(name);
   const auto boundary = p_->boundary_plans_.find(name);
-  if (boundary != p_->boundary_plans_.end() &&
-      boundary->second->requires_fixed_state_conversion()) {
-    if (!prim_to_cons)
-      throw std::runtime_error(
-          "System primitive fixed-state boundary requires the block-model conversion");
+  if (boundary != p_->boundary_plans_.end()) {
     if (!cons_to_prim)
       throw std::runtime_error(
-          "System primitive fixed-state boundary requires prepared variable-recovery validation");
-    const int ncomp = s.ncomp;
-    boundary->second->prepare_fixed_state_conversion(
-        [prim_to_cons, cons_to_prim, ncomp](const double* primitive, double* conservative) {
-          prim_to_cons(primitive, conservative);
-          std::vector<double> recovered(static_cast<std::size_t>(ncomp));
-          const RecoveryReport report = cons_to_prim(conservative, recovered.data());
-          if (!report.publication_permitted())
-            throw std::runtime_error(
-                "primitive fixed-state boundary conversion failed prepared variable recovery");
-        });
+          "System prepared boundary traces require the block-model variable-recovery authority");
+    if (boundary->second->requires_fixed_state_conversion()) {
+      if (!prim_to_cons)
+        throw std::runtime_error(
+            "System primitive fixed-state boundary requires the block-model conversion");
+      const int ncomp = s.ncomp;
+      boundary->second->prepare_fixed_state_conversion(
+          [prim_to_cons, cons_to_prim, ncomp](const double* primitive, double* conservative) {
+            prim_to_cons(primitive, conservative);
+            std::vector<double> recovered(static_cast<std::size_t>(ncomp));
+            const RecoveryReport report = cons_to_prim(conservative, recovered.data());
+            if (!report.publication_permitted())
+              throw std::runtime_error(
+                  "primitive fixed-state boundary conversion failed prepared variable recovery");
+          });
+    }
+    boundary->second->prepare_trace_recovery(cons_to_prim);
   }
   s.prim_to_cons = std::move(prim_to_cons);
   s.cons_to_prim = std::move(cons_to_prim);
