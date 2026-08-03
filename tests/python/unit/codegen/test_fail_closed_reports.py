@@ -101,16 +101,19 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
         "external FieldSolver@2 on one uniform host/serial level"
     )
     implicit_pair = routes["amr:shared_interface_implicit_jacvec_pair"]
-    assert implicit_pair.status == "unavailable"
+    assert implicit_pair.status == "partial"
     assert implicit_pair.layout == "amr"
-    assert implicit_pair.backend == "none"
+    assert implicit_pair.backend == "production"
     assert implicit_pair.mpi is False
     assert implicit_pair.gpu is False
-    assert "no generated Program executes" in implicit_pair.limitation
+    assert "compiles, binds and runs GMRES" in implicit_pair.limitation
+    assert "independent packed-vector carrier block" in implicit_pair.limitation
+    assert "dynamic hierarchy mutation" in implicit_pair.limitation
     assert implicit_pair.available_route == (
-        "native host/serial pair primitive plus compile-only generated route"
+        "generated host/serial GMRES solve with an authenticated two-sided shared-interface "
+        "JVP on a frozen two-level 2D AMR hierarchy"
     )
-    assert "ADC-758 open" in implicit_pair.alternative
+    assert "additional interfaces, MPI or GPU" in implicit_pair.alternative
 
 
 def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_kernels():

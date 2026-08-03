@@ -605,23 +605,25 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "amr:shared_interface_implicit_jacvec_pair",
             layout="amr",
-            backend="none",
+            backend="production",
             platform="host",
             mpi=False,
             gpu=False,
-            status="unavailable",
+            status="partial",
             limitation=(
-                "the host/serial level_rhs_jacvec_pair primitive and resolve-evidence-gated "
-                "compile route exist, but no generated Program executes the implicit "
-                "solve/matvec end to end"
+                "one generated Program compiles, binds and runs GMRES with the paired "
+                "level_rhs_jacvec_pair matvec on every level of an exactly two-level frozen 2D "
+                "AMR hierarchy in host/serial execution; the two interface participants may use "
+                "one independent packed-vector carrier block, but dynamic hierarchy mutation, "
+                "additional interfaces, mixed apply operators, MPI and GPU remain unavailable"
             ),
-            requested="generated shared-interface implicit JVP solve",
             available_route=(
-                "native host/serial pair primitive plus compile-only generated route"
+                "generated host/serial GMRES solve with an authenticated two-sided shared-interface "
+                "JVP on a frozen two-level 2D AMR hierarchy"
             ),
             alternative=(
-                "keep ADC-758 open and add an end-to-end generated bind/solve/matvec proof "
-                "before advertising a production route"
+                "use the proved frozen two-level host/serial route, or add explicit execution "
+                "proof for dynamic hierarchies, additional interfaces, MPI or GPU"
             ),
             source=source,
         ),

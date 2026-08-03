@@ -113,18 +113,20 @@ Supported native routes include:
   before that level becomes the parent of the next transition; only those exact routes can authorize
   proper-nesting support across an omitted physical-boundary face. This route does not mirror one
   endpoint's AMR tags through the interface mapping.
-  One narrow shared implicit JVP development slice exists, but it is not yet reported as a
-  production-executable generated solve. Resolve authenticates exactly two runtime blocks connected
-  by one interface on a frozen two-level hierarchy, two state-only `rhs_jacvec` nodes in one packed
-  matrix-free apply, and both base residuals in the same top-level atomic RHS round. Code generation
-  consumes that exact resolve evidence before emitting the paired call. The native
+  One narrow shared implicit JVP route is production-executable on host/serial. Resolve authenticates
+  exactly two participant blocks connected by one interface on a frozen two-level hierarchy, two
+  state-only `rhs_jacvec` nodes in one packed matrix-free apply, and both base residuals in the same
+  top-level atomic RHS round. An unrelated third block may carry the two-component packed Krylov
+  vector, but cannot participate in another interface. Code generation consumes that exact resolve
+  evidence before emitting the paired call. The native
   `level_rhs_jacvec_pair` primitive perturbs both endpoint states before one shared-flux evaluation,
-  so its finite difference includes both cross-interface derivatives. The direct native primitive
-  and compile route are covered separately; no generated Program currently executes the implicit
-  solve/matvec end to end, so ADC-758 remains open and the public capability remains unavailable.
-  Field-coupled boundaries, dynamic hierarchy mutation, additional blocks/interfaces and mixed apply
-  operators fail closed. Bind requires the exact materialized prefix `(L0, L1)` and rejects MPI,
-  non-host devices and non-host memory before native interface installation.
+  so its finite difference includes both cross-interface derivatives. A generated Program now
+  compiles, binds and runs GMRES through more than one paired interface evaluation per level while
+  preserving the uncommitted packed carrier state. The public capability is therefore `partial`,
+  not unavailable.
+  Field-coupled boundaries, dynamic hierarchy mutation, additional participating interfaces and mixed
+  apply operators fail closed. Bind requires the exact materialized prefix `(L0, L1)` and rejects
+  MPI, non-host devices and non-host memory before native interface installation.
   Cross-layout interfaces without an explicit Mapping/Transfer provider, dynamic active-depth
   changes, non-finest dynamic replacements at depth greater than two, and historical
   shared-interface rates remain unavailable. Frozen and depth-preserving dynamic
