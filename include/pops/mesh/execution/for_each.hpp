@@ -23,6 +23,7 @@
 #include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/mesh/index/box.hpp>
 #include <pops/mesh/index/box2d.hpp>
+#include <pops/mesh/index/entity_index.hpp>
 
 #include <cstdint>  // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
 #include <cstdlib>  // getenv / strtol: overridable serial fallback threshold (#165)
@@ -187,10 +188,77 @@ inline bool foreach_small_box(const Box<Dim>& box, std::int64_t threshold) noexc
   return true;
 }
 
+template <class ExecutionSpace, int Dim, class F>
+void launch_index_space(const ExecutionSpace& execution, const Box<Dim>& box, const char* label,
+                        F f) {
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS iteration requires a Kokkos execution-space instance");
+  if constexpr (Dim == 1) {
+    Kokkos::parallel_for(
+        label,
+        Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<int>>(execution, box.lo[0],
+                                                                    box.hi[0] + 1),
+        KOKKOS_LAMBDA(const int i) { f(CellIndex<1>{i}); });
+  } else if constexpr (Dim == 2) {
+    Kokkos::parallel_for(
+        label,
+        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<2>, Kokkos::IndexType<int>>(
+            execution, {box.lo[0], box.lo[1]}, {box.hi[0] + 1, box.hi[1] + 1}),
+        KOKKOS_LAMBDA(const int i, const int j) { f(CellIndex<2>{i, j}); });
+  } else {
+    Kokkos::parallel_for(
+        label,
+        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<3>, Kokkos::IndexType<int>>(
+            execution, {box.lo[0], box.lo[1], box.lo[2]},
+            {box.hi[0] + 1, box.hi[1] + 1, box.hi[2] + 1}),
+        KOKKOS_LAMBDA(const int i, const int j, const int k) { f(CellIndex<3>{i, j, k}); });
+  }
+}
+
+template <int Dim, int Axis, class F>
+struct FaceKernelAdapter {
+  F functor;
+
+  POPS_HD void operator()(const CellIndex<Dim>& index) const {
+    functor(FaceIndex<Dim, Axis>{index});
+  }
+};
+
 }  // namespace detail
 
+/// Return the face-index box normal to compile-time @p Axis.  A cell box contains one more face
+/// than cells along its normal axis and retains the cell extents along every tangent axis.
+template <int Axis, int Dim>
+Box<Dim> face_box(const Box<Dim>& cells) {
+  static_assert(Axis >= 0 && Axis < Dim,
+                "pops::face_box axis must lie inside the compile-time rank");
+  if (cells.empty())
+    return cells;
+  detail::require_iterable_box(cells);
+  Box<Dim> faces = cells;
+  ++faces.hi[Axis];
+  return faces;
+}
+
+/// Submit a cell kernel to an explicit Kokkos execution-space instance.  Unlike the default host
+/// convenience overload, this path never substitutes a synchronous small-box loop, so task-graph
+/// and accelerator-stream ordering remain owned by the supplied instance.
+template <class ExecutionSpace, int Dim, class F>
+void for_each_cell(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
+  if (b.empty())
+    return;
+  detail::require_iterable_box(b);
+  detail::ensure_kokkos_initialized();
+  if constexpr (Dim == 1)
+    detail::launch_index_space(execution, b, "pops_for_each_cell_1d", f);
+  else if constexpr (Dim == 2)
+    detail::launch_index_space(execution, b, "pops_for_each_cell_2d", f);
+  else
+    detail::launch_index_space(execution, b, "pops_for_each_cell_3d", f);
+}
+
 /// Applies @p f to every index of a compile-time-ranked box.  The functor is passed by value and
-/// receives Index<Dim>; the selected Kokkos policy has the same static rank as the box.
+/// receives CellIndex<Dim>; the selected Kokkos policy has the same static rank as the box.
 template <int Dim, class F>
 void for_each_cell(const Box<Dim>& b, F f) {
   if (b.empty())
@@ -201,43 +269,57 @@ void for_each_cell(const Box<Dim>& b, F f) {
       record_fallback(FallbackCounter::kForeachSerialSmallBox);
       if constexpr (Dim == 1) {
         for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          f(Index<1>{i});
+          f(CellIndex<1>{i});
       } else if constexpr (Dim == 2) {
         for (int j = b.lo[1]; j <= b.hi[1]; ++j)
           for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            f(Index<2>{i, j});
+            f(CellIndex<2>{i, j});
       } else {
         for (int k = b.lo[2]; k <= b.hi[2]; ++k)
           for (int j = b.lo[1]; j <= b.hi[1]; ++j)
             for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-              f(Index<3>{i, j, k});
+              f(CellIndex<3>{i, j, k});
       }
       return;
     }
   }
   detail::ensure_kokkos_initialized();
-  if constexpr (Dim == 1) {
-    Kokkos::parallel_for(
-        "pops_for_each_index_1d", Kokkos::RangePolicy<Kokkos::IndexType<int>>(b.lo[0], b.hi[0] + 1),
-        KOKKOS_LAMBDA(const int i) { f(Index<1>{i}); });
-  } else if constexpr (Dim == 2) {
-    Kokkos::parallel_for(
-        "pops_for_each_index_2d",
-        Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>({b.lo[0], b.lo[1]},
-                                                                       {b.hi[0] + 1, b.hi[1] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j) { f(Index<2>{i, j}); });
-  } else {
-    Kokkos::parallel_for(
-        "pops_for_each_index_3d",
-        Kokkos::MDRangePolicy<Kokkos::Rank<3>, Kokkos::IndexType<int>>(
-            {b.lo[0], b.lo[1], b.lo[2]}, {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
-        KOKKOS_LAMBDA(const int i, const int j, const int k) { f(Index<3>{i, j, k}); });
-  }
+  const Kokkos::DefaultExecutionSpace execution{};
+  for_each_cell(execution, b, f);
 }
 
-/// SUM reduction over a compile-time-ranked box.  The functor receives Index<Dim>.
+/// Submit the product of a compile-time-ranked integer box.  This is the non-cell semantic facade
+/// used by topology, pack/unpack, and task-graph work while sharing the same static Kokkos policies.
+template <class ExecutionSpace, int Dim, class F>
+void for_each_product(const ExecutionSpace& execution, const Box<Dim>& product, F f) {
+  for_each_cell(execution, product, f);
+}
+
 template <int Dim, class F>
-Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
+void for_each_product(const Box<Dim>& product, F f) {
+  for_each_cell(product, f);
+}
+
+/// Submit faces normal to compile-time @p Axis.  Axis is a type property of every FaceIndex passed
+/// to the functor, so flux and metric kernels do not branch on direction in their inner loop.
+template <int Axis, class ExecutionSpace, int Dim, class F>
+void for_each_face(const ExecutionSpace& execution, const Box<Dim>& cells, F f) {
+  const Box<Dim> faces = face_box<Axis>(cells);
+  for_each_cell(execution, faces, detail::FaceKernelAdapter<Dim, Axis, F>{f});
+}
+
+template <int Axis, int Dim, class F>
+void for_each_face(const Box<Dim>& cells, F f) {
+  const Box<Dim> faces = face_box<Axis>(cells);
+  for_each_cell(faces, detail::FaceKernelAdapter<Dim, Axis, F>{f});
+}
+
+/// SUM reduction on an explicit execution-space instance.  The returned scalar establishes the
+/// completion dependency for this reduction only; unrelated submitted work remains unfenced.
+template <class ExecutionSpace, int Dim, class F>
+Real for_each_cell_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS reduction requires a Kokkos execution-space instance");
   if (b.empty())
     return Real(0);
   detail::require_iterable_box(b);
@@ -246,14 +328,15 @@ Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
   if constexpr (Dim == 1) {
     Kokkos::parallel_reduce(
         "pops_reduce_sum_index_1d",
-        Kokkos::RangePolicy<Kokkos::IndexType<int>>(b.lo[0], b.hi[0] + 1),
+        Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<int>>(execution, b.lo[0],
+                                                                    b.hi[0] + 1),
         KOKKOS_LAMBDA(const int i, Real& accumulator) { accumulator += f(Index<1>{i}); },
         Kokkos::Sum<Real>{result});
   } else if constexpr (Dim == 2) {
     Kokkos::parallel_reduce(
         "pops_reduce_sum_index_2d",
-        Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>({b.lo[0], b.lo[1]},
-                                                                       {b.hi[0] + 1, b.hi[1] + 1}),
+        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<2>, Kokkos::IndexType<int>>(
+            execution, {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
         KOKKOS_LAMBDA(const int i, const int j, Real& accumulator) {
           accumulator += f(Index<2>{i, j});
         },
@@ -261,8 +344,9 @@ Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
   } else {
     Kokkos::parallel_reduce(
         "pops_reduce_sum_index_3d",
-        Kokkos::MDRangePolicy<Kokkos::Rank<3>, Kokkos::IndexType<int>>(
-            {b.lo[0], b.lo[1], b.lo[2]}, {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
+        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<3>, Kokkos::IndexType<int>>(
+            execution, {b.lo[0], b.lo[1], b.lo[2]},
+            {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
         KOKKOS_LAMBDA(const int i, const int j, const int k, Real& accumulator) {
           accumulator += f(Index<3>{i, j, k});
         },
@@ -271,9 +355,21 @@ Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
   return result;
 }
 
-/// MAX reduction over a compile-time-ranked box.  The functor receives Index<Dim>.
+/// SUM reduction over a compile-time-ranked box on the default execution-space instance.
 template <int Dim, class F>
-Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
+Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::ensure_kokkos_initialized();
+  const Kokkos::DefaultExecutionSpace execution{};
+  return for_each_cell_reduce_sum(execution, b, f);
+}
+
+/// MAX reduction on an explicit execution-space instance.
+template <class ExecutionSpace, int Dim, class F>
+Real for_each_cell_reduce_max(const ExecutionSpace& execution, const Box<Dim>& b, F f) {
+  static_assert(Kokkos::is_execution_space<ExecutionSpace>::value,
+                "PoPS reduction requires a Kokkos execution-space instance");
   if (b.empty())
     return Real(0);
   detail::require_iterable_box(b);
@@ -282,7 +378,8 @@ Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
   if constexpr (Dim == 1) {
     Kokkos::parallel_reduce(
         "pops_reduce_max_index_1d",
-        Kokkos::RangePolicy<Kokkos::IndexType<int>>(b.lo[0], b.hi[0] + 1),
+        Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<int>>(execution, b.lo[0],
+                                                                    b.hi[0] + 1),
         KOKKOS_LAMBDA(const int i, Real& accumulator) {
           const Real value = f(Index<1>{i});
           if (value > accumulator)
@@ -292,8 +389,8 @@ Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
   } else if constexpr (Dim == 2) {
     Kokkos::parallel_reduce(
         "pops_reduce_max_index_2d",
-        Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>({b.lo[0], b.lo[1]},
-                                                                       {b.hi[0] + 1, b.hi[1] + 1}),
+        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<2>, Kokkos::IndexType<int>>(
+            execution, {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
         KOKKOS_LAMBDA(const int i, const int j, Real& accumulator) {
           const Real value = f(Index<2>{i, j});
           if (value > accumulator)
@@ -303,8 +400,9 @@ Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
   } else {
     Kokkos::parallel_reduce(
         "pops_reduce_max_index_3d",
-        Kokkos::MDRangePolicy<Kokkos::Rank<3>, Kokkos::IndexType<int>>(
-            {b.lo[0], b.lo[1], b.lo[2]}, {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
+        Kokkos::MDRangePolicy<ExecutionSpace, Kokkos::Rank<3>, Kokkos::IndexType<int>>(
+            execution, {b.lo[0], b.lo[1], b.lo[2]},
+            {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
         KOKKOS_LAMBDA(const int i, const int j, const int k, Real& accumulator) {
           const Real value = f(Index<3>{i, j, k});
           if (value > accumulator)
@@ -313,6 +411,26 @@ Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
         Kokkos::Max<Real>{result});
   }
   return result;
+}
+
+/// MAX reduction over a compile-time-ranked box on the default execution-space instance.
+template <int Dim, class F>
+Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::ensure_kokkos_initialized();
+  const Kokkos::DefaultExecutionSpace execution{};
+  return for_each_cell_reduce_max(execution, b, f);
+}
+
+template <class ExecutionSpace, int Dim, class F>
+Real for_each_product_reduce_sum(const ExecutionSpace& execution, const Box<Dim>& product, F f) {
+  return for_each_cell_reduce_sum(execution, product, f);
+}
+
+template <int Dim, class F>
+Real for_each_product_reduce_sum(const Box<Dim>& product, F f) {
+  return for_each_cell_reduce_sum(product, f);
 }
 
 /// Applies @p f to EACH cell (i, j) of box @p b (bounds inclusive), via Kokkos::parallel_for

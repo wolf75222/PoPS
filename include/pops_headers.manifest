@@ -68,6 +68,7 @@ test-only pops/mesh/nd_proof/translation_exchange.hpp
 api pops/mesh/index/box.hpp
 api pops/mesh/index/box2d.hpp
 api pops/mesh/index/box_hash.hpp
+api pops/mesh/index/entity_index.hpp
 api pops/mesh/index/extent.hpp
 api pops/mesh/index/index.hpp
 api pops/mesh/index/real_vector.hpp
