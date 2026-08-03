@@ -482,6 +482,14 @@ def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
     assert payload["runtime"] == "uniform"
     assert payload["instance"]["bind_identity"] == plan.bind_identity.to_data()
     assert payload["instance"]["plan_identity"] == plan.artifact.plan.plan_identity.to_data()
+    assert payload["instance"]["resolved_dimension"] == 2
+    assert payload["instance"]["supported_dimensions"] == [2]
+    assert payload["runtime_environment"]["dimension"] == 2
+    assert payload["runtime_environment"]["supported_dimensions"] == [2]
+    assert payload["instance"]["native_spatial_layouts"] == {
+        layout_id: row.to_data()
+        for layout_id, row in plan.artifact.native_layouts.items()
+    }
     assert payload["instance"]["runtime_plan"] == runtime._runtime_plan.to_data()
     assert (
         payload["instance"]["runtime_plan"]["communication"]["layout_plan_id"]

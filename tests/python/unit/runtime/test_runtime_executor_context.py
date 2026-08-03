@@ -528,40 +528,52 @@ def test_runtime_install_rejects_concurrent_overwrite_transfer_targets():
 def test_cartesian_grid_lowering_is_exact_and_refuses_unrepresentable_geometry():
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
+    from pops.layouts import Uniform
     from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.mesh import normalize_layout_plan
+    from pops.model import OwnerPath
     from pops.runtime._runtime_mesh_lowering import _uniform_system_values
 
-    with pytest.raises(NotImplementedError, match="exact pops.mesh.CartesianGrid"):
+    def native(grid, name):
+        normalized, = normalize_layout_plan(
+            Uniform(grid), owner=OwnerPath.case(name)).layouts
+        assert normalized.native_spatial_layout is not None
+        return normalized.native_spatial_layout
+
+    with pytest.raises(TypeError, match="exact NativeSpatialLayout"):
         _uniform_system_values(SimpleNamespace(n=16, L=2.0, periodic=False))
 
     square = CartesianGrid(
         frame=Rectangle("square", (0.0, 0.0), (2.0, 2.0)).frame(Cartesian2D()),
         cells=(16, 16),
     )
-    assert _uniform_system_values(square) == (16, 2.0, (False, False), 0.0, 0.0)
+    assert _uniform_system_values(native(square, "square")) == (
+        16, 2.0, (False, False), 0.0, 0.0)
 
     periodic = CartesianGrid(
         frame=square.frame,
         cells=(16, 16),
         periodic=PeriodicAxes(square.frame.axes),
     )
-    assert _uniform_system_values(periodic) == (16, 2.0, (True, True), 0.0, 0.0)
+    assert _uniform_system_values(native(periodic, "periodic")) == (
+        16, 2.0, (True, True), 0.0, 0.0)
 
     partial = CartesianGrid(
         frame=square.frame,
         cells=(16, 16),
         periodic=PeriodicAxes((square.frame.x,)),
     )
-    assert _uniform_system_values(partial) == (16, 2.0, (True, False), 0.0, 0.0)
+    assert _uniform_system_values(native(partial, "partial")) == (
+        16, 2.0, (True, False), 0.0, 0.0)
 
     rectangular_cells = CartesianGrid(frame=square.frame, cells=(16, 8))
     with pytest.raises(NotImplementedError, match="rectangular CartesianGrid"):
-        _uniform_system_values(rectangular_cells)
+        _uniform_system_values(native(rectangular_cells, "rectangular"))
     shifted = CartesianGrid(
         frame=Rectangle("shifted", (1.0, 0.0), (3.0, 2.0)).frame(Cartesian2D()),
         cells=(16, 16),
     )
-    assert _uniform_system_values(shifted) == (
+    assert _uniform_system_values(native(shifted, "shifted")) == (
         16, 2.0, (False, False), 1.0, 0.0,
     )
 

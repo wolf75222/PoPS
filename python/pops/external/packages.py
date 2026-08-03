@@ -389,7 +389,8 @@ def _require_fixed_signature(manifest: ComponentManifest) -> None:
 
 
 def _require_platform_matches(manifests: tuple[ComponentManifest, ...], platform: Any) -> None:
-    dimensions = tuple(platform.capabilities["dimensions"].require("platform.dimensions"))
+    dimensions = tuple(platform.capabilities["supported_dimensions"].require(
+        "platform.supported_dimensions"))
     scalar = platform.precision.compute.require("platform.precision.compute")
     device = platform.device.require("platform.device")
     normalized_device = "cpu" if device in ("host", "cpu") else device

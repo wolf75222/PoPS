@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -119,6 +120,39 @@ def test_unknown_is_missing_proof_and_3d_is_representable_then_refused():
     assert three_d.dimension == 3
     with pytest.raises(PlatformContractError, match="unsupported dimension=3"):
         launch_checked(_platform(), _context(), [three_d], lambda *_: None)
+
+
+def test_platform_support_set_is_distinct_from_layout_resolved_dimension():
+    platform = _platform()
+    context = _context()
+    supported = _proof((1, 2, 3))
+    platform = replace(
+        platform,
+        capabilities=dict(platform.capabilities, supported_dimensions=supported),
+    )
+    context = replace(
+        context,
+        backend=replace(
+            context.backend,
+            capabilities=dict(
+                context.backend.capabilities,
+                supported_dimensions=supported,
+            ),
+        ),
+    )
+    plan = SimpleNamespace(
+        artifact=SimpleNamespace(
+            platform_manifest=platform,
+            plan=SimpleNamespace(resolved_dimension=2),
+        ),
+        execution_context=context,
+    )
+
+    from pops.runtime._runtime_plan_io import proved_platform
+
+    _, _, _, facts = proved_platform(plan)
+    assert facts["supported_dimensions"] == (1, 2, 3)
+    assert facts["dimension"] == 2
 
 
 @pytest.mark.parametrize("changed", [

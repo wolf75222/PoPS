@@ -28,7 +28,7 @@ _CENTERINGS = frozenset({"cell", "node", "face_x", "face_y", "face_z"})
 _LAYOUTS = frozenset({"right", "left", "strided"})
 _OWNERSHIP = frozenset({"borrowed", "owned", "shared"})
 _FIELD_CAPABILITIES = (
-    "dimensions",
+    "supported_dimensions",
     "centerings",
     "scalars",
     "layouts",
@@ -449,8 +449,8 @@ def _validate_launch_facts(platform: PlatformManifest, context: ExecutionContext
             "runtime does not prove the generic field-view launch contract",
             field="generic_field_view", expected=True, actual=generic_field_view)
     supported_dimensions = tuple(_field_capability(
-        backend, "dimensions", owner="runtime").require(
-        "runtime.capabilities.dimensions"))
+        backend, "supported_dimensions", owner="runtime").require(
+        "runtime.capabilities.supported_dimensions"))
     supported_centerings = tuple(_field_capability(
         backend, "centerings", owner="runtime").require(
         "runtime.capabilities.centerings"))
@@ -664,7 +664,7 @@ def proven_serial_manifest(*, backend: str, target: str, abi: str,
                precision=PrecisionPolicy(*(proof("float64") for _ in range(4))),
                device=proof("host"), memory_spaces=proof(("host",)),
                communicator=proof("serial"), capabilities={
-                   "dimensions": proof((2,)), "centerings": proof(("cell",)),
+                   "supported_dimensions": proof((2,)), "centerings": proof(("cell",)),
                    "scalars": proof(("float64",)),
                    "layouts": proof(("right", "left", "strided")),
                    "ownership": proof(("borrowed", "owned", "shared")),
@@ -730,7 +730,7 @@ def artifact_platform_manifest(
         device_proof = proof(device_value) if device_value else unknown()
         memory_proof = proof(tuple(spaces)) if spaces else unknown()
         capabilities = {
-            "dimensions": proof((2,)), "centerings": proof(("cell",)),
+            "supported_dimensions": proof((2,)), "centerings": proof(("cell",)),
             "scalars": proof(("float64",)),
             "layouts": proof(("right", "left", "strided")),
             "ownership": proof(("borrowed", "owned", "shared")),

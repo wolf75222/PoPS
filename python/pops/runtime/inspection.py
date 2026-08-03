@@ -146,6 +146,17 @@ def build_runtime_inspection(
     cap_report = native_capability_report()
     cap_dict = cap_report.to_dict()
     options = _options(sim, runtime)
+    environment = runtime_environment_report()
+    if instance is not None:
+        selected = instance.get("resolved_dimension")
+        supported = instance.get("supported_dimensions")
+        if isinstance(selected, bool) or not isinstance(selected, int):
+            raise TypeError("runtime instance inspection requires one exact resolved_dimension")
+        if not isinstance(supported, list) or selected not in supported:
+            raise ValueError(
+                "runtime instance resolved_dimension is absent from supported_dimensions")
+        environment["dimension"] = selected
+        environment["supported_dimensions"] = list(supported)
     limitations = [
         {"feature": row.feature, "status": row.status, "reason": row.limitation}
         for row in cap_report.routes
@@ -155,7 +166,7 @@ def build_runtime_inspection(
         runtime=runtime,
         blocks=_block_names(sim),
         clock=_clock(sim),
-        runtime_environment=runtime_environment_report(),
+        runtime_environment=environment,
         capabilities=cap_dict,
         program=_program(sim),
         profile=PerformanceSummary(_profile_payload(sim)).to_dict(),

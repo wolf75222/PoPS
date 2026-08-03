@@ -96,15 +96,28 @@ def native_runtime_backend_for_route(backend, target, communicator):
     memory_spaces = data["memory_spaces"]
     if not isinstance(memory_spaces, (list, tuple)):
         raise TypeError("native runtime memory_spaces must be a sequence")
-    result = RuntimeBackendManifest(
+    legacy_capabilities = {
+        name: proof(tuple(value) if isinstance(value, list) else value)
+        for name, value in capabilities.items()
+    }
+    legacy = RuntimeBackendManifest(
         backend=proof(data["backend"]), target=proof(data["target"]), abi=proof(data["abi"]),
         precision=PrecisionPolicy(**{name: proof(value) for name, value in precision.items()}),
         device=proof(data["device"]), memory_spaces=proof(tuple(memory_spaces)),
         communicator=proof(data["communicator"]),
-        capabilities={name: proof(tuple(value) if isinstance(value, list) else value)
-                      for name, value in capabilities.items()})
-    if result.identity.token != data["identity"]:
+        capabilities=legacy_capabilities)
+    if legacy.identity.token != data["identity"]:
         raise ValueError("native RuntimeBackendManifest identity does not match its exact payload")
+    if "supported_dimensions" in legacy_capabilities or "dimensions" not in legacy_capabilities:
+        raise ValueError(
+            "native RuntimeBackendManifest must expose the exact legacy dimensions wire field")
+    translated_capabilities = dict(legacy_capabilities)
+    translated_capabilities["supported_dimensions"] = translated_capabilities.pop("dimensions")
+    result = RuntimeBackendManifest(
+        backend=proof(data["backend"]), target=proof(data["target"]), abi=proof(data["abi"]),
+        precision=PrecisionPolicy(**{name: proof(value) for name, value in precision.items()}),
+        device=proof(data["device"]), memory_spaces=proof(tuple(memory_spaces)),
+        communicator=proof(data["communicator"]), capabilities=translated_capabilities)
     return result
 
 

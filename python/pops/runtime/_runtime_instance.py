@@ -778,6 +778,16 @@ class RuntimeInstance:
                 "artifact_identity": self._install_plan.artifact.artifact_identity.to_data(),
                 "plan_identity": self._install_plan.artifact.plan.plan_identity.to_data(),
                 "layout_plan": self._layout_plan.inspect(),
+                "resolved_dimension": self._install_plan.artifact.resolved_dimension,
+                "supported_dimensions": list(
+                    self._install_plan.artifact.platform_manifest.capabilities[
+                        "supported_dimensions"
+                    ].require("artifact.platform.supported_dimensions")
+                ),
+                "native_spatial_layouts": {
+                    layout_id: row.to_data()
+                    for layout_id, row in self._install_plan.artifact.native_layouts.items()
+                },
                 "execution_context": self._execution_context.to_data(),
                 "runtime_plan": self._runtime_plan.to_data(),
                 "installed_components": [
