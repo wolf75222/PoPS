@@ -186,12 +186,14 @@ Supported native routes include:
   `riemann:typed_failure_outcome` is deliberately `partial`: every built-in returns the common
   device-copyable `FluxEvaluation` with typed status, stability bound, reason code, requested/used/
   last solver identity and attempt metadata. A single-solver route remains explicit, while a
-  statically instantiated C++ `PreparedRiemannRecoveryPolicy<RoeFlux, HLLFlux, RusanovFlux,
-  RejectRiemannRecovery>` can execute the declared ordered chain in the ordinary Uniform/AMR face
-  hot loop. Only a typed candidate rejection advances; retry and fatal outcomes remain terminal.
-  The route remains `partial`: Python/component preparation, block/team and MPI fallback counters,
-  GPU qualification, restart publication metadata, backend matrices and performance budgets are not
-  yet delivered.
+  typed public `riemann.Recovery(primary=Roe(), fallbacks=(HLL(), Rusanov()))` descriptor lowers to
+  the sole statically instantiated C++ `PreparedRiemannRecoveryPolicy<RoeFlux, HLLFlux,
+  RusanovFlux, RejectRiemannRecovery>` in the ordinary Cartesian Uniform/AMR face hot loop. Other
+  orders, duplicate or configured candidates, external descriptors, and untyped values are refused
+  before compile; annular polar geometry is explicitly unavailable. Only a typed candidate rejection
+  advances; retry and fatal outcomes remain terminal. The route remains `partial`: block/team and MPI
+  fallback counters, GPU qualification, restart publication metadata, backend matrices and
+  performance budgets are not yet delivered.
 - Prepared variable recovery is explicitly `partial`. One block-prepared closed-form method returns
   a device-copyable `RecoveryOutcome`/`RecoveryReport`. Type erasure retains both the selected and
   last-attempted method kinds, so a successful fallback or a refusal cannot be reported as an opaque

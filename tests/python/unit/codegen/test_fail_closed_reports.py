@@ -207,12 +207,12 @@ def test_riemann_recovery_routes_distinguish_typed_rejection_from_missing_policy
     assert policy.backend == "production"
     assert policy.mpi is False
     assert policy.gpu is False
-    assert "fixed device-copyable C++ PreparedRiemannRecoveryPolicy" in policy.limitation
-    assert "ordinary face hot loop" in policy.limitation
-    assert "only typed candidate rejection advances" in policy.limitation
-    assert "no public Python/component preparation route" in policy.limitation
+    assert "typed public riemann.Recovery descriptor" in policy.limitation
+    assert "Uniform and AMR Cartesian face kernels" in policy.limitation
+    assert "only typed candidate rejection" in policy.limitation
+    assert "polar geometry is refused" in policy.limitation
     assert "GPU qualification" in policy.limitation
-    assert "PreparedRiemannRecoveryPolicy<RoeFlux" in policy.available_route
+    assert "riemann.Recovery(primary=Roe()" in policy.available_route
     assert "consume rejection through the step retry/failure policy" in policy.alternative
 
 

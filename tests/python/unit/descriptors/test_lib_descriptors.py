@@ -48,6 +48,91 @@ def test_riemann_native_ids_are_exact():
     assert lib.riemann.Roe().native_id == "pops::RoeFlux"
 
 
+def test_riemann_recovery_is_the_exact_prepared_native_policy():
+    descriptor = lib.riemann.Recovery(
+        primary=lib.riemann.Roe(),
+        fallbacks=(lib.riemann.HLL(), lib.riemann.Rusanov()),
+    )
+
+    assert descriptor.brick_type == "native"
+    assert descriptor.scheme == "roe_hll_rusanov_recovery"
+    assert descriptor.native_id == (
+        "pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,"
+        "pops::RusanovFlux,pops::RejectRiemannRecovery>"
+    )
+    assert descriptor.options["recovery_order"] == (
+        "roe", "hll", "rusanov", "reject"
+    )
+    assert set(descriptor.requirements["capabilities"]) >= {
+        "physical_flux", "provider_pack", "stability_bound", "wave_speeds",
+        "roe_dissipation",
+    }
+
+
+@pytest.mark.parametrize(
+    ("primary", "fallbacks", "message"),
+    (
+        ("roe", (lib.riemann.HLL(), lib.riemann.Rusanov()), "typed built-in"),
+        (lib.riemann.Roe(), [lib.riemann.HLL(), lib.riemann.Rusanov()], "requires a tuple"),
+        (
+            lib.riemann.Roe(),
+            (lib.riemann.HLL(), lib.riemann.HLL()),
+            "candidates must be unique",
+        ),
+        (
+            lib.riemann.HLL(),
+            (lib.riemann.Roe(), lib.riemann.Rusanov()),
+            "supports exactly primary=Roe()",
+        ),
+        (
+            lib.riemann.Roe(),
+            (lib.riemann.HLL(waves=_num.riemann.waves.ExplicitPair()),
+             lib.riemann.Rusanov()),
+            "carries candidate options",
+        ),
+    ),
+)
+def test_riemann_recovery_refuses_non_exact_sequences(primary, fallbacks, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        lib.riemann.Recovery(primary=primary, fallbacks=fallbacks)
+
+
+def test_riemann_recovery_refuses_external_and_forged_native_candidates():
+    external = lib.BrickDescriptor(
+        "acme.roe", "external_cpp", category="riemann", native_id="acme_roe",
+        scheme="roe",
+    )
+    with pytest.raises(ValueError, match="refuses external/non-native"):
+        lib.riemann.Recovery(
+            primary=external,
+            fallbacks=(lib.riemann.HLL(), lib.riemann.Rusanov()),
+        )
+
+    forged = lib.BrickDescriptor(
+        "roe", "native", category="riemann", native_id="pops::RoeFlux", scheme="roe",
+        requirements={"capabilities": []},
+    )
+    with pytest.raises(ValueError, match="not the catalog-authenticated"):
+        lib.riemann.Recovery(
+            primary=forged,
+            fallbacks=(lib.riemann.HLL(), lib.riemann.Rusanov()),
+        )
+
+
+def test_riemann_recovery_public_validation_refuses_polar_without_substitution():
+    descriptor = lib.riemann.Recovery(
+        primary=lib.riemann.Roe(),
+        fallbacks=(lib.riemann.HLL(), lib.riemann.Rusanov()),
+    )
+
+    availability = lib.riemann.available(descriptor, {"layout": "polar"})
+    assert availability.ok is False
+    assert "catalog polar_ok=false" in availability.reason
+    assert "no fallback or candidate substitution" in availability.reason
+    with pytest.raises(ValueError, match="unavailable on annular polar geometry"):
+        lib.riemann.validate(descriptor, {"layout": "polar"})
+
+
 def test_reconstruction_weno5z_is_native():
     d = lib.reconstruction.WENO5Z()
     assert d.brick_type == "native"

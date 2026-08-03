@@ -493,19 +493,19 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=False,
             status="partial",
             limitation=(
-                "a fixed device-copyable C++ PreparedRiemannRecoveryPolicy executes a validated "
-                "ordered candidate chain in the ordinary face hot loop and records requested, "
-                "used, last-attempted, first-cause, and attempt-count provenance; only typed "
-                "candidate rejection advances, but no public Python/component preparation route, "
-                "block/team counter, MPI fallback reduction, GPU qualification, restart metadata, "
-                "or benchmark gate exists yet"
+                "the typed public riemann.Recovery descriptor lowers one catalog-authenticated "
+                "Roe -> HLL -> Rusanov -> reject PreparedRiemannRecoveryPolicy into Uniform and "
+                "AMR Cartesian face kernels and records requested, used, last-attempted, "
+                "first-cause, and attempt-count provenance; only typed candidate rejection "
+                "advances, while polar geometry is refused and block/team counters, MPI fallback "
+                "reduction, GPU qualification, restart metadata, and a benchmark gate remain"
             ),
             requested=(
                 "prepared Riemann recovery chain with requested/used solver diagnostics"
             ),
             available_route=(
-                "PreparedRiemannRecoveryPolicy<RoeFlux, HLLFlux, RusanovFlux, "
-                "RejectRiemannRecovery> in a statically instantiated C++ spatial route"
+                "pops.numerics.riemann.Recovery(primary=Roe(), "
+                "fallbacks=(HLL(), Rusanov()))"
             ),
             alternative=(
                 "select one supported Riemann route explicitly and consume rejection through "
