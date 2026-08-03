@@ -12,6 +12,7 @@ PROVIDER = ROOT / "include/pops/numerics/nonlinear/prepared_local_nonlinear.hpp"
 COLLECTIVE = ROOT / "include/pops/numerics/nonlinear/local_nonlinear_collective.hpp"
 IMPLICIT_STEPPER = ROOT / "include/pops/numerics/time/integrators/implicit_stepper.hpp"
 MODEL_KERNELS = ROOT / "python/pops/codegen/program_emit_model_kernels.py"
+PROGRAM_OPS = ROOT / "python/pops/codegen/program_emit_ops.py"
 
 
 def _without_cpp_comments(source: str) -> str:
@@ -130,9 +131,10 @@ def test_failure_location_uses_staged_integer_collectives_without_float_packing(
     provider = PROVIDER.read_text(encoding="utf-8")
     implicit = IMPLICIT_STEPPER.read_text(encoding="utf-8")
     generated = MODEL_KERNELS.read_text(encoding="utf-8")
+    program_ops = PROGRAM_OPS.read_text(encoding="utf-8")
     collective = COLLECTIVE.read_text(encoding="utf-8")
 
-    for source in (provider, implicit, generated):
+    for source in (provider, implicit, generated, program_ops):
         assert "encode_local_nonlinear_failure" not in source
         assert "encode_ranked_local_nonlinear_failure" not in source
     assert "Kokkos::Min<int>" in collective
