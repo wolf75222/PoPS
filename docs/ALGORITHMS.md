@@ -259,8 +259,14 @@ drive a dense Roe-type dissipation via the DSL emitter `m.roe_from_jacobian()` (
 `pops::roe_abs_apply`
 ([`include/pops/numerics/linalg/dense_eig.hpp`](../include/pops/numerics/linalg/dense_eig.hpp)) behind a real-spectrum
 gate. A real singular Jacobian uses the native zero-mode projector. A complex or non-converged
-spectrum is rejected; the provider never substitutes another Riemann solver. Passing
-`entropy_fix=delta` applies the Harten spectral function directly to the dense Jacobian. This provider
+spectrum is rejected; the provider never substitutes another Riemann solver. Passing the typed
+`entropy_fix=riemann.Harten(delta)` policy applies the Harten spectral function directly to the
+dense Jacobian; `riemann.NoEntropyFix()` (the default for `roe_from_jacobian`) selects the matrix
+absolute value. Role-generated Roe keeps its historical `riemann.Harten(0.1)` default and also
+accepts `riemann.NoEntropyFix()` explicitly. Bare entropy scalars are rejected during authoring.
+The detached artifact records `fluid_roles_v1`, `direct_action_v1`, or `flux_jacobian_v1` together
+with the exact canonical entropy option. Runtime availability and inspection consume that evidence;
+they never reconstruct a provider from `has_roe=True`. This provider
 evaluates the flux Jacobian at the arithmetic midpoint $(U_L+U_R)/2$. It is therefore a Roe-type
 linearization for a general nonlinear flux, not a claim that the resulting matrix satisfies the exact
 Roe secant identity $F_R-F_L=A(U_R-U_L)$.
