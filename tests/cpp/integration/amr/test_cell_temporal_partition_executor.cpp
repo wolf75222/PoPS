@@ -401,6 +401,8 @@ TEST(test_cell_temporal_partition_executor,
   EXPECT_EQ(executor.checkpoint().synchronization_tick, 1);
   EXPECT_NE(executor.exact_contract(), initial_contract);
 
+  const SameLevelCellIntegratedFluxLedgerAcceptedState first_accepted_flux =
+      ledger->accepted_state();
   const std::vector<double> after_first_commit = runtime->density(0);
   executor.begin_attempt(2);
   executor.advance_to_barrier();
@@ -410,6 +412,17 @@ TEST(test_cell_temporal_partition_executor,
   EXPECT_EQ(ledger->begin_tick(), 1);
   EXPECT_EQ(ledger->end_tick(), 2);
   EXPECT_EQ(executor.checkpoint().synchronization_tick, 2);
+
+  ledger->restore_accepted_state(first_accepted_flux);
+  EXPECT_EQ(ledger->publication_generation(), 1u);
+  EXPECT_EQ(ledger->begin_tick(), 0);
+  EXPECT_EQ(ledger->end_tick(), 1);
+  EXPECT_EQ(ledger->tick_denominator(), 100);
+  for (int component = 0; component < ledger->component_count(); ++component)
+    EXPECT_DOUBLE_EQ(
+        ledger->integrated_flux(0, SameLevelCellFace::XLow, component),
+        first_accepted_flux.integrated_flux[SameLevelCellIntegratedFluxLedger::storage_offset(
+            0, SameLevelCellFace::XLow, component, ledger->component_count())]);
 }
 
 TEST(test_cell_temporal_partition_executor,

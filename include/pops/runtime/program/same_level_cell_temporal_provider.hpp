@@ -35,6 +35,25 @@ namespace pops::runtime::program {
 
 enum class SameLevelCellFace : std::uint8_t { XLow = 0, XHigh = 1, YLow = 2, YHigh = 3 };
 
+/// Complete accepted image of one same-level integrated-flux publication.
+///
+/// The static layout qualifiers are retained deliberately: a rollback may restore only the exact
+/// ledger that produced the image.  This prevents a stale local-time context from publishing fluxes
+/// into a rematerialized hierarchy that happens to have the same number of cells.
+struct SameLevelCellIntegratedFluxLedgerAcceptedState {
+  std::uint64_t topology_epoch = 0;
+  std::uint64_t materialization_generation = 0;
+  std::size_t block = 0;
+  int level = 0;
+  std::size_t cell_count = 0;
+  int component_count = 0;
+  std::vector<Real, fab_allocator<Real>> integrated_flux;
+  std::int64_t begin_tick = 0;
+  std::int64_t end_tick = 0;
+  std::int64_t tick_denominator = 1;
+  std::uint64_t publication_generation = 0;
+};
+
 /// Accepted, fixed-shape time-integrated face-flux publication.
 ///
 /// Each cell owns four face records, avoiding device races while retaining both copies of an
@@ -69,6 +88,59 @@ class SameLevelCellIntegratedFluxLedger {
   [[nodiscard]] std::int64_t tick_denominator() const noexcept { return tick_denominator_; }
   [[nodiscard]] std::uint64_t publication_generation() const noexcept {
     return publication_generation_;
+  }
+
+  /// Copy the accepted publication into caller-owned reusable storage.
+  ///
+  /// Program attempts keep one resident image and reuse its capacity across steps.  Any allocation
+  /// therefore happens at the transaction boundary, never in the prepared rung loop.
+  void copy_accepted_state_into(
+      SameLevelCellIntegratedFluxLedgerAcceptedState& state) const {
+    state.topology_epoch = topology_epoch_;
+    state.materialization_generation = materialization_generation_;
+    state.block = block_;
+    state.level = level_;
+    state.cell_count = cell_count_;
+    state.component_count = component_count_;
+    state.integrated_flux.resize(accepted_.size());
+    std::copy(accepted_.begin(), accepted_.end(), state.integrated_flux.begin());
+    state.begin_tick = begin_tick_;
+    state.end_tick = end_tick_;
+    state.tick_denominator = tick_denominator_;
+    state.publication_generation = publication_generation_;
+  }
+
+  [[nodiscard]] SameLevelCellIntegratedFluxLedgerAcceptedState accepted_state() const {
+    SameLevelCellIntegratedFluxLedgerAcceptedState state;
+    copy_accepted_state_into(state);
+    return state;
+  }
+
+  /// Restore one previously captured accepted publication after the hierarchy state rolls back.
+  ///
+  /// Every qualifier is checked before mutation.  A topology/materialization mismatch is never
+  /// interpreted as an empty ledger because that would hide a stale prepared temporal provider.
+  void restore_accepted_state(
+      const SameLevelCellIntegratedFluxLedgerAcceptedState& state) {
+    if (state.topology_epoch != topology_epoch_ ||
+        state.materialization_generation != materialization_generation_ ||
+        state.block != block_ || state.level != level_ || state.cell_count != cell_count_ ||
+        state.component_count != component_count_ || state.integrated_flux.size() != accepted_.size())
+      throw std::invalid_argument(
+          "same-level cell flux ledger rollback image targets another prepared layout");
+    if (state.begin_tick < 0 || state.end_tick < state.begin_tick ||
+        state.tick_denominator <= 0 ||
+        (state.publication_generation == 0 &&
+         (state.begin_tick != 0 || state.end_tick != 0)) ||
+        (state.publication_generation != 0 && state.end_tick == state.begin_tick))
+      throw std::invalid_argument(
+          "same-level cell flux ledger rollback image has an invalid accepted clock");
+
+    std::copy(state.integrated_flux.begin(), state.integrated_flux.end(), accepted_.begin());
+    begin_tick_ = state.begin_tick;
+    end_tick_ = state.end_tick;
+    tick_denominator_ = state.tick_denominator;
+    publication_generation_ = state.publication_generation;
   }
 
   [[nodiscard]] Real integrated_flux(std::size_t cell, SameLevelCellFace face,
