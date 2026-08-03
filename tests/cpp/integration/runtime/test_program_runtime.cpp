@@ -1553,6 +1553,33 @@ TEST(ProgramRuntime, AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAccep
   EXPECT_EQ(system.get_state("tracer"), std::vector<double>(static_cast<std::size_t>(n) * n, 0.5));
 }
 
+TEST(ProgramRuntime, AnalyticInitialStatePublishesWhenPreparedRecoveryAcceptsEveryCell) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
+  ModelSpec scalar;
+  scalar.transport = "exb";
+  scalar.source = "none";
+  scalar.elliptic = "charge";
+  system.add_block("tracer", scalar);
+  system.set_block_conversion(
+      "tracer", [](const double* in, double* out) { out[0] = in[0]; },
+      [](const double* in, double* out) {
+        RecoveryReport report;
+        out[0] = in[0];
+        report.status = RecoveryStatus::kRecovered;
+        report.cause = RecoveryCause::kNone;
+        return report;
+      });
+
+  EXPECT_EQ(system.set_analytic_expression_state(
+                "tracer", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{0.5}}),
+            static_cast<std::int64_t>(n) * n);
+  EXPECT_EQ(system.get_state("tracer"), std::vector<double>(static_cast<std::size_t>(n) * n, 0.5));
+}
+
 TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();

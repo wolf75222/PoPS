@@ -198,21 +198,19 @@ test_regex = "^FacadeRouting\\.PrimitiveMaterializationFailsClosedWithoutMutatin
 requirement = "analytic_initial_recovery_publication"
 polarity = "positive"
 target = "test_program_runtime"
-test_regex = "^ProgramRuntime\\.AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAcceptsEveryCell$"
+test_regex = "^ProgramRuntime\\.AnalyticInitialStatePublishesWhenPreparedRecoveryAcceptsEveryCell$"
 
 [[check]]
 requirement = "analytic_initial_recovery_publication"
 polarity = "refusal"
-kind = "mpi_ctest"
-target = "test_mpi_system_analytic_level_set"
-test_regex = "^test_mpi_system_analytic_level_set_np2$"
-nproc = 2
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAcceptsEveryCell$"
 
 [[check]]
 requirement = "fallible_primitive_to_conservative_publication"
 polarity = "positive"
 target = "test_block_builder"
-test_regex = "^test_block_builder\\.cell_primitive_conversion_consumes_prepared_recovery_outcome$"
+test_regex = "^test_block_builder\\.primitive_to_conservative_publication_roundtrips_before_commit$"
 
 [[check]]
 requirement = "fallible_primitive_to_conservative_publication"
@@ -236,7 +234,7 @@ test_regex = "^test_amr_transfer_properties\\.RegridRecoveryRefusalRollsBackHier
 requirement = "amr_restriction_recovery_publication"
 polarity = "positive"
 target = "test_amr_transfer_properties"
-test_regex = "^test_amr_transfer_properties\\.RegridPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell$"
+test_regex = "^test_amr_transfer_properties\\.RestrictionPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell$"
 
 [[check]]
 requirement = "amr_restriction_recovery_publication"

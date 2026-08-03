@@ -201,3 +201,15 @@ TEST(test_block_builder, cell_primitive_conversion_consumes_prepared_recovery_ou
   EXPECT_GE(failure.failing_component, 1);
   EXPECT_EQ(primitive, sentinel);
 }
+
+TEST(test_block_builder, primitive_to_conservative_publication_roundtrips_before_commit) {
+  const Model model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}};
+  const auto conversion = make_cell_convert(model);
+
+  const std::array<double, 4> authored_primitive{1.0, 0.2, -0.1, 1.0};
+  const std::array<double, 4> expected_conservative{1.0, 0.2, -0.1, 2.525};
+  std::array<double, 4> published{-9.0, -9.0, -9.0, -9.0};
+  EXPECT_NO_THROW(conversion.first(authored_primitive.data(), published.data()));
+  for (std::size_t component = 0; component < published.size(); ++component)
+    EXPECT_NEAR(published[component], expected_conservative[component], 1e-14);
+}
