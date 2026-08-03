@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import stat
-import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,275 +16,394 @@ from ._checkpoint_collective import (
 )
 
 
-def _checkpoint_path_inode(path: Path) -> tuple[int, int]:
-    """Return the exact non-following filesystem identity of one checkpoint path."""
-    status = path.stat(follow_symlinks=False)
-    return int(status.st_dev), int(status.st_ino)
+def _owner(value: os.stat_result) -> tuple[int, int]:
+    return int(value.st_dev), int(value.st_ino)
 
 
-def _unlink_checkpoint_path_if_owned(
-    path: Path,
-    inode: tuple[int, int],
-    *,
-    phase: str,
-) -> None:
-    """Atomically detach and remove only the exact checkpoint inode owned by PoPS."""
-    from ._writers.common import _StagedOutputFile
+def _validate_owner(value: Any, *, where: str) -> tuple[int, int]:
+    if (
+        type(value) not in {list, tuple}
+        or len(value) != 2
+        or any(type(item) is not int or item < 0 for item in value)
+    ):
+        raise TypeError("%s must be exact opaque inode evidence" % where)
+    return int(value[0]), int(value[1])
 
-    _StagedOutputFile._quarantine_owned_path(
-        path,
-        inode,
-        replaced_message="checkpoint %s refuses to delete replaced path %s" % (phase, path),
-    )
+
+def _raise_cleanup_failures(message: str, failures: list[BaseException]) -> None:
+    if failures:
+        raise RuntimeError(
+            message
+            + ": "
+            + "; ".join("%s: %s" % (type(error).__name__, error) for error in failures)
+        )
+
+
+class _CheckpointTransportFailure(RuntimeError):
+    """A broken control transport after which no second collective is legal."""
+
+
+class _CheckpointEntryAuthority:
+    """One exact directory entry plus the retained descriptor of its inode on rank zero."""
+
+    __slots__ = ("name", "owner", "_descriptor")
+
+    def __init__(self, name: str, owner: tuple[int, int], descriptor: int | None) -> None:
+        if not isinstance(name, str) or not name or "/" in name or "\x00" in name:
+            raise ValueError("checkpoint entry authority requires one local name")
+        self.name = name
+        self.owner = _validate_owner(owner, where="checkpoint entry owner")
+        self._descriptor = descriptor
+        if descriptor is not None:
+            retained = os.fstat(descriptor)
+            if not stat.S_ISREG(retained.st_mode) or _owner(retained) != self.owner:
+                raise RuntimeError("checkpoint entry descriptor differs from its inode authority")
+
+    @property
+    def is_open(self) -> bool:
+        return self._descriptor is not None
+
+    def fileno(self) -> int:
+        if self._descriptor is None:
+            raise RuntimeError("this checkpoint peer has no rank-zero entry descriptor")
+        return self._descriptor
+
+    def duplicate(self) -> int:
+        return os.dup(self.fileno())
+
+    def transfer(self, name: str) -> _CheckpointEntryAuthority:
+        descriptor = self.fileno()
+        transferred = _CheckpointEntryAuthority(name, self.owner, descriptor)
+        self._descriptor = None
+        return transferred
+
+    def close(self) -> None:
+        descriptor = self._descriptor
+        if descriptor is None:
+            return
+        self._descriptor = None
+        os.close(descriptor)
 
 
 class _CheckpointTransactionReceipt:
-    """Authenticated private directory spanning native capture and Python reseal.
+    """Private mkdirat/openat namespace retained from capture through publication."""
 
-    The path-only native checkpoint ABI cannot attest which inode it created.  RuntimeInstance
-    therefore accepts a native candidate only inside this retained, mode-0700 directory and only
-    after authenticating the candidate payload through an anchored descriptor.  Calls without this
-    receipt are refused rather than pretending that a post-hoc ``stat`` proves creator ownership.
+    __slots__ = (
+        "parent",
+        "directory_name",
+        "owner",
+        "_directory_fd",
+        "_parent_fd",
+        "_native_entry",
+    )
 
-    The native provider still accepts only a path: it cannot promise no-clobber creation between
-    the absence proof and its own open/replace, nor identify a same-principal substitution with
-    another *valid, authenticated* PoPS payload before this descriptor is acquired.  Those stronger
-    claims require a future fd/receipt native ABI and are deliberately not advertised here.  Invalid
-    or later substitutions are detected and are never cleaned as PoPS-owned entries.
-    """
-
-    __slots__ = ("directory", "owner", "_descriptor", "_parent_descriptor")
+    _NATIVE_NAME = "native.npz"
 
     def __init__(
         self,
-        directory: Any,
+        parent: Any,
+        directory_name: str,
         owner: tuple[int, int],
-        descriptor: int | None,
-        parent_descriptor: int | None,
+        directory_fd: int | None,
+        parent_fd: int | None,
+        native_entry: _CheckpointEntryAuthority,
     ) -> None:
         if (
-            type(owner) is not tuple
-            or len(owner) != 2
-            or any(type(value) is not int or value < 0 for value in owner)
+            not isinstance(directory_name, str)
+            or not directory_name.startswith(".pops-restart-transaction.")
+            or "/" in directory_name
         ):
-            raise ValueError("checkpoint transaction receipt requires an exact directory inode")
-        if (descriptor is None) != (parent_descriptor is None):
+            raise ValueError("checkpoint transaction requires one private directory name")
+        if (directory_fd is None) != (parent_fd is None):
             raise ValueError("checkpoint transaction descriptors must be retained together")
-        self.directory = Path(directory)
-        self.owner = owner
-        self._descriptor = descriptor
-        self._parent_descriptor = parent_descriptor
-        self.authenticate_directory()
+        self.parent = Path(parent)
+        self.directory_name = directory_name
+        self.owner = _validate_owner(owner, where="checkpoint transaction owner")
+        self._directory_fd = directory_fd
+        self._parent_fd = parent_fd
+        self._native_entry = native_entry
+        if directory_fd is not None:
+            self.authenticate_directory_at()
 
     @staticmethod
     def _directory_flags() -> int:
         return os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
-    @classmethod
-    def created(cls, parent: Path) -> _CheckpointTransactionReceipt:
-        parent.mkdir(parents=True, exist_ok=True)
-        parent_descriptor = os.open(parent, cls._directory_flags())
-        directory: Path | None = None
-        descriptor: int | None = None
-        try:
-            directory = Path(tempfile.mkdtemp(prefix=".pops-restart-transaction.", dir=str(parent)))
-            descriptor = os.open(
-                directory.name,
-                cls._directory_flags(),
-                dir_fd=parent_descriptor,
-            )
-            created = os.fstat(descriptor)
-            return cls(
-                directory,
-                (int(created.st_dev), int(created.st_ino)),
-                descriptor,
-                parent_descriptor,
-            )
-        except BaseException:
-            if descriptor is not None:
-                os.close(descriptor)
-            # Authentication did not complete, so the lexical directory name is not owned and
-            # must not be removed even when it still appears empty.
-            os.close(parent_descriptor)
-            raise
+    @property
+    def directory(self) -> Path:
+        return self.parent / self.directory_name
 
-    @classmethod
-    def observed(cls, directory: Any, owner: tuple[int, int]) -> _CheckpointTransactionReceipt:
-        return cls(directory, owner, None, None)
+    @property
+    def staging_path(self) -> Path:
+        return self.directory / self._NATIVE_NAME
 
     @property
     def has_root_descriptor(self) -> bool:
-        return self._descriptor is not None
+        return self._directory_fd is not None
+
+    @classmethod
+    def created(cls, parent: Path) -> _CheckpointTransactionReceipt:
+        parent.mkdir(parents=True, exist_ok=True)
+        parent_fd = os.open(parent, cls._directory_flags())
+        directory_name = ""
+        directory_fd: int | None = None
+        transaction: _CheckpointTransactionReceipt | None = None
+        try:
+            for _attempt in range(32):
+                candidate = ".pops-restart-transaction.%s" % os.urandom(16).hex()
+                try:
+                    os.mkdir(candidate, 0o700, dir_fd=parent_fd)
+                except FileExistsError:
+                    continue
+                directory_name = candidate
+                break
+            if not directory_name:
+                raise RuntimeError("checkpoint could not allocate a private transaction directory")
+            directory_fd = os.open(directory_name, cls._directory_flags(), dir_fd=parent_fd)
+            transaction = cls(
+                parent,
+                directory_name,
+                _owner(os.fstat(directory_fd)),
+                directory_fd,
+                parent_fd,
+                _CheckpointEntryAuthority(cls._NATIVE_NAME, (0, 0), None),
+            )
+            transaction._native_entry = transaction.created_at(cls._NATIVE_NAME)
+            return transaction
+        except BaseException as error:
+            failures = []
+            if transaction is not None:
+                try:
+                    transaction.cleanup_owned()
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+            else:
+                if directory_fd is not None:
+                    try:
+                        os.close(directory_fd)
+                    except BaseException as cleanup_error:
+                        failures.append(cleanup_error)
+                try:
+                    os.close(parent_fd)
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+            if failures:
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "checkpoint transaction construction cleanup also failed: "
+                        + "; ".join(str(item) for item in failures)
+                    )
+            raise
+
+    @classmethod
+    def observed(cls, data: Any) -> _CheckpointTransactionReceipt:
+        if not isinstance(data, dict) or set(data) != {
+            "parent",
+            "directory_name",
+            "directory_owner",
+            "staging_name",
+            "staging_owner",
+        }:
+            raise RuntimeError("rank zero returned invalid checkpoint transaction evidence")
+        if data["staging_name"] != cls._NATIVE_NAME:
+            raise RuntimeError("rank zero returned a different native staging name")
+        # Device/inode values are opaque transport scalars on peers; they are never compared with
+        # a rank-local mount.
+        native = _CheckpointEntryAuthority(
+            data["staging_name"],
+            _validate_owner(data["staging_owner"], where="native staging evidence"),
+            None,
+        )
+        return cls(
+            data["parent"],
+            data["directory_name"],
+            _validate_owner(data["directory_owner"], where="transaction evidence"),
+            None,
+            None,
+            native,
+        )
 
     def to_data(self) -> dict[str, Any]:
+        if self.has_root_descriptor:
+            self.authenticate_directory_at()
+            if self._native_entry.is_open:
+                self.authenticate_entry_at(self._native_entry)
         return {
-            "directory": str(self.directory),
-            "device": self.owner[0],
-            "inode": self.owner[1],
+            "parent": str(self.parent),
+            "directory_name": self.directory_name,
+            "directory_owner": list(self.owner),
+            "staging_name": self._native_entry.name,
+            "staging_owner": list(self._native_entry.owner),
         }
 
-    def authenticate_directory(self) -> None:
-        named = self.directory.lstat()
-        named_owner = (int(named.st_dev), int(named.st_ino))
+    def directory_fileno(self) -> int:
+        if self._directory_fd is None:
+            raise RuntimeError("rank zero lacks the checkpoint transaction directory descriptor")
+        return self._directory_fd
+
+    def authenticate_directory_at(self) -> None:
+        directory_fd = self.directory_fileno()
+        if self._parent_fd is None:
+            raise RuntimeError("checkpoint transaction parent descriptor is unavailable")
+        retained = os.fstat(directory_fd)
+        named = os.stat(self.directory_name, dir_fd=self._parent_fd, follow_symlinks=False)
+        parent = os.fstat(self._parent_fd)
         if (
-            not stat.S_ISDIR(named.st_mode)
-            or stat.S_IMODE(named.st_mode) & 0o077
-            or named_owner != self.owner
+            not stat.S_ISDIR(retained.st_mode)
+            or stat.S_IMODE(retained.st_mode) & 0o077
+            or _owner(retained) != self.owner
+            or _owner(named) != self.owner
+            or int(retained.st_dev) != int(parent.st_dev)
         ):
             raise RuntimeError("checkpoint private transaction directory authority changed")
-        if self._descriptor is not None:
-            retained = os.fstat(self._descriptor)
-            if (
-                not stat.S_ISDIR(retained.st_mode)
-                or (int(retained.st_dev), int(retained.st_ino)) != self.owner
-            ):
-                raise RuntimeError("checkpoint private transaction descriptor authority changed")
 
-    def require_entry_path(self, path: Path) -> None:
-        self.authenticate_directory()
-        if path.parent != self.directory or path.name in {"", ".", ".."}:
-            raise RuntimeError("checkpoint staging path escaped its private transaction directory")
-
-    def open_candidate(self, path: Path) -> tuple[int, tuple[int, int]]:
-        """Open an unowned native candidate without granting cleanup authority."""
-        self.require_entry_path(path)
-        if self._descriptor is None:
-            raise RuntimeError("rank zero lacks the checkpoint transaction descriptor")
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path.name, flags, dir_fd=self._descriptor)
+    def created_at(self, name: str) -> _CheckpointEntryAuthority:
+        self.authenticate_directory_at()
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(name, flags, 0o600, dir_fd=self.directory_fileno())
         try:
-            candidate = os.fstat(descriptor)
-            if not stat.S_ISREG(candidate.st_mode):
-                raise RuntimeError("native checkpoint candidate is not a regular file")
-            return descriptor, (int(candidate.st_dev), int(candidate.st_ino))
+            return _CheckpointEntryAuthority(name, _owner(os.fstat(descriptor)), descriptor)
         except BaseException:
             os.close(descriptor)
             raise
 
-    def require_absent_entry(self, path: Path) -> None:
-        """Prove that PoPS has not yet acquired or inherited this directory entry."""
-        self.require_entry_path(path)
-        if self._descriptor is None:
-            raise RuntimeError("rank zero lacks the checkpoint transaction descriptor")
-        try:
-            os.stat(path.name, dir_fd=self._descriptor, follow_symlinks=False)
-        except FileNotFoundError:
-            return
-        raise FileExistsError(
-            "checkpoint private staging entry existed before native creation: %s" % path
-        )
+    def create_unique_at(self, *, suffix: str) -> _CheckpointEntryAuthority:
+        for _attempt in range(32):
+            name = ".native.npz.%s%s" % (os.urandom(12).hex(), suffix)
+            try:
+                return self.created_at(name)
+            except FileExistsError:
+                continue
+        raise RuntimeError("checkpoint could not allocate a unique transaction staging entry")
 
-    def authenticate_entry(self, path: Path, owner: tuple[int, int]) -> None:
-        """Acquire/confirm one name only while it still denotes the authenticated inode."""
-        self.require_entry_path(path)
-        if self._descriptor is None:
-            raise RuntimeError("rank zero lacks the checkpoint transaction descriptor")
+    def open_candidate_at(self, name: str) -> _CheckpointEntryAuthority:
+        self.authenticate_directory_at()
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(name, flags, dir_fd=self.directory_fileno())
         try:
-            current = os.stat(path.name, dir_fd=self._descriptor, follow_symlinks=False)
-        except FileNotFoundError as error:
-            raise RuntimeError(
-                "checkpoint transaction entry disappeared before ownership acquisition"
-            ) from error
+            return _CheckpointEntryAuthority(name, _owner(os.fstat(descriptor)), descriptor)
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def authenticate_entry_at(self, entry: _CheckpointEntryAuthority) -> None:
+        self.authenticate_directory_at()
+        retained = os.fstat(entry.fileno())
+        named = os.stat(entry.name, dir_fd=self.directory_fileno(), follow_symlinks=False)
         if (
-            not stat.S_ISREG(current.st_mode)
-            or (
-                int(current.st_dev),
-                int(current.st_ino),
-            )
-            != owner
+            not stat.S_ISREG(retained.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+            or _owner(retained) != entry.owner
+            or _owner(named) != entry.owner
         ):
             raise RuntimeError(
                 "checkpoint transaction entry was replaced before ownership acquisition"
             )
 
-    def rename_no_replace(self, source: Path, destination: Path) -> None:
-        self.require_entry_path(source)
-        self.require_entry_path(destination)
-        if self._descriptor is None:
-            raise RuntimeError("rank zero lacks the checkpoint transaction descriptor")
+    def rename_no_replace_at(
+        self, source: _CheckpointEntryAuthority, destination_name: str
+    ) -> _CheckpointEntryAuthority:
+        self.authenticate_entry_at(source)
         from ._writers.common import _rename_no_replace
 
         _rename_no_replace(
             source.name,
-            destination.name,
-            src_dir_fd=self._descriptor,
-            dst_dir_fd=self._descriptor,
+            destination_name,
+            src_dir_fd=self.directory_fileno(),
+            dst_dir_fd=self.directory_fileno(),
         )
+        # Keep the same object/fd in the caller's cleanup ledger until post-rename
+        # authentication succeeds.  If that check fails, cleanup still knows the new entry name.
+        source.name = destination_name
+        self.authenticate_entry_at(source)
+        return source
+
+    def quarantine_entry_at(
+        self,
+        entry: _CheckpointEntryAuthority,
+        *,
+        phase: str,
+        close_entry: bool = True,
+    ) -> None:
+        from ._writers.common import _StagedOutputFile
+
+        try:
+            _StagedOutputFile._quarantine_owned_path(
+                self.directory / entry.name,
+                entry.owner,
+                replaced_message=(
+                    "checkpoint %s refuses to delete replaced transaction entry %s"
+                    % (phase, entry.name)
+                ),
+                directory_fd=self.directory_fileno(),
+            )
+        finally:
+            if close_entry:
+                entry.close()
+
+    def take_native_entry(self) -> _CheckpointEntryAuthority:
+        entry = self._native_entry
+        self._native_entry = _CheckpointEntryAuthority(self._NATIVE_NAME, entry.owner, None)
+        return entry
 
     def cleanup_empty(self) -> None:
-        """Atomically detach then remove this exact empty private directory."""
-        descriptor = self._descriptor
-        parent_descriptor = self._parent_descriptor
-        if descriptor is None:
+        directory_fd = self._directory_fd
+        parent_fd = self._parent_fd
+        if directory_fd is None:
             return
         cleanup_name = ".pops-restart-cleanup-%s" % os.urandom(16).hex()
         moved = False
+        primary = None
         try:
-            self.authenticate_directory()
-            if os.listdir(descriptor):
+            self.authenticate_directory_at()
+            if os.listdir(directory_fd):
                 raise RuntimeError(
-                    "checkpoint private transaction directory is not empty; retained at %s"
-                    % self.directory
+                    "checkpoint private transaction directory is not empty; retained as %s"
+                    % self.directory_name
                 )
-            if parent_descriptor is None:
+            if parent_fd is None:
                 raise RuntimeError("checkpoint transaction parent descriptor is unavailable")
             from ._writers.common import _rename_no_replace
 
             _rename_no_replace(
-                self.directory.name,
+                self.directory_name,
                 cleanup_name,
-                src_dir_fd=parent_descriptor,
-                dst_dir_fd=parent_descriptor,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
             )
             moved = True
-            detached = os.stat(cleanup_name, dir_fd=parent_descriptor, follow_symlinks=False)
-            detached_owner = (int(detached.st_dev), int(detached.st_ino))
-            if detached_owner != self.owner:
-                recovery = self.directory.parent / cleanup_name
+            detached = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+            if _owner(detached) != self.owner:
                 try:
                     _rename_no_replace(
                         cleanup_name,
-                        self.directory.name,
-                        src_dir_fd=parent_descriptor,
-                        dst_dir_fd=parent_descriptor,
+                        self.directory_name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
                     )
                 except BaseException as restore_error:
                     raise RuntimeError(
-                        "checkpoint transaction directory was replaced; replacement retained at "
-                        "%s; restoration failed: %s" % (recovery, restore_error)
+                        "checkpoint transaction directory was substituted; replacement "
+                        "retained as %s because restoration failed" % cleanup_name
                     ) from restore_error
-                moved = False
-                raise RuntimeError(
-                    "checkpoint transaction directory was replaced and restored without deletion"
-                )
-            os.rmdir(cleanup_name, dir_fd=parent_descriptor)
+                else:
+                    moved = False
+                raise RuntimeError("checkpoint transaction directory was substituted and restored")
+            os.rmdir(cleanup_name, dir_fd=parent_fd)
             moved = False
         except BaseException as error:
+            primary = error
             if moved:
                 add_note = getattr(error, "add_note", None)
                 if callable(add_note):
-                    add_note(
-                        "authenticated checkpoint transaction retained at %s"
-                        % (self.directory.parent / cleanup_name)
-                    )
+                    add_note("checkpoint transaction retained as %s" % cleanup_name)
             raise
         finally:
-            self._descriptor = None
-            self._parent_descriptor = None
-            primary = sys.exc_info()[1]
-            close_failures = []
-            try:
-                os.close(descriptor)
-            except BaseException as close_error:
-                close_failures.append(close_error)
-            if parent_descriptor is not None:
-                try:
-                    os.close(parent_descriptor)
-                except BaseException as close_error:
-                    close_failures.append(close_error)
-            if close_failures:
+            failures = self.close_descriptors()
+            if failures:
                 message = "checkpoint transaction descriptor cleanup also failed: " + "; ".join(
-                    "%s: %s" % (type(error).__name__, error) for error in close_failures
+                    str(error) for error in failures
                 )
                 if primary is not None:
                     add_note = getattr(primary, "add_note", None)
@@ -294,6 +411,117 @@ class _CheckpointTransactionReceipt:
                         add_note(message)
                 else:
                     raise RuntimeError(message)
+
+    def close_descriptors(self) -> list[BaseException]:
+        failures = []
+        for attribute in ("_directory_fd", "_parent_fd"):
+            descriptor = getattr(self, attribute)
+            if descriptor is None:
+                continue
+            setattr(self, attribute, None)
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                failures.append(error)
+        return failures
+
+    def close(self) -> None:
+        failures = []
+        native = self._native_entry
+        self._native_entry = _CheckpointEntryAuthority(self._NATIVE_NAME, native.owner, None)
+        if native.is_open:
+            try:
+                native.close()
+            except BaseException as error:
+                failures.append(error)
+        failures.extend(self.close_descriptors())
+        _raise_cleanup_failures(
+            "checkpoint transaction descriptor cleanup failed",
+            failures,
+        )
+
+    def cleanup_owned(self) -> None:
+        failures = []
+        native = self._native_entry
+        self._native_entry = _CheckpointEntryAuthority(self._NATIVE_NAME, native.owner, None)
+        if native.is_open:
+            try:
+                self.quarantine_entry_at(native, phase="transaction construction cleanup")
+            except BaseException as error:
+                failures.append(error)
+        try:
+            self.cleanup_empty()
+        except BaseException as error:
+            failures.append(error)
+        _raise_cleanup_failures("checkpoint transaction cleanup failed", failures)
+
+
+class _CheckpointPayloadProof:
+    """Exact resealed inode handoff; only rank zero retains its open descriptor."""
+
+    __slots__ = ("transaction", "entry")
+
+    def __init__(
+        self,
+        transaction: _CheckpointTransactionReceipt,
+        entry: _CheckpointEntryAuthority,
+    ) -> None:
+        self.transaction = transaction
+        self.entry = entry
+        if transaction.has_root_descriptor:
+            transaction.authenticate_entry_at(entry)
+
+    @property
+    def path(self) -> Path:
+        return self.transaction.directory / self.entry.name
+
+    @property
+    def owner(self) -> tuple[int, int]:
+        return self.entry.owner
+
+    def to_data(self) -> dict[str, Any]:
+        if self.transaction.has_root_descriptor:
+            # The collective handoff is evidence for this still-open inode, not for whichever
+            # object a later lexical lookup might find under the same name.
+            self.transaction.authenticate_entry_at(self.entry)
+        return {
+            "path": str(self.path),
+            "entry_name": self.entry.name,
+            "entry_owner": list(self.entry.owner),
+            "directory_name": self.transaction.directory_name,
+            "directory_owner": list(self.transaction.owner),
+        }
+
+    @classmethod
+    def observed(
+        cls, transaction: _CheckpointTransactionReceipt, data: Any
+    ) -> _CheckpointPayloadProof:
+        if not isinstance(data, dict) or set(data) != {
+            "path",
+            "entry_name",
+            "entry_owner",
+            "directory_name",
+            "directory_owner",
+        }:
+            raise RuntimeError("rank zero returned invalid checkpoint payload proof")
+        if (
+            data["path"] != str(transaction.directory / data["entry_name"])
+            or data["directory_name"] != transaction.directory_name
+            or _validate_owner(data["directory_owner"], where="payload proof transaction owner")
+            != transaction.owner
+        ):
+            raise RuntimeError("checkpoint payload proof differs from its transaction receipt")
+        return cls(
+            transaction,
+            _CheckpointEntryAuthority(
+                data["entry_name"],
+                _validate_owner(data["entry_owner"], where="payload proof entry owner"),
+                None,
+            ),
+        )
+
+    def close(self) -> None:
+        self.entry.close()
 
 
 def _recorded_hierarchy() -> Any:
@@ -310,276 +538,489 @@ class ReopenedRestart:
 
 
 class _RestartSnapshot:
-    """One collectively captured file whose publication is still compensatable."""
+    """One exact resealed-fd handoff whose publication remains compensatable."""
 
     __slots__ = (
         "_runtime",
         "_topology",
-        "_staging",
-        "_staging_inode",
+        "_proof",
+        "_staging_owned",
         "_published_target",
-        "_published_inode",
+        "_published_entry",
+        "_published_parent_fd",
         "_discarded",
-        "_transaction",
     )
 
-    @staticmethod
-    def _inode(path: Path) -> tuple[int, int]:
-        return _checkpoint_path_inode(path)
-
-    @staticmethod
-    def _unlink_owned(
-        path: Path,
-        inode: tuple[int, int],
-        *,
-        phase: str,
-    ) -> None:
-        _unlink_checkpoint_path_if_owned(path, inode, phase=phase)
-
     def __init__(self, runtime: Any, directory: Any) -> None:
+        from ._checkpoint_collective import root_attempt
+
         self._runtime = runtime
         self._topology = checkpoint_topology(runtime)
+        self._proof: _CheckpointPayloadProof | None = None
+        self._staging_owned = False
+        self._published_target: Path | None = None
+        self._published_entry: _CheckpointEntryAuthority | None = None
+        self._published_parent_fd: int | None = None
+        self._discarded = False
         local_directory = Path(os.path.abspath(os.path.normpath(os.fspath(directory))))
         created_transaction: _CheckpointTransactionReceipt | None = None
 
-        def choose_staging() -> dict[str, Any]:
+        def choose_transaction() -> dict[str, Any]:
             nonlocal created_transaction
             created_transaction = _CheckpointTransactionReceipt.created(local_directory)
-            selected = created_transaction.to_data()
-            selected["parent"] = str(local_directory)
-            selected["staging"] = str(created_transaction.directory / "native.npz")
-            return selected
+            return created_transaction.to_data()
 
-        selected = root_value(self._topology, "staging selection", choose_staging)
+        attempt = root_attempt(self._topology, "staging selection", choose_transaction)
+        if attempt.transport_error is not None:
+            error = _CheckpointTransportFailure(
+                "checkpoint transport failed during staging selection: %s" % attempt.transport_error
+            )
+            if attempt.producer_error is not None:
+                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+            if self._topology.rank == 0 and created_transaction is not None:
+                try:
+                    created_transaction.cleanup_owned()
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise error from attempt.transport_error
+        if attempt.producer_error is not None:
+            if self._topology.rank == 0 and created_transaction is not None:
+                try:
+                    created_transaction.cleanup_owned()
+                except BaseException as cleanup_error:
+                    add_note = getattr(attempt.producer_error, "add_note", None)
+                    if callable(add_note):
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise attempt.producer_error
+
         selection_error = None
+        transaction = None
         try:
-            if not isinstance(selected, dict) or set(selected) != {
-                "parent",
-                "directory",
-                "device",
-                "inode",
-                "staging",
-            }:
-                raise RuntimeError("rank zero returned an invalid checkpoint staging selection")
-            if str(local_directory) != selected["parent"]:
+            if self._topology.rank == 0:
+                transaction = created_transaction
+                if transaction is None or transaction.to_data() != attempt.value:
+                    raise RuntimeError(
+                        "rank-zero transaction receipt differs from its collective evidence"
+                    )
+            else:
+                transaction = _CheckpointTransactionReceipt.observed(attempt.value)
+            if transaction.parent != local_directory:
                 raise ValueError(
                     "checkpoint staging directory differs across ranks: local %s, rank-0 %s"
-                    % (local_directory, selected["parent"])
+                    % (local_directory, transaction.parent)
                 )
-            if any(
-                isinstance(selected[key], bool) or type(selected[key]) is not int
-                for key in ("device", "inode")
-            ):
-                raise RuntimeError("rank zero returned invalid transaction directory evidence")
-            transaction_owner = (int(selected["device"]), int(selected["inode"]))
-            if self._topology.rank == 0:
-                if created_transaction is None:
-                    raise RuntimeError("rank zero lost its checkpoint transaction receipt")
-                transaction = created_transaction
-                if transaction.to_data() != {
-                    key: selected[key] for key in ("directory", "device", "inode")
-                }:
-                    raise RuntimeError("rank zero transaction receipt differs from its broadcast")
-            else:
-                transaction = _CheckpointTransactionReceipt.observed(
-                    selected["directory"], transaction_owner
-                )
-            staging = canonical_checkpoint_path(selected["staging"])
-            transaction.require_entry_path(staging)
         except BaseException as error:
             selection_error = error
-            transaction = created_transaction
-            staging = (
-                Path(selected.get("staging", ".invalid-checkpoint.npz"))
-                if isinstance(selected, dict)
-                else Path(".invalid-checkpoint.npz")
-            )
         try:
             consensus(self._topology, "staging agreement", error=selection_error)
         except BaseException as error:
-            if created_transaction is not None:
+            if self._topology.rank == 0 and created_transaction is not None:
                 try:
-                    created_transaction.cleanup_empty()
+                    created_transaction.cleanup_owned()
                 except BaseException as cleanup_error:
                     add_note = getattr(error, "add_note", None)
                     if callable(add_note):
-                        add_note("checkpoint transaction cleanup also failed: %s" % cleanup_error)
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
             raise
         if transaction is None:
             raise RuntimeError("checkpoint staging selection returned no transaction receipt")
-        self._transaction = transaction
-        self._staging = staging
-        self._staging_inode: tuple[int, int] | None = None
-        self._published_target: Path | None = None
-        self._published_inode: tuple[int, int] | None = None
-        self._discarded = False
 
-        # Every rank enters the exact native capture with the same staging path.  The RuntimeInstance
-        # performs a consensus after native collection and after rank-zero envelope sealing.
         try:
-            produced = Path(
-                runtime._checkpoint_payload(
-                    self._staging,
-                    transaction_receipt=self._transaction,
-                )
+            proof = runtime._checkpoint_payload(
+                transaction.staging_path,
+                transaction_receipt=transaction,
             )
-        except BaseException as error:
-            try:
-                root_value(
-                    self._topology,
-                    "failed capture transaction cleanup",
-                    self._transaction.cleanup_empty,
-                )
-            except BaseException as cleanup_error:
-                add_note = getattr(error, "add_note", None)
-                if callable(add_note):
-                    add_note("checkpoint transaction cleanup also failed: %s" % cleanup_error)
+        except _CheckpointTransportFailure:
             self._discarded = True
             raise
-        exact_error = None
-        if produced != self._staging:
-            exact_error = RuntimeError(
-                "restart provider did not capture the exact shared staged snapshot"
-            )
-        consensus(
-            self._topology,
-            "staged snapshot identity",
-            error=exact_error,
-            value=str(produced),
-        )
-        staged_inode = root_value(
-            self._topology,
-            "staged snapshot inode",
-            lambda: list(self._transaction_entry_inode(self._staging)),
-        )
-        if not isinstance(staged_inode, list) or len(staged_inode) != 2:
-            raise RuntimeError("rank zero returned an invalid staged checkpoint inode")
-        self._staging_inode = (int(staged_inode[0]), int(staged_inode[1]))
-
-    def _transaction_entry_inode(self, path: Path) -> tuple[int, int]:
-        descriptor, owner = self._transaction.open_candidate(path)
-        os.close(descriptor)
-        self._transaction.authenticate_entry(path, owner)
-        return owner
+        except BaseException as error:
+            if self._topology.rank == 0:
+                try:
+                    transaction.cleanup_owned()
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            self._discarded = True
+            raise
+        if type(proof) is not _CheckpointPayloadProof or proof.transaction is not transaction:
+            error = RuntimeError("RuntimeInstance returned no exact checkpoint payload proof")
+            if self._topology.rank == 0:
+                failures = []
+                if type(proof) is _CheckpointPayloadProof:
+                    try:
+                        proof.close()
+                    except BaseException as cleanup_error:
+                        failures.append(cleanup_error)
+                try:
+                    transaction.cleanup_owned()
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+                if failures:
+                    error.add_note(
+                        "rank-zero checkpoint cleanup also failed: "
+                        + "; ".join(str(item) for item in failures)
+                    )
+            self._discarded = True
+            raise error
+        self._proof = proof
+        self._staging_owned = True
 
     @property
     def path(self) -> Path:
-        return self._staging
+        if self._proof is None:
+            raise RuntimeError("restart snapshot has no checkpoint payload proof")
+        return self._proof.path
+
+    @staticmethod
+    def _target_directory_flags() -> int:
+        return os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+    def _close_published_root(self) -> list[BaseException]:
+        failures = []
+        entry = self._published_entry
+        self._published_entry = None
+        if entry is not None:
+            try:
+                entry.close()
+            except BaseException as error:
+                failures.append(error)
+        descriptor = self._published_parent_fd
+        self._published_parent_fd = None
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                failures.append(error)
+        return failures
+
+    def _quarantine_published_root(self, *, phase: str) -> None:
+        entry = self._published_entry
+        descriptor = self._published_parent_fd
+        target = self._published_target
+        self._published_entry = None
+        self._published_parent_fd = None
+        self._published_target = None
+        if entry is None or descriptor is None or target is None:
+            failures = []
+            if entry is not None:
+                try:
+                    entry.close()
+                except BaseException as error:
+                    failures.append(error)
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    failures.append(error)
+            _raise_cleanup_failures("published checkpoint authority cleanup failed", failures)
+            return
+        from ._writers.common import _StagedOutputFile
+
+        primary: BaseException | None = None
+        try:
+            _StagedOutputFile._quarantine_owned_path(
+                target,
+                entry.owner,
+                replaced_message=(
+                    "checkpoint %s refuses to delete replaced target %s" % (phase, target)
+                ),
+                directory_fd=descriptor,
+            )
+        except BaseException as error:
+            primary = error
+        finally:
+            failures = []
+            try:
+                entry.close()
+            except BaseException as error:
+                failures.append(error)
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                failures.append(error)
+        if primary is not None:
+            if failures:
+                add_note = getattr(primary, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "published checkpoint descriptor cleanup also failed: "
+                        + "; ".join(str(error) for error in failures)
+                    )
+            raise primary
+        _raise_cleanup_failures("published checkpoint descriptor cleanup failed", failures)
+
+    def _cleanup_root(self, *, include_published: bool) -> None:
+        failures = []
+        proof = self._proof
+        if self._staging_owned and proof is not None:
+            self._staging_owned = False
+            try:
+                proof.transaction.quarantine_entry_at(
+                    proof.entry,
+                    phase="snapshot staging cleanup",
+                )
+            except BaseException as error:
+                failures.append(error)
+        elif proof is not None:
+            try:
+                proof.close()
+            except BaseException as error:
+                failures.append(error)
+        if include_published and self._published_target is not None:
+            try:
+                self._quarantine_published_root(phase="snapshot rollback")
+            except BaseException as error:
+                failures.append(error)
+        if proof is not None:
+            try:
+                proof.transaction.cleanup_empty()
+            except BaseException as error:
+                failures.append(error)
+        if include_published:
+            failures.extend(self._close_published_root())
+        _raise_cleanup_failures("checkpoint snapshot cleanup failed", failures)
 
     def publish(self, target: Any) -> Path:
+        from ._checkpoint_collective import root_attempt
+
         if self._discarded:
             raise RuntimeError("discarded restart snapshot cannot be published")
+        if self._proof is None:
+            raise RuntimeError("restart snapshot has no checkpoint payload proof")
         local_target = canonical_checkpoint_path(target)
-        selected_target = Path(
-            root_value(self._topology, "target selection", lambda: str(local_target))
-        )
         target_error = None
-        if local_target != selected_target:
-            target_error = ValueError(
-                "checkpoint target differs across ranks: local %s, rank-0 %s"
-                % (local_target, selected_target)
+        try:
+            rows = consensus(
+                self._topology,
+                "target agreement",
+                value=str(local_target),
             )
-        if self._published_target is not None and self._published_target != selected_target:
-            target_error = ValueError("restart snapshot was already published to another target")
-        consensus(self._topology, "target agreement", error=target_error)
+            if any(row["value"] != str(local_target) for row in rows):
+                raise ValueError("checkpoint target differs across ranks")
+            if self._published_target is not None and self._published_target != local_target:
+                raise ValueError("restart snapshot was already published to another target")
+        except BaseException as error:
+            target_error = error
+        if target_error is not None:
+            if self._topology.rank == 0:
+                try:
+                    self._cleanup_root(include_published=True)
+                except BaseException as cleanup_error:
+                    add_note = getattr(target_error, "add_note", None)
+                    if callable(add_note):
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            self._discarded = True
+            raise target_error
         if self._published_target is not None:
             return self._published_target
 
         def publish_root() -> dict[str, Any]:
-            selected_target.parent.mkdir(parents=True, exist_ok=True)
+            proof = self._proof
+            if proof is None or not self._staging_owned:
+                raise RuntimeError("restart snapshot has no owned staging proof")
+            local_target.parent.mkdir(parents=True, exist_ok=True)
+            parent_fd = os.open(local_target.parent, self._target_directory_flags())
             linked = False
-            if self._staging_inode is None:
-                raise RuntimeError("restart snapshot has no authenticated staging inode")
+            primary: BaseException | None = None
+
+            def authenticate_target_at() -> None:
+                named = os.stat(local_target.name, dir_fd=parent_fd, follow_symlinks=False)
+                retained = os.fstat(proof.entry.fileno())
+                if (
+                    not stat.S_ISREG(named.st_mode)
+                    or _owner(named) != proof.owner
+                    or _owner(retained) != proof.owner
+                ):
+                    raise RuntimeError("checkpoint publication differs from its retained proof")
+
             try:
-                # Staging lives in a private child of the target directory, hence on the same
-                # filesystem.  A hard link is an atomic no-clobber publication: unlike
-                # exists()+replace(), it cannot overwrite a competing creator.
-                os.link(self._staging, selected_target)
-                linked = True
-                if self._inode(selected_target) != self._staging_inode:
-                    raise RuntimeError("checkpoint hard link does not retain the staging inode")
-                self._runtime._inspect_checkpoint_file(selected_target)
-                self._unlink_owned(
-                    self._staging, self._staging_inode, phase="successful staging cleanup"
+                proof.transaction.authenticate_entry_at(proof.entry)
+                os.link(
+                    proof.entry.name,
+                    local_target.name,
+                    src_dir_fd=proof.transaction.directory_fileno(),
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
                 )
-                self._transaction.cleanup_empty()
+                linked = True
+                authenticate_target_at()
+                proof.transaction.quarantine_entry_at(
+                    proof.entry,
+                    phase="successful staging cleanup",
+                    close_entry=False,
+                )
+                self._staging_owned = False
+                proof.transaction.cleanup_empty()
+                # Re-authenticate immediately before handing the still-open inode to the
+                # compensatable published state; publication never reopens the target by path.
+                authenticate_target_at()
+                self._published_entry = proof.entry.transfer(local_target.name)
+                self._published_parent_fd = parent_fd
+                parent_fd = -1
+                self._published_target = local_target
             except FileExistsError as error:
-                raise FileExistsError(
-                    "checkpoint target collision: %s" % selected_target
-                ) from error
+                primary = FileExistsError("checkpoint target collision: %s" % local_target)
+                raise primary from error
             except BaseException as error:
-                cleanup_error = None
+                primary = error
                 if linked:
                     try:
-                        # This transaction created this exact link.  Staging remains as the durable
-                        # owner until authentication succeeds, so cleanup cannot delete a peer's file.
-                        self._unlink_owned(
-                            selected_target,
-                            self._staging_inode,
-                            phase="failed publication cleanup",
+                        from ._writers.common import _StagedOutputFile
+
+                        _StagedOutputFile._quarantine_owned_path(
+                            local_target,
+                            proof.owner,
+                            replaced_message=(
+                                "checkpoint failed publication refuses replaced target %s"
+                                % local_target
+                            ),
+                            directory_fd=parent_fd,
                         )
-                    except BaseException as caught:
-                        cleanup_error = caught
-                add_note = getattr(error, "add_note", None)
-                if cleanup_error is not None and callable(add_note):
-                    add_note("failed checkpoint publication cleanup: %s" % cleanup_error)
+                    except BaseException as cleanup_error:
+                        add_note = getattr(error, "add_note", None)
+                        if callable(add_note):
+                            add_note("failed checkpoint publication cleanup: %s" % cleanup_error)
                 raise
+            finally:
+                if parent_fd >= 0:
+                    try:
+                        os.close(parent_fd)
+                    except BaseException as close_error:
+                        if primary is None:
+                            raise
+                        add_note = getattr(primary, "add_note", None)
+                        if callable(add_note):
+                            add_note(
+                                "checkpoint publication descriptor cleanup also failed: %s"
+                                % close_error
+                            )
             return {
-                "target": str(selected_target),
-                "device": self._staging_inode[0],
-                "inode": self._staging_inode[1],
+                "target": str(local_target),
+                "entry_owner": list(self._published_entry.owner),
             }
 
-        publication = root_value(self._topology, "publication", publish_root)
-        if not isinstance(publication, dict) or set(publication) != {
-            "target",
-            "device",
-            "inode",
-        }:
-            raise RuntimeError("checkpoint publication returned invalid ownership evidence")
-        published = Path(publication["target"])
-        if published != selected_target:
-            raise RuntimeError("checkpoint publication returned a different target")
-        self._published_target = published
-        self._published_inode = (int(publication["device"]), int(publication["inode"]))
-        return published
+        attempt = root_attempt(self._topology, "publication", publish_root)
+        if attempt.transport_error is not None:
+            error = _CheckpointTransportFailure(
+                "checkpoint transport failed during publication: %s" % attempt.transport_error
+            )
+            if attempt.producer_error is not None:
+                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+            if self._topology.rank == 0:
+                try:
+                    self._cleanup_root(include_published=True)
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            self._discarded = True
+            raise error from attempt.transport_error
+        if attempt.producer_error is not None:
+            error = attempt.producer_error
+            cleanup = root_attempt(
+                self._topology,
+                "failed publication cleanup",
+                lambda: self._cleanup_root(include_published=True),
+            )
+            cleanup_errors = tuple(
+                item
+                for item in (cleanup.producer_error, cleanup.transport_error)
+                if item is not None
+            )
+            if cleanup_errors:
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "checkpoint publication cleanup also failed: "
+                        + "; ".join(str(item) for item in cleanup_errors)
+                    )
+            self._discarded = True
+            raise error
+        publication = attempt.value
+        publication_error = None
+        owner = None
+        try:
+            if not isinstance(publication, dict) or set(publication) != {
+                "target",
+                "entry_owner",
+            }:
+                raise RuntimeError("checkpoint publication returned invalid ownership evidence")
+            if Path(publication["target"]) != local_target:
+                raise RuntimeError("checkpoint publication returned a different target")
+            owner = _validate_owner(publication["entry_owner"], where="published checkpoint owner")
+        except BaseException as error:
+            publication_error = error
+        try:
+            consensus(
+                self._topology,
+                "publication ownership proof",
+                error=publication_error,
+                value=publication,
+            )
+        except BaseException as error:
+            if self._topology.rank == 0:
+                try:
+                    self._cleanup_root(include_published=True)
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            self._discarded = True
+            raise
+        if owner is None:
+            raise RuntimeError("checkpoint publication proof validation returned no owner")
+        if self._topology.rank != 0:
+            self._published_target = local_target
+            self._published_entry = _CheckpointEntryAuthority(local_target.name, owner, None)
+        return local_target
+
+    def _finish_cleanup(self, *, phase: str, include_published: bool) -> None:
+        from ._checkpoint_collective import root_attempt
+
+        attempt = root_attempt(
+            self._topology,
+            phase,
+            lambda: self._cleanup_root(include_published=include_published),
+        )
+        self._discarded = True
+        if attempt.transport_error is not None:
+            error = _CheckpointTransportFailure(
+                "checkpoint transport failed during %s: %s" % (phase, attempt.transport_error)
+            )
+            if attempt.producer_error is not None:
+                error.add_note("rank-zero cleanup also failed: %s" % attempt.producer_error)
+            raise error from attempt.transport_error
+        if attempt.producer_error is not None:
+            raise attempt.producer_error
 
     def discard(self) -> None:
         if self._discarded or self._published_target is not None:
             return
-
-        def discard_root() -> None:
-            if self._staging_inode is None:
-                raise RuntimeError("restart snapshot has no authenticated staging inode")
-            self._unlink_owned(self._staging, self._staging_inode, phase="snapshot discard")
-            self._transaction.cleanup_empty()
-
-        root_value(self._topology, "discard", discard_root)
-        self._discarded = True
+        self._finish_cleanup(phase="discard", include_published=False)
 
     def rollback(self) -> None:
         if self._discarded:
             return
+        self._finish_cleanup(phase="rollback", include_published=True)
 
-        def rollback_root() -> None:
-            if self._staging_inode is not None:
-                self._unlink_owned(
-                    self._staging, self._staging_inode, phase="rollback staging cleanup"
-                )
-            if self._published_target is not None:
-                if self._published_inode is None:
-                    raise RuntimeError("published checkpoint has no ownership evidence")
-                self._unlink_owned(
-                    self._published_target,
-                    self._published_inode,
-                    phase="rollback publication cleanup",
-                )
-            self._transaction.cleanup_empty()
+    def finalize(self) -> None:
+        failures = []
+        if self._proof is not None:
+            try:
+                self._proof.close()
+            except BaseException as error:
+                failures.append(error)
+            try:
+                self._proof.transaction.close()
+            except BaseException as error:
+                failures.append(error)
+        failures.extend(self._close_published_root())
+        _raise_cleanup_failures("checkpoint snapshot finalization failed", failures)
 
-        root_value(self._topology, "rollback", rollback_root)
-        self._published_target = None
-        self._published_inode = None
-        self._discarded = True
+    def __del__(self) -> None:
+        try:
+            self.finalize()
+        except BaseException:
+            pass
 
 
 @dataclass(frozen=True, slots=True)

@@ -39,6 +39,15 @@ class CheckpointTopology:
         return self.communicator is not None
 
 
+@dataclass(frozen=True, slots=True)
+class RootAttempt:
+    """One root producer outcome with transport failure kept as a separate state."""
+
+    value: Any = None
+    producer_error: BaseException | None = None
+    transport_error: BaseException | None = None
+
+
 class InMemoryCheckpoint(Mapping[str, Any]):
     """Closed, object-free NPZ payload used by every restart rank.
 
@@ -234,6 +243,63 @@ def root_value(
         record = _validated_error_record(envelope["error"], phase=phase)
         _raise_collective_failure(phase, ((0, record),))
     return envelope["value"]
+
+
+def root_attempt(
+    topology: CheckpointTopology,
+    phase: str,
+    producer: Callable[[], Any],
+) -> RootAttempt:
+    """Run one root producer without conflating its failure with broadcast transport.
+
+    Callers that own rank-zero filesystem state can safely decide whether another collective is
+    legal: a producer failure means the first transport completed, while ``transport_error`` means
+    only rank zero may perform local compensation.
+    """
+    if not isinstance(phase, str) or not phase:
+        raise TypeError("checkpoint phase must be non-empty text")
+    if not callable(producer):
+        raise TypeError("checkpoint root producer must be callable")
+    envelope = None
+    local_error = None
+    if topology.rank == 0:
+        try:
+            envelope = {"value": producer(), "error": None}
+        except BaseException as error:
+            local_error = error
+            envelope = {
+                "value": None,
+                "error": None if not topology.distributed else _error_record(error),
+            }
+    if not topology.distributed:
+        if local_error is not None:
+            return RootAttempt(producer_error=local_error)
+        try:
+            encode_value(envelope)
+        except BaseException as error:
+            return RootAttempt(transport_error=error)
+    else:
+        try:
+            envelope = broadcast_value(topology.communicator, envelope, root=0)
+        except BaseException as error:
+            return RootAttempt(producer_error=local_error, transport_error=error)
+    try:
+        if not isinstance(envelope, Mapping) or set(envelope) != {"value", "error"}:
+            raise RuntimeError("checkpoint %s broadcast returned an invalid envelope" % phase)
+        if envelope["error"] is not None:
+            record = _validated_error_record(envelope["error"], phase=phase)
+            try:
+                _raise_collective_failure(phase, ((0, record),))
+            except BaseException as error:
+                return RootAttempt(
+                    producer_error=(
+                        local_error if topology.rank == 0 and local_error is not None else error
+                    )
+                )
+            raise AssertionError("checkpoint producer failure reconstruction returned")
+    except BaseException as error:
+        return RootAttempt(transport_error=error)
+    return RootAttempt(value=envelope["value"])
 
 
 def root_effect(
@@ -705,6 +771,7 @@ def restore_checkpoint_path(
 __all__ = [
     "CheckpointTopology",
     "InMemoryCheckpoint",
+    "RootAttempt",
     "canonical_checkpoint_path",
     "checkpoint_topology",
     "collective_checkpoint_capture",
@@ -716,5 +783,6 @@ __all__ = [
     "restore_checkpoint_payload",
     "root_effect",
     "root_bytes",
+    "root_attempt",
     "root_value",
 ]

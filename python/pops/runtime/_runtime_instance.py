@@ -1641,18 +1641,19 @@ class RuntimeInstance:
             safe_console_completed(console_session, report)
         return report
 
-    def _checkpoint_payload(self, path: Any, *, transaction_receipt: Any = None) -> str:
+    def _checkpoint_payload(self, path: Any, *, transaction_receipt: Any = None) -> Any:
         from pops.output._checkpoint_collective import (
             canonical_checkpoint_path,
             checkpoint_topology,
             consensus,
-            root_value,
+            root_attempt,
         )
         from pops.output._restart_provider import (
+            _CheckpointPayloadProof,
+            _CheckpointTransportFailure,
             _CheckpointTransactionReceipt,
-            _unlink_checkpoint_path_if_owned,
+            _raise_cleanup_failures,
         )
-        from pops.output._writers.common import _StagingAuthority
 
         topology = checkpoint_topology(self)
         expected = canonical_checkpoint_path(path)
@@ -1663,17 +1664,13 @@ class RuntimeInstance:
                     "RuntimeInstance checkpoint capture requires an authenticated private "
                     "transaction receipt; the path-only native ABI cannot prove creator ownership"
                 )
-            transaction_receipt.require_entry_path(expected)
+            if expected != transaction_receipt.staging_path:
+                raise RuntimeError("checkpoint staging path differs from its transaction receipt")
             if topology.rank == 0 and not transaction_receipt.has_root_descriptor:
                 raise RuntimeError("rank zero lacks the checkpoint transaction descriptor")
         except BaseException as error:
             receipt_error = error
         consensus(topology, "private transaction receipt", error=receipt_error)
-        root_value(
-            topology,
-            "native staging absence",
-            lambda: transaction_receipt.require_absent_entry(expected),
-        )
 
         target = None
         capture_error = None
@@ -1686,14 +1683,32 @@ class RuntimeInstance:
                 )
         except BaseException as error:
             capture_error = error
-        rows = consensus(
-            topology,
-            "native capture",
-            error=capture_error,
-            value=None if target is None else str(target),
-        )
+        try:
+            rows = consensus(
+                topology,
+                "native capture",
+                error=capture_error,
+                value=None if target is None else str(target),
+            )
+        except BaseException as error:
+            # Consensus may itself be the failed transport.  Never enter another collective from
+            # this state; only rank zero owns descriptors and compensates locally.
+            if topology.rank == 0:
+                try:
+                    transaction_receipt.cleanup_owned()
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise
         if any(row["value"] != str(expected) for row in rows):
-            raise RuntimeError("native checkpoint ranks returned different staged paths")
+            error = RuntimeError("native checkpoint ranks returned different staged paths")
+            if topology.rank == 0:
+                try:
+                    transaction_receipt.cleanup_owned()
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise error
 
         import numpy as np
         from ._checkpoint_manifest import (
@@ -1704,16 +1719,26 @@ class RuntimeInstance:
         )
 
         entries: dict[str, Any] = {
-            "expected_owned": False,
-            "expected_owner": None,
-            "temporary_owned": False,
+            "expected": None,
             "temporary": None,
+            "candidate": None,
+            "proof": None,
         }
 
-        def seal_root() -> str:
-            candidate_descriptor, candidate_owner = transaction_receipt.open_candidate(expected)
+        def inspect_entry(entry: Any) -> None:
+            with os.fdopen(entry.duplicate(), "rb") as stream:
+                # ``dup`` retains the same open-file description and therefore the writer's
+                # current offset.  Rewind the retained authority before every authenticated read.
+                stream.seek(0)
+                self._inspect_checkpoint_payload(stream.read())
+
+        def seal_root() -> dict[str, Any]:
+            initial = transaction_receipt.take_native_entry()
+            entries["expected"] = initial
+            candidate = transaction_receipt.open_candidate_at(initial.name)
+            entries["candidate"] = candidate
             try:
-                with os.fdopen(os.dup(candidate_descriptor), "rb") as stream:
+                with os.fdopen(candidate.duplicate(), "rb") as stream:
                     with np.load(stream, allow_pickle=False) as stored:
                         old_manifest = json.loads(str(stored[MANIFEST_KEY]))
                         runtime_kind = old_manifest.get("runtime_kind")
@@ -1727,11 +1752,21 @@ class RuntimeInstance:
                             for name in stored.files
                             if name not in {MANIFEST_KEY, IDENTITY_KEY}
                         }
-            finally:
-                os.close(candidate_descriptor)
-            transaction_receipt.authenticate_entry(expected, candidate_owner)
-            entries["expected_owner"] = candidate_owner
-            entries["expected_owned"] = True
+                # Keep the candidate fd open across the path comparison.  Only a valid payload
+                # written into the inode created by ``created_at`` can retain that authority.
+                # A provider that swaps the directory entry is rejected instead of granting
+                # ownership to an inode reacquired by path after capture.
+                transaction_receipt.authenticate_entry_at(candidate)
+                if candidate.owner != initial.owner:
+                    raise RuntimeError(
+                        "native checkpoint replaced its created-at staging inode"
+                    )
+                transaction_receipt.authenticate_entry_at(initial)
+            except BaseException:
+                raise
+            else:
+                entries["candidate"] = None
+                candidate.close()
 
             payload["runtime_consumer_graph"] = np.asarray(self._consumer_graph.identity.token)
             cursors = self._checkpoint_cursor_override or self._consumer_cursors
@@ -1746,26 +1781,21 @@ class RuntimeInstance:
                 )
             )
             seal_checkpoint_payload(self, payload, runtime_kind=runtime_kind)
-            temporary = _StagingAuthority.created(
-                expected,
-                suffix=".runtime-instance.tmp",
-            )
+            temporary = transaction_receipt.create_unique_at(suffix=".runtime-instance.tmp")
             entries["temporary"] = temporary
-            entries["temporary_owned"] = True
             with os.fdopen(temporary.duplicate(), "wb") as stream:
                 np.savez_compressed(stream, **payload)
-            temporary.authenticate_path()
+            transaction_receipt.authenticate_entry_at(temporary)
             # Validate the completed reseal before detaching the authenticated native entry.
-            self._inspect_checkpoint_file(temporary.path)
+            inspect_entry(temporary)
 
-            entries["expected_owned"] = False
-            _unlink_checkpoint_path_if_owned(
-                expected,
-                candidate_owner,
-                phase="runtime envelope replacement",
-            )
+            native = entries["expected"]
+            entries["expected"] = None
+            transaction_receipt.quarantine_entry_at(native, phase="runtime envelope replacement")
             try:
-                transaction_receipt.rename_no_replace(temporary.path, expected)
+                resealed = transaction_receipt.rename_no_replace_at(
+                    temporary, transaction_receipt._NATIVE_NAME
+                )
             except FileExistsError as error:
                 # Even an entry already hard-linked to the temporary inode was not created by
                 # this rename.  Never infer directory-entry ownership merely from inode equality.
@@ -1773,76 +1803,129 @@ class RuntimeInstance:
                     "runtime checkpoint staging path appeared during envelope publication: %s"
                     % expected
                 ) from error
-            entries["temporary_owned"] = False
-            entries["expected_owner"] = temporary.owner
-            entries["expected_owned"] = True
-            transaction_receipt.authenticate_entry(expected, temporary.owner)
-            temporary.close()
+            proof = _CheckpointPayloadProof(transaction_receipt, resealed)
+            entries["proof"] = proof
             entries["temporary"] = None
             # A staged checkpoint is not publishable until its final envelope has been read back
             # and authenticated by the same strict path used during restart.
-            self._inspect_checkpoint_file(expected)
-            return str(expected)
+            inspect_entry(resealed)
+            return proof.to_data()
 
         def cleanup_root() -> None:
             failures = []
-            temporary = entries["temporary"]
-            if temporary is not None:
-                if entries["temporary_owned"]:
-                    # Relinquish the public name before quarantine begins.  If quarantine moves a
-                    # replacement, a second cleanup must never treat that entry as ours.
-                    entries["temporary_owned"] = False
-                    try:
-                        _unlink_checkpoint_path_if_owned(
-                            temporary.path,
-                            temporary.owner,
-                            phase="failed runtime envelope temporary cleanup",
-                        )
-                    except BaseException as cleanup_error:
-                        failures.append(cleanup_error)
+            for key, phase in (
+                ("temporary", "failed runtime envelope temporary cleanup"),
+                ("expected", "failed runtime envelope staging cleanup"),
+            ):
+                entry = entries[key]
+                entries[key] = None
+                if entry is None:
+                    continue
                 try:
-                    temporary.close()
+                    transaction_receipt.quarantine_entry_at(entry, phase=phase)
                 except BaseException as cleanup_error:
                     failures.append(cleanup_error)
-                entries["temporary"] = None
-            if entries["expected_owned"]:
-                owner = entries["expected_owner"]
-                entries["expected_owned"] = False
+            candidate = entries["candidate"]
+            entries["candidate"] = None
+            if candidate is not None:
                 try:
-                    _unlink_checkpoint_path_if_owned(
-                        expected,
-                        owner,
-                        phase="failed runtime envelope staging cleanup",
+                    candidate.close()
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+            proof = entries["proof"]
+            entries["proof"] = None
+            if proof is not None:
+                try:
+                    transaction_receipt.quarantine_entry_at(
+                        proof.entry,
+                        phase="failed runtime envelope handoff cleanup",
                     )
                 except BaseException as cleanup_error:
                     failures.append(cleanup_error)
-            if failures:
-                raise RuntimeError(
-                    "runtime checkpoint cleanup failed: "
-                    + "; ".join(
-                        "%s: %s" % (type(failure).__name__, failure) for failure in failures
-                    )
-                )
-
-        try:
-            sealed = Path(root_value(topology, "runtime envelope sealing", seal_root))
-        except BaseException as error:
-            cleanup_error = None
             try:
-                root_value(
-                    topology,
-                    "runtime envelope staging cleanup",
-                    cleanup_root,
+                transaction_receipt.cleanup_empty()
+            except BaseException as cleanup_error:
+                failures.append(cleanup_error)
+            _raise_cleanup_failures("runtime checkpoint cleanup failed", failures)
+
+        attempt = root_attempt(topology, "runtime envelope sealing", seal_root)
+        if attempt.transport_error is not None:
+            error = _CheckpointTransportFailure(
+                "checkpoint transport failed during runtime envelope sealing: %s"
+                % attempt.transport_error
+            )
+            if attempt.producer_error is not None:
+                error.add_note("rank-zero producer also failed: %s" % attempt.producer_error)
+            if topology.rank == 0:
+                try:
+                    cleanup_root()
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise error from attempt.transport_error
+        if attempt.producer_error is not None:
+            error = attempt.producer_error
+            cleanup_attempt = root_attempt(
+                topology,
+                "runtime envelope staging cleanup",
+                cleanup_root,
+            )
+            cleanup_errors = tuple(
+                item
+                for item in (
+                    cleanup_attempt.producer_error,
+                    cleanup_attempt.transport_error,
                 )
-            except BaseException as caught:
-                cleanup_error = caught
-            add_note = getattr(error, "add_note", None)
-            if cleanup_error is not None and callable(add_note):
-                add_note("failed runtime checkpoint staging cleanup: %s" % cleanup_error)
+                if item is not None
+            )
+            if cleanup_errors:
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "failed runtime checkpoint staging cleanup: "
+                        + "; ".join(str(item) for item in cleanup_errors)
+                    )
+            raise error
+
+        proof_error = None
+        proof = None
+        try:
+            if topology.rank == 0:
+                proof = entries["proof"]
+                if type(proof) is not _CheckpointPayloadProof:
+                    raise RuntimeError("rank zero lost its exact checkpoint payload proof")
+                if proof.to_data() != attempt.value:
+                    raise RuntimeError("rank-zero payload proof differs from its broadcast")
+            else:
+                proof = _CheckpointPayloadProof.observed(transaction_receipt, attempt.value)
+        except BaseException as error:
+            proof_error = error
+        try:
+            consensus(
+                topology,
+                "runtime envelope payload proof",
+                error=proof_error,
+                value=attempt.value,
+            )
+        except BaseException as error:
+            if topology.rank == 0:
+                try:
+                    cleanup_root()
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
             raise
-        if sealed != expected:
-            raise RuntimeError("rank zero sealed a different checkpoint staging path")
-        return str(expected)
+        if proof is None:
+            error = RuntimeError("checkpoint payload proof validation returned no proof")
+            if topology.rank == 0:
+                try:
+                    cleanup_root()
+                except BaseException as cleanup_error:
+                    error.add_note("rank-zero checkpoint cleanup also failed: %s" % cleanup_error)
+            raise error
+        if topology.rank == 0:
+            entries["proof"] = None
+        return proof
 
     def _restart_operation(self) -> Any:
         from pops.output._restart_provider import RestartAuthority
@@ -1863,7 +1946,7 @@ class RuntimeInstance:
             snapshot = operation.snapshot(self, target.parent)
             operation.validate_snapshot(snapshot)
             try:
-                return str(operation.write(snapshot, target))
+                produced = str(operation.write(snapshot, target))
             except BaseException as error:
                 discard = getattr(snapshot, "discard", None)
                 if callable(discard):
@@ -1874,6 +1957,10 @@ class RuntimeInstance:
                         if callable(add_note):
                             add_note("checkpoint staging cleanup also failed: %s" % cleanup_error)
                 raise
+            finalize = getattr(snapshot, "finalize", None)
+            if callable(finalize):
+                finalize()
+            return produced
         finally:
             self._retry_consumer_finalizers()
 
@@ -1896,10 +1983,6 @@ class RuntimeInstance:
         if cursors.to_data() != dict(cursor_data):
             raise ValueError("restart consumer cursor rows are not canonical")
         return cursors
-
-    def _inspect_checkpoint_file(self, path: Any) -> ConsumerCursorSet:
-        """Rank-zero-only complete authentication; performs no native mutation."""
-        return self._inspect_checkpoint_payload(Path(path).read_bytes())
 
     def _inspect_checkpoint_payload(self, payload: bytes) -> ConsumerCursorSet:
         """Authenticate exact in-memory bytes on rank zero without native mutation."""
