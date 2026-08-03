@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/fv/numerical_flux.hpp>
+#include <pops/physics/bricks/hyperbolic.hpp>
 #include <pops/physics/fluids/euler.hpp>
 
 #include <cmath>
@@ -310,6 +311,10 @@ TEST(test_riemann_capabilities, compile_time_detection) {
   static_assert(pops::HasHLLCStructure<PermutedEuler>);
   static_assert(pops::HasRoeDissipation<PermutedEuler>);
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");
+  static_assert(pops::HasHLLCStructure<pops::IsothermalFlux>);
+  static_assert(pops::HasRoeDissipation<pops::IsothermalFlux>);
+  static_assert(pops::HasHLLCStructure<pops::IsothermalFluxPolar>);
+  static_assert(pops::HasRoeDissipation<pops::IsothermalFluxPolar>);
   static_assert(pops::HasHLLCStructure<DimensionalIsoHLLC<1>>);
   static_assert(pops::HasHLLCStructure<DimensionalIsoHLLC<3>>);
   SUCCEED() << "detection des capabilities (Euler a-capabilites, Hooked/Iso capability)";
@@ -408,6 +413,40 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
     const double d = maxdiff(face_density(hllc, iso, U, a, U, a, dir), iso.flux(U, a, dir));
     EXPECT_LE(d, 1e-13) << "consistance HLLC isotherme (dir " << dir << ")";
   }
+}
+
+TEST(test_riemann_capabilities, native_isothermal_provider_serves_hllc_and_roe) {
+  pops::IsothermalFlux model;
+  model.cs2 = Real(0.5);
+  const Aux providers{};
+  const pops::IsothermalFlux::State value{Real(1.3), Real(0.4), Real(-0.7)};
+
+  for (int axis = 0; axis < 2; ++axis) {
+    const auto physical = model.flux(value, providers, axis);
+    const auto hllc = face_density(pops::HLLCFlux{}, model, value, providers, value, providers,
+                                   axis);
+    const auto roe =
+        face_density(pops::RoeFlux{}, model, value, providers, value, providers, axis);
+    EXPECT_LE(maxdiff(hllc, physical), 1e-13);
+    EXPECT_LE(maxdiff(roe, physical), 1e-13);
+  }
+}
+
+TEST(test_riemann_capabilities, native_isothermal_contact_is_not_replaced_by_hll) {
+  pops::IsothermalFlux model;
+  model.cs2 = Real(0.5);
+  const Aux providers{};
+  pops::IsothermalFlux::State left{Real(1), Real(0), Real(2)};
+  pops::IsothermalFlux::State right{Real(1), Real(0), Real(-3)};
+
+  const auto hllc =
+      face_density(pops::HLLCFlux{}, model, left, providers, right, providers, 0);
+  const auto roe = face_density(pops::RoeFlux{}, model, left, providers, right, providers, 0);
+  const auto hll = face_density(pops::HLLFlux{}, model, left, providers, right, providers, 0);
+  EXPECT_LE(std::fabs(hllc[2]), 1e-14);
+  EXPECT_LE(std::fabs(roe[2]), 1e-14);
+  EXPECT_GE(std::fabs(hll[2]), 1e-2)
+      << "a hidden HLL fallback would make the contact-resolving providers diffusive";
 }
 
 TEST(test_riemann_capabilities, hllc_provider_contract_is_dimension_independent) {

@@ -199,6 +199,93 @@ struct IsothermalFlux {
     smin = vn - c;
     smax = vn + c;
   }
+
+  // -------------------------------------------------------------------------------------------
+  // RIEMANN CAPABILITIES: the isothermal closure owns its contact construction and Roe action.
+  // HLLCFlux / RoeFlux remain layout-blind and consume these hooks through the same
+  // HasHLLCStructure / HasRoeDissipation contracts as every other physical provider.
+  // -------------------------------------------------------------------------------------------
+
+  /// Barotropic pressure p = c_s^2 rho used by the HLLC physical provider.
+  POPS_HD Real pressure(const State& u) const { return cs2 * u[0]; }
+
+  /// Contact-wave speed for the isothermal Euler closure.
+  POPS_HD Real contact_speed(const State& left, const State& right, Real pressure_left,
+                             Real pressure_right, Real lower, Real upper, int dir) const {
+    const int normal = dir == 0 ? 1 : 2;
+    const Real density_left = left[0];
+    const Real density_right = right[0];
+    const Real velocity_left = left[normal] / velocity_rho(density_left);
+    const Real velocity_right = right[normal] / velocity_rho(density_right);
+    return (pressure_right - pressure_left +
+            density_left * velocity_left * (lower - velocity_left) -
+            density_right * velocity_right * (upper - velocity_right)) /
+           (density_left * (lower - velocity_left) -
+            density_right * (upper - velocity_right));
+  }
+
+  /// HLLC star state for a barotropic state (rho, rho u, rho v).
+  POPS_HD State hllc_star_state(const State& value, Real, Real speed, Real contact,
+                                int dir) const {
+    const int normal = dir == 0 ? 1 : 2;
+    const int tangent = dir == 0 ? 2 : 1;
+    const Real density = value[0];
+    const Real normal_velocity = value[normal] / velocity_rho(density);
+    const Real star_density = density * (speed - normal_velocity) / (speed - contact);
+    State result{};
+    result[0] = star_density;
+    result[normal] = star_density * contact;
+    result[tangent] = star_density * (value[tangent] / velocity_rho(density));
+    return result;
+  }
+
+  /// Roe action |A_roe| dU for the isothermal Euler closure.
+  POPS_HD State roe_dissipation(const State& left, const auto&, const State& right, const auto&,
+                                int dir) const {
+    const int normal = dir == 0 ? 1 : 2;
+    const int tangent = dir == 0 ? 2 : 1;
+    const Real density_left = left[0];
+    const Real density_right = right[0];
+    const Real velocity_left = left[normal] / velocity_rho(density_left);
+    const Real velocity_right = right[normal] / velocity_rho(density_right);
+    const Real tangent_left = left[tangent] / velocity_rho(density_left);
+    const Real tangent_right = right[tangent] / velocity_rho(density_right);
+
+    const Real root_left = std::sqrt(density_left);
+    const Real root_right = std::sqrt(density_right);
+    const Real denominator = root_left + root_right;
+    const Real normal_velocity =
+        (root_left * velocity_left + root_right * velocity_right) / denominator;
+    const Real tangent_velocity =
+        (root_left * tangent_left + root_right * tangent_right) / denominator;
+    const Real roe_density = root_left * root_right;
+    const Real sound_speed = std::sqrt(cs2);
+
+    const Real density_jump = density_right - density_left;
+    const Real normal_jump = velocity_right - velocity_left;
+    const Real tangent_jump = tangent_right - tangent_left;
+    const Real acoustic_minus =
+        (cs2 * density_jump - roe_density * sound_speed * normal_jump) /
+        (Real(2) * cs2);
+    const Real acoustic_plus =
+        (cs2 * density_jump + roe_density * sound_speed * normal_jump) /
+        (Real(2) * cs2);
+    const Real shear = roe_density * tangent_jump;
+
+    const HartenEntropyFix entropy_fix{Real(0.1)};
+    const Real lambda_minus = entropy_fix(normal_velocity - sound_speed, sound_speed);
+    const Real lambda_shear = normal_velocity < Real(0) ? -normal_velocity : normal_velocity;
+    const Real lambda_plus = entropy_fix(normal_velocity + sound_speed, sound_speed);
+
+    State result{};
+    result[0] = lambda_minus * acoustic_minus + lambda_plus * acoustic_plus;
+    result[normal] = lambda_minus * acoustic_minus * (normal_velocity - sound_speed) +
+                     lambda_plus * acoustic_plus * (normal_velocity + sound_speed);
+    result[tangent] = lambda_minus * acoustic_minus * tangent_velocity +
+                      lambda_shear * shear +
+                      lambda_plus * acoustic_plus * tangent_velocity;
+    return result;
+  }
   static VariableSet conservative_vars() {
     return {VariableKind::Conservative,
             {"rho", "rho_u", "rho_v"},

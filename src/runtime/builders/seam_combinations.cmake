@@ -49,6 +49,8 @@ set(POPS_SEAM_COMBINATIONS
     "system_transport_seam|system|exb|-|build_block_exb|system/base|system_exb.cpp"
     "system_flux_seam|system|isothermal|rusanov|build_block_isothermal_rusanov|system/isothermal|system_isothermal_rusanov.cpp"
     "system_flux_seam|system|isothermal|hll|build_block_isothermal_hll|system/isothermal|system_isothermal_hll.cpp"
+    "system_flux_seam|system|isothermal|hllc|build_block_isothermal_hllc|system/isothermal|system_isothermal_hllc.cpp"
+    "system_flux_seam|system|isothermal|roe|build_block_isothermal_roe|system/isothermal|system_isothermal_roe.cpp"
     "system_flux_seam|system|compressible|rusanov|build_block_compressible_rusanov|system/compressible|system_compressible_rusanov.cpp"
     "system_flux_seam|system|compressible|hll|build_block_compressible_hll|system/compressible|system_compressible_hll.cpp"
     "system_flux_seam|system|compressible|hllc|build_block_compressible_hllc|system/compressible|system_compressible_hllc.cpp"

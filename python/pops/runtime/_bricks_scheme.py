@@ -150,8 +150,9 @@ class Spatial:
       requiring a pressure or n_vars == 4. This is the recommended path for a NON Euler model with
       signed waves (moment system, isothermal): HLL() + Minmod().
       HLLC() / Roe() = capability-driven contact-resolving and Roe-linearized solvers. The model
-      MUST supply HasHLLCStructure / HasRoeDissipation; the native Euler brick and DSL providers
-      conform through that same contract. There is no layout inference or implicit fallback.
+      MUST supply HasHLLCStructure / HasRoeDissipation; native Euler/isothermal bricks and DSL
+      providers conform through that same contract, including the annular-polar isothermal route.
+      There is no layout or coordinate inference and no implicit fallback.
     - ``recon``: a ``pops.numerics.variables`` descriptor lowering to "conservative" | "primitive"
       (reconstructed variables; primitive more robust for Euler: positivity of rho and p; shortcut
       primitive=).

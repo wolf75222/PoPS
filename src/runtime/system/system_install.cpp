@@ -217,11 +217,10 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
         break;
       }
       case TransportRouteId::kIsothermal: {
-        // Isothermal is flux-subdivided (ADC-342): only rusanov + hll are reachable (3-var, no pressure
-        // for hllc/roe). The per-flux seams call make_block_<flux> directly, so -- like compressible --
-        // we run make_block's validation here (validate_riemann then validate_limiter, identical
-        // messages) before dispatching; hllc/roe and any unknown flux hit the registry throw (explicit,
-        // no UB). The default preserves isothermal+hllc -> registry-mismatch throw exactly.
+        // Isothermal is flux-subdivided (ADC-342). Its physical provider now supplies the exact
+        // HLLC and Roe capabilities, so all public providers use the same per-flux seam shape as
+        // compressible Euler. The registry validates tokens; capability ownership remains in the
+        // model and no branch substitutes another solver.
         validate_riemann(riemann, /*polar=*/false, "System");
         validate_limiter(limiter, "System");
         switch (parse_riemann_route(riemann, "System")) {
@@ -230,6 +229,12 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
             break;
           case RiemannRouteId::kHll:
             bb = detail::build_block_isothermal_hll(model, args);
+            break;
+          case RiemannRouteId::kHllc:
+            bb = detail::build_block_isothermal_hllc(model, args);
+            break;
+          case RiemannRouteId::kRoe:
+            bb = detail::build_block_isothermal_roe(model, args);
             break;
           default:
             throw_registry_dispatch_mismatch("System", "flux", riemann);

@@ -577,7 +577,7 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
 // branch of dispatch_amr_block VERBATIM (same leaves, same hllc/roe `if constexpr` capability guards, same
 // messages); validate_riemann/limiter run in the caller (dispatch_amr_block, or the compressible thin
 // dispatcher python/amr_block_compressible.cpp). dispatch_amr_block (below, unchanged) still serves the
-// exb/isothermal seam, where the if constexpr guards prune hllc/roe.
+// transport seam, where the same if constexpr guards admit or refuse each concrete provider.
 template <class Model>
 AmrRuntimeBlock dispatch_amr_block_rusanov(const Model& m, const std::string& lim,
                                            const SharedAmrLayout& S, const std::string& name,
@@ -679,7 +679,7 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
                                    bool wave_speed_cache = false) {
   // CENTRALIZED VALIDATION (dispatch_tags.hpp registry) BEFORE the dispatch: same tags accepted /
   // rejected as before, identical messages. The template if/else dispatch that follows is UNCHANGED; the
-  // capability guards (hllc/roe: 2D Euler or capability) stay `if constexpr` PER MODEL.
+  // capability guards (hllc/roe: exact physical provider capability) stay `if constexpr` PER MODEL.
   validate_riemann(riem, /*polar=*/false, "add_block(AmrSystem, multi-block)");
   validate_limiter(lim, "add_block(AmrSystem, multi-block)");
   if (!std::isfinite(weno_epsilon) || weno_epsilon <= 0.0)
@@ -692,7 +692,8 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
         "add_block(AmrSystem, multi-block): wave_speed_cache requires flux='hll'");
   // ADC-359: delegate to the flux-pinned dispatch_amr_block_<flux> helpers above (factored so the
   // compressible seam compiles one flux per TU). Behavior is unchanged: same leaves, same hllc/roe
-  // capability guards, same throws. exb/isothermal route here as before (their guards prune hllc/roe).
+  // capability guards and same throws. ExB is refused; native isothermal is admitted by its exact
+  // HLLC/Roe provider hooks.
   // ADC-641: parse the validated tag ONCE into the typed RiemannRouteId; the switch decodes it and the
   switch (parse_riemann_route(riem, "add_block(AmrSystem, multi-block)")) {
     case RiemannRouteId::kRusanov:

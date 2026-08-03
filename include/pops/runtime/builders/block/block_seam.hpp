@@ -96,7 +96,7 @@ BuiltBlock build_block_for_make(TR tr, const ModelSpec& model, const BlockBuildA
 }
 
 /// Per-transport seam body: the full make_block dispatcher (all fluxes). Used by transports that are NOT
-/// flux-subdivided (exb -- only rusanov reachable via the capability guards; isothermal -- rusanov+hll).
+/// flux-subdivided (exb -- only rusanov reachable via the capability guards).
 template <class TR>
 BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& a) {
   return build_block_for_make(std::move(tr), model, a, [](auto m, const BlockBuildArgs& aa) {
@@ -110,12 +110,13 @@ BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& 
 // IsothermalFlux{cs2, vacuum_floor}).
 BuiltBlock build_block_exb(const ModelSpec& model, const BlockBuildArgs& a);
 
-// Isothermal (3-var fluid) carries two reachable fluxes (rusanov + hll; hllc/roe need 4-var + pressure)
-// x 4 limiters x 15 models -- the post-split long pole -- so it is FLUX-SUBDIVIDED like compressible
-// (ADC-342): one .cpp per reachable flux. System dispatches on the riemann string; an unsupported flux
-// (incl. hllc/roe) is caught by the shared validate_riemann + the registry throw.
+// Isothermal (3-var fluid) carries all four public providers through its exact physical
+// capabilities. It stays FLUX-SUBDIVIDED like compressible (ADC-342): one generated .cpp per
+// reachable flux, with no alternate Euler-specific builder.
 BuiltBlock build_block_isothermal_rusanov(const ModelSpec& model, const BlockBuildArgs& a);
 BuiltBlock build_block_isothermal_hll(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_isothermal_hllc(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_isothermal_roe(const ModelSpec& model, const BlockBuildArgs& a);
 
 // Compressible (Euler, 4-var + pressure) is the heaviest transport: all four fluxes are valid, so it is
 // FLUX-SUBDIVIDED into one .cpp per flux (ADC-335) -- each instantiates only its flux's build_block
