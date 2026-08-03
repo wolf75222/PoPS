@@ -26,7 +26,9 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
+#include <vector>
 
 using namespace pops;
 
@@ -149,6 +151,47 @@ TEST(test_block_builder, isothermal_model_without_hllc_capability_is_rejected) {
   };
   EXPECT_TRUE(refused_with("hllc", "capability"))
       << "isotherme + hllc refuse (nomme la capability)";
+}
+
+TEST(test_block_builder, prepared_no_flux_zeroes_only_its_evaluated_face_flux) {
+  const Box2D dom = Box2D::from_extents(4, 3);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray cells = BoxArray::from_domain(dom, 4);
+  const DistributionMapping dm(cells.size(), n_ranks());
+  BCRec bc;
+  MultiFab aux(cells, dm, 3, 1);
+  aux.set_val(0.0);
+
+  GridContext ctx{dom, bc, geom, &aux};
+  ctx.boundary_plan = std::make_shared<PreparedBoundaryPlan>(
+      "case::closed::plan", 1,
+      prepare_hyperbolic_boundary<2>(
+          {"no_flux", "foextrap", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+          {"case::closed::xlo", "case::closed::xhi", "case::closed::ylo", "case::closed::yhi"},
+          std::vector<std::string>{"Scalar"}));
+
+  MultiFab fx(BoxArray(std::vector<Box2D>{xface_box(dom)}), dm, 1, 0);
+  MultiFab fy(BoxArray(std::vector<Box2D>{yface_box(dom)}), dm, 1, 0);
+  fx.set_val(3.0);
+  fy.set_val(5.0);
+  detail::zero_prepared_boundary_fluxes(fx, fy, ctx);
+  fx.sync_host();
+  fy.sync_host();
+
+  for (int local = 0; local < fx.local_size(); ++local) {
+    const Fab2D& values = fx.fab(local);
+    const Box2D box = fx.box(local);
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+        EXPECT_DOUBLE_EQ(values(i, j, 0), i == dom.lo[0] ? 0.0 : 3.0);
+  }
+  for (int local = 0; local < fy.local_size(); ++local) {
+    const Fab2D& values = fy.fab(local);
+    const Box2D box = fy.box(local);
+    for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+      for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+        EXPECT_DOUBLE_EQ(values(i, j, 0), 5.0);
+  }
 }
 
 TEST(test_block_builder, cell_primitive_conversion_consumes_prepared_recovery_outcome) {

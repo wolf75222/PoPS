@@ -331,6 +331,12 @@ class PreparedBoundaryPlan {
             "PreparedBoundaryPlan omitted interface faces must be unique ordinals 0..3");
       omitted_faces_[static_cast<std::size_t>(face)] = true;
     }
+    for (int face = 0; face < 4; ++face)
+      if (omitted_faces_[static_cast<std::size_t>(face)] &&
+          hyperbolic_boundary_.face(face / 2, face % 2 == 0 ? -1 : 1).law ==
+              HyperbolicBoundaryLaw::NoFlux)
+        throw std::invalid_argument(
+            "a prepared interface face cannot also be a physical no-flux boundary");
     validate_base();
   }
 
@@ -386,6 +392,18 @@ class PreparedBoundaryPlan {
   bool has_omitted_faces() const {
     return std::any_of(omitted_faces_.begin(), omitted_faces_.end(),
                        [](bool value) { return value; });
+  }
+  bool has_zero_flux_faces() const noexcept {
+    for (int axis = 0; axis < 2; ++axis)
+      for (const int side : {-1, 1})
+        if (zeroes_face(axis, side))
+          return true;
+    return false;
+  }
+  bool zeroes_face(int axis, int side) const {
+    if (axis < 0 || axis >= 2 || (side != -1 && side != 1))
+      throw std::invalid_argument("PreparedBoundaryPlan face selector is invalid");
+    return hyperbolic_boundary_.face(axis, side).law == HyperbolicBoundaryLaw::NoFlux;
   }
   bool omits_face(int axis, int side) const {
     if (axis < 0 || axis >= 2 || (side != -1 && side != 1))

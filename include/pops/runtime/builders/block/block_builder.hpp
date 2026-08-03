@@ -67,7 +67,7 @@ inline void require_geometry_aware_boundary_provider(const GridContext& context,
         "that provider has no active-cell or cut-cell metric contract");
 }
 
-struct ZeroPreparedInterfaceFace {
+struct ZeroPreparedBoundaryFace {
   Array4 flux;
   int axis = 0;
   int coordinate = 0;
@@ -80,26 +80,27 @@ struct ZeroPreparedInterfaceFace {
   }
 };
 
-inline void zero_prepared_interface_fluxes(MultiFab& fx, MultiFab& fy, const GridContext& context) {
-  if (!context.boundary_plan || !context.boundary_plan->has_omitted_faces())
+inline void zero_prepared_boundary_fluxes(MultiFab& fx, MultiFab& fy, const GridContext& context) {
+  if (!context.boundary_plan || (!context.boundary_plan->has_omitted_faces() &&
+                                 !context.boundary_plan->has_zero_flux_faces()))
     return;
   for (int local = 0; local < fx.local_size(); ++local) {
     const Box2D faces = fx.box(local);
-    if (context.boundary_plan->omits_face(0, -1))
-      for_each_cell(faces, ZeroPreparedInterfaceFace{fx.fab(local).array(), 0, context.dom.lo[0],
-                                                     fx.ncomp()});
-    if (context.boundary_plan->omits_face(0, 1))
-      for_each_cell(faces, ZeroPreparedInterfaceFace{fx.fab(local).array(), 0,
-                                                     context.dom.hi[0] + 1, fx.ncomp()});
+    if (context.boundary_plan->omits_face(0, -1) || context.boundary_plan->zeroes_face(0, -1))
+      for_each_cell(
+          faces, ZeroPreparedBoundaryFace{fx.fab(local).array(), 0, context.dom.lo[0], fx.ncomp()});
+    if (context.boundary_plan->omits_face(0, 1) || context.boundary_plan->zeroes_face(0, 1))
+      for_each_cell(faces, ZeroPreparedBoundaryFace{fx.fab(local).array(), 0, context.dom.hi[0] + 1,
+                                                    fx.ncomp()});
   }
   for (int local = 0; local < fy.local_size(); ++local) {
     const Box2D faces = fy.box(local);
-    if (context.boundary_plan->omits_face(1, -1))
-      for_each_cell(faces, ZeroPreparedInterfaceFace{fy.fab(local).array(), 1, context.dom.lo[1],
-                                                     fy.ncomp()});
-    if (context.boundary_plan->omits_face(1, 1))
-      for_each_cell(faces, ZeroPreparedInterfaceFace{fy.fab(local).array(), 1,
-                                                     context.dom.hi[1] + 1, fy.ncomp()});
+    if (context.boundary_plan->omits_face(1, -1) || context.boundary_plan->zeroes_face(1, -1))
+      for_each_cell(
+          faces, ZeroPreparedBoundaryFace{fy.fab(local).array(), 1, context.dom.lo[1], fy.ncomp()});
+    if (context.boundary_plan->omits_face(1, 1) || context.boundary_plan->zeroes_face(1, 1))
+      for_each_cell(faces, ZeroPreparedBoundaryFace{fy.fab(local).array(), 1, context.dom.hi[1] + 1,
+                                                    fy.ncomp()});
   }
 }
 
@@ -107,19 +108,23 @@ inline BoundaryFaceOmission prepared_boundary_face_omission(const GridContext& c
   BoundaryFaceOmission omission;
   omission.domain = context.dom;
   if (context.boundary_plan) {
-    omission.xlo = context.boundary_plan->omits_face(0, -1);
-    omission.xhi = context.boundary_plan->omits_face(0, +1);
-    omission.ylo = context.boundary_plan->omits_face(1, -1);
-    omission.yhi = context.boundary_plan->omits_face(1, +1);
+    omission.xlo =
+        context.boundary_plan->omits_face(0, -1) || context.boundary_plan->zeroes_face(0, -1);
+    omission.xhi =
+        context.boundary_plan->omits_face(0, +1) || context.boundary_plan->zeroes_face(0, +1);
+    omission.ylo =
+        context.boundary_plan->omits_face(1, -1) || context.boundary_plan->zeroes_face(1, -1);
+    omission.yhi =
+        context.boundary_plan->omits_face(1, +1) || context.boundary_plan->zeroes_face(1, +1);
   }
   return omission;
 }
 
-struct PreparedInterfaceFluxFilter {
+struct PreparedBoundaryFluxFilter {
   const GridContext* context = nullptr;
   void operator()(MultiFab& fx, MultiFab& fy) const {
     if (context != nullptr)
-      zero_prepared_interface_fluxes(fx, fy, *context);
+      zero_prepared_boundary_fluxes(fx, fy, *context);
   }
 };
 
@@ -164,7 +169,7 @@ inline void assemble_rhs_without_prepared_interfaces(
     else
       transform_grid_boundary_fluxes(state, fx, fy, context, *point);
   }
-  zero_prepared_interface_fluxes(fx, fy, context);
+  zero_prepared_boundary_fluxes(fx, fy, context);
   mf_eval_rhs(model, state, *context.aux, fx, fy, context.geom.dx(), context.geom.dy(), residual);
 }
 
@@ -223,8 +228,9 @@ struct BlockRhsEval {
   void eval_core_filled(MultiFab& U, MultiFab& R,
                         const runtime::multiblock::BoundaryEvaluationPoint* point = nullptr,
                         const PreparedGridBoundarySession* boundary = nullptr) const {
-    if (ctx->boundary_plan && (ctx->boundary_plan->has_omitted_faces() ||
-                               ctx->boundary_plan->has_flux_transformations())) {
+    if (ctx->boundary_plan &&
+        (ctx->boundary_plan->has_omitted_faces() || ctx->boundary_plan->has_zero_flux_faces() ||
+         ctx->boundary_plan->has_flux_transformations())) {
       assemble_rhs_without_prepared_interfaces<Limiter, Flux>(
           model, U, *ctx, R, recon_prim, pos_floor, weno_eps, ws_cache, point, boundary);
       return;
@@ -487,8 +493,9 @@ struct BlockRhsEvalMasked {
   void operator()(MultiFab& U, MultiFab& R) const {
     require_geometry_aware_boundary_provider(ctx, "masked transport residual");
     fill_grid_ghosts(U, ctx);
-    assemble_rhs_masked<Limiter, Flux>(model, U, *ctx.aux, *mask, ctx.geom, R, recon_prim,
-                                       pos_floor, weno_eps);
+    const BoundaryFaceOmission omission = prepared_boundary_face_omission(ctx);
+    assemble_rhs_masked_impl<Limiter, Flux>(model, U, *ctx.aux, *mask, ctx.geom, R, recon_prim,
+                                            pos_floor, weno_eps, omission);
   }
 
   /// Program core after its point-qualified host protocol has produced ghosts. Kept as the only
@@ -517,9 +524,10 @@ struct BlockRhsEvalEb {
     fill_grid_ghosts(U, ctx);
     const Real face_open_eps =
         ctx.eb_thresholds ? ctx.eb_thresholds->face_open_eps : ctx.eb_face_open_eps;
-    assemble_rhs_eb_prepared<Limiter, Flux>(model, U, *ctx.aux, *ctx.domain_mask,
-                                            *inverse_volume_fraction, ctx.geom, R, recon_prim,
-                                            pos_floor, face_open_eps, weno_eps);
+    const PreparedEbMetricsProvider provider{ctx.domain_mask, inverse_volume_fraction};
+    assemble_rhs_eb_with_metrics<Limiter, Flux>(model, U, *ctx.aux, provider, ctx.geom, R,
+                                                recon_prim, pos_floor, face_open_eps, weno_eps,
+                                                PreparedBoundaryFluxFilter{&ctx});
   }
 
   /// Program core after its point-qualified host protocol has produced ghosts. See the staircase
@@ -530,7 +538,7 @@ struct BlockRhsEvalEb {
     const PreparedEbMetricsProvider provider{ctx.domain_mask, inverse_volume_fraction};
     assemble_rhs_eb_with_metrics<Limiter, Flux>(model, U, *ctx.aux, provider, ctx.geom, R,
                                                 recon_prim, pos_floor, face_open_eps, weno_eps,
-                                                PreparedInterfaceFluxFilter{&ctx});
+                                                PreparedBoundaryFluxFilter{&ctx});
   }
 };
 

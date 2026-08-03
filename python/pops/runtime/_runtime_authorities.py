@@ -160,7 +160,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             raise ValueError("prepared boundary plan must contain canonical xlo/xhi/ylo/yhi rows")
         types = [row.get("type") for row in faces]
         if any(value not in {
-                "periodic", "foextrap", "dirichlet", "slip_wall", "external"}
+                "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall", "external"}
                for value in types):
             raise NotImplementedError("prepared boundary plan selected an unavailable face producer")
         representations = [row.get("representation", "conservative") for row in faces]

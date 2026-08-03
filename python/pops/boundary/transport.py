@@ -262,7 +262,7 @@ class ResolvedTransportCondition:
 
         if not isinstance(self.geometry, DomainBoundary):
             raise TypeError("ResolvedTransportCondition.geometry must be a DomainBoundary")
-        if self.condition_type not in {"inflow", "outflow", "slip_wall"}:
+        if self.condition_type not in {"inflow", "outflow", "no_flux", "slip_wall"}:
             raise ValueError("unsupported built-in transport condition type")
         _state(self.state, where="ResolvedTransportCondition.state")
         if not self.state.is_resolved:
@@ -283,6 +283,7 @@ class ResolvedTransportCondition:
                 BoundaryProviderKind.OUTFLOW,
                 BoundaryProviderKind.DIRECTIONAL_TRANSPORT,
             )),
+            "no_flux": frozenset((BoundaryProviderKind.NO_FLUX,)),
             "slip_wall": frozenset((BoundaryProviderKind.GHOST_FORMULA,)),
         }[self.condition_type]
         if self.provider.kind not in allowed_kinds:
@@ -319,6 +320,8 @@ def _resolved_condition(
         GhostFormula,
         GhostState,
         Inflow as LowLevelInflow,
+        NoFlux as LowLevelNoFlux,
+        NumericalFlux,
         Outflow as LowLevelOutflow,
         RepresentationFlow,
     )
@@ -343,17 +346,29 @@ def _resolved_condition(
         representation=flow,
         characteristic=_closure(),
     )
-    output = GhostState(boundary=boundary, subject=state, representation=target)
+    output = (
+        NumericalFlux(boundary=boundary, subject=state, representation=target)
+        if condition_type == "no_flux"
+        else GhostState(boundary=boundary, subject=state, representation=target)
+    )
     factory = {
         "inflow": LowLevelInflow,
+        "no_flux": LowLevelNoFlux,
         "outflow": LowLevelOutflow,
         "slip_wall": GhostFormula,
     }[condition_type]
-    provider = factory(
-        handle=_provider_handle(state, geometry, condition_type),
-        outputs=(output,),
-        dependencies=dependencies,
-    )
+    if condition_type == "no_flux":
+        provider = factory(
+            handle=_provider_handle(state, geometry, condition_type),
+            output=output,
+            dependencies=dependencies,
+        )
+    else:
+        provider = factory(
+            handle=_provider_handle(state, geometry, condition_type),
+            outputs=(output,),
+            dependencies=dependencies,
+        )
     return ResolvedTransportCondition(
         geometry=geometry,
         condition_type=condition_type,
@@ -507,6 +522,58 @@ class Outflow:
     def resolve_references(self, resolver: Any) -> Outflow:
         if not callable(resolver):
             raise TypeError("Outflow.resolve_references requires a callable resolver")
+        return type(self)(state=resolver(self.state))
+
+    def inspect(self) -> dict[str, Any]:
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "condition_type": self.condition_type,
+            "state": self.state.inspect(),
+        }
+
+    def resolve_condition(
+        self,
+        *,
+        geometry: DomainBoundary,
+        boundary: Any,
+        requirement: BoundaryStencilRequirement,
+    ) -> ResolvedTransportCondition:
+        return _resolved_condition(
+            self,
+            condition_type=self.condition_type,
+            geometry=geometry,
+            boundary=boundary,
+            requirement=requirement,
+            include_state_dependency=True,
+        )
+
+
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class NoFlux:
+    """Close one physical face after the Riemann solve.
+
+    Ghost values use the prepared extrapolation law so reconstruction remains defined; the same
+    immutable face row then zeroes the already evaluated numerical flux before divergence/reflux.
+    """
+
+    condition_type: ClassVar[str] = "no_flux"
+    state: Handle
+    values: tuple[Expr, ...]
+    representation: Representation | None
+    converter: Handle | None
+
+    def __init__(self, *, state: Any) -> None:
+        object.__setattr__(self, "state", _state(state, where="NoFlux.state"))
+        object.__setattr__(self, "values", ())
+        object.__setattr__(self, "representation", None)
+        object.__setattr__(self, "converter", None)
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return (self.state,)
+
+    def resolve_references(self, resolver: Any) -> NoFlux:
+        if not callable(resolver):
+            raise TypeError("NoFlux.resolve_references requires a callable resolver")
         return type(self)(state=resolver(self.state))
 
     def inspect(self) -> dict[str, Any]:
@@ -825,6 +892,7 @@ class ResolvedTransportBoundarySet:
                     "type": {
                         "outflow": "foextrap",
                         "inflow": "dirichlet",
+                        "no_flux": "no_flux",
                         "slip_wall": "slip_wall",
                     }[row.condition_type],
                     "representation": self._native_representation_contract(
@@ -833,7 +901,7 @@ class ResolvedTransportBoundarySet:
                         row, state)[1],
                     "values": (
                         []
-                        if row.condition_type == "outflow"
+                        if row.condition_type in {"no_flux", "outflow"}
                         else [
                             (
                                 _expression_data(expression, qualified=True)
@@ -873,10 +941,13 @@ class ResolvedTransportBoundarySet:
         for condition in conditions:
             geometry = condition.geometry
             face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)
-            if condition.condition_type in {"outflow", "slip_wall"}:
+            if condition.condition_type in {"no_flux", "outflow", "slip_wall"}:
                 values = [0.0] * ncomp
-                face_type = (
-                    "foextrap" if condition.condition_type == "outflow" else "slip_wall")
+                face_type = {
+                    "no_flux": "no_flux",
+                    "outflow": "foextrap",
+                    "slip_wall": "slip_wall",
+                }[condition.condition_type]
             else:
                 analytic_values = all(
                     isinstance(expression, ScalarExpr) for expression in condition.values
@@ -919,7 +990,7 @@ class ResolvedTransportBoundarySet:
                             )
                         values.append(float(value))
                 face_type = "dirichlet"
-            if condition.condition_type in {"outflow", "slip_wall"}:
+            if condition.condition_type in {"no_flux", "outflow", "slip_wall"}:
                 analytic_programs = []
                 clock_id = None
             face_rows[face] = {
@@ -1162,6 +1233,7 @@ __all__ = [
     "BoundaryStencilRequirement",
     "Inflow",
     "model_primitive_to_conservative",
+    "NoFlux",
     "Outflow",
     "ResolvedTransportBoundarySet",
     "ResolvedTransportCondition",
