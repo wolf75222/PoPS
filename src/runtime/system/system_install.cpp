@@ -533,14 +533,25 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   if (stride < 1)
     throw std::runtime_error("System::install_block : stride >= 1");
   Impl* P = p_.get();
-  if (P->eb_set_ && !supports_geometry_mode(closures.supported_geometry_modes, P->geometry_mode_))
-    throw std::runtime_error(
-        "System::install_block: block '" + name +
-        "' has no numerical provider for the active embedded-boundary geometry");
+  const SpatialProviderGeometry active_geometry =
+      P->geometry_mode_ == GeometryMode::None ? closures.base_spatial_geometry
+                                              : spatial_provider_geometry(P->geometry_mode_);
+  const auto supports_active = [&](SpatialProviderOperation operation) {
+    return closures.spatial_provider.supports({kNativeDimension, active_geometry, operation});
+  };
+  if (!supports_active(SpatialProviderOperation::Residual))
+    throw std::runtime_error("System::install_block: block '" + name +
+                             "' has no numerical provider for the active spatial geometry");
   const auto boundary_plan = P->boundary_plans_.find(name);
-  if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None &&
-      boundary_plan != P->boundary_plans_.end() &&
-      boundary_plan->second->has_component_boundaries())
+  if (boundary_plan != P->boundary_plans_.end() &&
+      boundary_plan->second->requires_characteristic_no_inflow() &&
+      !supports_active(SpatialProviderOperation::CharacteristicNoInflow))
+    throw std::runtime_error("System::install_block: block '" + name +
+                             "' has no characteristic no-inflow provider for the active spatial "
+                             "geometry");
+  if (boundary_plan != P->boundary_plans_.end() &&
+      boundary_plan->second->has_component_boundaries() &&
+      !supports_active(SpatialProviderOperation::BoundaryLinearization))
     throw std::runtime_error("System::install_block: embedded-boundary block '" + name +
                              "' has a native boundary component without a geometry-aware provider");
   P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), ncomp, substeps, evolve,
@@ -555,7 +566,8 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
     P->sp.back().state_identity = state_route->second;
   }
   P->sp.back().U.set_val(Real(0));
-  P->sp.back().supported_geometry_modes = closures.supported_geometry_modes;
+  P->sp.back().base_spatial_geometry = closures.base_spatial_geometry;
+  P->sp.back().spatial_provider = closures.spatial_provider;
   P->sp.back().cons_vars = cons_vars;
   P->sp.back().prim_vars = prim_vars;
   P->sp.back().hotspot = std::move(closures.hotspot);  // dt_hotspot diagnostic (ADC-182)
@@ -1235,16 +1247,35 @@ void System::set_analytic_level_set(const std::vector<std::string>& opcodes,
               "System::set_analytic_level_set: embedded-boundary transport has no signed-mask or "
               "cut-cell shared-interface provider");
         for (const auto& block : P->sp)
-          if (!supports_geometry_mode(block.supported_geometry_modes, geometry_mode))
+          if (!supports_geometry_mode(block.spatial_provider, geometry_mode))
             throw std::runtime_error("System::set_analytic_level_set: block '" + block.name +
                                      "' has no numerical provider for embedded-boundary mode '" +
                                      mode + "'");
-        if (geometry_mode != GeometryMode::None)
-          for (const auto& [name, plan] : P->boundary_plans_)
-            if (plan->has_component_boundaries())
+        if (geometry_mode != GeometryMode::None) {
+          const SpatialProviderGeometry geometry = spatial_provider_geometry(geometry_mode);
+          for (const auto& [name, plan] : P->boundary_plans_) {
+            const auto block = std::find_if(
+                P->sp.begin(), P->sp.end(),
+                [&name](const Impl::Species& candidate) { return candidate.name == name; });
+            // Assembly order is intentionally free: install_block and mark_bound authenticate a
+            // plan installed before its block once that block has materialized.
+            if (block == P->sp.end())
+              continue;
+            const auto supports = [&](SpatialProviderOperation operation) {
+              return block->spatial_provider.supports({kNativeDimension, geometry, operation});
+            };
+            if (plan->requires_characteristic_no_inflow() &&
+                !supports(SpatialProviderOperation::CharacteristicNoInflow))
+              throw std::runtime_error(
+                  "System::set_analytic_level_set: block '" + name +
+                  "' has characteristic no-inflow without an embedded-boundary metric provider");
+            if (plan->has_component_boundaries() &&
+                !supports(SpatialProviderOperation::BoundaryLinearization))
               throw std::runtime_error(
                   "System::set_analytic_level_set: block '" + name +
                   "' has a native boundary component without an embedded-boundary metric provider");
+          }
+        }
 
         std::vector<analytic::AnalyticProgram> compiled =
             analytic::compile_component_programs({opcodes}, {literals});
@@ -1366,17 +1397,41 @@ void System::set_geometry_mode(const std::string& mode) {
     throw std::runtime_error(
         "System::set_geometry_mode: embedded-boundary transport has no signed-mask or cut-cell "
         "shared-interface provider");
-  for (const auto& block : P->sp)
-    if (!supports_geometry_mode(block.supported_geometry_modes, gmode))
+  for (const auto& block : P->sp) {
+    const SpatialProviderGeometry geometry = gmode == GeometryMode::None
+                                                 ? block.base_spatial_geometry
+                                                 : spatial_provider_geometry(gmode);
+    if (!block.spatial_provider.supports(
+            {kNativeDimension, geometry, SpatialProviderOperation::Residual}))
       throw std::runtime_error("System::set_geometry_mode: block '" + block.name +
                                "' has no numerical provider for embedded-boundary mode '" + mode +
                                "'");
-  if (gmode != GeometryMode::None)
-    for (const auto& [name, plan] : P->boundary_plans_)
-      if (plan->has_component_boundaries())
+  }
+  if (gmode != GeometryMode::None) {
+    const SpatialProviderGeometry geometry = spatial_provider_geometry(gmode);
+    for (const auto& [name, plan] : P->boundary_plans_) {
+      const auto block =
+          std::find_if(P->sp.begin(), P->sp.end(),
+                       [&name](const Impl::Species& candidate) { return candidate.name == name; });
+      // The exact provider is checked by install_block and again by mark_bound when the plan was
+      // published before its block.
+      if (block == P->sp.end())
+        continue;
+      const auto supports = [&](SpatialProviderOperation operation) {
+        return block->spatial_provider.supports({kNativeDimension, geometry, operation});
+      };
+      if (plan->requires_characteristic_no_inflow() &&
+          !supports(SpatialProviderOperation::CharacteristicNoInflow))
+        throw std::runtime_error(
+            "System::set_geometry_mode: block '" + name +
+            "' has characteristic no-inflow without an embedded-boundary metric provider");
+      if (plan->has_component_boundaries() &&
+          !supports(SpatialProviderOperation::BoundaryLinearization))
         throw std::runtime_error(
             "System::set_geometry_mode: block '" + name +
             "' has a native boundary component without an embedded-boundary metric provider");
+    }
+  }
   P->geometry_mode_ = gmode;
 }
 

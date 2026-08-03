@@ -18,6 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Spatial providers now publish one exact dimension/geometry/operation matrix. The prepared local
+  periodic Cartesian residual executes compile-time 1D and 3D metrics, reconstruction, Riemann
+  fluxes and conservative divergence, while the Box2D/MultiFab runtime still refuses non-2D binds
+  and embedded/polar characteristic or boundary-linearization routes without metric providers.
+- Characteristic no-inflow ghost production is transactional even without a separate primitive
+  trace-recovery provider: a partially written halo is restored when collective preflight refuses.
 - `Program.cadence(substeps=..., stride=...)` now authors the native global cadence as immutable,
   identity-bearing Program data and installs it before the Uniform or AMR runtime freezes.
 - `AsyncScientificOutput` now accepts fields, diagnostics, or both on one exact schedule. Diagnostic

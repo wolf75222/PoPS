@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -7,6 +8,7 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/numerics/spatial/provider_matrix.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -39,15 +41,26 @@ struct EbThresholds;
 /// residuals. None stays the untouched production path.
 enum class GeometryMode { None, Staircase, CutCell };
 
-constexpr std::uint8_t geometry_mode_flag(GeometryMode mode) {
-  return static_cast<std::uint8_t>(1U << static_cast<unsigned>(mode));
+constexpr SpatialProviderGeometry spatial_provider_geometry(GeometryMode mode) {
+  switch (mode) {
+    case GeometryMode::None:
+      return SpatialProviderGeometry::Cartesian;
+    case GeometryMode::Staircase:
+      return SpatialProviderGeometry::Staircase;
+    case GeometryMode::CutCell:
+      return SpatialProviderGeometry::CutCell;
+  }
+  return SpatialProviderGeometry::Cartesian;
 }
-constexpr std::uint8_t kCartesianGeometrySupport = geometry_mode_flag(GeometryMode::None);
-constexpr std::uint8_t kAllGeometrySupport = geometry_mode_flag(GeometryMode::None) |
-                                             geometry_mode_flag(GeometryMode::Staircase) |
-                                             geometry_mode_flag(GeometryMode::CutCell);
-constexpr bool supports_geometry_mode(std::uint8_t supported_modes, GeometryMode mode) {
-  return (supported_modes & geometry_mode_flag(mode)) != 0;
+
+constexpr bool supports_spatial_operation(const SpatialProviderCapabilities& capabilities,
+                                          GeometryMode mode, SpatialProviderOperation operation) {
+  return capabilities.supports({kNativeDimension, spatial_provider_geometry(mode), operation});
+}
+
+constexpr bool supports_geometry_mode(const SpatialProviderCapabilities& capabilities,
+                                      GeometryMode mode) {
+  return supports_spatial_operation(capabilities, mode, SpatialProviderOperation::Residual);
 }
 
 /// Mesh + transport BC + aux shared by a block closures. @c aux is NOT owned:
@@ -686,9 +699,12 @@ struct BlockClosures {
   /// Embedded-boundary twin of @ref project.  Only active cell centres are projected, preserving
   /// the caller-owned state outside the physical domain exactly.
   std::function<void(MultiFab&)> project_masked;
-  /// Explicit provider capability. A mode absent from this bitset is rejected before execution;
-  /// no runtime path may infer support from a non-empty fallback closure.
-  std::uint8_t supported_geometry_modes = kCartesianGeometrySupport;
+  /// Geometry selected by the base residual. Embedded-boundary modes replace Cartesian only; a
+  /// polar block therefore retains Polar when GeometryMode is None.
+  SpatialProviderGeometry base_spatial_geometry = SpatialProviderGeometry::Cartesian;
+  /// Exact dimension x geometry x operation provider matrix. A missing cell is rejected before
+  /// execution; no runtime path may infer characteristic or metric support from a residual closure.
+  SpatialProviderCapabilities spatial_provider = make_cartesian_spatial_provider(kNativeDimension);
 };
 
 }  // namespace pops
