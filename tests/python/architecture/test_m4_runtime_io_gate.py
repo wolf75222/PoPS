@@ -39,7 +39,7 @@ def test_m4_manifest_is_a_closed_exact_matrix():
 
     assert not errors, "M4 gate audit is structurally invalid:\n  " + "\n  ".join(errors)
     assert data["deferred"] == []
-    assert len(data["check"]) == 53
+    assert len(data["check"]) == 54
     assert data["issues"] == [
         "ADC-679",
         "ADC-680",
@@ -226,6 +226,13 @@ def test_m4_gate_pins_every_external_component_family():
             "test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions",
         ),
     } <= executable
+
+    assert (
+        "external_solver",
+        "positive",
+        "tests/python/integration/mpi/test_external_amr_field_solver_mpi.py::"
+        "test_external_amr_field_bridge_executes_and_refuses_collectively",
+    ) in executable
 
 
 def test_m4_gate_pins_real_runtime_instance_and_positive_checkpoint_proofs():

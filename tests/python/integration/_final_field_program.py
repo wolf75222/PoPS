@@ -20,6 +20,7 @@ from pops.amr import (
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
+    PatchLayout,
     Tag,
 )
 from pops.domain import Rectangle
@@ -190,6 +191,8 @@ def resolve_periodic_field_program(
     include: str | None = None,
     strict_restart: bool = False,
     anchored_field: bool = False,
+    patch_layout: PatchLayout | None = None,
+    clustering: Any = None,
 ) -> Any:
     """Return the exact public resolved plan consumed by one native integration compile."""
     if target not in {"system", "amr_system"}:
@@ -294,6 +297,8 @@ def resolve_periodic_field_program(
             ),
             transfer=transfer,
             execution=AMRExecution.synchronous(),
+            patch_layout=PatchLayout() if patch_layout is None else patch_layout,
+            clustering=clustering,
         )
     native_options: dict[str, Any] = {}
     if cxx is not None or include is not None:

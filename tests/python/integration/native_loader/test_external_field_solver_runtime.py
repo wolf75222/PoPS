@@ -61,7 +61,13 @@ def _component(
     return factory(**({} if instance_parameters is None else instance_parameters))
 
 
-def _topology_source(manifest, *, require_multilevel=False, periodic_axes=3):
+def _topology_source(
+    manifest,
+    *,
+    require_multilevel=False,
+    require_distributed=False,
+    periodic_axes=3,
+):
     return f'''#include <pops/runtime/config/generated_component_abi.hpp>
 #include <cstddef>
 #include <cstring>
@@ -101,11 +107,15 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
       request->local_patch_count > request->topology.patch_count) return 3;
   bool saw_level_zero = false;
   bool saw_level_one = false;
+  bool saw_owner_zero = false;
+  bool saw_owner_one = false;
   std::string topology_signature;
   for (std::size_t patch = 0; patch < request->topology.patch_count; ++patch) {{
     const auto& metadata = request->topology.patches[patch];
     saw_level_zero = saw_level_zero || metadata.level == 0;
     saw_level_one = saw_level_one || metadata.level == 1;
+    saw_owner_zero = saw_owner_zero || metadata.owner_rank == 0;
+    saw_owner_one = saw_owner_one || metadata.owner_rank == 1;
     topology_signature += std::to_string(metadata.level) + ":" +
         std::to_string(metadata.owner_rank) + ":" + std::to_string(metadata.lower[0]) + ":" +
         std::to_string(metadata.lower[1]) + ":" + std::to_string(metadata.upper[0]) + ":" +
@@ -113,6 +123,8 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
   }}
   const bool multilevel = saw_level_one;
   if ({str(require_multilevel).lower()} && !saw_level_zero) return 6;
+  if ({str(require_distributed).lower()} &&
+      (!saw_level_zero || !saw_level_one || !saw_owner_zero || !saw_owner_one)) return 11;
   if ({str(require_multilevel).lower()} && !previous_multilevel_signature.empty() &&
       topology_signature != previous_multilevel_signature &&
       previous_multilevel_layout == request->topology.materialized_layout_identity) return 10;
@@ -120,10 +132,14 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
     previous_multilevel_signature = topology_signature;
     previous_multilevel_layout = request->topology.materialized_layout_identity;
   }}
-  if ({str(require_multilevel).lower()} &&
+  if ({str(require_multilevel).lower()} && !{str(require_distributed).lower()} &&
       request->local_patch_count != request->topology.patch_count) return 8;
+  if ({str(require_distributed).lower()} &&
+      (request->local_patch_count == 0 ||
+       request->local_patch_count >= request->topology.patch_count)) return 8;
   bool saw_masked_coarse_cell = false;
   bool saw_active_fine_cell = false;
+  int local_owner = -1;
   for (std::size_t local = 0; local < request->local_patch_count; ++local) {{
     const auto& patch = request->local_patches[local];
     const bool full = patch.material_representation == POPS_FIELD_MATERIAL_FULL_V1;
@@ -138,6 +154,9 @@ int prepare_topology(void* value, const PopsFieldTopologyRequestV2* request,
         patch.material_ids.data ||
         patch.material_mask.size != patch.component_labels.size) return 4;
     const auto& metadata = request->topology.patches[patch.metadata_index];
+    if ({str(require_distributed).lower()} &&
+        (local_owner == -1 ? (local_owner = metadata.owner_rank, false)
+                           : local_owner != metadata.owner_rank)) return 12;
     if (metadata.dimension != 2 || metadata.cell_spacing[0] <= 0.0 ||
         metadata.cell_spacing[1] <= 0.0 || !metadata.layout_identity ||
         !metadata.patch_identity ||
@@ -327,6 +346,44 @@ def _externally_faulted_solver_source(manifest, fault_marker):
         iterations_expression="1",
         extra_includes="#include <filesystem>",
     )
+
+
+def _mpi_faulted_solver_source(
+    manifest,
+    *,
+    collective_fault_marker,
+    divergent_fault_marker,
+    divergent_owner=1,
+):
+    """Return one MPI component with typed collective and rank-local fault switches."""
+    source = _solver_source(
+        manifest,
+        solution_expression=(
+            "(std::filesystem::exists(%s) && request->local_patch_count != 0 && "
+            "request->topology.patches[request->local_patches[0].metadata_index].owner_rank "
+            "== %d) ? std::numeric_limits<double>::quiet_NaN() : 7.0"
+            % (json.dumps(str(divergent_fault_marker)), divergent_owner)
+        ),
+        solve_count_statement="++state->solve_count;",
+        iterations_expression="state->solve_count",
+        extra_includes="#include <filesystem>",
+    )
+    solved = "  report->status = POPS_SOLVE_SOLVED_V2;"
+    collective = f'''  if (std::filesystem::exists(
+          {json.dumps(str(collective_fault_marker))})) {{
+    report->status = POPS_SOLVE_INVALID_EVALUATION_V2;
+    report->action = POPS_SOLVE_ACTION_FAIL_RUN_V2;
+    report->iterations = state->solve_count;
+    report->relative_residual = 1.0;
+    report->reference_residual_norm = 1.0;
+    report->residual_norm = 1.0;
+    report->reason = "forced collective MPI failure";
+    return 0;
+  }}
+{solved}'''
+    if source.count(solved) != 1:
+        raise AssertionError("test FieldSolver source no longer has one solved-report seam")
+    return source.replace(solved, collective)
 
 
 def _program(state, rate, field):
