@@ -53,7 +53,7 @@ def _require_native() -> None:
 def _authoring() -> tuple[Any, Any, Any, Any]:
     model = Model("normalized-execution-model")
     (rho,) = model.conservative_vars("rho")
-    model.primitive_vars(rho=rho)
+    model.primitive_vars(rho)
     model.conservative_from([rho])
     model.flux(x=[0.0 * rho], y=[0.0 * rho])
     model.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])

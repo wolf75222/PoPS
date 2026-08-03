@@ -108,9 +108,8 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         resolve_component_provider_packs,
     )
 
-    m.__pops_bind_component_provider_packs__(
-        resolve_component_provider_packs(module)
-    )
+    provider_packs = resolve_component_provider_packs(module)
+    m.__pops_bind_component_provider_packs__(provider_packs)
     # The facade is a lowering view of THIS Module, not a newly declared model. Re-anchor its empty
     # backing model before the first declaration so every derived operator registry retains the
     # Module's exact authoring authority. Without this, owner-qualified Program nodes would be
@@ -199,7 +198,7 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         coverage_rows.append(LoweringCoverageRow(
             "module:%s:eigenvalues" % module.name, "documentary"))
 
-    for key in m._component_provider_pack:
+    for key in provider_packs.complete:
         key_data = key.to_data()
         stable_key = "%s/%s/%s" % (
             key_data["space_kind"], key_data["space_name"], key_data["component"])

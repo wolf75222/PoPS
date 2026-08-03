@@ -20,10 +20,11 @@
 //     and the held-node scheduler cache through the checkpoint; the AMR runtime defers both (its
 //     history / cache seams are not wired), so these stay EMPTY on AMR. Keeping the storage here (one
 //     struct) means an AMR history/cache seam later plugs into the SAME fields, never a fork.
-// WHO OWNS STEPPING: the cadence fields (step_ / substeps_ / stride_ / dt_bound_) are READ by the
-// driver, but the cadence LOOP lives at the call site, not here -- SystemProgramDriver::run_program_cadence
-// on the uniform side, AmrSystem::Impl::run_program_cadence_ on the AMR side. This struct only STORES
-// the cadence; it never advances the clock (no Impl / grid dependency leaks in).
+// WHO OWNS STEPPING: this state owns the one topology-independent cadence LOOP as well as its fields
+// (step_ / substeps_ / stride_ / dt_bound_). Uniform and AMR lend it only their accepted
+// `(physical_time, macro_step)` cursor by reference; no Impl, grid or hierarchy dependency crosses
+// this boundary. ProgramExecutionServices remains the sole implementation of operations invoked by
+// the installed step closure, while the two runtime drivers merely enter this shared dispatcher.
 //
 // GRID BOUNDARY. The self-contained logic (cadence guards, diagnostics, block params, history-ring
 // introspection + rotate, cache passthrough) lives HERE as methods with Program-subsystem-worded
@@ -220,6 +221,9 @@ struct ProgramRuntimeState {
   /// essential at large physical times: reconstructing it as `accepted_time - accumulated_dt` loses
   /// low bits before the Program starts. Zero is the canonical inactive image.
   double cadence_window_start_time_ = 0.0;
+  /// Transient non-reentrancy lease for the one shared cadence dispatcher. It is neither checkpoint
+  /// state nor accepted scientific state and is always released by RAII on success or failure.
+  bool cadence_dispatch_active_ = false;
   /// A strict checkpoint restore stages, but does not yet install, one authenticated window. The
   /// subsequent set_clock must present the exact accepted (time, macro-step) pair that validated the
   /// staged image; only that call commits the window. A mismatch discards the staged transaction and
@@ -232,7 +236,8 @@ struct ProgramRuntimeState {
   double cadence_clock_restore_accepted_time_ = 0.0;
   int cadence_clock_restore_macro_step_ = 0;
   /// LAST accepted numerical interval handed to step_ (ADC-626). Set by the driver right before each
-  /// program_.step_(h) call (run_program_cadence, shared by step() and step_cfl()), so the runtime's
+  /// program_.step_(h) call (dispatch_cadence_step, shared by both runtimes and their explicit/CFL
+  /// entry points), so the runtime's
   /// pre-commit store_history can tag its state sample with the outgoing interval that advances it
   /// toward the next accepted sample (HistoryManager::slot_dt). A plain data field only assigned by
   /// the template (never a new method it instantiates) -> the mock System. Default 0 -> no program
@@ -705,6 +710,66 @@ struct ProgramRuntimeState {
       cadence_window_dt_ = step.effective_dt;
       cadence_window_steps_ = step.window_steps;
       cadence_window_start_time_ = step.window_start;
+    }
+  }
+
+  /// Execute one accepted facade step through the single Uniform/AMR cadence dispatcher.
+  ///
+  /// The owning runtime lends its exact accepted cursor by reference. The dispatcher publishes each
+  /// numerical substep's start coordinate while invoking the installed Program, restores the entry
+  /// cursor after every failure, commits the held/due cadence image once, then advances the public
+  /// cursor exactly once. Grid and hierarchy work remain inside the installed provider closure.
+  void dispatch_cadence_step(double& physical_time_cursor, int& macro_step_cursor, double dt,
+                             const std::string& runtime) {
+    if (cadence_dispatch_active_)
+      throw std::logic_error(runtime + " Program cadence dispatch is non-reentrant");
+    if (!step_)
+      throw std::logic_error(
+          runtime + " Program cadence dispatch requires an installed whole-system Program");
+
+    cadence_dispatch_active_ = true;
+    struct CadenceDispatchLease {
+      bool& active;
+      ~CadenceDispatchLease() { active = false; }
+    } dispatch_lease{cadence_dispatch_active_};
+
+    const double accepted_time = physical_time_cursor;
+    const int accepted_macro_step = macro_step_cursor;
+    const PreparedCadenceStep cadence =
+        prepare_cadence_step(accepted_time, accepted_macro_step, dt, runtime);
+    if (accepted_macro_step == std::numeric_limits<int>::max())
+      throw std::overflow_error(runtime + " Program cadence macro-step counter overflow");
+
+    try {
+      if (cadence.due) {
+        validate_cadence_partition(cadence, substeps_, runtime);
+        const int held_before_due = cadence.window_steps - 1;
+        if (accepted_macro_step < held_before_due)
+          throw std::logic_error(runtime + " Program cadence window starts before macro-step zero");
+        const int window_start_macro_step = accepted_macro_step - held_before_due;
+        run_balance_due_window(accepted_macro_step, runtime, [&] {
+          for (int substep = 0; substep < substeps_; ++substep) {
+            const PreparedCadenceSubstep partition =
+                prepare_cadence_substep(cadence, substep, substeps_, runtime);
+            physical_time_cursor = partition.start;
+            macro_step_cursor = window_start_macro_step;
+            last_dt_ = static_cast<Real>(partition.dt);
+            step_(partition.dt);
+            physical_time_cursor = partition.end;
+          }
+        });
+        physical_time_cursor = accepted_time;
+        macro_step_cursor = accepted_macro_step;
+      }
+
+      commit_cadence_step(cadence, runtime);
+      physical_time_cursor = cadence.window_end;
+      complete_balance_step(cadence.due);
+      ++macro_step_cursor;
+    } catch (...) {
+      physical_time_cursor = accepted_time;
+      macro_step_cursor = accepted_macro_step;
+      throw;
     }
   }
 
