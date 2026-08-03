@@ -67,7 +67,6 @@ EXPECTED_REQUIREMENTS = {
 }
 EXPECTED_DEFERRED = (
     "remaining_runtime_nd_metric_eb_characteristic_execution",
-    "remaining_legacy_recovery_and_boundary_authority_deletion",
     "amr_regrid_migration_and_restart_coherence",
     "remaining_local_time_migration_and_load_balance_runtime_integration",
 )

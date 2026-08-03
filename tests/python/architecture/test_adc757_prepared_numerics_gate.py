@@ -140,7 +140,7 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
     assert "accelerator_stream_partitioning" not in data["deferred"]
     assert "performance_baselines_and_end_to_end_benchmarks" not in data["deferred"]
     assert "workspace_reentrancy_and_stream_partitioning" not in data["deferred"]
-    assert "remaining_legacy_recovery_and_boundary_authority_deletion" in data["deferred"]
+    assert "remaining_legacy_recovery_and_boundary_authority_deletion" not in data["deferred"]
     assert all("riemann_authority" not in family for family in data["deferred"])
     assert "runtime_consumer_cutover_and_legacy_deletion" not in data["deferred"]
     assert "boundary_geometry_riemann_and_spatial_provider_families" not in data["deferred"]
