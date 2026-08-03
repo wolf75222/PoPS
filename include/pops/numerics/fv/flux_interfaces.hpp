@@ -105,6 +105,22 @@ struct QualifiedProviderRequirement {
 enum class EvaluationStatus : std::uint8_t { kOk, kRetry, kReject, kFailed };
 enum class TransactionFailureAction : std::uint8_t { kNone, kRetryStep, kRejectStep, kAbortRun };
 
+/// Stable identity of a numerical Riemann candidate.
+///
+/// The value is carried by every production face result, so a successful declared fallback can
+/// never be reported as if the requested solver had produced the flux.  `kReject` is a terminal
+/// policy action rather than an evaluated numerical solver; `kExternal` identifies a statically
+/// installed user flux whose component identity remains owned by the external-brick manifest.
+enum class RiemannSolverId : std::uint8_t {
+  kUnspecified = 0,
+  kRusanov = 1,
+  kHll = 2,
+  kHllc = 3,
+  kRoe = 4,
+  kExternal = 254,
+  kReject = 255,
+};
+
 /// Stable, device-copyable causes emitted by the built-in Riemann candidates.
 ///
 /// External numerical-flux providers may retain their own qualified reason codes.  Built-ins use
@@ -324,6 +340,11 @@ struct FluxEvaluation {
   EvaluationStatus status = EvaluationStatus::kFailed;
   StabilityBound stability{};
   std::uint32_t reason_code = 0;
+  RiemannSolverId requested_solver = RiemannSolverId::kUnspecified;
+  RiemannSolverId used_solver = RiemannSolverId::kUnspecified;
+  RiemannSolverId last_attempted_solver = RiemannSolverId::kUnspecified;
+  std::uint32_t recovery_reason_code = 0;
+  std::uint8_t attempt_count = 0;
 
   POPS_HD static FluxEvaluation ok(const State& value, StabilityBound bound) {
     return FluxEvaluation(EvaluationStatus::kOk, bound, 0, FluxDensity<State>{value});
@@ -343,6 +364,38 @@ struct FluxEvaluation {
 
   POPS_HD bool succeeded() const { return status == EvaluationStatus::kOk; }
   POPS_HD TransactionFailureAction failure_action() const { return transaction_action(status); }
+  POPS_HD bool used_fallback() const {
+    return succeeded() && requested_solver != RiemannSolverId::kUnspecified &&
+           used_solver != requested_solver;
+  }
+
+  /// Complete provenance for one explicitly selected solver.  External policies retain their
+  /// own qualified reason codes; the common evaluator supplies `kExternal` when they do not expose
+  /// a native built-in identity.  A refusal has no flux-producing solver and therefore records
+  /// `kReject` as the used policy action.
+  POPS_HD FluxEvaluation with_single_solver(RiemannSolverId solver) const {
+    FluxEvaluation result = *this;
+    result.requested_solver = solver;
+    result.used_solver = succeeded() ? solver : RiemannSolverId::kReject;
+    result.last_attempted_solver = solver;
+    result.recovery_reason_code = 0;
+    result.attempt_count = 1;
+    return result;
+  }
+
+  /// Complete provenance after an explicit prepared recovery chain has run.
+  POPS_HD FluxEvaluation with_recovery_provenance(RiemannSolverId requested, RiemannSolverId used,
+                                                  RiemannSolverId last_attempted,
+                                                  std::uint32_t first_recovery_reason,
+                                                  std::uint8_t attempts) const {
+    FluxEvaluation result = *this;
+    result.requested_solver = requested;
+    result.used_solver = used;
+    result.last_attempted_solver = last_attempted;
+    result.recovery_reason_code = first_recovery_reason;
+    result.attempt_count = attempts;
+    return result;
+  }
 
   /// Sole access to a flux density.  A failed evaluator can never smuggle a plausible value into
   /// a spatial kernel: every non-success status produces an invalid density independently of the
@@ -374,6 +427,11 @@ struct FluxEvaluation {
     return {value};
   }
 };
+
+/// Final numerical vocabulary: retain the established FluxEvaluation spelling while exposing the
+/// Riemann-specific name used by prepared recovery policies.
+template <class State>
+using RiemannResult = FluxEvaluation<State>;
 
 /// The only operation which accepts a FluxDensity and a geometric measure.  Its distinct return
 /// type has no overload here, so an IntegratedFaceFlux cannot accidentally be integrated twice.
@@ -519,7 +577,15 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux(
   const auto right = make_face_trace<Model>(right_state, right_providers);
   static_assert(NumericalFlux<Numerical, PhysicalFluxView<Model>>,
                 "numerical flux does not satisfy the typed two-trace contract");
-  return numerical(physical, left, right, face);
+  auto result = numerical(physical, left, right, face);
+  if (result.requested_solver != RiemannSolverId::kUnspecified)
+    return result;
+  constexpr RiemannSolverId solver = [] {
+    if constexpr (requires { Numerical::solver_id; })
+      return static_cast<RiemannSolverId>(Numerical::solver_id);
+    return RiemannSolverId::kExternal;
+  }();
+  return result.with_single_solver(solver);
 }
 
 template <class Numerical, class Model, class Storage>
