@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/coupling/amr/amr_coupler_mp.hpp>  // AmrCouplerMP, AmrLevelMP
+#include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -22,11 +23,14 @@
 #include <pops/runtime/config/route_ids.hpp>
 
 #include <cmath>
+#include <concepts>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -54,6 +58,78 @@ struct AmrDiscLF {
 };
 
 namespace detail {
+
+template <class Model>
+concept ExactAmrTransportModelProvider =
+    requires(const Model& model, ExactContractBuilder& contract) {
+      { Model::transport_model_provider_identity() } noexcept
+      -> std::same_as<PreparedProviderIdentity>;
+      { model.serialize_exact_transport_parameters(contract) } -> std::same_as<void>;
+    };
+
+template <class Limiter>
+constexpr std::string_view exact_limiter_route_token() noexcept {
+  if constexpr (std::is_same_v<Limiter, NoSlope>)
+    return "none";
+  if constexpr (std::is_same_v<Limiter, Minmod>)
+    return "minmod";
+  if constexpr (std::is_same_v<Limiter, VanLeer>)
+    return "vanleer";
+  if constexpr (std::is_same_v<Limiter, Weno5>)
+    return "weno5";
+  if constexpr (std::is_same_v<Limiter, MC>)
+    return "mc";
+  if constexpr (std::is_same_v<Limiter, Superbee>)
+    return "superbee";
+  return {};
+}
+
+template <class Flux>
+constexpr std::string_view exact_riemann_route_token() noexcept {
+  if constexpr (std::is_same_v<Flux, RusanovFlux>)
+    return "rusanov";
+  if constexpr (std::is_same_v<Flux, HLLFlux>)
+    return "hll";
+  if constexpr (std::is_same_v<Flux, HLLCFlux>)
+    return "hllc";
+  if constexpr (std::is_same_v<Flux, RoeFlux>)
+    return "roe";
+  if constexpr (std::is_same_v<Flux, RoeHllRusanovRecoveryPolicy>)
+    return "roe_hll_rusanov_recovery";
+  return {};
+}
+
+template <class Model, class Limiter, class Flux>
+void prepare_amr_transport_flux_contract(const Model& model, bool reconstruct_primitive,
+                                         Real positivity_floor, Real weno_epsilon,
+                                         bool wave_speed_cache, AmrRuntimeBlock& block) {
+  constexpr std::string_view limiter = exact_limiter_route_token<Limiter>();
+  constexpr std::string_view riemann = exact_riemann_route_token<Flux>();
+  if constexpr (ExactAmrTransportModelProvider<Model> && !limiter.empty() && !riemann.empty()) {
+    const PreparedProviderIdentity model_identity = Model::transport_model_provider_identity();
+    if (model_identity.name.empty() || model_identity.version == 0)
+      throw std::invalid_argument(
+          "AMR transport model provider requires a non-empty identity and non-zero version");
+    ExactContractBuilder model_parameters;
+    model.serialize_exact_transport_parameters(model_parameters);
+    ExactContractBuilder contract;
+    contract.text("pops.amr.compiled-transport-flux")
+        .scalar(std::uint32_t{1})
+        .text(model_identity.name)
+        .scalar(model_identity.version)
+        .bytes(model_parameters.view())
+        .text(limiter)
+        .text(riemann)
+        .scalar(reconstruct_primitive)
+        .scalar(positivity_floor)
+        .scalar(weno_epsilon)
+        .scalar(wave_speed_cache)
+        .scalar(static_cast<std::int32_t>(Model::n_vars));
+    block.transport_flux_provider_identity =
+        "pops.amr.compiled-transport-flux@1";
+    block.transport_flux_parameter_contract = std::move(contract).release();
+  }
+}
 
 template <class Limiter, class Flux, class Model>
 void compute_amr_face_fluxes(const Model& model, const MultiFab& state, const MultiFab& aux,
@@ -266,6 +342,9 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
   b.boundary_plan = boundary_plan;
   b.boundary_field_registry = boundary_field_registry;
   b.transport_boundary_fill = transport_boundary_fill;
+  prepare_amr_transport_flux_contract<Model, Limiter, Flux>(
+      model, recon_prim, static_cast<Real>(pos_floor), static_cast<Real>(weno_epsilon),
+      wave_speed_cache, b);
   const bool rprim = recon_prim;
   const Real pf = static_cast<Real>(pos_floor);
   const Real weps = static_cast<Real>(weno_epsilon);
