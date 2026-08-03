@@ -12,9 +12,12 @@
 
 #include <Kokkos_MathematicalFunctions.hpp>
 
+#include <array>
 #include <cmath>
 #include <concepts>
+#include <cstddef>
 #include <limits>
+#include <type_traits>
 
 namespace pops {
 
@@ -79,6 +82,8 @@ POPS_HD inline void union_hll_speed_intervals(Real left_lower, Real left_upper, 
 
 /// Local Lax-Friedrichs/Rusanov flux.
 struct RusanovFlux {
+  static constexpr RiemannSolverId solver_id = RiemannSolverId::kRusanov;
+
   template <PhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
@@ -148,6 +153,8 @@ POPS_HD FluxEvaluation<typename Physical::State> hll_flux_with_speeds(
 
 /// Harten-Lax-van Leer two-wave flux.
 struct HLLFlux {
+  static constexpr RiemannSolverId solver_id = RiemannSolverId::kHll;
+
   template <PhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
@@ -186,6 +193,8 @@ concept HLLCPhysicalFlux =
 
 /// Contact-resolving HLLC policy.  Physical structure is supplied by the narrow PhysicalFlux.
 struct HLLCFlux {
+  static constexpr RiemannSolverId solver_id = RiemannSolverId::kHllc;
+
   template <PhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
@@ -271,6 +280,8 @@ concept RoePhysicalFlux = PhysicalFlux<Physical> &&
 
 /// Roe-like policy.  Eigenstructure and entropy policy belong to the physical provider.
 struct RoeFlux {
+  static constexpr RiemannSolverId solver_id = RiemannSolverId::kRoe;
+
   template <PhysicalFlux Physical>
   POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
                                                               const typename Physical::Trace& left,
@@ -306,5 +317,122 @@ struct RoeFlux {
     }
   }
 };
+
+/// Explicit terminal action of a prepared Riemann recovery chain.  It is not a numerical flux and
+/// is never evaluated; reaching it preserves the last candidate's typed rejection and prevents
+/// publication through the ordinary FluxEvaluation failure path.
+struct RejectRiemannRecovery {
+  static constexpr RiemannSolverId solver_id = RiemannSolverId::kReject;
+};
+
+namespace detail {
+
+template <class Candidate>
+consteval RiemannSolverId declared_riemann_solver_id() {
+  static_assert(
+      requires { Candidate::solver_id; },
+      "a prepared Riemann recovery candidate must expose a typed solver_id");
+  return static_cast<RiemannSolverId>(Candidate::solver_id);
+}
+
+template <class... Candidates>
+consteval bool valid_riemann_recovery_chain() {
+  constexpr std::array ids{declared_riemann_solver_id<Candidates>()...};
+  if constexpr (sizeof...(Candidates) < 2 || sizeof...(Candidates) > 255)
+    return false;
+  if (ids.back() != RiemannSolverId::kReject)
+    return false;
+  for (std::size_t index = 0; index + 1 < ids.size(); ++index) {
+    if (ids[index] == RiemannSolverId::kUnspecified || ids[index] == RiemannSolverId::kReject)
+      return false;
+    for (std::size_t previous = 0; previous < index; ++previous)
+      if (ids[previous] == ids[index])
+        return false;
+  }
+  return true;
+}
+
+template <class Next, class... Rest, PhysicalFlux Physical>
+POPS_HD FluxEvaluation<typename Physical::State> continue_riemann_recovery(
+    const Physical& physical, const typename Physical::Trace& left,
+    const typename Physical::Trace& right, const FaceContext& face,
+    const FluxEvaluation<typename Physical::State>& current, RiemannSolverId requested,
+    RiemannSolverId last_attempted, std::uint32_t first_recovery_reason, std::uint8_t attempts) {
+  if (current.succeeded())
+    return current.with_recovery_provenance(requested, last_attempted, last_attempted,
+                                            first_recovery_reason, attempts);
+
+  // Retry and fatal outcomes are scheduler decisions, not solver degeneracies.  A prepared chain
+  // may recover only a typed candidate rejection; it must never silently downgrade stronger
+  // failure semantics.
+  if (current.status != EvaluationStatus::kReject)
+    return current.with_recovery_provenance(requested, RiemannSolverId::kReject, last_attempted,
+                                            first_recovery_reason, attempts);
+
+  if constexpr (std::is_same_v<Next, RejectRiemannRecovery>) {
+    static_assert(sizeof...(Rest) == 0,
+                  "RejectRiemannRecovery must be the final prepared policy action");
+    return current.with_recovery_provenance(requested, RiemannSolverId::kReject, last_attempted,
+                                            first_recovery_reason, attempts);
+  } else {
+    static_assert(NumericalFlux<Next, Physical>,
+                  "a prepared Riemann recovery candidate does not satisfy NumericalFlux for the "
+                  "selected physical provider");
+    constexpr RiemannSolverId next_id = declared_riemann_solver_id<Next>();
+    const auto next = Next{}(physical, left, right, face);
+    const std::uint32_t recovery_reason =
+        first_recovery_reason != 0 ? first_recovery_reason : next.reason_code;
+    return continue_riemann_recovery<Rest...>(physical, left, right, face, next, requested, next_id,
+                                              recovery_reason,
+                                              static_cast<std::uint8_t>(attempts + 1));
+  }
+}
+
+}  // namespace detail
+
+/// Fixed, allocation-free and device-copyable Riemann recovery chain.
+///
+/// Candidate types and their order are resolved before a spatial kernel is instantiated.  The hot
+/// loop contains no string dispatch, virtual call, callback, exception, heap allocation or hidden
+/// substitution.  Only `kReject` advances to the next declared candidate; retry/fatal outcomes
+/// remain terminal.  The chain must end explicitly in RejectRiemannRecovery.
+template <class... Candidates>
+struct PreparedRiemannRecoveryPolicy;
+
+template <class First, class... Rest>
+struct PreparedRiemannRecoveryPolicy<First, Rest...> {
+  static_assert(detail::valid_riemann_recovery_chain<First, Rest...>(),
+                "a prepared Riemann recovery chain must contain unique typed candidates and end "
+                "in RejectRiemannRecovery");
+  static_assert((std::is_trivially_copyable_v<First> && ... && std::is_trivially_copyable_v<Rest>),
+                "prepared Riemann recovery candidates must be device-copyable values");
+
+  static constexpr RiemannSolverId solver_id = First::solver_id;
+  static constexpr std::size_t candidate_count = sizeof...(Rest);
+  inline static constexpr std::array ordered_solver_ids{
+      detail::declared_riemann_solver_id<First>(), detail::declared_riemann_solver_id<Rest>()...};
+
+  template <PhysicalFlux Physical>
+  POPS_HD FluxEvaluation<typename Physical::State> operator()(const Physical& physical,
+                                                              const typename Physical::Trace& left,
+                                                              const typename Physical::Trace& right,
+                                                              const FaceContext& face) const {
+    static_assert(!std::is_same_v<First, RejectRiemannRecovery>,
+                  "a prepared Riemann recovery chain requires a numerical first candidate");
+    static_assert(NumericalFlux<First, Physical>,
+                  "the requested Riemann candidate does not satisfy NumericalFlux for the "
+                  "selected physical provider");
+    constexpr RiemannSolverId requested = detail::declared_riemann_solver_id<First>();
+    const auto first = First{}(physical, left, right, face);
+    const std::uint32_t first_reason = first.succeeded() ? 0 : first.reason_code;
+    return detail::continue_riemann_recovery<Rest...>(physical, left, right, face, first, requested,
+                                                      requested, first_reason, 1);
+  }
+};
+
+template <class... Candidates>
+POPS_HD constexpr PreparedRiemannRecoveryPolicy<Candidates...> prepare_riemann_recovery_policy() {
+  return {};
+}
 
 }  // namespace pops
