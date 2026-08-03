@@ -386,6 +386,42 @@ TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedSt
       << "failed diagnostic recovery must not mutate the accepted conservative state";
 }
 
+TEST(FacadeRouting, PrimitiveMaterializationRefusesMissingPreparedBatchAuthority) {
+#if defined(POPS_HAS_KOKKOS)
+  (void)kokkos_scope();
+#endif
+  constexpr int n = 4;
+  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
+  system.add_block("gas", compressible_model(), "none", "rusanov", "conservative");
+
+  const std::vector<double> accepted = system.get_state("gas");
+  system.set_block_conversion(
+      "gas", [](const double* in, double* out) {
+        for (int component = 0; component < 4; ++component)
+          out[component] = in[component];
+      },
+      [](const double* in, double* out) {
+        for (int component = 0; component < 4; ++component)
+          out[component] = in[component];
+        RecoveryReport report;
+        report.status = RecoveryStatus::kRecovered;
+        report.cause = RecoveryCause::kNone;
+        return report;
+      });
+
+  bool rejected = false;
+  try {
+    (void)system.get_primitive_state("gas");
+  } catch (const std::runtime_error& error) {
+    rejected = std::string(error.what()).find(
+                   "no generation-qualified prepared batch recovery consumer") !=
+               std::string::npos;
+  }
+  EXPECT_TRUE(rejected);
+  EXPECT_EQ(system.get_state("gas"), accepted)
+      << "missing prepared batch authority must not mutate accepted conservative state";
+}
+
 TEST(FacadeRouting, PrimitiveInputRequiresPreparedRecoveryBeforeConservativePublication) {
 #if defined(POPS_HAS_KOKKOS)
   (void)kokkos_scope();

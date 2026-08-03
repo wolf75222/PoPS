@@ -651,7 +651,8 @@ class System {
 
   /// Type-erasure of the POINTWISE (one cell) cons <-> prim conversion of a block: in/out are
   /// arrays of ncomp doubles. Installed by install_block / add_compiled_model / push_dynamic from
-  /// the block's model, consumed by set_primitive_state / get_primitive_state.
+  /// the block's model and consumed by publication and prepared-boundary validation. Primitive
+  /// field materialization exclusively consumes CellBatchRecovery below.
   using CellConvert = std::function<void(const double* in, double* out)>;
   /// Fallible conservative -> primitive conversion. A failed report forbids writing @p out.
   using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
@@ -669,8 +670,8 @@ class System {
 
   /// Installs the generation-qualified host/Uniform batch consumer used by
   /// get_primitive_state. The callback owns one warm-start slot per local cell and publishes the
-  /// materialized primitive array only after the complete batch succeeds. A missing callback keeps
-  /// the legacy pointwise path for old external components; AMR has a separate hierarchy runtime.
+  /// materialized primitive array only after the complete batch succeeds. Every supported builder
+  /// must install it; a missing callback is an explicit incomplete-provider refusal.
   POPS_EXPORT void set_block_batch_recovery(const std::string& name,
                                             CellBatchRecovery batch_cons_to_prim);
 

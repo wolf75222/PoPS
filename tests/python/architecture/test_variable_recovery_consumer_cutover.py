@@ -39,7 +39,7 @@ def test_cell_primitive_conversion_has_one_prepared_fail_closed_authority():
     assert "m.to_primitive" not in conversion
 
 
-def test_runtime_materialization_consumes_recovery_before_copying_candidate():
+def test_runtime_materialization_consumes_only_prepared_batch_before_publication():
     source = SYSTEM_FIELDS.read_text(encoding="utf-8")
     materialization = _between(
         source,
@@ -47,27 +47,27 @@ def test_runtime_materialization_consumes_recovery_before_copying_candidate():
         "\nSolveReport System::solve_fields_in_place_",
     )
 
-    recovery = materialization.index("const RecoveryReport recovery")
-    refusal = materialization.index("if (!recovery.publication_permitted())")
-    publication = materialization.index("prim[static_cast<std::size_t>(c) * nn + k] = cell_out[c]")
-    assert recovery < refusal < publication
-    assert "variable recovery failed" in materialization
-
-
-def test_runtime_materialization_prefers_generation_qualified_uniform_batch():
-    source = SYSTEM_FIELDS.read_text(encoding="utf-8")
-    materialization = _between(
-        source,
-        "std::vector<double> System::get_primitive_state",
-        "\nSolveReport System::solve_fields_in_place_",
-    )
-
-    batch = materialization.index("if (s.batch_cons_to_prim)")
-    recovery = materialization.index("s.batch_cons_to_prim(cons, prim)", batch)
+    required = materialization.index("if (!s.batch_cons_to_prim)")
+    recovery = materialization.index("s.batch_cons_to_prim(cons, prim)", required)
     refusal = materialization.index("if (!batch.publication_permitted())", recovery)
     publication = materialization.index("return prim;", refusal)
-    compatibility = materialization.index("Compatibility path", publication)
-    assert batch < recovery < refusal < publication < compatibility
+    assert required < recovery < refusal < publication
+    assert "variable recovery failed" in materialization
+    assert "generation-qualified prepared batch recovery consumer" in materialization
+    assert "s.cons_to_prim(cell_in.data(), cell_out.data())" not in materialization
+
+
+def test_runtime_materialization_has_no_pointwise_compatibility_authority():
+    source = SYSTEM_FIELDS.read_text(encoding="utf-8")
+    materialization = _between(
+        source,
+        "std::vector<double> System::get_primitive_state",
+        "\nSolveReport System::solve_fields_in_place_",
+    )
+
+    assert "Compatibility path" not in materialization
+    assert "if (s.batch_cons_to_prim)" not in materialization
+    assert "std::vector<double> cell_in" not in materialization
 
 
 def test_type_erased_recovery_report_preserves_actual_method_identity():

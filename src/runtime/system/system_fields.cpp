@@ -200,7 +200,8 @@ POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConve
   }
   // A replacement pointwise authority must never inherit warm starts produced by the previous
   // model/provider. The matching batch authority is installed explicitly immediately afterwards
-  // by current native and compiled builders; legacy external components stay on the pointwise path.
+  // by every supported native and compiled builder. Until then primitive-field materialization
+  // fails closed instead of reviving a second cell-by-cell recovery engine.
   s.batch_cons_to_prim = {};
   s.prim_to_cons = std::move(prim_to_cons);
   s.cons_to_prim = std::move(cons_to_prim);
@@ -301,53 +302,28 @@ void System::set_primitive_state(const std::string& name, const std::vector<doub
 std::vector<double> System::get_primitive_state(const std::string& name) {
   Impl::Species& s = p_->find(name);
   const int nc = s.ncomp;
-  // Number of cells = REAL EXTENTS of the index domain (n*n Cartesian, nr*ntheta polar), NOT
-  // cfg.n*cfg.n: in polar cfg.n = nr, so cfg.n^2 != nr*ntheta -> heap overflow (ntheta<nr) or
-  // partial/wrong content (ntheta>nr). Cartesian bit-identical (dom.nx()==dom.ny()==n).
-  const std::size_t nn =
-      static_cast<std::size_t>(p_->dom.nx()) * static_cast<std::size_t>(p_->dom.ny());
   if (!s.cons_to_prim)
     throw std::runtime_error(
         "System::get_primitive_state : the model of block '" + name +
         "' does not expose a conservative -> primitive conversion (.so generated before "
         "this project ?) ; use get_state (direct conservative state)");
+  if (!s.batch_cons_to_prim)
+    throw std::runtime_error(
+        "System::get_primitive_state : block '" + name +
+        "' has no generation-qualified prepared batch recovery consumer");
   const std::vector<double> cons = p_->copy_state(s.U, nc);  // get_state path (same marshaling)
-  if (s.batch_cons_to_prim) {
-    std::vector<double> prim;
-    const UniformRecoveryBatchReport batch = s.batch_cons_to_prim(cons, prim);
-    if (!batch.publication_permitted()) {
-      const RecoveryReport& recovery = batch.recovery;
-      throw std::runtime_error(
-          "System::get_primitive_state : variable recovery failed for block '" + name +
-          "' at local cell " + std::to_string(batch.failed_cell) + " (status=" +
-          recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
-          ", failing_component=" + std::to_string(recovery.failing_component) +
-          ", attempted_methods=" + std::to_string(recovery.attempted_methods) +
-          ", last_method=" + recovery_method_kind_name(recovery.last_method_kind) +
-          ", last_method_index=" + std::to_string(recovery.last_method) + ")");
-    }
-    return prim;
-  }
-
-  // Compatibility path for externally built components that predate the generation-qualified
-  // Uniform batch seam. Current native and compiled blocks always install batch_cons_to_prim.
-  std::vector<double> prim(cons.size());
-  std::vector<double> cell_in(static_cast<std::size_t>(nc)), cell_out(static_cast<std::size_t>(nc));
-  for (std::size_t k = 0; k < nn; ++k) {
-    for (int c = 0; c < nc; ++c)
-      cell_in[c] = cons[static_cast<std::size_t>(c) * nn + k];
-    const RecoveryReport recovery = s.cons_to_prim(cell_in.data(), cell_out.data());
-    if (!recovery.publication_permitted())
-      throw std::runtime_error(
-          "System::get_primitive_state : variable recovery failed for block '" + name +
-          "' at local cell " + std::to_string(k) + " (status=" +
-          recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
-          ", failing_component=" + std::to_string(recovery.failing_component) +
-          ", attempted_methods=" + std::to_string(recovery.attempted_methods) +
-          ", last_method=" + recovery_method_kind_name(recovery.last_method_kind) +
-          ", last_method_index=" + std::to_string(recovery.last_method) + ")");
-    for (int c = 0; c < nc; ++c)
-      prim[static_cast<std::size_t>(c) * nn + k] = cell_out[c];
+  std::vector<double> prim;
+  const UniformRecoveryBatchReport batch = s.batch_cons_to_prim(cons, prim);
+  if (!batch.publication_permitted()) {
+    const RecoveryReport& recovery = batch.recovery;
+    throw std::runtime_error(
+        "System::get_primitive_state : variable recovery failed for block '" + name +
+        "' at local cell " + std::to_string(batch.failed_cell) + " (status=" +
+        recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
+        ", failing_component=" + std::to_string(recovery.failing_component) +
+        ", attempted_methods=" + std::to_string(recovery.attempted_methods) +
+        ", last_method=" + recovery_method_kind_name(recovery.last_method_kind) +
+        ", last_method_index=" + std::to_string(recovery.last_method) + ")");
   }
   return prim;
 }
