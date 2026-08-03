@@ -82,12 +82,31 @@ For this bounded slice, a cell-local checkpoint restarts only with the recorded 
 before the native restart transaction, because rematerializing canonical cell ids onto a new owner
 or topology is not implemented yet.
 
-This foundation deliberately does not pretend that the existing global AMR driver is cell-local
-stepping. If a cell-local image reaches that driver, execution fails before the Program body instead
-of silently falling back to a global `dt`. ADC-707/ADC-708 still own the prepared patch/task graph;
-ADC-756 still requires Kokkos rung batches, actual local-stage boundary evaluation, time-integrated
-same-level/MPI/coarse-fine flux ledgers, regrid/rank-change rematerialization, device determinism and
-performance evidence. None of those execution or conservation claims is made by this restart slice.
+`PreparedBatchedCellTemporalExecutor` is the first executable ADC-756 rung slice. Preparation
+authenticates the exact provider identity recorded by the accepted image, groups canonical records
+into compact device-accessible arrays and reserves the host clock transaction. During an attempt it
+orders events by exact integer end tick and rung, then launches one Kokkos batch for every active
+rung event rather than one task or kernel per cell. The provider sees the exact rational begin/end
+time of each cell. The prepared hot loop does not allocate PoPS storage.
+
+The executor accepts only a typed provider exposing one combined device operation:
+`evaluate_local_stage_and_record_space_time_flux`. There are no independent Boolean declarations
+for a local stage or ledger. An accepted result therefore means that the provider evaluated the
+stage and wrote its attempt-local integrated-flux record before that cell clock advanced. All
+provider records and cell clocks commit together only at the synchronization barrier. A malformed
+outcome, rejection, provider-preparation refusal or kernel failure rolls back the complete attempt
+and leaves the accepted checkpoint unchanged.
+
+This is not yet the complete production cell-local AMR route. The hierarchy-global
+`AmrProgramContext` has no prepared field-stage/flux provider and consequently still refuses a
+cell-local image before entering the Program body; it never substitutes a global `dt`. The delivered
+executor proves real Kokkos rung batching, exact local clock delivery and transactional provider
+consumption with a dedicated stage/ledger provider. ADC-756 still needs the concrete same-level,
+MPI and coarse/fine space-time flux ledgers, local-time boundary interpolation, collective provider
+contract consensus, device/GPU determinism and performance evidence. Regrid and rank-change
+rematerialization and persistence of the provider's exact parameter contract also remain open.
+ADC-707/ADC-708 continue to own the prepared patch/task graph. No end-to-end AMR conservation or
+restart-across-rematerialization claim is made by this bounded executor slice.
 
 Offline envelope inspection authenticates only the integrity of a canonical checkpoint; it is not
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
