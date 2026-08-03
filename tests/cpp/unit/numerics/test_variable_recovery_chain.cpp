@@ -4,9 +4,11 @@
 #include <pops/physics/bricks/elliptic.hpp>
 #include <pops/physics/bricks/source.hpp>
 #include <pops/physics/composition/composite.hpp>
+#include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace {
 
@@ -71,6 +73,17 @@ struct ExplicitReject {
 
   POPS_HD pops::RecoveryMethodResult<1> operator()(const Real (&)[1], const Real (&)[1]) const {
     return pops::RecoveryMethodResult<1>::reject(pops::RecoveryCause::kExplicitRejection);
+  }
+};
+
+struct InitialGuessOrReject {
+  static constexpr pops::RecoveryMethodKind kind = pops::RecoveryMethodKind::kCustom;
+
+  POPS_HD pops::RecoveryMethodResult<1> operator()(const Real (&conserved)[1],
+                                                   const Real (&initial_guess)[1]) const {
+    if (conserved[0] < Real(0))
+      return pops::RecoveryMethodResult<1>::reject(pops::RecoveryCause::kExplicitRejection);
+    return pops::RecoveryMethodResult<1>::candidate(initial_guess);
   }
 };
 
@@ -294,6 +307,62 @@ TEST(PreparedVariableRecovery, stale_warm_start_is_an_explicit_non_mutating_miss
   EXPECT_TRUE(cache.load_if_current(5, 9, destination));
   EXPECT_EQ(destination[0], Real(3));
   EXPECT_EQ(destination[1], Real(4));
+}
+
+TEST(PreparedVariableRecovery, uniform_consumer_reuses_only_exact_generation_qualified_cells) {
+  const auto plan = pops::prepare_variable_recovery<1>(
+      AcceptPositive<1>{},
+      pops::recovery_methods(pops::prepared_local_nonlinear_recovery<1>(SquareProblemFactory{})));
+  pops::PreparedUniformRecoveryConsumer<1, decltype(plan)> consumer(plan);
+
+  const std::vector<double> first_conserved{4.0, 9.0};
+  std::vector<double> primitive{77.0};
+  const auto first = consumer.recover(first_conserved, primitive);
+  ASSERT_TRUE(first.publication_permitted());
+  EXPECT_EQ(first.cache_hits, std::size_t{0});
+  EXPECT_EQ(first.topology_generation, std::uint64_t{1});
+  EXPECT_EQ(first.state_generation, std::uint64_t{1});
+  ASSERT_EQ(primitive.size(), std::size_t{2});
+  EXPECT_NEAR(primitive[0], 2.0, 1e-10);
+  EXPECT_NEAR(primitive[1], 3.0, 1e-10);
+
+  const auto repeated = consumer.recover(first_conserved, primitive);
+  ASSERT_TRUE(repeated.publication_permitted());
+  EXPECT_EQ(repeated.cache_hits, std::size_t{2});
+  EXPECT_EQ(repeated.topology_generation, std::uint64_t{1});
+  EXPECT_EQ(repeated.state_generation, std::uint64_t{2});
+
+  const std::vector<double> one_changed{16.0, 9.0};
+  const auto changed = consumer.recover(one_changed, primitive);
+  ASSERT_TRUE(changed.publication_permitted());
+  EXPECT_EQ(changed.cache_hits, std::size_t{1});
+  EXPECT_NEAR(primitive[0], 4.0, 1e-10);
+  EXPECT_NEAR(primitive[1], 3.0, 1e-10);
+}
+
+TEST(PreparedVariableRecovery, uniform_consumer_failure_keeps_output_and_invalidates_all_slots) {
+  const auto plan = pops::prepare_variable_recovery<1>(
+      AcceptPositive<1>{}, pops::recovery_methods(InitialGuessOrReject{}));
+  pops::PreparedUniformRecoveryConsumer<1, decltype(plan)> consumer(plan);
+
+  const std::vector<double> accepted{4.0, 9.0};
+  std::vector<double> primitive;
+  ASSERT_TRUE(consumer.recover(accepted, primitive).publication_permitted());
+
+  const std::vector<double> rejected{4.0, -1.0};
+  const std::vector<double> sentinel{31.0, 41.0};
+  primitive = sentinel;
+  const auto failed = consumer.recover(rejected, primitive);
+  EXPECT_FALSE(failed.publication_permitted());
+  EXPECT_EQ(failed.failed_cell, std::size_t{1});
+  EXPECT_EQ(failed.cache_hits, std::size_t{1});
+  EXPECT_EQ(failed.recovery.status, pops::RecoveryStatus::kRejected);
+  EXPECT_EQ(primitive, sentinel);
+
+  const auto retry = consumer.recover(accepted, primitive);
+  ASSERT_TRUE(retry.publication_permitted());
+  EXPECT_EQ(retry.cache_hits, std::size_t{0})
+      << "a failed batch must invalidate slots committed earlier in that batch";
 }
 
 TEST(PreparedVariableRecovery, malformed_and_repair_candidates_fail_closed) {
