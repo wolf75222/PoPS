@@ -8,6 +8,8 @@ import subprocess
 import sys
 import types
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -75,7 +77,8 @@ def test_final_and_release_preflights_verify_cpp_duration_catalogs_before_build(
 def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
     generated = _load("_release_contract_test",
                       ROOT / "python" / "pops" / "_generated_release_contract.py")
-    source = json.loads((ROOT / "schemas" / "release_contract.v1.json").read_text())
+    source = json.loads((ROOT / "schemas" / "release_contract.v2.json").read_text())
+    assert source["release_contract_schema_version"] == 2
     assert generated.PACKAGE_VERSION == "1.0.0"
     for name in (
         "public_api_version", "semantic_ir_version", "normalization_version",
@@ -93,6 +96,57 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
         {"arch": "arm64", "backend": "Kokkos Serial", "os": "macos", "python": "cp312"},
     )
     assert "CUDA wheel" in generated.SUPPORTED_MATRIX["not_promised"]
+
+
+def test_release_contract_authenticates_component_catalog_digests():
+    import copy
+    import hashlib
+
+    generated = _load(
+        "_release_contract_component_digest_test",
+        ROOT / "python" / "pops" / "_generated_release_contract.py",
+    )
+    catalog = json.loads((ROOT / "schemas" / "component_catalog.v2.json").read_text())
+    canonical = json.dumps(
+        catalog, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    semantic = copy.deepcopy(catalog)
+    for family in semantic["route_families"]:
+        for route in family["routes"]:
+            route.pop("limitations", None)
+            route["metadata"].pop("summary", None)
+    semantic_canonical = json.dumps(
+        semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+    assert generated.COMPONENT_CATALOG_SHA256 == hashlib.sha256(canonical).hexdigest()
+    assert generated.COMPONENT_CATALOG_SEMANTIC_SHA256 == hashlib.sha256(
+        semantic_canonical
+    ).hexdigest()
+    release = _release_module().contract()
+    assert release["component_catalog_sha256"] == generated.COMPONENT_CATALOG_SHA256
+    assert (
+        release["component_catalog_semantic_sha256"]
+        == generated.COMPONENT_CATALOG_SEMANTIC_SHA256
+    )
+
+
+def test_release_generator_rejects_stale_component_catalog_digest(tmp_path):
+    generator = _load(
+        "_release_contract_stale_component_digest_test",
+        ROOT / "scripts" / "generate_release_contract.py",
+    )
+    payload = json.loads((ROOT / "schemas" / "release_contract.v2.json").read_text())
+    payload["component_catalog_sha256"] = "0" * 64
+    source = tmp_path / "release_contract.v2.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    generator.SOURCE = source
+
+    with pytest.raises(
+        generator.ContractError,
+        match="component_catalog_sha256 drifted from component_catalog.v2.json",
+    ):
+        generator._load()
 
 
 def test_pre_one_compatibility_uses_minor_boundary_and_post_one_uses_major_boundary():

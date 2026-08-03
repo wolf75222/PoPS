@@ -3,7 +3,7 @@
 // clang-format off
 namespace pops::release_contract {
 inline constexpr const char* kPackageVersion = "1.0.0";
-inline constexpr int kReleaseContractSchemaVersion = 1;
+inline constexpr int kReleaseContractSchemaVersion = 2;
 inline constexpr int kPublicApiVersion = 1;
 inline constexpr int kSemanticIrVersion = 1;
 inline constexpr int kNormalizationVersion = 1;
@@ -16,6 +16,8 @@ inline constexpr int kReleaseNativeAbiVersion = 3;
 inline constexpr int kCheckpointEnvelopeSchemaVersion = 1;
 inline constexpr int kUniformCheckpointPayloadVersion = 5;
 inline constexpr int kAmrCheckpointPayloadVersion = 7;
-inline constexpr const char* kContractSha256 = "677cc4279df230eeedcf0d657b558a1c42479bc41d0e7e1cc8cbdf0e7560a3da";
+inline constexpr const char* kComponentCatalogSha256 = "ad1dbd6838d52c41b7d797ffdb3e43d07da701c0adbe00845acaf5e41ae67640";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8";
+inline constexpr const char* kContractSha256 = "d47184f12a2f95954819764f1791a3cad9274cd47e0de5ac0d7e83f39092943a";
 }  // namespace pops::release_contract
 // clang-format on

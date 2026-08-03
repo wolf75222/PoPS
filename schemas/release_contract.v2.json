@@ -1,5 +1,5 @@
 {
-  "release_contract_schema_version": 1,
+  "release_contract_schema_version": 2,
   "public_api_version": 1,
   "semantic_ir_version": 1,
   "normalization_version": 1,
@@ -12,6 +12,8 @@
   "checkpoint_envelope_schema_version": 1,
   "uniform_checkpoint_payload_version": 5,
   "amr_checkpoint_payload_version": 7,
+  "component_catalog_sha256": "ad1dbd6838d52c41b7d797ffdb3e43d07da701c0adbe00845acaf5e41ae67640",
+  "component_catalog_semantic_sha256": "34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8",
   "supported_matrix": {
     "language": {
       "python": ["3.12"],
