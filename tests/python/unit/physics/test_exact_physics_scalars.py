@@ -19,6 +19,7 @@ from pops.physics.coupling_presets import (
 from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
 from pops.physics._scalars import canonical_scalar_data, physics_scalar_cpp
+from pops.numerics.riemann import Harten, NoEntropyFix
 
 
 def _constant_source(*values):
@@ -51,7 +52,8 @@ def _entropy_fixed_roe_model(entropy_fix):
     q1, q2 = model.conservative_vars("q1", "q2")
     model.flux(x=[q1, q2], y=[q2, q1])
     model.wave_speeds_from_jacobian()
-    model.roe_from_jacobian(entropy_fix=entropy_fix)
+    policy = NoEntropyFix() if entropy_fix is None else Harten(entropy_fix)
+    model.roe_from_jacobian(entropy_fix=policy)
     model.primitive_vars(q1, q2)
     model.conservative_from([q1, q2])
     return model
@@ -173,7 +175,7 @@ def test_roe_entropy_fix_emits_and_hashes_exact_positive_literal():
 
 @pytest.mark.parametrize("value", [True, 0, -1, float("nan"), float("inf"), Decimal("1e-10000")])
 def test_roe_entropy_fix_rejects_invalid_or_native_underflowing_values(value):
-    with pytest.raises((TypeError, ValueError, OverflowError), match="entropy_fix"):
+    with pytest.raises((TypeError, ValueError, OverflowError), match="Harten.delta"):
         _entropy_fixed_roe_model(value)
 
 
