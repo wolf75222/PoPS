@@ -114,11 +114,28 @@ block, one level, one rank-owned box, one common cell rung, frozen attempt auxil
 built-in periodic/Foextrap transport boundaries and transport-only forward Euler. A prepared
 physical-boundary plan is refused until its exact executable contract can join the provider
 identity. The route also has no MPI, GPU, heterogeneous-rung interpolation, coarse/fine ledger,
-source-stage integration, regrid/rank-change rematerialization, restart persistence or performance
-proof. The public hierarchy-global `AmrProgramContext` consequently still refuses a
-cell-local image before entering the Program body; it never substitutes a global `dt` and does not
-silently select this native C++ provider. ADC-707/ADC-708 continue to own the prepared patch/task
-graph. No end-to-end locally subcycled AMR conservation claim is made by this bounded ADC-756 slice.
+source-stage integration, regrid/rank-change rematerialization, diagnostic-ledger checkpoint
+persistence or performance proof.
+
+`Program.cell_local_time(tick_denominator=..., rung=...)` now selects this bounded route explicitly.
+Generated AMR code accepts only the exact single-state Forward-Euler transport graph, prepares the
+provider at an accepted boundary and installs `AmrProgramContext::advance_same_level_cell_temporal`.
+The context routes checkpoint, attempt, commit and rollback through that sole executor; the ordinary
+hierarchy-global driver still refuses a cell-local image and never substitutes a global `dt`.
+Same-topology restart restores the numerical image and integer clocks. Because the accepted-state
+schema does not persist the last interval's diagnostic face ledger, restart invalidates that
+publication until the next accepted interval instead of exposing stale fluxes.
+
+The remaining production extensions are explicit dependencies, not capabilities inferred from this
+slice: canonical rank/box ownership and halo-stage snapshots for MPI; distributed face-ledger
+reconciliation and collective failure draining; device-resident provider storage and publication for
+GPU; temporal neighbour interpolation and subface synchronization for heterogeneous rungs;
+coarse/fine space-time ledgers, reflux and local refinement ratios for multilevel AMR; exact provider
+rematerialization after regrid or rank migration; prepared source, field and physical-boundary stage
+contracts; an accepted-state schema extension if the last diagnostic ledger must survive restart;
+and backend/allocation/performance qualification. ADC-707/ADC-708 continue to own the prepared
+patch/task graph. No end-to-end heterogeneous or multilevel locally subcycled AMR conservation claim
+is made by this bounded route.
 
 Offline envelope inspection authenticates only the integrity of a canonical checkpoint; it is not
 a migration. The frozen release-v2 Uniform checkpoint predates the envelope and omits lifecycle
