@@ -164,10 +164,11 @@ POPS_HD void accumulate_cfl(const Model& model, const typename Model::State& sta
     accumulate_cfl<Axis + 1>(model, state, metric, cell, inverse_volume, inverse_dt, status);
 }
 
-template <int Axis, int Dim, int N>
-POPS_HD void accumulate_divergence(const FaceFieldView<const Real, Dim>& faces,
-                                   const Index<Dim>& cell, Real inverse_volume,
-                                   StateVec<N>& divergence, FiniteVolumeStatus& status) {
+template <int Axis, int Dim, int N, class T>
+  requires std::same_as<std::remove_const_t<T>, Real>
+POPS_HD void accumulate_divergence(const FaceFieldView<T, Dim>& faces, const Index<Dim>& cell,
+                                   Real inverse_volume, StateVec<N>& divergence,
+                                   FiniteVolumeStatus& status) {
   if (status != FiniteVolumeStatus::Success)
     return;
   if (cell[Axis] == std::numeric_limits<int>::max()) {
@@ -189,8 +190,9 @@ POPS_HD void accumulate_divergence(const FaceFieldView<const Real, Dim>& faces,
     accumulate_divergence<Axis + 1>(faces, cell, inverse_volume, divergence, status);
 }
 
-template <int N, int Dim>
-POPS_HD bool valid_face_field_layout(const FaceFieldView<const Real, Dim>& faces) {
+template <int N, int Dim, class T>
+  requires std::same_as<std::remove_const_t<T>, Real>
+POPS_HD bool valid_face_field_layout(const FaceFieldView<T, Dim>& faces) {
   if (faces.ncomp != N || faces.cells.empty())
     return false;
   for (int axis = 0; axis < Dim; ++axis) {
@@ -301,11 +303,10 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_metric_face_flux(
 /// Conservative divergence of already integrated, positive-axis face fluxes.  Geometry enters
 /// exactly once through the prepared cell measure; face integration is owned by
 /// evaluate_metric_face_flux + apply_face_measure.
-template <int N, int Dim, class Metric>
-  requires PreparedMetricProvider<Dim, Metric>
+template <int N, int Dim, class Metric, class T>
+  requires(std::same_as<std::remove_const_t<T>, Real> && PreparedMetricProvider<Dim, Metric>)
 POPS_HD FiniteVolumeResult<StateVec<N>> conservative_residual(
-    const Metric& metric, const FaceFieldView<const Real, Dim>& integrated_fluxes,
-    const Index<Dim>& cell) {
+    const Metric& metric, const FaceFieldView<T, Dim>& integrated_fluxes, const Index<Dim>& cell) {
   FiniteVolumeResult<StateVec<N>> result{};
   if (!integrated_fluxes.cells.contains(cell) ||
       !finite_volume_detail::valid_face_field_layout<N>(integrated_fluxes)) {
