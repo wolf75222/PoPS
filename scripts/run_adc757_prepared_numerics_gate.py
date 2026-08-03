@@ -38,6 +38,7 @@ EXPECTED_REQUIREMENTS = {
     "amr_bootstrap_recovery_publication",
     "amr_history_recovery_publication",
     "physical_boundary_trace_recovery_publication",
+    "terminal_source_recovery_publication",
     "type_erased_recovery_method_identity",
     "model_declared_admissibility",
     "prepared_limiter_provider",

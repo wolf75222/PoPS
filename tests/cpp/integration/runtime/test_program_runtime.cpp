@@ -115,9 +115,9 @@ static void add_sourced_gas(System& system, double gamma) {
                      "none", "rusanov", "conservative", "explicit", gamma);
 }
 
-static void add_draining_gas(System& system, double gamma) {
+static void add_draining_gas(System& system, const std::string& name, double gamma) {
   add_compiled_model(
-      system, "gas", DrainingGasModel{Euler{gamma}, DrainingDensitySource{}, NoEll{}}, "none",
+      system, name, DrainingGasModel{Euler{gamma}, DrainingDensitySource{}, NoEll{}}, "none",
       "rusanov", "conservative", "explicit", gamma);
 }
 
@@ -986,7 +986,7 @@ TEST(ProgramRuntime, SourceOnlyProgramStagePreservesEmbeddedBoundaryInactiveCell
   EXPECT_GT(inactive_cells, 0);
 }
 
-TEST(ProgramRuntime, TerminalSourcePublicationConsumesPreparedRecoveryBeforeCommit) {
+TEST(ProgramRuntime, TerminalSourcePublicationAcceptsPreparedRecoveryCandidate) {
 #if defined(POPS_HAS_KOKKOS)
   ensure_kokkos();
 #endif
@@ -999,7 +999,7 @@ TEST(ProgramRuntime, TerminalSourcePublicationConsumesPreparedRecoveryBeforeComm
   cfg.periodicity = {true, true};
 
   System system(cfg);
-  add_draining_gas(system, gamma);
+  add_draining_gas(system, "gas", gamma);
   std::vector<double> initial(4 * cells);
   fill_ic(initial, n, gamma);
   system.set_state("gas", initial);
@@ -1024,19 +1024,61 @@ TEST(ProgramRuntime, TerminalSourcePublicationConsumesPreparedRecoveryBeforeComm
     EXPECT_DOUBLE_EQ(accepted[cell], 0.75);
   EXPECT_DOUBLE_EQ(system.time(), 0.25);
   EXPECT_EQ(system.macro_step(), 1);
+}
 
-  // A second source update reaches rho=0 exactly. Euler recovery would divide momentum by rho;
-  // commit_many must therefore refuse the whole candidate before copying one live component.
+TEST(ProgramRuntime, TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  constexpr double gamma = 1.4;
+  const std::size_t cells = static_cast<std::size_t>(n) * n;
+  SystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+
+  System system(cfg);
+  add_draining_gas(system, "first", gamma);
+  add_draining_gas(system, "second", gamma);
+  std::vector<double> initial(4 * cells);
+  fill_ic(initial, n, gamma);
+  system.set_state("first", initial);
+  system.set_state("second", initial);
+  system.set_program_block_map({0, 1});
+  runtime::program::ProgramContext context(&system);
+  context.configure_primary_clock("test.clock.source-recovery-multiblock");
+  context.install([context](double step) {
+    context.begin_step(step);
+    MultiFab& first = context.state(0);
+    MultiFab& second = context.state(1);
+    MultiFab& first_source = context.rhs_scratch(920011, 0, first);
+    MultiFab& second_source = context.rhs_scratch(920012, 1, second);
+    MultiFab& first_candidate = context.scratch_state(920013, 0, first);
+    MultiFab& second_candidate = context.scratch_state(920014, 1, second);
+    context.source_default_into(0, first, first_source);
+    context.source_default_into(1, second, second_source);
+    context.lincomb(first_candidate, Real(1), first, Real(0), first);
+    context.lincomb(second_candidate, Real(1), second, Real(0), second);
+    context.axpy(first_candidate, Real(step), first_source);
+    context.axpy(second_candidate, Real(2) * Real(step), second_source);
+    context.commit_many({{&first, &first_candidate}, {&second, &second_candidate}});
+  });
+  system.set_program_block_map({0, 1});
+
+  // The first block reaches rho=0.5 and is valid, while the second reaches rho=0.  If commit_many
+  // copied as it iterated, the first live state would leak before the second recovery refusal.
   try {
-    system.step(0.75);
-    FAIL() << "an unrecoverable model-source endpoint must not publish";
+    system.step(0.5);
+    FAIL() << "an unrecoverable multi-block model-source endpoint must not publish";
   } catch (const std::runtime_error& error) {
     EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
               std::string::npos);
   }
-  EXPECT_EQ(system.get_state("gas"), accepted);
-  EXPECT_DOUBLE_EQ(system.time(), 0.25);
-  EXPECT_EQ(system.macro_step(), 1);
+  EXPECT_EQ(system.get_state("first"), initial);
+  EXPECT_EQ(system.get_state("second"), initial);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
 }
 
 TEST(ProgramRuntime, ExplicitSourceProgramPreservesEmbeddedBoundaryInactiveCells) {

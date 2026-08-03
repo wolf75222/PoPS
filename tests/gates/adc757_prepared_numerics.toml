@@ -279,6 +279,18 @@ target = "test_prepared_boundary_plan"
 test_regex = "^PreparedBoundaryTraceRecovery\\.rejects_inadmissible_traces_and_restores_complete_ghost_transaction$"
 
 [[check]]
+requirement = "terminal_source_recovery_publication"
+polarity = "positive"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.TerminalSourcePublicationAcceptsPreparedRecoveryCandidate$"
+
+[[check]]
+requirement = "terminal_source_recovery_publication"
+polarity = "refusal"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.TerminalSourceRecoveryRefusalPreventsPartialMultiBlockCommit$"
+
+[[check]]
 requirement = "type_erased_recovery_method_identity"
 polarity = "positive"
 target = "test_variable_recovery_chain"
