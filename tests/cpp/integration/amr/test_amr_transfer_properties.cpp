@@ -702,19 +702,18 @@ TEST(test_amr_transfer_properties, BootstrapMaterializesPreparedBoundarySessionA
         kPreparedBoundarySentinel);
 }
 
-TEST(test_amr_transfer_properties,
-     BootstrapCommitPublishesOnlyRecoveryAcceptedLevelsAndKeepsRefusalRollbackable) {
-  {
-    AmrRuntime runtime = bootstrap_runtime(8, false, 5.0);
-    test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
-                                           "test::bootstrap-recovery-accepted@1");
-    runtime.begin_bootstrap_plan();
-    ASSERT_TRUE(runtime.bootstrap_next_level(2));
-    EXPECT_GT(runtime.fill_bootstrap_block_constant(0, 1, {2.0}), 0);
-    EXPECT_NO_THROW(runtime.commit_bootstrap_level());
-    EXPECT_EQ(runtime.nlev(), 2);
-  }
+TEST(test_amr_transfer_properties, BootstrapCommitPublishesRecoveryAcceptedLevels) {
+  AmrRuntime runtime = bootstrap_runtime(8, false, 5.0);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::bootstrap-recovery-accepted@1");
+  runtime.begin_bootstrap_plan();
+  ASSERT_TRUE(runtime.bootstrap_next_level(2));
+  EXPECT_GT(runtime.fill_bootstrap_block_constant(0, 1, {2.0}), 0);
+  EXPECT_NO_THROW(runtime.commit_bootstrap_level());
+  EXPECT_EQ(runtime.nlev(), 2);
+}
 
+TEST(test_amr_transfer_properties, BootstrapRecoveryRefusalKeepsPendingLevelRollbackable) {
   AmrRuntime runtime = bootstrap_runtime(8, false, 5.0);
   const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
   const std::uint64_t topology_epoch_before = runtime.topology_epoch();

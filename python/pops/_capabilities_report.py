@@ -525,8 +525,10 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "evaluation; primitive-to-conservative setup conversion publishes only a finite "
                 "candidate accepted by that same prepared inverse authority; accepted AMR "
                 "regrid prolongation and restriction candidates pass the block-prepared inverse "
-                "authority collectively before replacing live hierarchy state, with no implicit "
-                "repair, fallback, or mutable cache"
+                "authority collectively before replacing live hierarchy state; AMR bootstrap "
+                "commits, rematerialized history slots, and physical boundary traces use that "
+                "same publication gate and roll back exactly on refusal, with no implicit repair, "
+                "fallback, or mutable cache"
             ),
             source=source,
         ),
@@ -539,20 +541,20 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=gpu,
             status="unavailable",
             limitation=(
-                "model/source conversion, AMR bootstrap/history transfer, primitive boundary "
-                "traces, persistent warm starts, cache restart, and the backend/performance "
-                "matrix do not yet share one prepared recovery authority"
+                "model/source conversion, persistent warm starts, cache restart, and the "
+                "backend/performance matrix do not yet share one prepared recovery authority"
             ),
             requested="complete prepared variable-recovery consumer cutover",
             available_route=(
                 "prepared closed-form recovery for System conservative-to-primitive and "
                 "transactional analytic initial-state materialization plus spatial face "
                 "reconstruction, fallible primitive-to-conservative setup conversion, and "
-                "transactional AMR regrid prolongation/restriction publication"
+                "transactional AMR regrid prolongation/restriction, bootstrap/history, and "
+                "physical boundary-trace publication"
             ),
             alternative=(
                 "use the delivered conservative-to-primitive consumers or implement the missing "
-                "bootstrap/history transfer, trace, and cache/restart contracts"
+                "model/source, warm-start, and cache/restart contracts"
             ),
             source=source,
         ),

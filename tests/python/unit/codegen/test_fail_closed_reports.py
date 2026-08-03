@@ -219,6 +219,9 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "transactional analytic initial-state materialization" in prepared.limitation
     assert "primitive-to-conservative setup conversion" in prepared.limitation
     assert "AMR regrid prolongation and restriction" in prepared.limitation
+    assert "AMR bootstrap commits" in prepared.limitation
+    assert "rematerialized history slots" in prepared.limitation
+    assert "physical boundary traces" in prepared.limitation
     assert "no implicit repair, fallback, or mutable cache" in prepared.limitation
 
     cutover = routes["recovery:complete_consumer_cutover"]
@@ -228,16 +231,16 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "model/source conversion" in cutover.limitation
     assert "initial and analytic materialization" not in cutover.limitation
     assert "fallible primitive-to-conservative conversion" not in cutover.limitation
-    assert "AMR bootstrap/history transfer" in cutover.limitation
+    assert "AMR bootstrap/history transfer" not in cutover.limitation
+    assert "primitive boundary traces" not in cutover.limitation
     assert "persistent warm starts" in cutover.limitation
     assert "transactional analytic initial-state materialization" in cutover.available_route
     assert "spatial face reconstruction" in cutover.available_route
     assert "fallible primitive-to-conservative setup conversion" in cutover.available_route
     assert "transactional AMR regrid prolongation/restriction" in cutover.available_route
-    assert (
-        "missing bootstrap/history transfer, trace, and cache/restart contracts"
-        in cutover.alternative
-    )
+    assert "bootstrap/history" in cutover.available_route
+    assert "physical boundary-trace publication" in cutover.available_route
+    assert "missing model/source, warm-start, and cache/restart contracts" in cutover.alternative
     assert cutover.error_message
 
 

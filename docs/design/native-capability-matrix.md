@@ -193,11 +193,12 @@ Supported native routes include:
   publication permission before copying a candidate or evaluating a flux. Primitive-to-conservative
   setup conversion similarly publishes only a finite candidate accepted by that prepared inverse
   authority. Accepted AMR regrid prolongation and restriction candidates also pass that
-  block-prepared inverse authority collectively before replacing live hierarchy state. This route
-  adds no implicit repair, fallback, or mutable cache. The separate
-  `recovery:complete_consumer_cutover` capability remains `unavailable`: model/source conversion,
-  AMR bootstrap/history transfer, primitive boundary traces, persistent warm starts, cache/restart,
-  backend parity, and performance evidence do not yet share that authority.
+  block-prepared inverse authority collectively before replacing live hierarchy state. AMR
+  bootstrap commits, rematerialized history slots, and physical boundary traces use the same
+  publication gate and restore their complete transaction on refusal. This route adds no implicit
+  repair, fallback, or mutable cache. The separate `recovery:complete_consumer_cutover` capability
+  remains `unavailable`: model/source conversion, persistent warm starts, cache/restart, backend
+  parity, and performance evidence do not yet share that authority.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.

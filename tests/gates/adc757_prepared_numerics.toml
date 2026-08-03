@@ -243,6 +243,42 @@ target = "test_amr_transfer_properties"
 test_regex = "^test_amr_transfer_properties\\.RestrictionRecoveryRefusalRollsBackEveryLevelAndHierarchyPublication$"
 
 [[check]]
+requirement = "amr_bootstrap_recovery_publication"
+polarity = "positive"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.BootstrapCommitPublishesRecoveryAcceptedLevels$"
+
+[[check]]
+requirement = "amr_bootstrap_recovery_publication"
+polarity = "refusal"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.BootstrapRecoveryRefusalKeepsPendingLevelRollbackable$"
+
+[[check]]
+requirement = "amr_history_recovery_publication"
+polarity = "positive"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.RegridRemapKeepsSlotsConsistent$"
+
+[[check]]
+requirement = "amr_history_recovery_publication"
+polarity = "refusal"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.RegridRecoveryRefusalRollsBackRemappedHistoryAndLiveHierarchy$"
+
+[[check]]
+requirement = "physical_boundary_trace_recovery_publication"
+polarity = "positive"
+target = "test_prepared_boundary_plan"
+test_regex = "^PreparedBoundaryTraceRecovery\\.accepts_admissible_physical_traces_without_hot_path_allocation$"
+
+[[check]]
+requirement = "physical_boundary_trace_recovery_publication"
+polarity = "refusal"
+target = "test_prepared_boundary_plan"
+test_regex = "^PreparedBoundaryTraceRecovery\\.rejects_inadmissible_traces_and_restores_complete_ghost_transaction$"
+
+[[check]]
 requirement = "type_erased_recovery_method_identity"
 polarity = "positive"
 target = "test_variable_recovery_chain"

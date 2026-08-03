@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 47
+    assert len(data["check"]) == 53
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-682",
@@ -40,6 +40,24 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
         "ADC-756",
     ]
     assert runner.main(["--check-only"]) == 0
+
+
+def test_adc757_slice_executes_amr_and_boundary_recovery_publication_proofs():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    claimed = {
+        "amr_bootstrap_recovery_publication",
+        "amr_history_recovery_publication",
+        "physical_boundary_trace_recovery_publication",
+    }
+    rows = [row for row in data["check"] if row["requirement"] in claimed]
+    assert {row["requirement"] for row in rows} == claimed
+    assert {(row["requirement"], row["polarity"]) for row in rows} == {
+        (requirement, polarity)
+        for requirement in claimed
+        for polarity in ("positive", "refusal")
+    }
 
 
 def test_adc757_slice_executes_qualified_flux_provider_pack_proofs():
