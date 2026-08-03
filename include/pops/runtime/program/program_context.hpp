@@ -399,7 +399,7 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     return sys_->solve_fields_from_blocks_in_place_(workspace.system_stages);
   }
 
-  runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
+  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
@@ -421,13 +421,9 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     sys_->install_program_step(std::move(step));
   }
 
-  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
-      int stage_id) const {
-    return boundary_point_(stage_id);
-  }
   void program_execution_rhs_into_(int /*program_block*/, int runtime_block, MultiFab& state,
                                    MultiFab& rhs, int rate_id) const {
-    sys_->block_rhs_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+    sys_->block_rhs_into_at(program_execution_boundary_point_(rate_id), runtime_block, state, rhs);
   }
   bool program_execution_has_boundary_linearization_(int runtime_block) const {
     return sys_->block_has_boundary_linearization(runtime_block);
@@ -464,7 +460,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   void program_execution_neg_div_flux_default_into_(int /*program_block*/, int runtime_block,
                                                     MultiFab& state, MultiFab& rhs,
                                                     int rate_id) const {
-    sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), runtime_block, state, rhs);
+    sys_->block_neg_div_flux_into_at(program_execution_boundary_point_(rate_id), runtime_block,
+                                     state, rhs);
   }
   void program_execution_neg_div_named_flux_into_(MultiFab& rhs, MultiFab& flux_x, MultiFab& flux_y,
                                                   MultiFab& divergence_scratch,
@@ -494,8 +491,8 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
   }
   void program_execution_rhs_group_(const RhsGroupBatch& batch) const {
     count_kernel(static_cast<std::int64_t>(batch.requests.size()));
-    sys_->block_rhs_group(boundary_point_(batch.group_id), batch.runtime_blocks, batch.states,
-                          batch.rhs, batch.flux_only);
+    sys_->block_rhs_group(program_execution_boundary_point_(batch.group_id), batch.runtime_blocks,
+                          batch.states, batch.rhs, batch.flux_only);
   }
   void program_execution_source_default_into_(int runtime_block, MultiFab& state,
                                               MultiFab& rhs) const {
