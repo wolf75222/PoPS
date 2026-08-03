@@ -133,7 +133,65 @@ class SourceComponentPackage:
                     "source_digest", record["path"], "payload bytes do not match the manifest")
             payloads.append(PackagePayload(record["path"], record["kind"], expected, content))
         identity = verify_package_identity(row)
-        return cls(manifests, exports, tuple(payloads), identity, manifest_path)
+        package = cls(manifests, exports, tuple(payloads), identity, manifest_path)
+        package.verify()
+        return package
+
+    def verify(self) -> None:
+        """Re-authenticate retained package bytes before a phase boundary.
+
+        Loading detaches source payloads from their filesystem paths, but the public package value
+        must not become an authority merely because it has the right Python type.  Registries and
+        the compiler call this method again immediately before consuming the value, so a forged or
+        in-memory-corrupted package cannot bypass the wire digest checks.
+        """
+        if self.protocol_abi != PROTOCOL_ABI:
+            raise ComponentPackageError(
+                "protocol_abi", "protocol_abi", "unsupported component protocol ABI")
+        if type(self.manifests) is not tuple or any(
+                type(manifest) is not ComponentManifest for manifest in self.manifests):
+            raise ComponentPackageError(
+                "component_manifest", "components",
+                "source package manifests must be exact ComponentManifest values")
+        canonical_manifests = _components([manifest.to_data() for manifest in self.manifests])
+        if canonical_manifests != self.manifests:
+            raise ComponentPackageError(
+                "component_manifest", "components", "component manifests are not canonical")
+        canonical_exports = _exports(self.exports, self.manifests)
+        if dict(canonical_exports) != dict(self.exports):
+            raise ComponentPackageError(
+                "exports", "exports", "source package exports are not canonical")
+        if type(self.payloads) is not tuple or not self.payloads:
+            raise ComponentPackageError(
+                "payloads", "payloads", "source package has no exact payload tuple")
+        paths: set[str] = set()
+        for index, payload in enumerate(self.payloads):
+            if type(payload) is not PackagePayload or type(payload.content) is not bytes:
+                raise ComponentPackageError(
+                    "payloads", "payloads[%d]" % index,
+                    "source package payloads must be exact immutable byte values")
+            if not isinstance(payload.identity, Identity):
+                raise ComponentPackageError(
+                    "digest", "payloads[%d].digest" % index,
+                    "payload identity must be a canonical PoPS identity")
+            validate_payload_row(payload.to_data(), index)
+            if payload.path in paths:
+                raise ComponentPackageError(
+                    "payloads", "payloads", "payload paths must be unique")
+            paths.add(payload.path)
+            if payload.identity != content_identity(payload.kind, payload.content):
+                raise ComponentPackageError(
+                    "source_digest", payload.path,
+                    "retained payload bytes do not match the package identity")
+        if not isinstance(self.identity, Identity) \
+                or self.identity.domain != "component-package":
+            raise ComponentPackageError(
+                "package_digest", "package_digest",
+                "source package identity must be a component-package identity")
+        if self.identity != package_identity(self.to_data()):
+            raise ComponentPackageError(
+                "package_digest", "package_digest",
+                "retained package content does not match package digest")
 
     def manifest(self, component_id: str) -> ComponentManifest:
         for manifest in self.manifests:
@@ -142,6 +200,7 @@ class SourceComponentPackage:
         raise KeyError(component_id)
 
     def require(self, alias: str, *, interface: ComponentInterface) -> ExternalComponentType:
+        self.verify()
         if type(interface) is not ComponentInterface:
             raise TypeError("interface must be an exact pops.interfaces.ComponentInterface")
         try:
