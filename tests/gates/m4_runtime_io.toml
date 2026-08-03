@@ -73,7 +73,7 @@ requirement = "external_package"
 polarity = "refusal"
 kind = "pytest"
 target = "external_package"
-nodeid = "tests/python/unit/codegen/test_component_packages.py::test_tampered_manifest_digest_is_rejected"
+nodeid = "tests/python/unit/codegen/test_component_packages.py::test_tampered_manifest_and_retained_source_are_rejected_at_phase_boundaries"
 
 [[check]]
 issue = "ADC-680"

@@ -35,7 +35,9 @@ interprets package JSON.
 The JSON package schema is strict and versioned. It contains the complete `ComponentManifest` data,
 explicit exports, payload digests, protocol ABI and a package digest. Paths are canonical relative
 POSIX paths; absolute paths, traversal and resolved escapes are rejected. Payload bytes are read and
-retained at load time, so compilation does not trust a later mutable source path.
+retained at load time, so compilation does not trust a later mutable source path. The retained
+manifest, package identity and every source/header/IR digest are re-authenticated when authoring,
+registering and immediately before compilation; the Python value's type alone is never authority.
 
 Source registration compares the complete component-manifest digest and source-package digest.
 Compiled registration compares the component, exact platform identity, artifact identity and binary
