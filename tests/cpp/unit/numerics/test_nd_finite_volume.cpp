@@ -205,7 +205,7 @@ void check_metric_cfl_and_divergence() {
     lengths[axis] = Real(1.5 + 0.5 * axis);
     velocity[axis] = axis % 2 == 0 ? Real(0.3 + 0.1 * axis) : Real(-0.4 - 0.1 * axis);
   }
-  const Box<Dim> cells = make_box(extents);
+  const Box<Dim> cells = make_box<Dim>(extents);
   const auto map = CartesianCoordinateMap<Dim>::make(origin, lengths);
   const auto metric = prepare_metric_provider(cells, map);
   const auto model = nd::ScalarAdvection<Dim>::prepare(velocity);
@@ -397,7 +397,7 @@ TEST(test_nd_finite_volume, inadmissible_states_and_invalid_metric_inputs_fail_c
       other_cells, CartesianCoordinateMap<3>::make(RealVector<3>{}, RealVector<3>{1, 1, 1}));
   EXPECT_EQ(nd::conservative_residual<5>(other_metric, faces.view(), Index<3>{}).status,
             nd::FiniteVolumeStatus::InvalidMetric);
-  EXPECT_FALSE(nd::evaluate_metric_face_flux<0, MetricFaceSide::Upper>(
-                   RusanovFlux{}, model, valid.value, valid.value, metric, Index<3>{2, 0, 0})
-                   .succeeded());
+  EXPECT_FALSE((nd::evaluate_metric_face_flux<0, MetricFaceSide::Upper>(
+                    RusanovFlux{}, model, valid.value, valid.value, metric, Index<3>{2, 0, 0})
+                    .succeeded()));
 }
