@@ -152,6 +152,7 @@ api pops/physics/bricks/hyperbolic.hpp
 api pops/physics/bricks/source.hpp
 api pops/physics/composition/composite.hpp
 api pops/physics/fluids/euler.hpp
+sdk-support pops/runtime/accelerator/prepared_stream_executor.hpp
 sdk-support pops/runtime/amr/amr_field_solve_transaction.hpp
 sdk-support pops/runtime/amr/amr_history.hpp
 sdk-support pops/runtime/amr/amr_program_reflux.hpp
