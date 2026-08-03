@@ -17,6 +17,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -27,11 +30,12 @@ using namespace pops;
 
 namespace {
 
-RecoveryReport accept_scalar_recovery(const double* conserved, double* primitive) {
+RecoveryReport scalar_recovery(const double* conserved, double* primitive, bool reject) {
   RecoveryReport report;
-  if (!std::isfinite(conserved[0])) {
+  if (reject || !std::isfinite(conserved[0])) {
     report.status = RecoveryStatus::kRejected;
-    report.cause = RecoveryCause::kNonFiniteCandidate;
+    report.cause =
+        reject ? RecoveryCause::kInadmissibleCandidate : RecoveryCause::kNonFiniteCandidate;
     report.failing_component = 0;
     return report;
   }
@@ -78,11 +82,14 @@ int run_dynamic_active_depth(int n, int me, int np) {
 
   const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
   AmrHierarchyLayout hierarchy = AmrHierarchyLayout::from_levels(*levels, load_balance);
+  auto reject_rank_zero_candidate = std::make_shared<bool>(false);
 
   AmrRuntimeBlock block;
   block.name = "moving";
   block.state_identity = "test://mpi-active-depth/block/moving/state/U";
-  block.cons_to_prim = accept_scalar_recovery;
+  block.cons_to_prim = [reject_rank_zero_candidate](const double* conserved, double* primitive) {
+    return scalar_recovery(conserved, primitive, *reject_rank_zero_candidate && my_rank() == 0);
+  };
   block.levels = levels;
   block.add_elliptic_rhs = [](const MultiFab&, MultiFab&) {};
   block.max_speed = [](const MultiFab&, const MultiFab&) { return Real(0); };
@@ -114,6 +121,19 @@ int run_dynamic_active_depth(int n, int me, int np) {
       runtime, {{0, 0, Real(1e9), test::PreparedThresholdRelation::Above}},
       {{0, 0, Real(1e9), test::PreparedThresholdRelation::Below}},
       "test::mpi-active-depth-coarsen@1");
+  *reject_rank_zero_candidate = true;
+  bool restriction_rejected = false;
+  try {
+    runtime.regrid();
+  } catch (const std::runtime_error& error) {
+    restriction_rejected =
+        std::string(error.what()).find("prepared variable recovery rejected") != std::string::npos;
+  }
+  const bool restriction_refusal_collective =
+      all_reduce_sum(restriction_rejected ? 1L : 0L) == n_ranks();
+  const bool restriction_rolled_back = runtime.nlev() == 3 && runtime.regrid_count() == 0 &&
+                                       std::fabs(runtime.mass(0) - initial_mass) < 1e-10;
+  *reject_rank_zero_candidate = false;
   runtime.regrid();
   const bool removed = runtime.nlev() == 1 && runtime.max_levels() == 3 && runtime.n_patches() == 0;
   const double removed_mass = runtime.mass(0);
@@ -124,6 +144,19 @@ int run_dynamic_active_depth(int n, int me, int np) {
       runtime, {{0, 0, Real(1.05), test::PreparedThresholdRelation::Above}},
       {{0, 0, Real(1.05), test::PreparedThresholdRelation::Below}},
       "test::mpi-active-depth-regrow@1");
+  *reject_rank_zero_candidate = true;
+  bool prolongation_rejected = false;
+  try {
+    runtime.regrid();
+  } catch (const std::runtime_error& error) {
+    prolongation_rejected =
+        std::string(error.what()).find("prepared variable recovery rejected") != std::string::npos;
+  }
+  const bool prolongation_refusal_collective =
+      all_reduce_sum(prolongation_rejected ? 1L : 0L) == n_ranks();
+  const bool prolongation_rolled_back = runtime.nlev() == 1 && runtime.regrid_count() == 1 &&
+                                        std::fabs(runtime.mass(0) - removed_mass) < 1e-10;
+  *reject_rank_zero_candidate = false;
   runtime.regrid();
   const bool regrown = runtime.nlev() == 3 && runtime.max_levels() == 3 && runtime.n_patches() > 0;
   const double regrown_mass = runtime.mass(0);
@@ -135,15 +168,21 @@ int run_dynamic_active_depth(int n, int me, int np) {
                           std::fmax(spread(removed_mass), spread(regrown_mass))));
   const bool conserved = std::fabs(removed_mass - initial_mass) < 1e-10 &&
                          std::fabs(regrown_mass - initial_mass) < 1e-10;
-  const long local_failure = removed && regrown && conserved && cross_rank_spread == 0.0 ? 0L : 1L;
+  const long local_failure = removed && regrown && conserved && restriction_refusal_collective &&
+                                     restriction_rolled_back && prolongation_refusal_collective &&
+                                     prolongation_rolled_back && cross_rank_spread == 0.0
+                                 ? 0L
+                                 : 1L;
   const long failure = all_reduce_max(local_failure);
 
   if (me == 0) {
     std::printf(
-        "AMRDEPTH np=%d | removed=%d regrown=%d | active=%d configured=%d patches=%d | "
-        "dm_remove=%.3e dm_regrow=%.3e spread=%.3e\n",
-        np, removed ? 1 : 0, regrown ? 1 : 0, runtime.nlev(), runtime.max_levels(),
-        runtime.n_patches(), std::fabs(removed_mass - initial_mass),
+        "AMRDEPTH np=%d | removed=%d regrown=%d | recovery_restrict=%d recovery_prolong=%d | "
+        "active=%d configured=%d patches=%d | dm_remove=%.3e dm_regrow=%.3e spread=%.3e\n",
+        np, removed ? 1 : 0, regrown ? 1 : 0,
+        restriction_refusal_collective && restriction_rolled_back ? 1 : 0,
+        prolongation_refusal_collective && prolongation_rolled_back ? 1 : 0, runtime.nlev(),
+        runtime.max_levels(), runtime.n_patches(), std::fabs(removed_mass - initial_mass),
         std::fabs(regrown_mass - initial_mass), cross_rank_spread);
   }
   return failure == 0 ? 0 : 1;
