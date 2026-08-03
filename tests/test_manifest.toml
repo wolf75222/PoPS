@@ -871,6 +871,11 @@ sources = ["tests/cpp/unit/mesh/test_nd_topology.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_transfer"
+sources = ["tests/cpp/unit/amr/test_nd_transfer.cpp"]
+labels = ["unit", "amr", "mesh", "fast"]
+
+[[cpp.suite]]
 name = "test_nd_translation_schedule"
 sources = ["tests/cpp/unit/mesh/test_nd_translation_schedule.cpp"]
 labels = ["unit", "mesh", "fast"]
