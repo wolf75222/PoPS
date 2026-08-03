@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 84
+    assert len(data["check"]) == 87
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-682",
@@ -244,6 +244,42 @@ def test_adc757_slice_authenticates_the_only_prepared_transport_boundary_authori
             "target": "test_polar_transport_mms",
             "test_regex": "^test_polar_transport_mms\\."
             "RejectsSharedInterfaceFaceOmission$",
+        },
+    ]
+
+
+def test_adc757_slice_authenticates_prepared_batch_as_the_only_recovery_authority():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    assert [
+        row
+        for row in data["check"]
+        if row["requirement"] == "prepared_batch_recovery_only_runtime_authority"
+    ] == [
+        {
+            "requirement": "prepared_batch_recovery_only_runtime_authority",
+            "polarity": "positive",
+            "kind": "pytest",
+            "path": "tests/python/architecture/"
+            "test_variable_recovery_consumer_cutover.py",
+            "test": "test_runtime_materialization_consumes_only_prepared_batch_before_"
+            "publication",
+        },
+        {
+            "requirement": "prepared_batch_recovery_only_runtime_authority",
+            "polarity": "refusal",
+            "kind": "pytest",
+            "path": "tests/python/architecture/"
+            "test_variable_recovery_consumer_cutover.py",
+            "test": "test_runtime_materialization_has_no_pointwise_compatibility_authority",
+        },
+        {
+            "requirement": "prepared_batch_recovery_only_runtime_authority",
+            "polarity": "refusal",
+            "target": "test_facade_routing",
+            "test_regex": "^FacadeRouting\\."
+            "PrimitiveMaterializationRefusesMissingPreparedBatchAuthority$",
         },
     ]
 
