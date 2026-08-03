@@ -231,9 +231,11 @@ TEST(test_load_balance, measured_rebalance_accepts_only_net_benefit_after_migrat
       .migration_bandwidth_bytes_per_second = 1'000'000'000'000,
       .per_patch_migration_latency_nanoseconds = 0,
   };
+  const std::string source_contract = detail::exact_rebalance_source(
+      "test.load-balance", "test.load-balance@1", 1, 2, 7, 3, boxes, current);
 
-  const RebalanceDecision accepted =
-      make_rebalance_decision(boxes, current, proposed, 2, 7, 3, estimates, profitable);
+  const RebalanceDecision accepted = make_rebalance_decision(
+      boxes, current, proposed, 2, 7, 3, estimates, profitable, source_contract);
   EXPECT_TRUE(accepted.accepted);
   EXPECT_EQ(accepted.reason, RebalanceReason::NetBenefit);
   EXPECT_EQ(accepted.moved_patches, 2);
@@ -245,8 +247,8 @@ TEST(test_load_balance, measured_rebalance_accepts_only_net_benefit_after_migrat
   RebalancePolicy expensive = profitable;
   expensive.amortization_steps = 1;
   expensive.migration_bandwidth_bytes_per_second = 1;
-  const RebalanceDecision refused =
-      make_rebalance_decision(boxes, current, proposed, 2, 7, 3, estimates, expensive);
+  const RebalanceDecision refused = make_rebalance_decision(boxes, current, proposed, 2, 7, 3,
+                                                            estimates, expensive, source_contract);
   EXPECT_FALSE(refused.accepted);
   EXPECT_EQ(refused.reason, RebalanceReason::InsufficientNetBenefit);
   EXPECT_LT(refused.predicted_net_speedup, 1.0);
@@ -258,13 +260,17 @@ TEST(test_load_balance, measured_rebalance_refuses_stale_or_incomplete_evidence)
   const DistributionMapping proposed(std::vector<int>{0, 1});
   std::vector<ResourceEstimate> estimates{measured_patch_cost(100), measured_patch_cost(1)};
   const RebalancePolicy policy{};
+  const std::string source_contract = detail::exact_rebalance_source(
+      "test.load-balance", "test.load-balance@1", 1, 2, 7, 3, boxes, current);
 
   estimates[1].topology_epoch = 6;
-  EXPECT_THROW(make_rebalance_decision(boxes, current, proposed, 2, 7, 3, estimates, policy),
+  EXPECT_THROW(make_rebalance_decision(boxes, current, proposed, 2, 7, 3, estimates, policy,
+                                       source_contract),
                std::invalid_argument);
   estimates[1] = measured_patch_cost(1);
   estimates[1].samples = 0;
-  EXPECT_THROW(make_rebalance_decision(boxes, current, proposed, 2, 7, 3, estimates, policy),
+  EXPECT_THROW(make_rebalance_decision(boxes, current, proposed, 2, 7, 3, estimates, policy,
+                                       source_contract),
                std::invalid_argument);
 }
 
@@ -273,8 +279,10 @@ TEST(test_load_balance, measured_rebalance_keeps_an_unchanged_mapping) {
   const DistributionMapping current(std::vector<int>{0, 1});
   const std::vector<ResourceEstimate> estimates{measured_patch_cost(1), measured_patch_cost(1)};
 
-  const RebalanceDecision decision =
-      make_rebalance_decision(boxes, current, current, 2, 7, 3, estimates, RebalancePolicy{});
+  const RebalanceDecision decision = make_rebalance_decision(
+      boxes, current, current, 2, 7, 3, estimates, RebalancePolicy{},
+      detail::exact_rebalance_source("test.load-balance", "test.load-balance@1", 1, 2, 7, 3, boxes,
+                                     current));
   EXPECT_FALSE(decision.accepted);
   EXPECT_EQ(decision.reason, RebalanceReason::MappingUnchanged);
   EXPECT_EQ(decision.moved_patches, 0);

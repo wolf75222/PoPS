@@ -69,6 +69,8 @@ enum class RebalanceReason : std::uint8_t {
 struct RebalanceDecision {
   std::uint64_t topology_epoch = 0;
   std::uint64_t materialization_generation = 0;
+  /// Exact prepared-authority, level, BoxArray and current-owner identity consumed by migration.
+  std::string source_contract;
   DistributionMapping proposed_mapping;
   RebalanceReason reason = RebalanceReason::EmptyHierarchy;
   bool accepted = false;
@@ -168,6 +170,29 @@ inline std::string exact_rebalance_request(const DistributionMapping& current,
   return std::move(contract).release();
 }
 
+inline std::string exact_rebalance_source(std::string_view authority_identity,
+                                          std::string_view authority_collective_contract,
+                                          int source_level, int source_rank_count,
+                                          std::uint64_t topology_epoch,
+                                          std::uint64_t materialization_generation,
+                                          const BoxArray& source_boxes,
+                                          const DistributionMapping& source_mapping) {
+  ExactContractBuilder contract;
+  contract.text("pops.rebalance-source")
+      .scalar(std::uint32_t{1})
+      .text(authority_identity)
+      .text(authority_collective_contract)
+      .scalar(source_level)
+      .scalar(source_rank_count)
+      .scalar(topology_epoch)
+      .scalar(materialization_generation)
+      .scalar(static_cast<std::uint64_t>(source_boxes.size()));
+  for (const Box2D& box : source_boxes.boxes())
+    contract.scalar(box.lo[0]).scalar(box.lo[1]).scalar(box.hi[0]).scalar(box.hi[1]);
+  contract.sequence(source_mapping.ranks());
+  return std::move(contract).release();
+}
+
 inline std::int64_t maximum_rank_cost(const DistributionMapping& mapping, int rank_count,
                                       LoadBalanceWeights weights) {
   std::vector<std::int64_t> costs(static_cast<std::size_t>(rank_count), 0);
@@ -201,9 +226,10 @@ inline std::int64_t migration_time_nanoseconds(std::int64_t bytes, std::int64_t 
 inline std::string exact_rebalance_decision(const RebalanceDecision& decision) {
   ExactContractBuilder contract;
   contract.text("pops.rebalance-decision")
-      .scalar(std::uint32_t{1})
+      .scalar(std::uint32_t{2})
       .scalar(decision.topology_epoch)
       .scalar(decision.materialization_generation)
+      .text(decision.source_contract)
       .scalar(static_cast<std::uint8_t>(decision.reason))
       .scalar(static_cast<std::uint8_t>(decision.accepted ? 1 : 0))
       .scalar(decision.moved_patches)
@@ -355,11 +381,11 @@ struct RoundRobinLoadBalance {
 inline RebalanceDecision make_rebalance_decision(
     const BoxArray& boxes, const DistributionMapping& current, const DistributionMapping& proposed,
     int rank_count, std::uint64_t topology_epoch, std::uint64_t materialization_generation,
-    ResourceEstimates estimates, const RebalancePolicy& policy) {
+    ResourceEstimates estimates, const RebalancePolicy& policy, std::string source_contract) {
   if (rank_count <= 0 || current.size() != boxes.size() || proposed.size() != boxes.size() ||
-      estimates.size() != static_cast<std::size_t>(boxes.size()))
+      estimates.size() != static_cast<std::size_t>(boxes.size()) || source_contract.empty())
     throw std::invalid_argument(
-        "rebalance mappings and resource estimates must match a positive-rank BoxArray");
+        "rebalance mappings, estimates and source contract must match a positive-rank BoxArray");
   if (policy.minimum_improvement_ppm < 0 || policy.minimum_improvement_ppm >= 1'000'000 ||
       policy.amortization_steps <= 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
       policy.per_patch_migration_latency_nanoseconds < 0)
@@ -374,6 +400,7 @@ inline RebalanceDecision make_rebalance_decision(
   RebalanceDecision decision;
   decision.topology_epoch = topology_epoch;
   decision.materialization_generation = materialization_generation;
+  decision.source_contract = std::move(source_contract);
   decision.proposed_mapping = proposed;
   if (boxes.size() == 0) {
     decision.reason = RebalanceReason::EmptyHierarchy;
@@ -511,16 +538,18 @@ class PreparedLoadBalanceAuthority {
   /// a policy candidate through the same immutable authority, accounts for migration over the
   /// configured horizon, and returns a decision that a hierarchy migration transaction may consume.
   [[nodiscard]] RebalanceDecision decide_rebalance(
-      const BoxArray& boxes, const DistributionMapping& current, int rank_count,
+      int source_level, const BoxArray& boxes, const DistributionMapping& current, int rank_count,
       std::uint64_t topology_epoch, std::uint64_t materialization_generation,
       ResourceEstimates estimates, const RebalancePolicy& policy,
       const CommunicatorView& communicator = world_communicator_view()) const {
     std::vector<std::int64_t> weights;
     std::string request_contract;
+    std::string source_contract;
     detail::collective_load_balance_preflight("rebalance request", communicator, [&] {
-      if (rank_count <= 0 || rank_count != communicator.size())
+      if (source_level < 0 || rank_count <= 0 || rank_count != communicator.size())
         throw std::invalid_argument(
-            "rebalance rank count must equal the execution communicator size");
+            "rebalance source level must be nonnegative and rank count must equal the execution "
+            "communicator size");
       if (current.size() != boxes.size() ||
           estimates.size() != static_cast<std::size_t>(boxes.size()))
         throw std::invalid_argument(
@@ -538,10 +567,14 @@ class PreparedLoadBalanceAuthority {
             detail::estimate_weight(estimate, topology_epoch, materialization_generation));
       request_contract = detail::exact_rebalance_request(
           current, topology_epoch, materialization_generation, estimates, policy);
+      source_contract = detail::exact_rebalance_source(
+          semantic_identity_, provider_.collective_contract(), source_level, rank_count,
+          topology_epoch, materialization_generation, boxes, current);
     });
 
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{semantic_identity_, provider_.collective_contract()},
+             {"rebalance-source", source_contract},
              {"rebalance-request", request_contract}},
             communicator))
       throw std::invalid_argument(
@@ -551,7 +584,8 @@ class PreparedLoadBalanceAuthority {
     std::optional<RebalanceDecision> result;
     detail::collective_load_balance_preflight("rebalance decision", communicator, [&] {
       result.emplace(make_rebalance_decision(boxes, current, proposed, rank_count, topology_epoch,
-                                             materialization_generation, estimates, policy));
+                                             materialization_generation, estimates, policy,
+                                             source_contract));
     });
     if (!result)
       throw std::logic_error("rebalance decision was not materialized");

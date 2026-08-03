@@ -142,6 +142,43 @@ int run_mpi_load_balance_authority(int argc, char** argv) {
     if (owner < 0 || owner >= ranks)
       ++failures;
 
+  // The prepared authority, not the migration consumer, owns cost interpretation. Start from an
+  // intentionally concentrated map so the measured uniform workload produces a deterministic
+  // beneficial proposal and an exact topology-qualified RebalanceDecision on every rank.
+  constexpr std::uint64_t topology_epoch = 10;
+  constexpr std::uint64_t materialization_generation = 20;
+  std::vector<ResourceEstimate> estimates(static_cast<std::size_t>(box_count));
+  for (ResourceEstimate& estimate : estimates) {
+    estimate.topology_epoch = topology_epoch;
+    estimate.materialization_generation = materialization_generation;
+    estimate.samples = 1;
+    estimate.cell_updates = 1;
+    estimate.compute_nanoseconds = 1000;
+    estimate.memory_bytes = 64;
+    estimate.resident_bytes = 64;
+  }
+  RebalancePolicy policy;
+  policy.minimum_improvement_ppm = 0;
+  policy.amortization_steps = 100;
+  policy.migration_bandwidth_bytes_per_second = 1'000'000'000'000LL;
+  policy.per_patch_migration_latency_nanoseconds = 0;
+  const DistributionMapping concentrated(std::vector<int>(static_cast<std::size_t>(box_count), 0));
+  const RebalanceDecision beneficial = authority.decide_rebalance(
+      1, boxes, concentrated, ranks, topology_epoch, materialization_generation, estimates, policy);
+  if (!beneficial.accepted || beneficial.reason != RebalanceReason::NetBenefit ||
+      beneficial.moved_patches <= 0 ||
+      beneficial.proposed_mapping.ranks() == concentrated.ranks() ||
+      beneficial.exact_contract != detail::exact_rebalance_decision(beneficial))
+    ++failures;
+
+  const RebalanceDecision unchanged =
+      authority.decide_rebalance(1, boxes, beneficial.proposed_mapping, ranks, topology_epoch,
+                                 materialization_generation, estimates, policy);
+  if (unchanged.accepted || unchanged.reason != RebalanceReason::MappingUnchanged ||
+      unchanged.moved_patches != 0 ||
+      unchanged.exact_contract != detail::exact_rebalance_decision(unchanged))
+    ++failures;
+
   if (ranks > 1) {
     auto divergent_weights = weights;
     if (rank == 1)
