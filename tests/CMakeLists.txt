@@ -454,6 +454,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_prepared_boundary_plan
   test_prepared_stream_executor
   test_geometry
+  test_nd_metric_provider
   test_refinement
   test_ref_ratio
   test_amr_hierarchy

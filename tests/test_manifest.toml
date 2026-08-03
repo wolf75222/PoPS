@@ -820,6 +820,11 @@ sources = ["tests/cpp/unit/mesh/test_geometry.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_metric_provider"
+sources = ["tests/cpp/unit/mesh/test_nd_metric_provider.cpp"]
+labels = ["unit", "mesh", "geometry", "fast"]
+
+[[cpp.suite]]
 name = "test_load_balance"
 sources = ["tests/cpp/unit/mesh/test_load_balance.cpp"]
 labels = ["unit", "mesh", "fast"]
