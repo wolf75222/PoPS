@@ -62,6 +62,7 @@ def test_amr_codegen_selects_only_the_prepared_cell_local_driver() -> None:
 
     source = emit_cpp_program(program, model=model, target="amr_system")
 
+    assert "ctx.configure_primary_clock(" in source
     assert "ctx.prepare_same_level_cell_temporal_execution(" in source
     assert program.clock.qualified_id in source
     assert "ctx_owner->advance_same_level_cell_temporal(dt);" in source
