@@ -338,9 +338,7 @@ def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any
         "    %sA(i, j, 10) = static_cast<pops::Real>("
         "pops::local_nonlinear_status_priority(solved_.status));" % status,
         "    if (!solved_.solved()) {",
-        "      %sA(i, j, 8) = pops::detail::encode_ranked_local_nonlinear_failure("
-        "pops::local_nonlinear_status_priority(solved_.status), "
-        "i, j, solved_.failing_component);" % status,
+        "      %sA(i, j, 8) = static_cast<pops::Real>(solved_.failing_component);" % status,
         "      %sA(i, j, 9) = pops::Real(1);" % status,
         "    } else {",
         "      %sA(i, j, 8) = pops::Real(0);" % status,
@@ -628,10 +626,7 @@ def _emit_solve_local_nonlinear_kernel(
         "    solve_statusA(i, j, 10) = static_cast<pops::Real>("
         "pops::local_nonlinear_status_priority(solved_.status));",
         "    if (!solved_.solved()) {",
-        "      solve_statusA(i, j, 8) = "
-        "pops::detail::encode_ranked_local_nonlinear_failure("
-        "pops::local_nonlinear_status_priority(solved_.status), "
-        "i, j, solved_.failing_component);",
+        "      solve_statusA(i, j, 8) = static_cast<pops::Real>(solved_.failing_component);",
         "      solve_statusA(i, j, 9) = pops::Real(1);",
         "    } else {",
         "      solve_statusA(i, j, 8) = pops::Real(0);",

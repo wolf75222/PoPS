@@ -15,6 +15,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/nonlinear/local_nonlinear_collective.hpp>
 #include <pops/numerics/nonlinear/prepared_local_nonlinear.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
@@ -363,7 +364,7 @@ struct PreparedImplicitSourceKernel {
     statistics(i, j, 6) = solved.condition_evidence;
     statistics(i, j, 7) = static_cast<Real>(solved.safeguard_steps);
     if (!solved.solved()) {
-      statistics(i, j, 8) = encode_local_nonlinear_failure(i, j, solved.failing_component);
+      statistics(i, j, 8) = static_cast<Real>(solved.failing_component);
       statistics(i, j, 9) = Real(1);
       statistics(i, j, 10) = static_cast<Real>((solved.reason_code >> 16) & 0xffffu);
       statistics(i, j, 11) = static_cast<Real>(solved.reason_code & 0xffffu);
@@ -391,23 +392,13 @@ struct LocalStatSum {
   POPS_HD void operator()(int i, int j, Real& result) const { result += values(i, j, component); }
 };
 
-struct LocalStatMaxForStatus {
-  ConstArray4 values;
-  int status = 0;
-  int component = 0;
-  POPS_HD void operator()(int i, int j, Real& result) const {
-    if (static_cast<int>(values(i, j, 0)) == status)
-      if (const Real value = values(i, j, component); value > result)
-        result = value;
-  }
-};
-
 struct LocalStatReasonHighForLocation {
   ConstArray4 values;
   int status = 0;
-  Real location = Real(0);
+  int selected_i = 0;
+  int selected_j = 0;
   POPS_HD void operator()(int i, int j, Real& result) const {
-    if (static_cast<int>(values(i, j, 0)) == status && values(i, j, 8) == location)
+    if (i == selected_i && j == selected_j && static_cast<int>(values(i, j, 0)) == status)
       if (const Real value = values(i, j, 10); value > result)
         result = value;
   }
@@ -416,10 +407,11 @@ struct LocalStatReasonHighForLocation {
 struct LocalStatReasonLowForLocation {
   ConstArray4 values;
   int status = 0;
-  Real location = Real(0);
+  int selected_i = 0;
+  int selected_j = 0;
   int reason_high = 0;
   POPS_HD void operator()(int i, int j, Real& result) const {
-    if (static_cast<int>(values(i, j, 0)) == status && values(i, j, 8) == location &&
+    if (i == selected_i && j == selected_j && static_cast<int>(values(i, j, 0)) == status &&
         static_cast<int>(values(i, j, 10)) == reason_high)
       if (const Real value = values(i, j, 11); value > result)
         result = value;
@@ -445,35 +437,27 @@ inline double collective_sum_component(const MultiFab& statistics, int component
   return all_reduce_sum(static_cast<double>(local));
 }
 
-inline Real collective_max_for_status(const MultiFab& statistics, int status, int component) {
+inline Real collective_reason_high(const MultiFab& statistics, int status, int selected_i,
+                                   int selected_j) {
   Real local = Real(0);
   for (int local_index = 0; local_index < statistics.local_size(); ++local_index) {
     const ConstArray4 values = statistics.fab(local_index).const_array();
     local = std::max(local, reduce_max_cell(statistics.box(local_index),
-                                            LocalStatMaxForStatus{values, status, component}));
+                                            LocalStatReasonHighForLocation{
+                                                values, status, selected_i, selected_j}));
   }
   return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
 }
 
-inline Real collective_reason_high(const MultiFab& statistics, int status, Real location) {
+inline Real collective_reason_low(const MultiFab& statistics, int status, int selected_i,
+                                  int selected_j, int reason_high) {
   Real local = Real(0);
   for (int local_index = 0; local_index < statistics.local_size(); ++local_index) {
     const ConstArray4 values = statistics.fab(local_index).const_array();
     local =
         std::max(local, reduce_max_cell(statistics.box(local_index),
-                                        LocalStatReasonHighForLocation{values, status, location}));
-  }
-  return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
-}
-
-inline Real collective_reason_low(const MultiFab& statistics, int status, Real location,
-                                  int reason_high) {
-  Real local = Real(0);
-  for (int local_index = 0; local_index < statistics.local_size(); ++local_index) {
-    const ConstArray4 values = statistics.fab(local_index).const_array();
-    local = std::max(local, reduce_max_cell(statistics.box(local_index),
-                                            LocalStatReasonLowForLocation{values, status, location,
-                                                                          reason_high}));
+                                        LocalStatReasonLowForLocation{values, status, selected_i,
+                                                                      selected_j, reason_high}));
   }
   return static_cast<Real>(all_reduce_max(static_cast<double>(local)));
 }
@@ -599,12 +583,17 @@ template <class Model>
   int failed_component = -1;
   std::uint32_t reason_code = 0;
   if (failed_cells > 0) {
-    const Real encoded = detail::collective_max_for_status(statistics, status_code, 8);
-    detail::decode_local_nonlinear_failure(encoded, failed_i, failed_j, failed_component);
-    const int reason_high =
-        static_cast<int>(detail::collective_reason_high(statistics, status_code, encoded));
+    const LocalNonlinearFailureLocation location =
+        collective_first_local_nonlinear_failure(statistics, status_priority, 12, 8);
+    if (!location.found || location.priority != status_priority)
+      throw std::runtime_error("implicit source collective status/location precedence mismatch");
+    failed_i = location.i;
+    failed_j = location.j;
+    failed_component = location.component;
+    const int reason_high = static_cast<int>(
+        detail::collective_reason_high(statistics, status_code, failed_i, failed_j));
     const int reason_low = static_cast<int>(
-        detail::collective_reason_low(statistics, status_code, encoded, reason_high));
+        detail::collective_reason_low(statistics, status_code, failed_i, failed_j, reason_high));
     reason_code =
         (static_cast<std::uint32_t>(reason_high) << 16) | static_cast<std::uint32_t>(reason_low);
   }

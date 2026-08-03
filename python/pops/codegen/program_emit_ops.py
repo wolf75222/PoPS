@@ -169,25 +169,24 @@ def _append_local_nonlinear_report(
             lines.append("const int %s = static_cast<int>(%s);" % (token, expression))
         else:
             lines.append("const pops::Real %s = %s;" % (token, expression))
-    encoded = "%s_failure_location" % report
+    location = "%s_failure_location" % report
     failed_count = "%s_failed_count" % report
     failed_i = "%s_failed_i" % report
     failed_j = "%s_failed_j" % report
     failed_component = "%s_failed_component" % report
-    encoded_priority = "%s_encoded_priority" % report
     lines += [
-        "const pops::Real %s = pops::reduce_max(%s, 8);" % (encoded, status),
         "const pops::Real %s = pops::reduce_sum(%s, 9);" % (failed_count, status),
-        "int %s = 0;" % encoded_priority,
-        "int %s = -1;" % failed_i,
-        "int %s = -1;" % failed_j,
-        "int %s = -1;" % failed_component,
+        "pops::LocalNonlinearFailureLocation %s;" % location,
         "if (%s > pops::Real(0))" % failed_count,
-        "  pops::detail::decode_ranked_local_nonlinear_failure("
-        "%s, %s, %s, %s, %s);" % (encoded, encoded_priority, failed_i, failed_j, failed_component),
-        "if (%s > pops::Real(0) && %s != %s)" % (failed_count, encoded_priority, priority),
+        "  %s = pops::collective_first_local_nonlinear_failure(%s, %s, 10, 8);"
+        % (location, status, priority),
+        "if (%s > pops::Real(0) && (!%s.found || %s.priority != %s))"
+        % (failed_count, location, location, priority),
         "  throw std::runtime_error("
         '"local nonlinear collective status/location precedence mismatch");',
+        "const int %s = %s.i;" % (failed_i, location),
+        "const int %s = %s.j;" % (failed_j, location),
+        "const int %s = %s.component;" % (failed_component, location),
     ]
     lines.append(
         "pops::SolveReport %s = pops::local_nonlinear_solve_report("
