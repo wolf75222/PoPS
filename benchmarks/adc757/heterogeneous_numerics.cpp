@@ -44,6 +44,12 @@
 #ifndef POPS_ADC757_BUILD_ID
 #define POPS_ADC757_BUILD_ID "unknown"
 #endif
+#ifndef POPS_ADC757_WHEEL_SHA256
+#define POPS_ADC757_WHEEL_SHA256 ""
+#endif
+#ifndef POPS_ADC757_MODULE_ABI_SHA256
+#define POPS_ADC757_MODULE_ABI_SHA256 ""
+#endif
 
 namespace {
 
@@ -62,6 +68,7 @@ struct Config {
   std::int64_t extent = 32768;
   int inner_iterations = 96;
   int migration_values_per_task = 4096;
+  std::string runtime_evidence_sha256;
 };
 
 struct Metrics {
@@ -117,6 +124,15 @@ int parse_positive_int(const char* text, const char* option) {
   return static_cast<int>(value);
 }
 
+std::string parse_sha256(const char* text, const char* option) {
+  const std::string value(text);
+  if (value.size() != 64 || std::any_of(value.begin(), value.end(), [](char character) {
+        return !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'));
+      }))
+    throw std::invalid_argument(std::string(option) + " requires one lowercase sha256 digest");
+  return value;
+}
+
 Config parse_config(int argc, char** argv) {
   Config config;
   bool have_scenario = false;
@@ -149,12 +165,14 @@ Config parse_config(int argc, char** argv) {
       config.inner_iterations = parse_positive_int(raw, "--inner-iterations");
     } else if (const char* raw = value("--migration-values-per-task=")) {
       config.migration_values_per_task = parse_positive_int(raw, "--migration-values-per-task");
+    } else if (const char* raw = value("--runtime-evidence-sha256=")) {
+      config.runtime_evidence_sha256 = parse_sha256(raw, "--runtime-evidence-sha256");
     } else {
       throw std::invalid_argument("unknown ADC-757 campaign option: " + argument);
     }
   }
-  if (!have_scenario || !have_route)
-    throw std::invalid_argument("--scenario and --route are required");
+  if (!have_scenario || !have_route || config.runtime_evidence_sha256.empty())
+    throw std::invalid_argument("--scenario, --route and --runtime-evidence-sha256 are required");
   if (config.extent < 4096)
     throw std::invalid_argument("--extent must be at least 4096 cells");
   if (config.inner_iterations > 1'000'000)
@@ -652,6 +670,8 @@ void write_correctness(std::ostream& output, const Correctness& correctness) {
 }
 
 int run(const Config& config) {
+  static_cast<void>(parse_sha256(POPS_ADC757_WHEEL_SHA256, "installed wheel identity"));
+  static_cast<void>(parse_sha256(POPS_ADC757_MODULE_ABI_SHA256, "installed module ABI identity"));
   if (pops::n_ranks() < 2)
     throw std::runtime_error("ADC-757 heterogeneous evidence requires at least two MPI ranks");
   if (!Executor::backend_can_partition_authentic_streams())
@@ -739,6 +759,9 @@ int run(const Config& config) {
            << json_escape(POPS_ADC757_REVISION) << "\",\"build_identity\":\""
            << json_escape(std::string(POPS_ADC757_BUILD_ID) + "-" +
                           Kokkos::DefaultExecutionSpace::name())
+           << "\",\"installed_wheel_sha256\":\"" << POPS_ADC757_WHEEL_SHA256
+           << "\",\"module_abi_sha256\":\"" << POPS_ADC757_MODULE_ABI_SHA256
+           << "\",\"runtime_evidence_sha256\":\"" << config.runtime_evidence_sha256
            << "\",\"execution_space\":\"" << Kokkos::DefaultExecutionSpace::name()
            << "\",\"mpi_ranks\":" << pops::n_ranks() << ",\"scenario\":\""
            << scenario_name(config.scenario) << "\",\"route\":\"" << route_name(config.route)
