@@ -69,6 +69,7 @@ class CompiledPlanRecord:
     backend: str
     layout: Any
     layout_plan: Any
+    native_layouts: Mapping[str, Any]
     layout_targets: Mapping[str, str]
     bind_schema: Any
     compile_values: Mapping[Any, Any]
@@ -87,6 +88,7 @@ class CompiledPlanRecord:
     bootstrap_plan: Any = None
     amr_execution: Any = None
     amr_providers: Mapping[str, Any] = field(default_factory=dict)
+    resolved_dimension: int = field(init=False)
     contract_identity: Identity = field(init=False)
 
     @classmethod
@@ -101,6 +103,7 @@ class CompiledPlanRecord:
             backend=plan.backend,
             layout=plan.layout,
             layout_plan=plan.layout_plan,
+            native_layouts=plan.native_layouts,
             layout_targets=plan.layout_targets,
             bind_schema=plan.bind_schema,
             compile_values=plan.compile_values,
@@ -142,6 +145,22 @@ class CompiledPlanRecord:
         from pops.codegen.lowering_coverage import LoweringCoverageReport
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("CompiledPlanRecord.layout_plan must be an exact LayoutPlan")
+        from pops.codegen._native_spatial_layout import (
+            native_spatial_layouts,
+            resolved_dimension,
+        )
+
+        expected_native_layouts = native_spatial_layouts(self.layout_plan)
+        if not isinstance(self.native_layouts, Mapping) \
+                or tuple(self.native_layouts) != tuple(expected_native_layouts):
+            raise ValueError("CompiledPlanRecord has invalid native layout specializations")
+        for layout_id, expected in expected_native_layouts.items():
+            actual = self.native_layouts[layout_id]
+            if type(actual) is not type(expected) or actual.to_data() != expected.to_data():
+                raise ValueError(
+                    "CompiledPlanRecord native layout specializations differ from LayoutPlan")
+        object.__setattr__(self, "native_layouts", _deep_freeze(self.native_layouts))
+        object.__setattr__(self, "resolved_dimension", resolved_dimension(self.native_layouts))
         targets = dict(self.layout_targets)
         expected_targets = tuple(row.handle.qualified_id for row in self.layout_plan.layouts)
         if tuple(targets) != expected_targets or any(
@@ -232,6 +251,9 @@ class CompiledPlanRecord:
             "layout": _evidence(self.layout, where="compiled plan layout"),
             "layout_plan": _evidence(
                 self.layout_plan, where="compiled plan layout plan"),
+            "native_layouts": _evidence(
+                self.native_layouts, where="compiled plan native layouts"),
+            "resolved_dimension": self.resolved_dimension,
             "layout_targets": _evidence(
                 self.layout_targets, where="compiled plan layout targets"),
             "bind_schema": _evidence(self.bind_schema, where="compiled plan bind schema"),
@@ -606,6 +628,14 @@ class CompiledSimulationArtifact:
     @property
     def layout_plan(self) -> Any:
         return self.plan.layout_plan
+
+    @property
+    def native_layouts(self) -> Mapping[str, Any]:
+        return self.plan.native_layouts
+
+    @property
+    def resolved_dimension(self) -> int:
+        return self.plan.resolved_dimension
 
     @property
     def so_path(self) -> str:

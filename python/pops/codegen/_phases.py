@@ -96,6 +96,9 @@ def resolve(
                          "qualified mapping lowering" % present),
             )
     resolved_layouts = layout_authority.require_runtime()
+    from pops.codegen._layout_resolution import resolve_native_spatial_layouts
+
+    native_layouts = resolve_native_spatial_layouts(layout_plan)
     validate_layout_mapping_components(layout_plan, components)
     if len(layout_plan.layouts) > 1 and tuple(problem.layout_subjects().fields):
         _refuse_runtime(
@@ -313,6 +316,7 @@ def resolve(
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
+        native_layouts=native_layouts,
         layout_targets={
             row.handle.qualified_id: ("amr_system" if row.adaptive else "system")
             for row in layout_plan.layouts
