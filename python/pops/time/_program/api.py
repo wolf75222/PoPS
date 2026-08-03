@@ -122,6 +122,9 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # The default executes once per accepted macro-step. A non-default cadence is an authored,
         # immutable part of the Program identity and is installed before the runtime freezes.
         self._cadence = None
+        # Optional bounded AMR cell-local execution authority.  It is explicit, immutable after
+        # authoring and serialized into the Program hash; codegen never infers this route from dt.
+        self._cell_local_time = None
         self._transaction_stores = ALL_PROVISIONAL_STORES
         self._acceptance_guards = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
@@ -243,6 +246,31 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         if type(cadence) is not ProgramCadence:
             raise TypeError("Program carries an invalid cadence contract")
         return cadence
+
+    def cell_local_time(self, *, tick_denominator: Any, rung: Any = 0) -> Any:
+        """Select the prepared cell-local AMR execution route.
+
+        The current production provider is deliberately bounded to one host rank, one 2D block,
+        one level, one owned box and one common rung.  Unsupported layouts fail during AMR install;
+        this method records only the exact integer time authority and never changes the Program IR.
+        """
+        self._guard_mutable("set cell-local time contract")
+        if self._cell_local_time is not None:
+            raise ValueError("Program.cell_local_time may be declared only once")
+        from pops.time._program.cell_local_time import CellLocalTimeContract
+
+        self._cell_local_time = CellLocalTimeContract(
+            tick_denominator=tick_denominator, rung=rung)
+        return self
+
+    def cell_local_time_contract(self) -> Any:
+        """Return the authored cell-local contract, or ``None`` for global execution."""
+        contract = self._cell_local_time
+        if contract is None:
+            return None
+        from pops.time._program.cell_local_time import require_cell_local_time_contract
+
+        return require_cell_local_time_contract(contract)
 
     def _register_acceptance_guard(self, guard: AcceptanceGuard) -> None:
         self._guard_mutable("register acceptance guard %r" % guard.name)
