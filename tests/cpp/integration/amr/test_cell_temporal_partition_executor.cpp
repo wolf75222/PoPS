@@ -341,7 +341,7 @@ TEST(test_cell_temporal_partition_executor,
   device_fence();
 
   PreparedSameLevelTransportEulerStageFluxProvider provider(
-      *runtime, partition, ledger, seconds_per_tick, "test.clock.cell-local");
+      *runtime, partition, ledger, "test.clock.cell-local");
   PreparedBatchedCellTemporalExecutor executor{partition, std::move(provider)};
   EXPECT_NE(executor.exact_contract().find("pops.amr.compiled-transport-flux"),
             std::string::npos);
@@ -395,8 +395,8 @@ TEST(test_cell_temporal_partition_executor,
   const CellTemporalPartitionAcceptedState partition =
       prepare_same_level_transport_euler_partition(*runtime, 0, 100, 0);
   auto ledger = make_scientific_flux_ledger(*runtime, partition);
-  PreparedSameLevelTransportEulerStageFluxProvider provider(
-      *runtime, partition, ledger, Real(0.01), "test.clock.cell-local");
+  PreparedSameLevelTransportEulerStageFluxProvider provider(*runtime, partition, ledger,
+                                                            "test.clock.cell-local");
   PreparedBatchedCellTemporalExecutor executor{partition, std::move(provider)};
   executor.begin_attempt(1);
   executor.advance_to_barrier();
@@ -413,7 +413,7 @@ TEST(test_cell_temporal_partition_executor,
 
   auto stale_ledger = make_scientific_flux_ledger(*runtime, partition);
   PreparedSameLevelTransportEulerStageFluxProvider stale_provider(
-      *runtime, partition, stale_ledger, Real(0.01), "test.clock.cell-local");
+      *runtime, partition, stale_ledger, "test.clock.cell-local");
   PreparedBatchedCellTemporalExecutor stale_executor{partition, std::move(stale_provider)};
   runtime->restore_checkpoint_counters(runtime->regrid_count(), runtime->topology_epoch() + 1);
   EXPECT_THROW(stale_executor.begin_attempt(1), std::runtime_error);

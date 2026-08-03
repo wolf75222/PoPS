@@ -244,11 +244,9 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
 
   PreparedSameLevelTransportEulerStageFluxProvider(
       AmrRuntime& runtime, const CellTemporalPartitionAcceptedState& partition,
-      std::shared_ptr<SameLevelCellIntegratedFluxLedger> ledger, Real seconds_per_tick,
-      std::string clock_identity)
+      std::shared_ptr<SameLevelCellIntegratedFluxLedger> ledger, std::string clock_identity)
       : runtime_(&runtime),
         ledger_(std::move(ledger)),
-        seconds_per_tick_(seconds_per_tick),
         clock_identity_(std::move(clock_identity)),
         topology_epoch_(runtime.topology_epoch()),
         materialization_generation_(runtime.topology_materialization_generation()) {
@@ -399,10 +397,9 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
         runtime_->n_blocks() != 1 || runtime_->nlev() != 1 || n_ranks() != 1)
       throw std::invalid_argument(
           "same-level transport provider requires its exact serial one-block/one-level partition");
-    if (!(seconds_per_tick_ > Real(0)) || !std::isfinite(seconds_per_tick_) ||
-        clock_identity_.empty())
+    if (clock_identity_.empty())
       throw std::invalid_argument(
-          "same-level transport provider requires a finite positive tick and clock identity");
+          "same-level transport provider requires a non-empty clock identity");
     live_ = &runtime_->level_state(0, 0);
     if (live_->box_array().size() != 1 || live_->local_size() != 1 || live_->dmap()[0] != 0)
       throw std::invalid_argument("same-level transport provider requires one serial-owned box");
@@ -435,6 +432,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
 
     synchronization_tick_ = partition.synchronization_tick;
     tick_denominator_ = partition.tick_denominator;
+    seconds_per_tick_ = Real(1) / static_cast<Real>(tick_denominator_);
     state_a_ = MultiFab(live_->box_array(), live_->dmap(), live_->ncomp(), live_->n_grow());
     state_b_ = MultiFab(live_->box_array(), live_->dmap(), live_->ncomp(), live_->n_grow());
     residual_ = MultiFab(live_->box_array(), live_->dmap(), live_->ncomp(), 0);
