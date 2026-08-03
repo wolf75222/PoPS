@@ -97,6 +97,10 @@ TEST(test_temporal_partition_restart, malformed_state_and_batches_fail_before_mu
   EXPECT_EQ(partition.checkpoint(), accepted);
 
   EXPECT_THROW(partition.require_global_execution_route(), std::logic_error);
+  EXPECT_THROW(partition.require_prepared_execution_route("test.temporal-partition.other@1"),
+               std::logic_error);
+  EXPECT_NO_THROW(
+      partition.require_prepared_execution_route("test.temporal-partition.batched-cells@1"));
   EXPECT_NO_THROW(BatchedCellTemporalPartition().require_global_execution_route());
 }
 
@@ -159,8 +163,13 @@ TEST(test_temporal_partition_restart,
   const double time_before = system.time();
   const int step_before = system.macro_step();
   const std::vector<std::uint8_t> bytes_before = system.program_accepted_state();
-  EXPECT_THROW(system.step(0.01), std::logic_error)
-      << "an authenticated cell-local schedule cannot degrade to the global AMR driver";
+  try {
+    system.step(0.01);
+    FAIL() << "an authenticated cell-local schedule degraded to the global AMR driver";
+  } catch (const std::logic_error& error) {
+    EXPECT_NE(std::string(error.what()).find("local-stage and time-integrated flux-ledger"),
+              std::string::npos);
+  }
   EXPECT_DOUBLE_EQ(system.time(), time_before);
   EXPECT_EQ(system.macro_step(), step_before);
   EXPECT_EQ(system.program_accepted_state(), bytes_before);

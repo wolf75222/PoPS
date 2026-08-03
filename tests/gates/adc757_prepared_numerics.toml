@@ -305,8 +305,8 @@ test_regex = "^PreparedVariableRecovery\\.rejected_report_names_last_method_with
 [[check]]
 requirement = "cell_local_temporal_partition_authority"
 polarity = "positive"
-target = "test_temporal_partition_restart"
-test_regex = "^test_temporal_partition_restart\\.batched_attempt_commit_and_rollback_are_exact$"
+target = "test_cell_temporal_partition_executor"
+test_regex = "^test_cell_temporal_partition_executor\\.executes_bounded_rung_batches_and_commits_exact_local_clocks$"
 
 [[check]]
 requirement = "cell_local_temporal_partition_authority"
