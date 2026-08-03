@@ -43,9 +43,8 @@ enum class SameLevelCellFace : std::uint8_t { XLow = 0, XHigh = 1, YLow = 2, YHi
 class SameLevelCellIntegratedFluxLedger {
  public:
   SameLevelCellIntegratedFluxLedger(std::uint64_t topology_epoch,
-                                    std::uint64_t materialization_generation,
-                                    std::size_t block, int level, std::size_t cell_count,
-                                    int component_count)
+                                    std::uint64_t materialization_generation, std::size_t block,
+                                    int level, std::size_t cell_count, int component_count)
       : topology_epoch_(topology_epoch),
         materialization_generation_(materialization_generation),
         block_(block),
@@ -79,9 +78,8 @@ class SameLevelCellIntegratedFluxLedger {
     return accepted_.at(storage_offset(cell, face, component, component_count_));
   }
 
-  [[nodiscard]] POPS_HD static std::size_t storage_offset(std::size_t cell,
-                                                          SameLevelCellFace face, int component,
-                                                          int components) noexcept {
+  [[nodiscard]] POPS_HD static std::size_t storage_offset(std::size_t cell, SameLevelCellFace face,
+                                                          int component, int components) noexcept {
     return (cell * std::size_t{4} + static_cast<std::size_t>(face)) *
                static_cast<std::size_t>(components) +
            static_cast<std::size_t>(component);
@@ -197,8 +195,7 @@ struct SameLevelTransportEulerDeviceView {
   evaluate_local_stage_and_record_space_time_flux(CellTemporalStagePoint point) const noexcept {
     if (point.level != 0 || point.rung != expected_rung || point.record_index >= cell_count ||
         point.cell != static_cast<std::uint64_t>(point.record_index) || nx <= 0 ||
-        component_count <= 0 || integrated_flux == nullptr ||
-        point.end_tick <= point.begin_tick)
+        component_count <= 0 || integrated_flux == nullptr || point.end_tick <= point.begin_tick)
       return CellTemporalStageOutcome::failed(0x756001u);
     const std::size_t linear = point.record_index;
     const int i = ilo + static_cast<int>(linear % static_cast<std::size_t>(nx));
@@ -376,8 +373,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
  private:
   static constexpr bool host_execution_() noexcept {
 #if defined(POPS_HAS_KOKKOS)
-    return std::is_same_v<typename Kokkos::DefaultExecutionSpace::memory_space,
-                          Kokkos::HostSpace>;
+    return std::is_same_v<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>;
 #else
     return true;
 #endif
@@ -473,12 +469,13 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
         .scalar(geometry.yhi)
         .scalar(periodicity.x)
         .scalar(periodicity.y)
-        .sequence(live_->box_array().boxes(), [](ExactContractBuilder& item, const Box2D& box) {
-          item.scalar(static_cast<std::int32_t>(box.lo[0]))
-              .scalar(static_cast<std::int32_t>(box.lo[1]))
-              .scalar(static_cast<std::int32_t>(box.hi[0]))
-              .scalar(static_cast<std::int32_t>(box.hi[1]));
-        })
+        .sequence(live_->box_array().boxes(),
+                  [](ExactContractBuilder& item, const Box2D& box) {
+                    item.scalar(static_cast<std::int32_t>(box.lo[0]))
+                        .scalar(static_cast<std::int32_t>(box.lo[1]))
+                        .scalar(static_cast<std::int32_t>(box.hi[0]))
+                        .scalar(static_cast<std::int32_t>(box.hi[1]));
+                  })
         .sequence(live_->dmap().ranks());
     exact_parameters_ = std::move(parameters).release();
   }

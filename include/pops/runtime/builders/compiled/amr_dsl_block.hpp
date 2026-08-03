@@ -62,8 +62,9 @@ namespace detail {
 template <class Model>
 concept ExactAmrTransportModelProvider =
     requires(const Model& model, ExactContractBuilder& contract) {
-      { Model::transport_model_provider_identity() } noexcept
-      -> std::same_as<PreparedProviderIdentity>;
+      {
+        Model::transport_model_provider_identity()
+      } noexcept -> std::same_as<PreparedProviderIdentity>;
       { model.serialize_exact_transport_parameters(contract) } -> std::same_as<void>;
     };
 
@@ -125,8 +126,7 @@ void prepare_amr_transport_flux_contract(const Model& model, bool reconstruct_pr
         .scalar(weno_epsilon)
         .scalar(wave_speed_cache)
         .scalar(static_cast<std::int32_t>(Model::n_vars));
-    block.transport_flux_provider_identity =
-        "pops.amr.compiled-transport-flux@1";
+    block.transport_flux_provider_identity = "pops.amr.compiled-transport-flux@1";
     block.transport_flux_parameter_contract = std::move(contract).release();
   }
 }

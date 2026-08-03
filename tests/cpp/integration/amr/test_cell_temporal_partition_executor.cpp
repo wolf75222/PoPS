@@ -206,8 +206,8 @@ std::unique_ptr<AmrRuntime> make_linear_transport_runtime() {
       LinearTransportModel{}, layout, "tracer", initial, true, 1.4, 1, false));
   blocks.back().state_identity = "test://cell-temporal/tracer/U";
   return std::make_unique<AmrRuntime>(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
-                                      std::move(blocks), layout.base_per,
-                                      layout.replicated_coarse, layout.wall);
+                                      std::move(blocks), layout.base_per, layout.replicated_coarse,
+                                      layout.wall);
 }
 
 std::shared_ptr<SameLevelCellIntegratedFluxLedger> make_scientific_flux_ledger(
@@ -340,11 +340,10 @@ TEST(test_cell_temporal_partition_executor,
   lincomb(expected, Real(1), expected, seconds_per_tick, residual);
   device_fence();
 
-  PreparedSameLevelTransportEulerStageFluxProvider provider(
-      *runtime, partition, ledger, "test.clock.cell-local");
+  PreparedSameLevelTransportEulerStageFluxProvider provider(*runtime, partition, ledger,
+                                                            "test.clock.cell-local");
   PreparedBatchedCellTemporalExecutor executor{partition, std::move(provider)};
-  EXPECT_NE(executor.exact_contract().find("pops.amr.compiled-transport-flux"),
-            std::string::npos);
+  EXPECT_NE(executor.exact_contract().find("pops.amr.compiled-transport-flux"), std::string::npos);
   const std::string initial_contract = executor.exact_contract();
   executor.begin_attempt(1);
   executor.advance_to_barrier();
@@ -412,8 +411,8 @@ TEST(test_cell_temporal_partition_executor,
                std::invalid_argument);
 
   auto stale_ledger = make_scientific_flux_ledger(*runtime, partition);
-  PreparedSameLevelTransportEulerStageFluxProvider stale_provider(
-      *runtime, partition, stale_ledger, "test.clock.cell-local");
+  PreparedSameLevelTransportEulerStageFluxProvider stale_provider(*runtime, partition, stale_ledger,
+                                                                  "test.clock.cell-local");
   PreparedBatchedCellTemporalExecutor stale_executor{partition, std::move(stale_provider)};
   runtime->restore_checkpoint_counters(runtime->regrid_count(), runtime->topology_epoch() + 1);
   EXPECT_THROW(stale_executor.begin_attempt(1), std::runtime_error);
