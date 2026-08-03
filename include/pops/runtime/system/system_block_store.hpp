@@ -9,6 +9,7 @@
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/context/grid_context.hpp>  // GeometryMode + point-qualified geometry residuals
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
+#include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 
 #include <functional>
 #include <map>
@@ -58,6 +59,7 @@ class SystemBlockStore {
   /// from set_block_conversion / native_loader stays a trivial move.
   using CellConvert = std::function<void(const double* in, double* out)>;
   using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
+  using CellBatchRecovery = UniformCellRecovery;
 
   /// Compiled spatial closures frozen at block add time (composite model + spatial scheme).
   /// Type-erased ONLY at the block list level; the kernel stays compiled.
@@ -202,6 +204,9 @@ class SystemBlockStore {
     /// Exact owner-qualified state Handle.  Installed from the compiled block plan rather than
     /// inferred from the optional physical-boundary authority.
     std::string state_identity;
+    /// Host/Uniform primitive materializer with per-cell generation-qualified warm starts. Kept at
+    /// the aggregate tail so native/legacy positional construction remains source-compatible.
+    CellBatchRecovery batch_cons_to_prim;
   };
 
   /// ORDERED registry of the blocks (UNIQUE source of truth). PUBLIC: Impl aliases it as `sp` for the

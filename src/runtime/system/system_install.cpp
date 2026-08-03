@@ -139,8 +139,9 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   std::function<Real(const MultiFab&)> max_speed;
   std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;
   std::function<Real(const MultiFab&)> src_freq, stab_dt;  // optional step bounds (model traits)
-  CellConvert prim_to_cons;   // pointwise model conversion (set_primitive_state)
-  CellRecovery cons_to_prim;  // fallible prepared recovery (get_primitive_state)
+  CellConvert prim_to_cons;              // pointwise model conversion (set_primitive_state)
+  CellRecovery cons_to_prim;             // fallible prepared recovery (get_primitive_state)
+  CellBatchRecovery batch_cons_to_prim;  // materialized host/Uniform primitive field
   VariableSet cons_vs, prim_vs;
   detail::BuiltBlock bb;
   if (P->polar_) {
@@ -254,6 +255,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   stab_dt = std::move(bb.stab_dt);
   prim_to_cons = std::move(bb.prim_to_cons);
   cons_to_prim = std::move(bb.cons_to_prim);
+  batch_cons_to_prim = std::move(bb.batch_cons_to_prim);
   // Common installation (same path as add_compiled_model for a DSL-generated model):
   // the closures run on the REAL System MultiFabs (MPI halos via fill_boundary, device
   // via Kokkos), without copy.
@@ -268,6 +270,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   block_options.primitive_vars = prim_vs.names;
   P->diagnostics_.block_options[name] = std::move(block_options);
   set_block_conversion(name, std::move(prim_to_cons), std::move(cons_to_prim));
+  set_block_batch_recovery(name, std::move(batch_cons_to_prim));
   set_block_dt_bounds(name, std::move(src_freq), std::move(stab_dt));
   // SCHEME GHOSTS: WENO5 reads a 5-point stencil (3 ghosts) > the 2 allocated by default in
   // install_block. We reallocate the block state with block_n_ghost(limiter) if needed (cf. AmrSystem which

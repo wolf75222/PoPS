@@ -41,6 +41,7 @@ struct BuiltBlock {
   std::function<Real(const MultiFab&)> src_freq, stab_dt;    // optional step bounds (model traits)
   std::function<void(const double*, double*)> prim_to_cons;  // System::CellConvert
   std::function<RecoveryReport(const double*, double*)> cons_to_prim;  // System::CellRecovery
+  UniformCellRecovery batch_cons_to_prim;  // generation-qualified host/Uniform materialization
   int aux_width =
       0;  // aux_comps<Model>() (Cartesian); unused on the polar path (no ensure_aux_width)
 };
@@ -91,6 +92,7 @@ BuiltBlock build_block_for_make(TR tr, const ModelSpec& model, const BlockBuildA
     auto conv = make_cell_convert(m);
     out.prim_to_cons = std::move(conv.first);
     out.cons_to_prim = std::move(conv.second);
+    out.batch_cons_to_prim = make_uniform_recovery_consumer(m);
   });
   return out;
 }

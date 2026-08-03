@@ -11,6 +11,7 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
+#include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/numerics/spatial_operator.hpp>
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb (cut-cell EB) + detail::DiscLevelSet (T5-PR2)
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>

@@ -36,6 +36,7 @@ BuiltBlock build_block_polar(const ModelSpec& model, const std::string& limiter,
     auto conv = make_cell_convert(m);
     out.prim_to_cons = std::move(conv.first);
     out.cons_to_prim = std::move(conv.second);
+    out.batch_cons_to_prim = make_uniform_recovery_consumer(m);
   });
   return out;
 }

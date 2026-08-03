@@ -20,6 +20,7 @@
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/output_piece.hpp>
+#include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <array>
@@ -654,11 +655,19 @@ class System {
   using CellConvert = std::function<void(const double* in, double* out)>;
   /// Fallible conservative -> primitive conversion. A failed report forbids writing @p out.
   using CellRecovery = std::function<RecoveryReport(const double* in, double* out)>;
+  using CellBatchRecovery = UniformCellRecovery;
   /// Installs the pointwise cons <-> prim conversions of a block (after install_block). Called by
   /// the header template add_compiled_model (compiled model); the native path add_block and the dynamic
   /// .so path set them directly. POPS_EXPORT: resolved by the native loader through dlopen.
   POPS_EXPORT void set_block_conversion(const std::string& name, CellConvert prim_to_cons,
                                         CellRecovery cons_to_prim);
+
+  /// Installs the generation-qualified host/Uniform batch consumer used by
+  /// get_primitive_state. The callback owns one warm-start slot per local cell and publishes the
+  /// materialized primitive array only after the complete batch succeeds. A missing callback keeps
+  /// the legacy pointwise path for old external components; AMR has a separate hierarchy runtime.
+  POPS_EXPORT void set_block_batch_recovery(const std::string& name,
+                                            CellBatchRecovery batch_cons_to_prim);
 
   /// Installs the optional STEP BOUNDS of a block (after install_block): reduction of the
   /// max source frequency (HasSourceFrequency trait, bound dt <= cfl*substeps/(stride*mu)) and of the

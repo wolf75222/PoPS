@@ -198,8 +198,23 @@ POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConve
     }
     boundary->second->prepare_trace_recovery(cons_to_prim);
   }
+  // A replacement pointwise authority must never inherit warm starts produced by the previous
+  // model/provider. The matching batch authority is installed explicitly immediately afterwards
+  // by current native and compiled builders; legacy external components stay on the pointwise path.
+  s.batch_cons_to_prim = {};
   s.prim_to_cons = std::move(prim_to_cons);
   s.cons_to_prim = std::move(cons_to_prim);
+}
+
+POPS_EXPORT void System::set_block_batch_recovery(const std::string& name,
+                                                  CellBatchRecovery batch_cons_to_prim) {
+  Impl::Species& state = p_->find(name);
+  if (!state.cons_to_prim)
+    throw std::runtime_error(
+        "System batch variable recovery requires the pointwise prepared recovery authority");
+  if (!batch_cons_to_prim)
+    throw std::invalid_argument("System batch variable recovery callback must not be empty");
+  state.batch_cons_to_prim = std::move(batch_cons_to_prim);
 }
 
 void System::set_primitive_state(const std::string& name, const std::vector<double>& prim) {
@@ -278,6 +293,25 @@ std::vector<double> System::get_primitive_state(const std::string& name) {
         "' does not expose a conservative -> primitive conversion (.so generated before "
         "this project ?) ; use get_state (direct conservative state)");
   const std::vector<double> cons = p_->copy_state(s.U, nc);  // get_state path (same marshaling)
+  if (s.batch_cons_to_prim) {
+    std::vector<double> prim;
+    const UniformRecoveryBatchReport batch = s.batch_cons_to_prim(cons, prim);
+    if (!batch.publication_permitted()) {
+      const RecoveryReport& recovery = batch.recovery;
+      throw std::runtime_error(
+          "System::get_primitive_state : variable recovery failed for block '" + name +
+          "' at local cell " + std::to_string(batch.failed_cell) + " (status=" +
+          recovery_status_name(recovery.status) + ", cause=" + recovery_cause_name(recovery.cause) +
+          ", failing_component=" + std::to_string(recovery.failing_component) +
+          ", attempted_methods=" + std::to_string(recovery.attempted_methods) +
+          ", last_method=" + recovery_method_kind_name(recovery.last_method_kind) +
+          ", last_method_index=" + std::to_string(recovery.last_method) + ")");
+    }
+    return prim;
+  }
+
+  // Compatibility path for externally built components that predate the generation-qualified
+  // Uniform batch seam. Current native and compiled blocks always install batch_cons_to_prim.
   std::vector<double> prim(cons.size());
   std::vector<double> cell_in(static_cast<std::size_t>(nc)), cell_out(static_cast<std::size_t>(nc));
   for (std::size_t k = 0; k < nn; ++k) {
