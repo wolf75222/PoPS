@@ -112,7 +112,7 @@ def _state_component_count(value: Any, *, where: str) -> int:
 
 def _validate_shared_interface_jacvec_pairs(
         program: Any, *, target: str, hierarchy: Any, neighbours: dict[str, set[str]],
-        interface_count: int, runtime_block_count: int, coherence: Any) -> set[int]:
+        interface_count: int, coherence: Any) -> set[int]:
     """Prove the deliberately narrow packed two-block implicit interface route.
 
     One matrix-free apply owns one packed Krylov vector.  Its two rhs_jacvec nodes consume
@@ -139,7 +139,10 @@ def _validate_shared_interface_jacvec_pairs(
         raise NotImplementedError(
             "shared NumericalFlux implicit JVP requires exactly one frozen two-level AMR "
             "hierarchy")
-    if (interface_count != 1 or runtime_block_count != 2 or len(participants) != 2 or
+    # Unrelated blocks may carry the packed Krylov RHS or other independently authored state.
+    # The native pair is qualified by its two exact endpoint block identities, so only the
+    # participating interface graph must remain the proved one-edge bijection.
+    if (interface_count != 1 or len(participants) != 2 or
             any(len(neighbours[name]) != 1 for name in participants)):
         raise NotImplementedError(
             "shared NumericalFlux implicit JVP supports exactly one two-block interface")
@@ -399,7 +402,7 @@ def validate_shared_interface_program(
     hierarchy = None if resolved_hierarchy is None else resolved_hierarchy.plan
     implicit_jacvec_ids = _validate_shared_interface_jacvec_pairs(
         program, target=target, hierarchy=hierarchy, neighbours=neighbours,
-        interface_count=len(declarations), runtime_block_count=len(blocks), coherence=coherence)
+        interface_count=len(declarations), coherence=coherence)
 
     participant_names = frozenset(neighbours)
     for value, path in _nested_control_values(program._values):
