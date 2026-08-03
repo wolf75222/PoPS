@@ -58,6 +58,14 @@ def _report() -> dict:
             "topology_identity": "two-level-amr-two-rank",
             "timestamp_utc": "2026-08-03T00:00:00Z",
         },
+        "protocol": {
+            "ordering": "ABBA",
+            "clock": "steady_clock",
+            "device_fence": "before_and_after",
+            "mpi_barrier": "before_and_after",
+            "rank_aggregation": "max",
+            "warmups": 2,
+        },
         "device": {
             "execution_space": "Cuda",
             "assignments": [
@@ -78,6 +86,9 @@ def _report() -> dict:
                 "candidate": _metrics(time=0.8, throughput=125.0, work=700, imbalance=1.3),
                 "correctness": _correctness(),
                 "minimum_speedup": 1.02,
+                "abba_time_to_solution_seconds": [
+                    [1.0, 0.8, 0.8, 1.0] for _ in range(5)
+                ],
             },
             {
                 "id": "cost_aware_load_balance",
@@ -92,9 +103,20 @@ def _report() -> dict:
                 ),
                 "correctness": _correctness(),
                 "minimum_speedup": 1.02,
+                "abba_time_to_solution_seconds": [
+                    [1.0, 0.75, 0.75, 1.0] for _ in range(5)
+                ],
             },
         ],
     }
+
+
+def _make_local_time_slow(report: dict) -> None:
+    scenario = report["scenarios"][0]
+    scenario["candidate"]["time_to_solution_seconds"] = 1.1
+    scenario["abba_time_to_solution_seconds"] = [
+        [1.0, 1.1, 1.1, 1.0] for _ in range(5)
+    ]
 
 
 def test_adc757_hardware_report_accepts_complete_device_evidence() -> None:
@@ -133,12 +155,7 @@ def test_adc757_campaign_manifest_requires_the_complete_hardware_contract() -> N
             ),
             "alias",
         ),
-        (
-            lambda report: report["scenarios"][0]["candidate"].update(
-                time_to_solution_seconds=1.1
-            ),
-            "speedup",
-        ),
+        (_make_local_time_slow, "speedup"),
         (
             lambda report: report["scenarios"][1]["candidate"].update(
                 imbalance_ratio=2.0

@@ -12,6 +12,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import statistics
 import sys
 from typing import Any
 
@@ -153,7 +154,14 @@ def _validate_scenario(raw: Any, expected_id: str) -> None:
     scenario = _mapping(raw, f"scenario[{expected_id}]")
     _exact_keys(
         scenario,
-        {"id", "baseline", "candidate", "correctness", "minimum_speedup"},
+        {
+            "id",
+            "baseline",
+            "candidate",
+            "correctness",
+            "minimum_speedup",
+            "abba_time_to_solution_seconds",
+        },
         f"scenario[{expected_id}]",
     )
     if scenario["id"] != expected_id:
@@ -166,7 +174,33 @@ def _validate_scenario(raw: Any, expected_id: str) -> None:
     minimum_speedup = _positive(scenario["minimum_speedup"], f"{expected_id}.minimum_speedup")
     if minimum_speedup < 1.0:
         raise EvidenceError(f"{expected_id}.minimum_speedup must require a net benefit")
-    speedup = baseline["time_to_solution_seconds"] / candidate["time_to_solution_seconds"]
+    blocks = scenario["abba_time_to_solution_seconds"]
+    if not isinstance(blocks, list) or len(blocks) < 5:
+        raise EvidenceError(f"{expected_id} requires at least five measured ABBA blocks")
+    ratios: list[float] = []
+    baseline_samples: list[float] = []
+    candidate_samples: list[float] = []
+    for index, raw_block in enumerate(blocks):
+        if not isinstance(raw_block, list) or len(raw_block) != 4:
+            raise EvidenceError(f"{expected_id} ABBA block {index} must contain A,B,B,A")
+        a1, b1, b2, a2 = (
+            _positive(value, f"{expected_id}.abba[{index}][{column}]")
+            for column, value in enumerate(raw_block)
+        )
+        baseline_samples.extend((a1, a2))
+        candidate_samples.extend((b1, b2))
+        ratios.append(math.sqrt((a1 * a2) / (b1 * b2)))
+    measured_baseline = statistics.median(baseline_samples)
+    measured_candidate = statistics.median(candidate_samples)
+    if not math.isclose(
+        baseline["time_to_solution_seconds"], measured_baseline, rel_tol=1.0e-12
+    ):
+        raise EvidenceError(f"{expected_id} baseline summary differs from ABBA samples")
+    if not math.isclose(
+        candidate["time_to_solution_seconds"], measured_candidate, rel_tol=1.0e-12
+    ):
+        raise EvidenceError(f"{expected_id} candidate summary differs from ABBA samples")
+    speedup = statistics.median(ratios)
     if speedup < minimum_speedup:
         raise EvidenceError(
             f"{expected_id} speedup {speedup:.6g} is below required {minimum_speedup:.6g}"
@@ -189,7 +223,11 @@ def _validate_scenario(raw: Any, expected_id: str) -> None:
 
 def validate(report: Any, *, expected_revision: str) -> dict[str, Any]:
     root = _mapping(report, "report")
-    _exact_keys(root, {"schema", "status", "provenance", "device", "streams", "scenarios"}, "report")
+    _exact_keys(
+        root,
+        {"schema", "status", "provenance", "protocol", "device", "streams", "scenarios"},
+        "report",
+    )
     if root["schema"] != SCHEMA:
         raise EvidenceError(f"unexpected report schema {root['schema']!r}")
     if root["status"] != "passed":
@@ -208,6 +246,17 @@ def validate(report: Any, *, expected_revision: str) -> dict[str, Any]:
     ranks = provenance["mpi_ranks"]
     if isinstance(ranks, bool) or not isinstance(ranks, int) or ranks < 2:
         raise EvidenceError("hardware evidence requires at least two MPI ranks")
+    protocol = _mapping(root["protocol"], "protocol")
+    expected_protocol = {
+        "ordering": "ABBA",
+        "clock": "steady_clock",
+        "device_fence": "before_and_after",
+        "mpi_barrier": "before_and_after",
+        "rank_aggregation": "max",
+        "warmups": 2,
+    }
+    if protocol != expected_protocol:
+        raise EvidenceError(f"protocol must be exactly {expected_protocol}")
     _validate_device(root, ranks)
     _validate_streams(root)
     scenarios = root["scenarios"]
