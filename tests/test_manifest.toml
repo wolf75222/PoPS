@@ -851,6 +851,11 @@ sources = ["tests/cpp/unit/mesh/test_nd_distribution.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_execution"
+sources = ["tests/cpp/unit/mesh/test_nd_execution.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
 name = "test_nd_layout"
 sources = ["tests/cpp/unit/mesh/test_nd_layout.cpp"]
 labels = ["unit", "mesh", "fast"]

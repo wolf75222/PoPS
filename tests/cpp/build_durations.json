@@ -149,6 +149,7 @@
   "test_multifab": 2.0,
   "test_nd_boundary_schedule": 2.0,
   "test_nd_distribution": 2.0,
+  "test_nd_execution": 2.0,
   "test_nd_layout": 2.0,
   "test_nd_metric_provider": 2.0,
   "test_nd_topology": 2.0,
