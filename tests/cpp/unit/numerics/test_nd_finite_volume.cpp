@@ -340,6 +340,9 @@ TEST(test_nd_finite_volume, face_field_owns_one_axis_static_fab_per_direction) {
   EXPECT_EQ(faces.field<1>().box(), nd::face_box<1>(cells));
   EXPECT_EQ(faces.field<2>().box(), nd::face_box<2>(cells));
   EXPECT_EQ(faces.view().ncomp, 5);
+  const auto metric = prepare_metric_provider(
+      cells, CartesianCoordinateMap<3>::make(RealVector<3>{}, RealVector<3>{1, 1, 1}));
+  EXPECT_TRUE(nd::conservative_residual<5>(metric, faces.view(), Index<3>{}).succeeded());
 }
 
 TEST(test_nd_finite_volume, inadmissible_states_and_invalid_metric_inputs_fail_closed) {
