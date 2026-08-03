@@ -136,18 +136,19 @@ TEST(test_nd_cluster, partitioned_shards_are_canonicalized_and_exactly_authentic
   const Box<2> domain{Index<2>{0, 0}, Index<2>{7, 3}};
   const mesh::BoxArray<2> patches(std::vector<Box<2>>{Box<2>{Index<2>{0, 0}, Index<2>{3, 3}},
                                                       Box<2>{Index<2>{4, 0}, Index<2>{7, 3}}});
-  const mesh::RankSpace<2> ranks{Index<2>{10, -2}, Extent<2>{2, 1}};
+  const mesh::RankSpace<2> ranks{Index<2>{10, -2}, Extent<2>{3, 1}};
   const auto distribution =
       mesh::Distribution<2>::partitioned(patches, ranks, {Index<2>{10, -2}, Index<2>{11, -2}});
   const nd::LevelLayout<2> level(0, domain, patches, distribution, {1, 1}, kLayoutBudget);
   nd::TagMask<2> left(level, Index<2>{10, -2}, nd::TagMaskBudget{1, 16, 16, 16});
   nd::TagMask<2> right(level, Index<2>{11, -2}, nd::TagMaskBudget{1, 16, 16, 16});
+  nd::TagMask<2> empty_rank(level, Index<2>{12, -2}, nd::TagMaskBudget{0, 0, 0, 0});
   left.set(Index<2>{1, 1});
   right.set(Index<2>{6, 2});
 
   const nd::BergerRigoutsosProvider<2> provider;
-  const std::vector<nd::TagMask<2>> ordered{left, right};
-  const std::vector<nd::TagMask<2>> reversed{right, left};
+  const std::vector<nd::TagMask<2>> ordered{left, right, empty_rank};
+  const std::vector<nd::TagMask<2>> reversed{empty_rank, right, left};
   const auto first = provider.cluster(ordered, options<2>({1, 1}, {4, 4}));
   const auto second = provider.cluster(reversed, options<2>({1, 1}, {4, 4}));
   EXPECT_EQ(first.boxes, second.boxes);
@@ -156,7 +157,7 @@ TEST(test_nd_cluster, partitioned_shards_are_canonicalized_and_exactly_authentic
                                                       Box<2>{Index<2>{6, 2}, Index<2>{6, 2}}}));
 
   const std::vector<nd::TagMask<2>> missing{left};
-  const std::vector<nd::TagMask<2>> duplicate{left, left};
+  const std::vector<nd::TagMask<2>> duplicate{left, left, empty_rank};
   EXPECT_THROW((void)provider.cluster(missing, options<2>({1, 1}, {4, 4})), std::invalid_argument);
   EXPECT_THROW((void)provider.cluster(duplicate, options<2>({1, 1}, {4, 4})),
                std::invalid_argument);
@@ -166,7 +167,7 @@ TEST(test_nd_cluster, partitioned_shards_are_canonicalized_and_exactly_authentic
   const nd::LevelLayout<2> other_level(0, domain, patches, reversed_distribution, {1, 1},
                                        kLayoutBudget);
   nd::TagMask<2> other(other_level, Index<2>{10, -2}, nd::TagMaskBudget{1, 16, 16, 16});
-  const std::vector<nd::TagMask<2>> mismatched{left, other};
+  const std::vector<nd::TagMask<2>> mismatched{left, other, empty_rank};
   EXPECT_THROW((void)provider.cluster(mismatched, options<2>({1, 1}, {4, 4})),
                std::invalid_argument);
 }
