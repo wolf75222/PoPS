@@ -90,3 +90,5 @@ metrics = [
   "migration_bytes",
   "migration_seconds",
 ]
+job_script = "benchmarks/romeo/adc757_heterogeneous_numerics.sbatch"
+submit_script = "benchmarks/romeo/submit_adc757_heterogeneous_numerics.sh"
