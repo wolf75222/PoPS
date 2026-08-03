@@ -398,52 +398,7 @@ struct AmrSystem::Impl {
   // second endpoint authority. With 1/1 this is a single program_.step_(dt) call (bit-identical to a
   // bare install). The cadence applies to the whole resolved ProgramGraph.
   void run_program_cadence_(double dt) {
-    const double accepted_time = t;
-    const auto cadence = program_.prepare_cadence_step(accepted_time, macro_step_, dt, "AmrSystem");
-    if (macro_step_ == std::numeric_limits<int>::max())
-      throw std::overflow_error("AmrSystem Program cadence macro-step counter overflow");
-    if (cadence.due) {
-      program_.validate_cadence_partition(cadence, program_.substeps_, "AmrSystem");
-      const int accepted_macro_step = macro_step_;
-      const int held_before_due = cadence.window_steps - 1;
-      if (accepted_macro_step < held_before_due)
-        throw std::logic_error("AmrSystem Program cadence window starts before macro-step zero");
-      const int window_start_macro_step = accepted_macro_step - held_before_due;
-      try {
-        program_.run_balance_due_window(accepted_macro_step, "AmrSystem", [&] {
-          for (int s = 0; s < program_.substeps_; ++s) {
-            const auto partition =
-                program_.prepare_cadence_substep(cadence, s, program_.substeps_, "AmrSystem");
-            // AmrProgramContext reads the facade clock at Program entry. Move it to the exact
-            // accepted start of this substep so stage/tagger coordinates cover the whole catch-up
-            // window instead of repeating the outer macro-step time.
-            t = partition.start;
-            // All internal calls belong to one public stride window. Publish the accepted start tick
-            // so schedules, regridding and AmrProgramContext never count Program substeps as facade
-            // macro-steps.
-            macro_step_ = window_start_macro_step;
-            // ADC-626/ADC-631: expose this interval before the Program stores its pre-commit history
-            // sample. The ring ledger then records the outgoing dt from that sample toward the next
-            // accepted sample (variable-dt replay). Parity with
-            // SystemProgramDriver::run_program_cadence.
-            program_.last_dt_ = static_cast<Real>(partition.dt);
-            program_.step_(partition.dt);
-            t = partition.end;
-          }
-        });
-      } catch (...) {
-        t = accepted_time;
-        macro_step_ = accepted_macro_step;
-        throw;
-      }
-      t = accepted_time;
-      macro_step_ = accepted_macro_step;
-    }
-    program_.commit_cadence_step(cadence, "AmrSystem");
-    // One prepared endpoint owns facade, stages and serialized AMR accepted clocks. Do not recompute
-    // it as either accepted_time + dt or window_start + effective_dt after Program execution.
-    t = cadence.window_end;
-    program_.complete_balance_step(cadence.due);
+    program_.dispatch_cadence_step(t, macro_step_, dt, "AmrSystem");
   }
 
   struct AcceptedSnapshot {
@@ -3156,7 +3111,6 @@ void AmrSystem::step(double dt) {
     // The installed Program is the sole temporal authority. It drives the per-level macro-step
     // through AmrProgramContext; AmrRuntime remains available only as the spatial hierarchy engine.
     p_->run_program_cadence_(dt);
-    ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
   });
 }
 void AmrSystem::advance(double dt, int nsteps) {
@@ -3243,7 +3197,6 @@ double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double
     if (dt < min_dt)
       throw std::runtime_error("AmrSystem::step_cfl stability bound is below declared min_dt");
     p_->run_program_cadence_(dt);
-    ++p_->macro_step_;
     return dt;
   });
 }
