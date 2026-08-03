@@ -88,14 +88,16 @@ enum class RiemannRouteId : int {
   kHll = 1,
   kHllc = 2,
   kRoe = 3,
+  kRoeHllRusanovRecovery = 4,
 };
 inline constexpr RouteInfo kRiemannRoutes[] = {
   {0, "rusanov", "pops::RusanovFlux", "physical_flux,provider_pack,stability_bound", ""},
   {1, "hll", "pops::HLLFlux", "physical_flux,provider_pack,stability_bound,wave_speeds", ""},
   {2, "hllc", "pops::HLLCFlux", "physical_flux,provider_pack,stability_bound,pressure,wave_speeds,contact_speed,hllc_star_state", ""},
   {3, "roe", "pops::RoeFlux", "physical_flux,provider_pack,stability_bound,roe_dissipation", ""},
+  {4, "roe_hll_rusanov_recovery", "pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,pops::RusanovFlux,pops::RejectRiemannRecovery>", "physical_flux,provider_pack,stability_bound,wave_speeds,roe_dissipation", "fixed ordered policy Roe -> HLL -> Rusanov -> reject,annular polar route unavailable"},
 };
-inline constexpr const char* kRiemannRouteTokensCsv = "rusanov|hll|hllc|roe";
+inline constexpr const char* kRiemannRouteTokensCsv = "rusanov|hll|hllc|roe|roe_hll_rusanov_recovery";
 
 enum class LimiterRouteId : int {
   kNone = 0,
@@ -258,6 +260,7 @@ inline constexpr RiemannTag kRiemanns[] = {
   {"hll", true, false, false, true},
   {"hllc", false, true, false, true},
   {"roe", false, false, true, true},
+  {"roe_hll_rusanov_recovery", true, false, true, false},
 };
 
 struct TransportTag { const char* name; int n_vars; bool polar_ok; const char* summary; };
@@ -305,11 +308,11 @@ inline constexpr BrickCatalogEntry kBrickCatalog[] = {
 
 inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
-inline constexpr int kRouteRegistryVersion = 2;
+inline constexpr int kRouteRegistryVersion = 3;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "ad1dbd6838d52c41b7d797ffdb3e43d07da701c0adbe00845acaf5e41ae67640";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8";
-inline constexpr const char* kRouteRegistrySignature = "v2:34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8";
+inline constexpr const char* kComponentCatalogSha256 = "b8801b403645d62afd4e9ea0dd92af8124f042f359aba9ad09ffa4ea6f4a8a66";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3";
+inline constexpr const char* kRouteRegistrySignature = "v3:b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",
