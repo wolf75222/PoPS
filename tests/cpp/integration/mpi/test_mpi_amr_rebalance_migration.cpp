@@ -9,8 +9,8 @@
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/parallel/comm.hpp>
-#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
+#include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
@@ -78,7 +78,7 @@ std::vector<std::vector<std::uint8_t>> gather_program_payloads(
   payload.reserve(local.size());
   for (const std::uint8_t byte : local)
     payload.push_back(static_cast<char>(byte));
-  const std::vector<std::string> gathered = ExecutionLane::world().allgather_bytes(payload);
+  const std::vector<std::string> gathered = WorldCommunicator::world().allgather_bytes(payload);
   std::vector<std::vector<std::uint8_t>> result;
   result.reserve(gathered.size());
   for (const std::string& rank_payload : gathered) {
