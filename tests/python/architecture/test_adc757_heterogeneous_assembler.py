@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,83 @@ def _module(path: Path, name: str):
     return module
 
 
+def _runtime_mode(mode: str, backend: str, ranks: int, token: str) -> dict:
+    return {
+        "id": mode,
+        "scenario_id": "adc757_amr_advection_runtime_v1",
+        "installation": {
+            "wheel_name": f"pops-{mode}.whl",
+            "wheel_sha256": token * 64,
+            "installed_tree_sha256": "e" * 64,
+            "native_sha256": "f" * 64,
+            "package_file": f"/opt/pops-{mode}/pops/__init__.py",
+            "native_extension": f"/opt/pops-{mode}/pops/_pops.so",
+            "python_executable": f"/opt/pops-{mode}/bin/python",
+            "outside_source_checkout": True,
+        },
+        "doctor": {"passed": True, "checks_sha256": "d" * 64},
+        "artifact": {
+            "identity": f"artifact:{mode}",
+            "abi_key": f"abi:{mode}",
+            "module_abi_key": f"module:{mode}",
+            "abi_compatible": True,
+        },
+        "execution": {
+            "backend": backend,
+            "mpi_ranks": ranks,
+            "accepted_steps": 4,
+            "final_time": 0.04,
+            "solution_sha256": "a" * 64,
+        },
+    }
+
+
+def _runtime_evidence() -> dict:
+    modes = [
+        _runtime_mode("serial", "Serial", 1, "1"),
+        _runtime_mode("threaded", "OpenMP", 1, "2"),
+        _runtime_mode("gpu", "Cuda", 1, "3"),
+        _runtime_mode("gpu_mpi", "Cuda", 2, "4"),
+    ]
+    gpu_mpi = modes[-1]["artifact"]
+    common = {
+        "consumed": True,
+        "artifact_identity": gpu_mpi["identity"],
+        "abi_key": gpu_mpi["abi_key"],
+    }
+    return {
+        "schema": "pops.adc757.installed-runtime-matrix.v1",
+        "status": "passed",
+        "revision": "candidate",
+        "scenario_id": "adc757_amr_advection_runtime_v1",
+        "modes": modes,
+        "authorities": {
+            "cell_local_time": {
+                **common,
+                "identity": "pops.local-time.runtime@1",
+                "accepted_steps": 4,
+                "fallback_count": 0,
+                "receipt_sha256": "b" * 64,
+            },
+            "amr_rebalance_migration": {
+                **common,
+                "identity": "pops.amr.rebalance.runtime@1",
+                "moved_patches": 2,
+                "migration_bytes": 4096,
+                "post_migration_steps": 2,
+                "receipt_sha256": "c" * 64,
+            },
+        },
+    }
+
+
+def _runtime_digest() -> str:
+    payload = json.dumps(
+        _runtime_evidence(), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _measurement(scenario: str, route: str, time: float) -> dict:
     candidate = route == "candidate"
     local_time = scenario == "prepared_local_time"
@@ -28,6 +107,9 @@ def _measurement(scenario: str, route: str, time: float) -> dict:
         "status": "passed",
         "revision": "candidate",
         "build_identity": "nvcc_wrapper-Cuda",
+        "installed_wheel_sha256": "4" * 64,
+        "module_abi_sha256": hashlib.sha256(b"module:gpu_mpi").hexdigest(),
+        "runtime_evidence_sha256": _runtime_digest(),
         "execution_space": "Cuda",
         "mpi_ranks": 2,
         "scenario": scenario,
@@ -84,7 +166,12 @@ def _measurements() -> list[dict]:
 def test_adc757_assembler_builds_a_report_accepted_by_the_independent_verifier() -> None:
     assembler = _module(ROOT / "benchmarks" / "adc757" / "assemble.py", "adc757_assemble")
     verifier = _module(ROOT / "benchmarks" / "adc757" / "verify.py", "adc757_verify")
-    report = assembler.assemble(_measurements(), revision="candidate", minimum_speedup=1.01)
+    report = assembler.assemble(
+        _measurements(),
+        revision="candidate",
+        minimum_speedup=1.01,
+        runtime_evidence=_runtime_evidence(),
+    )
     assert verifier.validate(report, expected_revision="candidate")["status"] == "passed"
 
 
@@ -94,4 +181,22 @@ def test_adc757_assembler_refuses_measurements_that_are_not_abba_ordered() -> No
     measurements[1], measurements[2] = measurements[2], measurements[1]
     measurements[1]["route"] = "baseline"
     with pytest.raises(assembler.AssemblyError, match="A,B,B,A"):
-        assembler.assemble(measurements, revision="candidate", minimum_speedup=1.01)
+        assembler.assemble(
+            measurements,
+            revision="candidate",
+            minimum_speedup=1.01,
+            runtime_evidence=_runtime_evidence(),
+        )
+
+
+def test_adc757_assembler_refuses_a_nonpassing_installed_runtime() -> None:
+    assembler = _module(ROOT / "benchmarks" / "adc757" / "assemble.py", "adc757_refusal")
+    evidence = _runtime_evidence()
+    evidence["status"] = "refused"
+    with pytest.raises(assembler.AssemblyError, match="did not pass"):
+        assembler.assemble(
+            _measurements(),
+            revision="candidate",
+            minimum_speedup=1.01,
+            runtime_evidence=evidence,
+        )
