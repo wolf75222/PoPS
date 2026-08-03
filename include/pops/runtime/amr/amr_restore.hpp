@@ -305,6 +305,204 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
   }
 }
 
+// --- Accepted-boundary ownership migration --------------------------------------------------------
+
+inline RebalanceDecision AmrRuntime::decide_rebalance(int level, ResourceEstimates estimates,
+                                                      const RebalancePolicy& policy) const {
+  const CommunicatorView communicator = world_communicator_view();
+  detail::collective_load_balance_preflight("AMR rebalance decision preflight", communicator, [&] {
+    if (communicator.size() != n_ranks() || communicator.rank() != my_rank())
+      throw std::invalid_argument(
+          "AMR rebalance communicator does not preserve the hierarchy rank space");
+    if (level <= 0 || level >= nlev_)
+      throw std::out_of_range("AMR rebalance currently accepts only an active fine level");
+    if (!hierarchy_.load_balance)
+      throw std::logic_error("AMR hierarchy has no prepared load-balance authority");
+  });
+  const std::size_t index = static_cast<std::size_t>(level);
+  return hierarchy_.load_balance->decide_rebalance(
+      level, hierarchy_.ba[index], hierarchy_.dm[index], n_ranks(), topology_epoch_,
+      topology_materialization_generation_, estimates, policy, communicator);
+}
+
+inline bool AmrRuntime::apply_rebalance_decision(int level, const RebalanceDecision& decision) {
+  const CommunicatorView communicator = world_communicator_view();
+  std::string live_contract;
+  std::int64_t moved_patches = 0;
+  detail::collective_load_balance_preflight("AMR rebalance migration preflight", communicator, [&] {
+    if (communicator.size() != n_ranks() || communicator.rank() != my_rank())
+      throw std::invalid_argument(
+          "AMR rebalance communicator does not preserve the hierarchy rank space");
+    if (level <= 0 || level >= nlev_)
+      throw std::out_of_range("AMR rebalance currently accepts only an active fine level");
+    if (step_rollback_scope_active() || field_solve_transaction_active() || boundary_stage_states_)
+      throw std::logic_error("AMR rebalance requires a clean accepted runtime boundary");
+    if (decision.topology_epoch != topology_epoch_ ||
+        decision.materialization_generation != topology_materialization_generation_)
+      throw std::invalid_argument("AMR rebalance decision targets stale topology or storage");
+    if (decision.source_contract.empty() || decision.exact_contract.empty() ||
+        decision.exact_contract != detail::exact_rebalance_decision(decision))
+      throw std::invalid_argument("AMR rebalance decision exact contract is invalid");
+
+    const std::size_t index = static_cast<std::size_t>(level);
+    const BoxArray& boxes = hierarchy_.ba[index];
+    const DistributionMapping& current = hierarchy_.dm[index];
+    for (const auto& [name, field] : bootstrap_staggered_fields_) {
+      (void)name;
+      if (field.levels.size() > index)
+        throw std::logic_error(
+            "AMR rebalance does not yet support materialized staggered bootstrap fields");
+    }
+    if (!hierarchy_.load_balance)
+      throw std::logic_error("AMR hierarchy has no prepared load-balance authority");
+    live_contract = detail::exact_rebalance_source(
+        hierarchy_.load_balance->semantic_identity(),
+        hierarchy_.load_balance->collective_contract(), level, n_ranks(), topology_epoch_,
+        topology_materialization_generation_, boxes, current);
+    if (decision.source_contract != live_contract)
+      throw std::invalid_argument(
+          "AMR rebalance decision does not target the live prepared level authority");
+    if (boxes.size() <= 0 || current.size() != boxes.size() ||
+        decision.proposed_mapping.size() != boxes.size())
+      throw std::invalid_argument("AMR rebalance decision does not match the active fine BoxArray");
+    for (int patch = 0; patch < boxes.size(); ++patch) {
+      const int owner = decision.proposed_mapping[patch];
+      if (owner < 0 || owner >= n_ranks())
+        throw std::invalid_argument("AMR rebalance decision contains an invalid owner rank");
+      if (owner != current[patch])
+        ++moved_patches;
+    }
+    if (decision.moved_patches != moved_patches || decision.migration_bytes < 0 ||
+        decision.migration_nanoseconds < 0 || decision.current_max_nanoseconds_per_step <= 0 ||
+        decision.proposed_max_nanoseconds_per_step <= 0 ||
+        !std::isfinite(decision.current_imbalance) || !std::isfinite(decision.proposed_imbalance) ||
+        !std::isfinite(decision.predicted_net_speedup) || decision.current_imbalance < 1.0 ||
+        decision.proposed_imbalance < 1.0 || decision.predicted_net_speedup <= 0.0)
+      throw std::invalid_argument("AMR rebalance decision metrics are incomplete or inconsistent");
+
+    switch (decision.reason) {
+      case RebalanceReason::MappingUnchanged:
+        if (decision.accepted || moved_patches != 0)
+          throw std::invalid_argument(
+              "AMR rebalance unchanged decision disagrees with the live mapping");
+        break;
+      case RebalanceReason::NetBenefit:
+        if (!decision.accepted || moved_patches == 0)
+          throw std::invalid_argument(
+              "AMR rebalance accepted decision has no beneficial migration");
+        break;
+      case RebalanceReason::InsufficientNetBenefit:
+        if (decision.accepted || moved_patches == 0)
+          throw std::invalid_argument(
+              "AMR rebalance refusal disagrees with the proposed migration");
+        break;
+      case RebalanceReason::EmptyHierarchy:
+        throw std::invalid_argument(
+            "AMR rebalance cannot apply an empty-hierarchy decision to an active fine level");
+      default:
+        throw std::invalid_argument("AMR rebalance decision reason is unsupported");
+    }
+  });
+
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"pops.amr.rebalance-source", live_contract},
+           {"pops.amr.rebalance-decision", decision.exact_contract}},
+          communicator))
+    throw std::invalid_argument(
+        "AMR rebalance live hierarchy or decision differs across MPI ranks");
+  if (!decision.accepted)
+    return false;
+
+  StepSnapshot accepted;
+  detail::collective_load_balance_preflight("AMR rebalance snapshot capture", communicator,
+                                            [&] { capture_step_snapshot(accepted); });
+
+  const std::size_t index = static_cast<std::size_t>(level);
+  const BoxArray boxes = hierarchy_.ba[index];
+  const int parent_level = level - 1;
+  const int refinement_ratio = hierarchy_.refinement_ratios[static_cast<std::size_t>(parent_level)];
+  std::optional<MultiFab> migrated_aux;
+  detail::collective_load_balance_preflight("AMR rebalance carrier allocation", communicator, [&] {
+    // Aux fields are not part of a block's conservative prolongation route. Prepare an exact
+    // owner-only copy before mutating the hierarchy; field publication may refresh derived ghosts
+    // and provider-owned components only after these accepted valid cells are restored.
+    migrated_aux.emplace(boxes, decision.proposed_mapping, aux_[index].ncomp(),
+                         aux_[index].n_grow());
+  });
+
+  std::exception_ptr migration_failure;
+  try {
+    parallel_copy(*migrated_aux, aux_[index], communicator);
+
+    materialize_regrid_transition_(parent_level, boxes, decision.proposed_mapping,
+                                   refinement_ratio);
+    detail::collective_load_balance_preflight(
+        "AMR rebalance carrier publication", communicator, [&] {
+          aux_[index] = std::move(*migrated_aux);
+          for (auto& block : blocks_)
+            for (int active_level = 0; active_level < nlev_; ++active_level)
+              (*block.levels)[static_cast<std::size_t>(active_level)].aux =
+                  &aux_[static_cast<std::size_t>(active_level)];
+        });
+
+    invalidate_named_field_topology();
+    record_topology_replacement_();
+    require_solved_field_outcome(solve_fields(),
+                                 "AmrRuntime::apply_rebalance_decision publication");
+    materialize_boundary_sessions_();
+
+    detail::collective_load_balance_preflight(
+        "AMR rebalance publication validation", communicator, [&] {
+          const auto& reference = *blocks_.front().levels;
+          for (std::size_t block = 0; block < blocks_.size(); ++block) {
+            const auto& levels = *blocks_[block].levels;
+            if (levels.size() != reference.size())
+              throw std::runtime_error(
+                  "AMR rebalance produced different level "
+                  "counts across blocks");
+            if (levels[index].U.box_array().boxes() != boxes.boxes() ||
+                levels[index].U.dmap().ranks() != decision.proposed_mapping.ranks())
+              throw std::runtime_error(
+                  "AMR rebalance did not publish its exact "
+                  "owner mapping on every block");
+          }
+        });
+    require_complete_history_materialization_collective_("AmrRuntime::apply_rebalance_decision");
+    device_fence();
+  } catch (...) {
+    migration_failure = std::current_exception();
+  }
+
+  const long migration_failures = all_reduce_max(migration_failure ? 1L : 0L, communicator);
+  if (migration_failures != 0) {
+    std::exception_ptr rollback_failure;
+    try {
+      restore_step_snapshot(accepted);
+    } catch (...) {
+      rollback_failure = std::current_exception();
+    }
+    if (all_reduce_max(rollback_failure ? 1L : 0L, communicator) != 0) {
+      if (rollback_failure)
+        std::rethrow_exception(rollback_failure);
+      throw std::runtime_error("AMR rebalance rollback failed on another MPI rank");
+    }
+    if (migration_failure)
+      std::rethrow_exception(migration_failure);
+    throw std::runtime_error("AMR rebalance migration failed on another MPI rank");
+  }
+
+  // Profiling is observational. It must never turn an already collectively committed hierarchy
+  // into a rank-local rollback attempt.
+  if (profiler_ != nullptr)
+    try {
+      profiler_->count("rebalance");
+      profiler_->count("rebalance_moved_patches", moved_patches);
+      profiler_->count("rebalance_migration_bytes", decision.migration_bytes);
+    } catch (...) {  // NOLINT(bugprone-empty-catch) -- profiling cannot invalidate publication
+    }
+  return true;
+}
+
 // --- regrid / clustering config setters (declared in amr_runtime.hpp) -----------------------------
 
 inline void AmrRuntime::set_regrid(int every, int grow, int margin) {

@@ -127,6 +127,7 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_amr_distributed_coarse "tests/cpp/integration/
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_dynamic_active_depth "tests/cpp/integration/mpi/test_mpi_amr_dynamic_active_depth.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_prepared_boundary_cf "tests/cpp/integration/mpi/test_mpi_amr_prepared_boundary_cf.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_program_reflux "tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_amr_rebalance_migration "tests/cpp/integration/mpi/test_mpi_amr_rebalance_migration.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_amr_twoblock_parity "tests/cpp/integration/mpi/test_mpi_amr_twoblock_parity.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_array_reduce "tests/cpp/integration/mpi/test_mpi_array_reduce.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_composite_fac "tests/cpp/integration/mpi/test_mpi_composite_fac.cpp")

@@ -178,6 +178,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_amr_rebalance_migration"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_rebalance_migration.cpp"]
+labels = ["backend", "mpi", "amr", "medium"]
+mpi_nproc = [2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_amr_twoblock_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_twoblock_parity.cpp"]
 labels = ["backend", "mpi", "medium"]

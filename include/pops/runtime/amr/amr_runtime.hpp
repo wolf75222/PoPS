@@ -3494,6 +3494,18 @@ class AmrRuntime {
   /// level; a level count over the composed max_levels is refused verbatim.
   void rebuild_hierarchy(const std::vector<std::vector<PatchBox>>& level_boxes,
                          const std::vector<std::vector<int>>& level_owner_ranks);
+  /// Consume one collective load-balance decision at a clean accepted boundary. The scientific
+  /// boxes are unchanged; every block, aux carrier and history slot is redistributed onto the
+  /// proposed owner map before topology-bound providers are rematerialized. A stale, divergent or
+  /// incomplete decision fails before mutation, and any migration/publication failure restores the
+  /// complete accepted runtime snapshot. Level zero remains composition-owned and is not migrated by
+  /// this fine-level transaction.
+  bool apply_rebalance_decision(int level, const RebalanceDecision& decision);
+  /// Ask the hierarchy's immutable prepared load-balance authority for one topology-qualified
+  /// decision. This is the only production decision route: callers provide measurements and policy,
+  /// while the runtime injects the exact live level, BoxArray, owners, epoch and generation.
+  RebalanceDecision decide_rebalance(int level, ResourceEstimates estimates,
+                                     const RebalancePolicy& policy) const;
   /// Owner rank per box of level @p k (the shared layout's DistributionMapping), index-aligned with
   /// that level's boxes in patch_boxes(). The v3 checkpoint serializes it so a restart reproduces the
   /// LOCAL-fab iteration order (bit-identity of the host aggregations). Body in amr_restore.hpp.
