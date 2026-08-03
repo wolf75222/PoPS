@@ -221,6 +221,30 @@ target = "test_facade_routing"
 test_regex = "^FacadeRouting\\.PrimitiveInputRequiresPreparedRecoveryBeforeConservativePublication$"
 
 [[check]]
+requirement = "amr_regrid_recovery_publication"
+polarity = "positive"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.RegridPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell$"
+
+[[check]]
+requirement = "amr_regrid_recovery_publication"
+polarity = "refusal"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.RegridRecoveryRefusalRollsBackHierarchyStateAndPublicationCounters$"
+
+[[check]]
+requirement = "amr_restriction_recovery_publication"
+polarity = "positive"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.RegridPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell$"
+
+[[check]]
+requirement = "amr_restriction_recovery_publication"
+polarity = "refusal"
+target = "test_amr_transfer_properties"
+test_regex = "^test_amr_transfer_properties\\.RestrictionRecoveryRefusalRollsBackEveryLevelAndHierarchyPublication$"
+
+[[check]]
 requirement = "type_erased_recovery_method_identity"
 polarity = "positive"
 target = "test_variable_recovery_chain"

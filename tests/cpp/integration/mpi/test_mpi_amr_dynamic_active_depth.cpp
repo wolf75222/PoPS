@@ -27,6 +27,20 @@ using namespace pops;
 
 namespace {
 
+RecoveryReport accept_scalar_recovery(const double* conserved, double* primitive) {
+  RecoveryReport report;
+  if (!std::isfinite(conserved[0])) {
+    report.status = RecoveryStatus::kRejected;
+    report.cause = RecoveryCause::kNonFiniteCandidate;
+    report.failing_component = 0;
+    return report;
+  }
+  primitive[0] = conserved[0];
+  report.status = RecoveryStatus::kRecovered;
+  report.cause = RecoveryCause::kNone;
+  return report;
+}
+
 int run_dynamic_active_depth(int n, int me, int np) {
   const Geometry geometry{Box2D::from_extents(n, n), Real(0), Real(1), Real(0), Real(1)};
   const BoxArray coarse_boxes = BoxArray::from_domain(geometry.domain, n / 2);
@@ -68,6 +82,7 @@ int run_dynamic_active_depth(int n, int me, int np) {
   AmrRuntimeBlock block;
   block.name = "moving";
   block.state_identity = "test://mpi-active-depth/block/moving/state/U";
+  block.cons_to_prim = accept_scalar_recovery;
   block.levels = levels;
   block.add_elliptic_rhs = [](const MultiFab&, MultiFab&) {};
   block.max_speed = [](const MultiFab&, const MultiFab&) { return Real(0); };

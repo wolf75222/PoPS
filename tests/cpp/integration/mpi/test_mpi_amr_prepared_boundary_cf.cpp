@@ -35,6 +35,20 @@ using namespace pops;
 
 namespace {
 
+RecoveryReport accept_scalar_recovery(const double* conserved, double* primitive) {
+  RecoveryReport report;
+  if (!std::isfinite(conserved[0])) {
+    report.status = RecoveryStatus::kRejected;
+    report.cause = RecoveryCause::kNonFiniteCandidate;
+    report.failing_component = 0;
+    return report;
+  }
+  primitive[0] = conserved[0];
+  report.status = RecoveryStatus::kRecovered;
+  report.cause = RecoveryCause::kNone;
+  return report;
+}
+
 constexpr Real kCoarseValue = Real(7.25);
 constexpr Real kFineValue = Real(3.0);
 constexpr Real kPhysicalValue = Real(40.0);
@@ -95,6 +109,7 @@ int run_prepared_boundary_cf_regrid(int me, int np) {
   block.name = "tracer";
   block.state_identity = state_identity;
   block.ncomp = 1;
+  block.cons_to_prim = accept_scalar_recovery;
   block.levels = levels;
   block.add_elliptic_rhs = [](const MultiFab&, MultiFab&) {};
   block.max_speed = [](const MultiFab&, const MultiFab&) { return Real(0); };

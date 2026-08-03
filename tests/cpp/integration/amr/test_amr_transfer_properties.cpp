@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -83,7 +84,9 @@ Real fine_polynomial_average(const Box2D& fine_domain, int i, int j) {
   return degree_four_cell_average(x, x + Real(0.5), y, y + Real(0.5));
 }
 
-AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = false) {
+AmrRuntime bootstrap_runtime(
+    int cells = 8, bool install_prepared_boundary = false,
+    double maximum_recoverable_value = std::numeric_limits<double>::infinity()) {
   AmrBuildParams params;
   params.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
   params.mesh.periodicity = Periodicity{true, true};
@@ -97,6 +100,21 @@ AmrRuntime bootstrap_runtime(int cells = 8, bool install_prepared_boundary = fal
       exb_model(), "minmod", "rusanov", layout, "transport",
       std::vector<double>(static_cast<std::size_t>(cells) * cells, 1.0), true, 1.4, 1, false, 1));
   blocks.back().state_identity = "test://amr-transfer/bootstrap/transport/state/U";
+  if (std::isfinite(maximum_recoverable_value))
+    blocks.back().cons_to_prim = [maximum_recoverable_value](const double* conserved,
+                                                             double* primitive) {
+      RecoveryReport report;
+      if (!std::isfinite(conserved[0]) || conserved[0] > maximum_recoverable_value) {
+        report.status = RecoveryStatus::kRejected;
+        report.cause = RecoveryCause::kInadmissibleCandidate;
+        report.failing_component = 0;
+        return report;
+      }
+      primitive[0] = conserved[0];
+      report.status = RecoveryStatus::kRecovered;
+      report.cause = RecoveryCause::kNone;
+      return report;
+    };
   if (install_prepared_boundary) {
     auto& block = blocks.front();
     const std::string state_identity = block.state_identity;
@@ -512,6 +530,92 @@ TEST(test_amr_transfer_properties, NativeSubcyclingGhostFillInterpolatesTimeThen
   EXPECT_THROW(
       workspace.apply(fine, old_parent, new_parent, Real(0.5), Real(0), 0, 24, CommunicatorView{}),
       std::invalid_argument);
+}
+
+TEST(test_amr_transfer_properties,
+     RegridPublishesOnlyAfterPreparedRecoveryAcceptsEveryCandidateCell) {
+  AmrRuntime runtime = bootstrap_runtime();
+  const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::recovery-accepted-regrid@1");
+
+  EXPECT_NO_THROW(runtime.regrid());
+  EXPECT_GT(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.regrid_count(), 1);
+  EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+
+  test::install_prepared_threshold_decisions(
+      runtime, {{0, 0, Real(1e9), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1e9), test::PreparedThresholdRelation::Below}},
+      "test::recovery-accepted-restriction@1");
+  EXPECT_NO_THROW(runtime.regrid());
+  EXPECT_EQ(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.regrid_count(), 2);
+  EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+}
+
+TEST(test_amr_transfer_properties,
+     RegridRecoveryRefusalRollsBackHierarchyStateAndPublicationCounters) {
+  AmrRuntime runtime = bootstrap_runtime(8, false, 0.5);
+  const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
+  const auto boxes_before = runtime.level_state(0, 0).box_array().boxes();
+  const std::uint64_t topology_epoch_before = runtime.topology_epoch();
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::recovery-rejected-regrid@1");
+
+  try {
+    runtime.regrid();
+    FAIL() << "a rejected regrid candidate was published";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+  EXPECT_EQ(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.regrid_count(), 0);
+  EXPECT_EQ(runtime.topology_epoch(), topology_epoch_before);
+  EXPECT_EQ(runtime.level_state(0, 0).box_array().boxes(), boxes_before);
+  EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+}
+
+TEST(test_amr_transfer_properties,
+     RestrictionRecoveryRefusalRollsBackEveryLevelAndHierarchyPublication) {
+  AmrRuntime runtime = bootstrap_runtime(8, false, 1.5);
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::restriction-recovery-bootstrap@1");
+  ASSERT_NO_THROW(runtime.regrid());
+  ASSERT_GT(runtime.nlev(), 1);
+  for (int level = 1; level < runtime.nlev(); ++level)
+    runtime.level_state(0, level).set_val(Real(2));
+  device_fence();
+
+  std::vector<std::vector<double>> states_before;
+  std::vector<std::vector<Box2D>> boxes_before;
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    states_before.push_back(runtime.block_level_state(0, level));
+    boxes_before.push_back(runtime.level_state(0, level).box_array().boxes());
+  }
+  const int levels_before = runtime.nlev();
+  const int regrids_before = runtime.regrid_count();
+  const std::uint64_t topology_epoch_before = runtime.topology_epoch();
+  test::install_prepared_threshold_decisions(
+      runtime, {{0, 0, Real(1e9), test::PreparedThresholdRelation::Above}},
+      {{0, 0, Real(1e9), test::PreparedThresholdRelation::Below}},
+      "test::recovery-rejected-restriction@1");
+
+  try {
+    runtime.regrid();
+    FAIL() << "a rejected restriction candidate was published";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+  EXPECT_EQ(runtime.nlev(), levels_before);
+  EXPECT_EQ(runtime.regrid_count(), regrids_before);
+  EXPECT_EQ(runtime.topology_epoch(), topology_epoch_before);
+  for (int level = 0; level < runtime.nlev(); ++level) {
+    EXPECT_EQ(runtime.level_state(0, level).box_array().boxes(), boxes_before[level]);
+    EXPECT_EQ(runtime.block_level_state(0, level), states_before[level]);
+  }
 }
 
 TEST(test_amr_transfer_properties, AnalyticEveryLevelCacheEpochAndL0L1L2Rollback) {

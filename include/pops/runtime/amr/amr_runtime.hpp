@@ -22,6 +22,7 @@
 #include <pops/numerics/elliptic/interface/field_provider.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
@@ -773,6 +774,52 @@ struct AmrNamedAuxCopyKernel {
         field[static_cast<std::int64_t>(j - origin_j) * row_width + (i - origin_i)];
   }
 };
+
+inline void require_recoverable_amr_candidate(
+    const MultiFab& candidate, int ncomp,
+    const std::function<RecoveryReport(const double*, double*)>& recovery,
+    std::string_view operation) {
+  const long missing = all_reduce_sum(recovery ? 0L : 1L);
+  if (missing != 0)
+    throw std::runtime_error(std::string(operation) +
+                             ": block has no prepared variable-recovery authority");
+  const long component_mismatches = all_reduce_sum(candidate.ncomp() == ncomp ? 0L : 1L);
+  if (component_mismatches != 0)
+    throw std::runtime_error(std::string(operation) +
+                             ": candidate component count differs from its block model");
+
+  candidate.sync_host();
+  std::vector<double> conserved(static_cast<std::size_t>(ncomp));
+  std::vector<double> primitive(static_cast<std::size_t>(ncomp));
+  long local_failures = 0;
+  for (int local = 0; local < candidate.local_size(); ++local) {
+    const ConstArray4 values = candidate.fab(local).const_array();
+    const Box2D valid = candidate.box(local);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+        for (int component = 0; component < ncomp; ++component)
+          conserved[static_cast<std::size_t>(component)] = values(i, j, component);
+        try {
+          const RecoveryReport report = recovery(conserved.data(), primitive.data());
+          const bool finite_candidate =
+              std::all_of(conserved.begin(), conserved.end(),
+                          [](double value) { return std::isfinite(value); }) &&
+              std::all_of(primitive.begin(), primitive.end(),
+                          [](double value) { return std::isfinite(value); });
+          if (!report.publication_permitted() || !finite_candidate)
+            ++local_failures;
+        } catch (...) {
+          ++local_failures;
+        }
+      }
+  }
+  const long failures = all_reduce_sum(local_failures);
+  if (failures != 0)
+    throw std::runtime_error(std::string(operation) +
+                             ": prepared variable recovery rejected the candidate before "
+                             "publication (failed cells=" +
+                             std::to_string(failures) + ")");
+}
 }  // namespace detail
 
 /// Type-erased closures of ONE AMR block, placed on the shared hierarchy. AMR counterpart of the
@@ -806,6 +853,9 @@ struct AmrRuntimeBlock {
   /// add_coupled_source THROWS instead of falling back to component 0 (a silent fallback would apply
   /// the source to the wrong field).
   VariableSet cons_vars;
+  /// Prepared conservative -> primitive publication authority of the concrete block model.  AMR
+  /// transfer/regrid candidates must pass it before replacing an accepted level.
+  std::function<RecoveryReport(const double*, double*)> cons_to_prim;
 
   /// Level stack of the block (level 0 = coarse, > 0 = fine patches), ON the shared layout. The aux
   /// pointer of each AmrLevelMP is (re)wired by AmrRuntime to the SHARED aux of the level. shared_ptr:
@@ -1385,6 +1435,15 @@ class AmrRuntime {
     rematerialize_persistent_topology_resources_(topology_materialization_generation_);
   }
 
+  void require_recoverable_block_candidate_(std::size_t block, const MultiFab& candidate,
+                                            std::string_view operation) const {
+    if (block >= blocks_.size())
+      throw std::out_of_range(std::string(operation) + ": block index is out of range");
+    const AmrRuntimeBlock& runtime_block = blocks_[block];
+    detail::require_recoverable_amr_candidate(candidate, runtime_block.ncomp,
+                                              runtime_block.cons_to_prim, operation);
+  }
+
   MultiFab regrid_block_field(std::size_t block, const BoxArray& boxes,
                               const DistributionMapping& distribution, const MultiFab& parent,
                               const MultiFab& old_fine, int parent_level, int ghost_depth,
@@ -1404,9 +1463,12 @@ class AmrRuntime {
           bootstrap_transfer_context(coarse, fine, coarse_level, coarse_level + 1, ratio,
                                      replicated_parent, base_per_));
     };
-    return regrid_field_on_layout_with_provider(boxes, distribution, parent, old_fine, parent_level,
-                                                ghost_depth, prolong, world_communicator_view(),
-                                                replicated_coarse_, refinement_ratio);
+    MultiFab candidate = regrid_field_on_layout_with_provider(
+        boxes, distribution, parent, old_fine, parent_level, ghost_depth, prolong,
+        world_communicator_view(), replicated_coarse_, refinement_ratio);
+    require_recoverable_block_candidate_(block, candidate,
+                                         "AmrRuntime regrid prolongation publication");
+    return candidate;
   }
 
   void restrict_block_field(std::size_t block, const MultiFab& fine, MultiFab& parent,
@@ -1418,10 +1480,15 @@ class AmrRuntime {
         authority.refinement_ratio != refinement_ratio)
       throw std::runtime_error(
           "AmrRuntime coarsening has no compatible prepared restriction authority");
+    MultiFab candidate(parent.box_array(), parent.dmap(), parent.ncomp(), parent.n_grow());
+    PureFieldAlgebra::copy_allocated(candidate, parent);
     authority.restriction.spatial(
-        fine, parent,
+        fine, candidate,
         bootstrap_transfer_context(parent, fine, parent_level, parent_level + 1, refinement_ratio,
                                    parent_level == 0 && replicated_coarse_));
+    require_recoverable_block_candidate_(block, candidate, "AmrRuntime restriction publication");
+    PureFieldAlgebra::copy_allocated(parent, candidate);
+    device_fence();
   }
   void set_tagging_program(std::vector<TaggingProgram::Stencil> stencils,
                            std::vector<TaggingProgram::Leaf> leaves,

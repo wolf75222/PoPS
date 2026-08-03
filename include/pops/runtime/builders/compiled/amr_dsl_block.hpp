@@ -213,8 +213,8 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
     if (found != S.boundary_plans->end())
       prepared_boundary_plan = found->second;
   }
+  auto conversion = make_cell_convert(model);
   if (prepared_boundary_plan && prepared_boundary_plan->requires_fixed_state_conversion()) {
-    auto conversion = make_cell_convert(model);
     prepared_boundary_plan->prepare_fixed_state_conversion(conversion.first);
   }
   std::shared_ptr<const PreparedBoundaryPlan> boundary_plan = prepared_boundary_plan;
@@ -255,6 +255,7 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
   b.reconstruction_ghost_depth = Limiter::n_ghost;
   b.cons_vars =
       Model::conservative_vars();  // names + ROLES: role resolution -> component of coupled sources
+  b.cons_to_prim = std::move(conversion.second);
   b.levels = levels;
   b.boundary_plan = boundary_plan;
   b.boundary_field_registry = boundary_field_registry;
