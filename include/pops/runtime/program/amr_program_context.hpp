@@ -3199,6 +3199,18 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
           "AmrProgramContext::commit_many aliased target/source requires a flat hierarchy; "
           "materialize an explicit provisional state before a conservative multi-level commit");
   }
+  void program_execution_validate_commit_candidates_(
+      std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+    for (const auto& [target, candidate] : commits)
+      for (std::size_t block = 0; block < eng_->n_blocks(); ++block)
+        if (target == &eng_->level_state(block, level_)) {
+          eng_->require_recoverable_block_candidate_(
+              block, *candidate,
+              "AMR Program terminal state publication for runtime block " +
+                  std::to_string(block) + " level " + std::to_string(level_));
+          break;
+        }
+  }
   ProgramRuntimeState& program_execution_runtime_state_() const {
     return facade_->program_runtime_state_();
   }

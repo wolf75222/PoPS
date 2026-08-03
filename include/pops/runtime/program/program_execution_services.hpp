@@ -1315,6 +1315,12 @@ class ProgramExecutionServices {
                  std::find(targets.begin(), targets.end(), commit.second) != targets.end();
         });
     provider_().program_execution_validate_commit_aliases_(has_aliased_source);
+    // A terminal candidate may combine transport, model-local sources, coupled sources, or an
+    // implicit solve.  The topology provider owns its exact block identity and validates every
+    // live-state publication through that block's prepared variable-recovery authority.  This
+    // read-only preflight runs before the first copy, so refusal cannot expose a partially committed
+    // multi-block endpoint.
+    provider_().program_execution_validate_commit_candidates_(commits);
 
     if (!has_aliased_source) {
       for (const auto& [target, source] : commits)

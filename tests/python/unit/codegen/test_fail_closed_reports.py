@@ -222,13 +222,15 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "AMR bootstrap commits" in prepared.limitation
     assert "rematerialized history slots" in prepared.limitation
     assert "physical boundary traces" in prepared.limitation
+    assert "generated Program terminal commits" in prepared.limitation
+    assert "model-local and coupled sources" in prepared.limitation
     assert "no implicit repair, fallback, or mutable cache" in prepared.limitation
 
     cutover = routes["recovery:complete_consumer_cutover"]
     assert cutover.status == "unavailable"
     assert cutover.layout == "uniform|amr"
     assert cutover.backend == "none"
-    assert "model/source conversion" in cutover.limitation
+    assert "manual in-place Program writes" in cutover.limitation
     assert "initial and analytic materialization" not in cutover.limitation
     assert "fallible primitive-to-conservative conversion" not in cutover.limitation
     assert "AMR bootstrap/history transfer" not in cutover.limitation
@@ -240,7 +242,8 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "transactional AMR regrid prolongation/restriction" in cutover.available_route
     assert "bootstrap/history" in cutover.available_route
     assert "physical boundary-trace publication" in cutover.available_route
-    assert "missing model/source, warm-start, and cache/restart contracts" in cutover.alternative
+    assert "model-local and coupled-source endpoints" in cutover.available_route
+    assert "missing in-place-write, warm-start, and cache/restart contracts" in cutover.alternative
     assert cutover.error_message
 
 

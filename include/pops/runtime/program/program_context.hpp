@@ -734,6 +734,15 @@ class ProgramContext : public ProgramExecutionServices<ProgramContext> {
     logical_physical_time_offset_ = rollback.physical_time_offset;
   }
   void program_execution_validate_commit_aliases_(bool /*has_aliased_source*/) const noexcept {}
+  void program_execution_validate_commit_candidates_(
+      std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+    for (const auto& [target, candidate] : commits)
+      for (int block = 0; block < sys_->n_blocks(); ++block)
+        if (target == &sys_->block_state(block)) {
+          sys_->validate_program_state_publication_candidate(block, *candidate);
+          break;
+        }
+  }
   ProgramRuntimeState& program_execution_runtime_state_() const {
     return sys_->program_runtime_state_();
   }

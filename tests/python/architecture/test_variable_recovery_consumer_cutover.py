@@ -7,6 +7,9 @@ import re
 ROOT = Path(__file__).resolve().parents[3]
 BLOCK_BUILDER = ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
 SYSTEM_FIELDS = ROOT / "src/runtime/system/system_fields.cpp"
+PROGRAM_SERVICES = ROOT / "include/pops/runtime/program/program_execution_services.hpp"
+PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/program_context.hpp"
+AMR_PROGRAM_CONTEXT = ROOT / "include/pops/runtime/program/amr_program_context.hpp"
 FLUX_FAILURE = ROOT / "include/pops/numerics/fv/flux_failure.hpp"
 FACE_FLUX = ROOT / "include/pops/numerics/spatial/primitives/face_flux.hpp"
 RECOVERY = ROOT / "include/pops/numerics/nonlinear/prepared_variable_recovery.hpp"
@@ -90,6 +93,25 @@ def test_runtime_layer_has_no_independent_direct_primitive_recovery():
         if re.search(r"\b(?:m|model)\.to_primitive\s*\(", source):
             bypasses.append(path.relative_to(ROOT).as_posix())
     assert bypasses == []
+
+
+def test_program_terminal_state_publication_validates_every_candidate_before_first_copy():
+    shared = PROGRAM_SERVICES.read_text(encoding="utf-8")
+    commit = _between(
+        shared,
+        "void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits)",
+        "\n  /// Apply every coupled-source operator",
+    )
+    validation = commit.index("program_execution_validate_commit_candidates_(commits)")
+    publication = commit.index("lincomb(*target", validation)
+    assert validation < publication
+
+    uniform = PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    assert "validate_program_state_publication_candidate(block, *candidate)" in uniform
+
+    amr = AMR_PROGRAM_CONTEXT.read_text(encoding="utf-8")
+    assert "require_recoverable_block_candidate_(" in amr
+    assert "AMR Program terminal state publication" in amr
 
 
 def test_face_reconstruction_returns_and_consumes_one_typed_recovery_report():

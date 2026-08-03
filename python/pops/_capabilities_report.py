@@ -527,8 +527,10 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "regrid prolongation and restriction candidates pass the block-prepared inverse "
                 "authority collectively before replacing live hierarchy state; AMR bootstrap "
                 "commits, rematerialized history slots, and physical boundary traces use that "
-                "same publication gate and roll back exactly on refusal, with no implicit repair, "
-                "fallback, or mutable cache"
+                "same publication gate and roll back exactly on refusal; generated Program "
+                "terminal commits validate every Uniform or AMR live-state candidate before the "
+                "first multi-block copy, including endpoints assembled from model-local and "
+                "coupled sources, with no implicit repair, fallback, or mutable cache"
             ),
             source=source,
         ),
@@ -541,7 +543,7 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=gpu,
             status="unavailable",
             limitation=(
-                "model/source conversion, persistent warm starts, cache restart, and the "
+                "manual in-place Program writes, persistent warm starts, cache restart, and the "
                 "backend/performance matrix do not yet share one prepared recovery authority"
             ),
             requested="complete prepared variable-recovery consumer cutover",
@@ -550,11 +552,12 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "transactional analytic initial-state materialization plus spatial face "
                 "reconstruction, fallible primitive-to-conservative setup conversion, and "
                 "transactional AMR regrid prolongation/restriction, bootstrap/history, and "
-                "physical boundary-trace publication"
+                "physical boundary-trace publication, plus generated Program terminal commit "
+                "validation for model-local and coupled-source endpoints"
             ),
             alternative=(
-                "use the delivered conservative-to-primitive consumers or implement the missing "
-                "model/source, warm-start, and cache/restart contracts"
+                "use generated Program candidate commits and the delivered recovery consumers, or "
+                "implement the missing in-place-write, warm-start, and cache/restart contracts"
             ),
             source=source,
         ),

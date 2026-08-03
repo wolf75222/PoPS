@@ -744,6 +744,13 @@ class System {
   POPS_EXPORT std::size_t apply_coupling_operators(Real dt,
                                                    const std::vector<MultiFab*>& candidate_states);
 
+  /// Internal Program publication preflight. Validates one terminal candidate through the exact
+  /// block model's prepared conservative-to-primitive recovery before commit_many copies any block
+  /// into accepted storage. The operation is collective and read-only; refusal leaves every live
+  /// state unchanged.
+  POPS_EXPORT void validate_program_state_publication_candidate(
+      int block, const MultiFab& candidate) const;
+
   /// Solve Poisson then derive aux = (phi, grad phi). The candidate potential and aux remain
   /// physically private until the returned one-shot outcome is consumed with Accept.
   [[nodiscard]] POPS_EXPORT SolveOutcome solve_fields();
