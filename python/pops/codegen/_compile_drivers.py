@@ -208,13 +208,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     )
 
 
-def _compile_resolved_problem(
-    plan: Any, so_path: Any = None, *, model: Any = None, model_graph: Any = None,
-    time: Any = None, backend: Any = "production", target: Any = "system",
-    force: Any = False, cxx: Any = None, include: Any = None, std: Any = None,
-    debug: Any = False, libraries: Any = None, problem_snapshot: Any = None,
-    field_plans: Any = None, balance_due_contract: Any = None,
-) -> Any:
+def _compile_resolved_problem(plan: Any) -> Any:
     """Compile only the route authenticated by one exact resolved plan."""
     from pops.codegen._plans import ResolvedSimulationPlan
 
@@ -225,25 +219,24 @@ def _compile_resolved_problem(
     )
 
     evidence = _issue_shared_interface_codegen_evidence(plan)
-    if time is not plan.time or target != plan.target:
-        raise ValueError("resolved Program compilation changed its plan Program or target")
+    from pops.codegen._orchestration_compile import build_program_model_graph
+    from pops.codegen.program_balance_due import validate_balance_due_contract
+    from pops._balance_due_contract import BalanceDueContract
+
+    balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
+    validate_balance_due_contract(plan.time, balance_due_contract)
+    options = dict(plan.compile_options)
+    options["libraries"] = plan.libraries
     return _compile_problem_impl(
-        so_path,
-        model=model,
-        model_graph=model_graph,
-        time=time,
-        backend=backend,
-        target=target,
-        force=force,
-        cxx=cxx,
-        include=include,
-        std=std,
-        debug=debug,
-        libraries=libraries,
-        problem_snapshot=problem_snapshot,
-        field_plans=field_plans,
+        model_graph=build_program_model_graph(plan),
+        time=plan.time,
+        backend=plan.backend,
+        target=plan.target,
+        problem_snapshot=plan.snapshot,
+        field_plans=plan.field_plans,
         balance_due_contract=balance_due_contract,
         shared_interface_codegen_evidence=evidence,
+        **options,
     )
 
 

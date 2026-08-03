@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pops.codegen._compile_drivers import compile_problem
+from pops.codegen._compile_drivers import _compile_resolved_problem, compile_problem
 from pops.codegen._interface_validation import validate_shared_interface_program
 from pops.codegen.program_emit_control import _emit_contiguous_rhs_group
 from pops.codegen.program_codegen import emit_cpp_program
@@ -195,6 +195,12 @@ def test_public_emitter_rejects_removed_implicit_pair_boolean_backdoor() -> None
             time=program,
             target="amr_system",
             has_shared_interface_implicit_jacvec=True,  # type: ignore[call-arg]
+        )
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        _compile_resolved_problem(
+            object(),
+            time=program,  # type: ignore[call-arg]
         )
 
 
