@@ -271,6 +271,7 @@ RIEMANN_RUSANOV = _REGISTRY["riemann"]["rusanov"]
 RIEMANN_HLL = _REGISTRY["riemann"]["hll"]
 RIEMANN_HLLC = _REGISTRY["riemann"]["hllc"]
 RIEMANN_ROE = _REGISTRY["riemann"]["roe"]
+RIEMANN_ROE_HLL_RUSANOV_RECOVERY = _REGISTRY["riemann"]["roe_hll_rusanov_recovery"]
 
 LIMITER_NONE = _REGISTRY["limiter"]["none"]
 LIMITER_MINMOD = _REGISTRY["limiter"]["minmod"]

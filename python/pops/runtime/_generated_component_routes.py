@@ -5,15 +5,15 @@ COMPONENT_CATALOG_SCHEMA_VERSION = 1
 
 COMPONENT_MANIFEST_SCHEMA_VERSION = 2
 
-ROUTE_REGISTRY_VERSION = 2
+ROUTE_REGISTRY_VERSION = 3
 
 CAPABILITY_VOCAB_VERSION = 4
 
-COMPONENT_CATALOG_SHA256 = 'ad1dbd6838d52c41b7d797ffdb3e43d07da701c0adbe00845acaf5e41ae67640'
+COMPONENT_CATALOG_SHA256 = 'b8801b403645d62afd4e9ea0dd92af8124f042f359aba9ad09ffa4ea6f4a8a66'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = '34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = 'b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8'
+ROUTE_REGISTRY_SIGNATURE = 'v3:b4cab25a04533f5ebfec12d1814688b1cb81f9cc5e4473ed40bcfa553d8403f3'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -36,7 +36,16 @@ ROUTE_TABLES = {'riemann': (('rusanov',
              ('roe',
               'pops::RoeFlux',
               ('physical_flux', 'provider_pack', 'stability_bound', 'roe_dissipation'),
-              ())),
+              ()),
+             ('roe_hll_rusanov_recovery',
+              'pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux,pops::HLLFlux,pops::RusanovFlux,pops::RejectRiemannRecovery>',
+              ('physical_flux',
+               'provider_pack',
+               'stability_bound',
+               'wave_speeds',
+               'roe_dissipation'),
+              ('fixed ordered policy Roe -> HLL -> Rusanov -> reject',
+               'annular polar route unavailable'))),
  'limiter': (('none', 'pops::NoSlope', (), ()),
              ('minmod', 'pops::Minmod', (), ()),
              ('vanleer', 'pops::VanLeer', (), ()),
@@ -123,7 +132,11 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
              'roe': {'needs_wave_speeds': False,
                      'needs_hllc_struct': False,
                      'needs_roe_diss': True,
-                     'polar_ok': True}},
+                     'polar_ok': True},
+             'roe_hll_rusanov_recovery': {'needs_wave_speeds': True,
+                                          'needs_hllc_struct': False,
+                                          'needs_roe_diss': True,
+                                          'polar_ok': False}},
  'limiter': {'none': {'n_ghost': 1, 'formal_order': 1, 'muscl_compatible': False},
              'minmod': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
              'vanleer': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
@@ -169,7 +182,7 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
 
 ROUTE_CPP_BINDINGS = {'riemann': {'enum': 'RiemannRouteId',
              'table': 'kRiemannRoutes',
-             'ids': ('kRusanov', 'kHll', 'kHllc', 'kRoe')},
+             'ids': ('kRusanov', 'kHll', 'kHllc', 'kRoe', 'kRoeHllRusanovRecovery')},
  'limiter': {'enum': 'LimiterRouteId',
              'table': 'kLimiterRoutes',
              'ids': ('kNone', 'kMinmod', 'kVanLeer', 'kWeno5', 'kMc', 'kSuperbee')},

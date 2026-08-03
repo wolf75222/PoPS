@@ -22,6 +22,53 @@ from typing import Any
 
 from pops.descriptors import Availability
 
+
+def _layout_of(context: Any) -> Any:
+    if context is None:
+        return None
+    if isinstance(context, dict):
+        return context.get("layout", context.get("mesh", context.get("geometry")))
+    for attribute in ("layout", "mesh", "geometry"):
+        value = getattr(context, attribute, None)
+        if value is not None:
+            return value
+    return context
+
+
+def _is_polar(context: Any) -> bool:
+    layout = _layout_of(context)
+    if layout is None:
+        return False
+    if isinstance(layout, str):
+        return layout.lower() in {"polar", "polar_mesh", "annular_polar"}
+    if type(layout).__name__ == "PolarMesh":
+        return True
+    capabilities = getattr(layout, "capabilities", None)
+    if callable(capabilities):
+        values = capabilities()
+        data = getattr(values, "values", values)
+        if hasattr(data, "get") and data.get("geometry") == "polar":
+            return True
+    return False
+
+
+def _validate_layout(flux: Any, context: Any) -> None:
+    if not _is_polar(context):
+        return
+    scheme = str(getattr(flux, "scheme", ""))
+    from pops.runtime.routes import resolve
+
+    try:
+        route = resolve("riemann", scheme)
+    except ValueError:
+        return  # External routes own their declared layout contract.
+    if not route.metadata.get("polar_ok", False):
+        raise ValueError(
+            "validate: Riemann flux %r is unavailable on annular polar geometry "
+            "(catalog polar_ok=false); no fallback or candidate substitution" % scheme
+        )
+
+
 def _model_of(context: Any) -> Any:
     """Extract the compiled / authoring model from a validate/available @p context, or ``None``.
 
@@ -54,6 +101,7 @@ def flux_validate(flux: Any, context: Any = None) -> bool:
 
     Returns ``True`` when the flux is usable; re-raises the predicate's ``ValueError`` otherwise.
     """
+    _validate_layout(flux, context)
     model = _model_of(context)
     if model is None:
         return True
@@ -78,7 +126,9 @@ def flux_available(flux: Any, context: Any = None) -> Any:
     except ValueError as err:
         from pops.numerics.riemann._contract import riemann_capability_contract
         from pops.runtime.routes import riemann_missing_capabilities
-        missing = riemann_missing_capabilities(riemann_capability_contract(flux), model)
+        missing = [] if model is None else riemann_missing_capabilities(
+            riemann_capability_contract(flux), model
+        )
         alternatives = ["pops.numerics.riemann.Rusanov()"]
         return Availability.no(str(err), missing=missing, alternatives=alternatives)
     return Availability.yes()
