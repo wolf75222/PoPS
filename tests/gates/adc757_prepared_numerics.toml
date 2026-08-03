@@ -1,4 +1,4 @@
-schema_version = 2
+schema_version = 3
 gate = "adc757-prepared-numerics-slice"
 issue = "ADC-757"
 evidence_from = ["ADC-682", "ADC-711", "ADC-733", "ADC-737", "ADC-749", "ADC-750", "ADC-751", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
@@ -6,14 +6,24 @@ deferred = [
   "remaining_runtime_nd_metric_eb_characteristic_execution",
   "remaining_legacy_recovery_and_boundary_authority_deletion",
   "amr_regrid_migration_and_restart_coherence",
-  "gpu_backend_execution",
-  "accelerator_stream_partitioning",
-  "performance_baselines_and_end_to_end_benchmarks",
   "remaining_local_time_migration_and_load_balance_runtime_integration",
 ]
 
+[hardware_evidence]
+kind = "authenticated_hardware_report"
+polarity = "positive"
+report_schema = "pops.adc757.heterogeneous-numerics.v1"
+verifier = "benchmarks/adc757/verify.py"
+requirements = [
+  "gpu_backend_execution",
+  "accelerator_stream_partitioning",
+  "performance_baselines_and_regression_thresholds",
+]
+
 # This is an executable partial gate, not ADC-757 closure. Every claimed
-# requirement has one success proof and one refusal/detector proof.
+# software requirement has success and refusal/detector proofs. The three
+# hardware positives must be supplied by the single authenticated report route above;
+# ordinary CPU CTests may provide only their fail-closed detector proofs.
 [[check]]
 requirement = "prepared_local_nonlinear"
 polarity = "positive"
@@ -475,3 +485,22 @@ requirement = "measured_load_balance_decision"
 polarity = "refusal"
 target = "test_load_balance"
 test_regex = "^test_load_balance\\.measured_rebalance_refuses_stale_or_incomplete_evidence$"
+
+[[check]]
+requirement = "gpu_backend_execution"
+polarity = "refusal"
+target = "test_prepared_stream_executor"
+test_regex = "^PreparedStreamExecutor\\.CpuBackendsCannotClaimIndependentAcceleratorStreams$"
+
+[[check]]
+requirement = "accelerator_stream_partitioning"
+polarity = "refusal"
+target = "test_prepared_stream_executor"
+test_regex = "^PreparedStreamExecutor\\.InvalidPreparationIsRejectedBeforeBackendSelection$"
+
+[[check]]
+requirement = "performance_baselines_and_regression_thresholds"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/architecture/test_adc757_heterogeneous_campaign.py"
+test = "test_adc757_hardware_report_refuses_false_closure"
