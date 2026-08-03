@@ -7,6 +7,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -101,6 +102,7 @@ class BatchedCellTemporalPartition {
       CellTemporalPartitionAcceptedState accepted = CellTemporalPartitionAcceptedState{})
       : accepted_(std::move(accepted)) {
     validate_cell_temporal_partition_state(accepted_);
+    pending_ticks_.reserve(accepted_.cells.size());
   }
 
   const CellTemporalPartitionAcceptedState& accepted_state() const noexcept { return accepted_; }
@@ -184,15 +186,33 @@ class BatchedCellTemporalPartition {
     if (attempt_active_)
       throw std::logic_error("temporal partition restore cannot replace an active attempt");
     validate_cell_temporal_partition_state(accepted);
+    pending_ticks_.reserve(accepted.cells.size());
     accepted_ = std::move(accepted);
   }
 
-  void require_global_execution_route() const {
-    if (accepted_.kind != TemporalPartitionKind::Global)
+  /// Authenticate the execution provider selected for this accepted image.
+  ///
+  /// An empty identity denotes the hierarchy-global AMR driver.  It is valid only for a global
+  /// partition.  A cell-local image must instead name the exact prepared provider stored in its
+  /// checkpoint; callers cannot silently substitute the global driver or a different executor.
+  void require_prepared_execution_route(std::string_view prepared_provider_identity) const {
+    if (accepted_.kind == TemporalPartitionKind::Global) {
+      if (!prepared_provider_identity.empty())
+        throw std::logic_error(
+            "global temporal partition cannot consume a cell-local prepared executor");
+      return;
+    }
+    if (prepared_provider_identity.empty())
       throw std::logic_error(
-          "cell-local temporal partition requires its prepared batched executor; the global AMR "
-          "step cannot silently replace it");
+          "cell-local temporal partition requires a prepared local-stage and time-integrated "
+          "flux-ledger executor; the global AMR step cannot silently replace it");
+    if (prepared_provider_identity != accepted_.provider_identity)
+      throw std::logic_error(
+          "cell-local temporal partition prepared-provider identity does not match its accepted "
+          "checkpoint");
   }
+
+  void require_global_execution_route() const { require_prepared_execution_route({}); }
 
   std::vector<std::vector<std::string>> manifest() const {
     std::map<int, std::size_t> rung_counts;
