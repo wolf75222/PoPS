@@ -487,6 +487,20 @@ target = "test_load_balance"
 test_regex = "^test_load_balance\\.measured_rebalance_refuses_stale_or_incomplete_evidence$"
 
 [[check]]
+requirement = "measured_load_balance_decision"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/amr/test_public_amr_resolution.py"
+test = "test_measured_knapsack_roundtrips_exact_native_decision_policy"
+
+[[check]]
+requirement = "measured_load_balance_decision"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/amr/test_public_amr_resolution.py"
+test = "test_measured_knapsack_rejects_invalid_decision_policy"
+
+[[check]]
 requirement = "gpu_backend_execution"
 polarity = "refusal"
 target = "test_prepared_stream_executor"

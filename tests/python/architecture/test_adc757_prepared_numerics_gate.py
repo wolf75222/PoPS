@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 78
+    assert len(data["check"]) == 80
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-682",
@@ -176,6 +176,34 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
     }
     assert all(row["polarity"] != "positive" for row in hardware_rows)
     assert runner.main(["--check-only", "--closure"]) == 3
+
+
+def test_adc757_slice_includes_exact_public_measured_load_balance_policy_proofs():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    public_rows = [
+        row
+        for row in data["check"]
+        if row.get("kind") == "pytest"
+        and row["requirement"] == "measured_load_balance_decision"
+    ]
+    assert public_rows == [
+        {
+            "requirement": "measured_load_balance_decision",
+            "polarity": "positive",
+            "kind": "pytest",
+            "path": "tests/python/unit/amr/test_public_amr_resolution.py",
+            "test": "test_measured_knapsack_roundtrips_exact_native_decision_policy",
+        },
+        {
+            "requirement": "measured_load_balance_decision",
+            "polarity": "refusal",
+            "kind": "pytest",
+            "path": "tests/python/unit/amr/test_public_amr_resolution.py",
+            "test": "test_measured_knapsack_rejects_invalid_decision_policy",
+        },
+    ]
 
 
 def test_adc757_slice_executes_host_workspace_reentrancy_without_claiming_streams():
