@@ -103,8 +103,7 @@ class BoxArray {
   explicit BoxArray(std::vector<box_type> boxes) : boxes_(std::move(boxes)) {}
 
   /// Tile a domain deterministically. Axis 0 is the contiguous ordering axis.
-  static BoxArray from_domain(const box_type& domain,
-                              const std::array<int, Dim>& max_grid_size) {
+  static BoxArray from_domain(const box_type& domain, const std::array<int, Dim>& max_grid_size) {
     for (int axis = 0; axis < Dim; ++axis)
       if (max_grid_size[axis] <= 0)
         throw std::invalid_argument("BoxArray max grid sizes must be strictly positive");
