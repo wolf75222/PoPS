@@ -194,7 +194,7 @@ TEST(test_amr_diagnostics, DeviceMultiboxNonzeroOriginParity) {
   const Geometry geometry{domain, Real(0), Real(1), Real(0), Real(1)};
   const auto load_balance = test::prepare_test_space_filling_curve_load_balance();
   AmrCouplerMP<DiagnosticWaveModel> coupler(DiagnosticWaveModel{}, geometry, boxes, BCRec{},
-                                            std::move(levels), {},
+                                            Periodicity{true, true}, std::move(levels), {},
                                             /*replicated_coarse=*/false, load_balance);
   for (int local = 0; local < coupler.coarse().local_size(); ++local)
     for_each_cell(
@@ -244,8 +244,8 @@ TEST(test_amr_diagnostics, RejectsInvalidSpacingBeforeFieldKernels) {
     EXPECT_THROW(
         {
           AmrCouplerMP<DiagnosticWaveModel> invalid(DiagnosticWaveModel{}, zero_width, boxes,
-                                                    BCRec{}, std::move(levels), {}, false,
-                                                    load_balance);
+                                                    BCRec{}, Periodicity{true, true},
+                                                    std::move(levels), {}, false, load_balance);
         },
         std::invalid_argument);
   }
@@ -258,7 +258,8 @@ TEST(test_amr_diagnostics, RejectsInvalidSpacingBeforeFieldKernels) {
     EXPECT_THROW(
         {
           AmrCouplerMP<DiagnosticWaveModel> invalid(DiagnosticWaveModel{}, geometry, boxes, BCRec{},
-                                                    std::move(levels), {}, false, load_balance);
+                                                    Periodicity{true, true}, std::move(levels), {},
+                                                    false, load_balance);
         },
         std::invalid_argument);
   }

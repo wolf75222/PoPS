@@ -457,7 +457,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     OperatorFingerprint topology =
         ::pops::detail::layout_fingerprint(prototype, program_resource_vector_distribution());
     ::pops::detail::fingerprint_geometry(topology, eng_->level_geom(level_));
-    ::pops::detail::fingerprint_boundary(topology, eng_->transport_bc());
+    ::pops::detail::fingerprint_boundary(topology, eng_->default_boundary_descriptor());
     ::pops::detail::fingerprint_mix(topology, "amr-level-local");
     ::pops::detail::fingerprint_mix(topology, static_cast<std::uint64_t>(level_));
     ::pops::detail::fingerprint_mix(topology, static_cast<std::uint64_t>(nlev()));
@@ -2946,7 +2946,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     const Geometry geometry = eng_->level_geom(level_);
     GridContext context;
     context.dom = geometry.domain;
-    context.bc = eng_->transport_bc();
+    context.bc = eng_->default_boundary_descriptor();
     context.geom = geometry;
     context.aux = &const_cast<MultiFab&>(eng_->aux(level_));
     return context;

@@ -2630,9 +2630,10 @@ class AmrRuntime {
   /// Geometry of level @p k: the coarse metric refined k times (dx/dy >> k, domain << k). The metric
   /// the per-level Laplacian / gradient / RHS read (parity with System's grid_context().geom).
   Geometry level_geom(int k) const { return geom_.refine(level_refinement(k)); }
-  /// Transport BCRec derived from the base periodicity (periodic where periodic, else Foextrap) -- the
-  /// SAME convention System::make_bc uses, so a Program's per-level ghost fill matches the System path.
-  BCRec transport_bc() const {
+  /// Topology-only BC descriptor used by field operators and fingerprints. Hyperbolic block
+  /// execution never treats it as a physical boundary authority: every non-periodic block owns a
+  /// PreparedBoundaryPlan and the plan performs the fill.
+  BCRec default_boundary_descriptor() const {
     BCRec b;  // periodic by default
     if (!base_per_.x)
       b.xlo = b.xhi = BCType::Foextrap;
@@ -2648,7 +2649,7 @@ class AmrRuntime {
     const Geometry geometry = level_geom(level);
     GridContext context;
     context.dom = geometry.domain;
-    context.bc = transport_bc();
+    context.bc = default_boundary_descriptor();
     context.geom = geometry;
     context.aux = &const_cast<MultiFab&>(aux_[static_cast<std::size_t>(level)]);
     context.boundary_plan = blocks_[block].boundary_plan;
@@ -4648,8 +4649,10 @@ class AmrRuntime {
       }
       if (block.boundary_plan)
         throw std::runtime_error("AMR Tagger boundary plan has no persistent prepared session");
+      if (!base_per_.x || !base_per_.y)
+        throw std::runtime_error("AMR Tagger non-periodic block has no prepared boundary session");
       fill_level_state_cf_ghosts(block_index, level, state);
-      fill_ghosts(state, domain, transport_bc());
+      fill_boundary(state, domain, base_per_);
     }
     if (gradient_shared_aux)
       fill_ghosts(aux_.at(static_cast<std::size_t>(level)), domain, aux_bc_);
