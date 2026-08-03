@@ -193,12 +193,16 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
         bb = detail::build_block_exb(model, args);
         break;
       case TransportRouteId::kCompressible: {
-        // Compressible/Euler is flux-subdivided (ADC-335): all four fluxes are valid (4-var + pressure),
+        // Compressible/Euler is flux-subdivided (ADC-335): its single-solver fluxes and fixed
+        // recovery policy are valid (4-var + pressure),
         // so we run the SAME validation as make_block (validate_riemann then validate_limiter, identical
         // messages) and dispatch the riemann route to the matching per-flux sub-TU. An unknown flux hits
         // the same registry throw as make_block's tail (validate_riemann already rejected it).
         validate_riemann(riemann, /*polar=*/false, "System");
         validate_limiter(limiter, "System");
+        if (args.wave_speed_cache && riemann != "hll")
+          throw std::runtime_error(
+              "System: wave_speed_cache requires flux='hll'; no alternate flux");
         switch (parse_riemann_route(riemann, "System")) {
           case RiemannRouteId::kRusanov:
             bb = detail::build_block_compressible_rusanov(model, args);
@@ -212,6 +216,9 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
           case RiemannRouteId::kRoe:
             bb = detail::build_block_compressible_roe(model, args);
             break;
+          case RiemannRouteId::kRoeHllRusanovRecovery:
+            bb = detail::build_block_compressible_roe_hll_rusanov_recovery(model, args);
+            break;
           default:
             throw_registry_dispatch_mismatch("System", "flux", riemann);
         }
@@ -224,6 +231,9 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
         // model and no branch substitutes another solver.
         validate_riemann(riemann, /*polar=*/false, "System");
         validate_limiter(limiter, "System");
+        if (args.wave_speed_cache && riemann != "hll")
+          throw std::runtime_error(
+              "System: wave_speed_cache requires flux='hll'; no alternate flux");
         switch (parse_riemann_route(riemann, "System")) {
           case RiemannRouteId::kRusanov:
             bb = detail::build_block_isothermal_rusanov(model, args);
@@ -236,6 +246,9 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
             break;
           case RiemannRouteId::kRoe:
             bb = detail::build_block_isothermal_roe(model, args);
+            break;
+          case RiemannRouteId::kRoeHllRusanovRecovery:
+            bb = detail::build_block_isothermal_roe_hll_rusanov_recovery(model, args);
             break;
           default:
             throw_registry_dispatch_mismatch("System", "flux", riemann);

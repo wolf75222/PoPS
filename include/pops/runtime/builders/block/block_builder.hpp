@@ -767,6 +767,31 @@ POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim
 }
 
 template <class Model>
+POPS_COLD_FN BlockClosures make_block_roe_hll_rusanov_recovery(const Model& m,
+                                                               const std::string& lim,
+                                                               const GridContext& ctx,
+                                                               bool recon_prim, Real pos_floor,
+                                                               Real weno_eps = kWenoEpsilon) {
+  if constexpr (!HasRoeDissipation<Model>) {
+    throw std::runtime_error(
+        "System: recovery policy 'roe -> hll -> rusanov' requires the model's Roe capability "
+        "(HasRoeDissipation); no candidate substitution");
+  } else if constexpr (!requires(const Model mm, typename Model::State s, Aux a, Real r) {
+                         mm.wave_speeds(s, a, 0, r, r);
+                       }) {
+    throw std::runtime_error(
+        "System: recovery policy 'roe -> hll -> rusanov' requires signed wave speeds for its "
+        "declared HLL candidate; no candidate substitution");
+  } else {
+    return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
+      using L = typename decltype(tag)::type;
+      return build_block<L, RoeHllRusanovRecoveryPolicy>(m, ctx, recon_prim, pos_floor,
+                                                         /*wave_speed_cache=*/false, weno_eps);
+    });
+  }
+}
+
+template <class Model>
 POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
                                       const std::string& riem, const GridContext& ctx,
                                       bool recon_prim, Real pos_floor = Real(0),
@@ -778,6 +803,8 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
   // guard (unreachable after validate_riemann).
   validate_riemann(riem, /*polar=*/false, "System");
   validate_limiter(lim, "System");
+  if (wave_speed_cache && riem != "hll")
+    throw std::runtime_error("System: wave_speed_cache requires flux='hll'; no alternate flux");
   // Parse the validated tag ONCE into the typed RiemannRouteId (ADC-641). Each public provider owns
   // exactly one leaf; the default is a defense-in-depth registry/dispatch guard.
   switch (parse_riemann_route(riem, "System")) {
@@ -789,6 +816,8 @@ POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
       return make_block_hllc(m, lim, ctx, recon_prim, pos_floor, weno_eps);
     case RiemannRouteId::kRoe:
       return make_block_roe(m, lim, ctx, recon_prim, pos_floor, weno_eps);
+    case RiemannRouteId::kRoeHllRusanovRecovery:
+      return make_block_roe_hll_rusanov_recovery(m, lim, ctx, recon_prim, pos_floor, weno_eps);
   }
   throw_registry_dispatch_mismatch("System", "flux", riem);
 }

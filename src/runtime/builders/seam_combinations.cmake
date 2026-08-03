@@ -51,10 +51,12 @@ set(POPS_SEAM_COMBINATIONS
     "system_flux_seam|system|isothermal|hll|build_block_isothermal_hll|system/isothermal|system_isothermal_hll.cpp"
     "system_flux_seam|system|isothermal|hllc|build_block_isothermal_hllc|system/isothermal|system_isothermal_hllc.cpp"
     "system_flux_seam|system|isothermal|roe|build_block_isothermal_roe|system/isothermal|system_isothermal_roe.cpp"
+    "system_flux_seam|system|isothermal|roe_hll_rusanov_recovery|build_block_isothermal_roe_hll_rusanov_recovery|system/isothermal|system_isothermal_roe_hll_rusanov_recovery.cpp"
     "system_flux_seam|system|compressible|rusanov|build_block_compressible_rusanov|system/compressible|system_compressible_rusanov.cpp"
     "system_flux_seam|system|compressible|hll|build_block_compressible_hll|system/compressible|system_compressible_hll.cpp"
     "system_flux_seam|system|compressible|hllc|build_block_compressible_hllc|system/compressible|system_compressible_hllc.cpp"
     "system_flux_seam|system|compressible|roe|build_block_compressible_roe|system/compressible|system_compressible_roe.cpp"
+    "system_flux_seam|system|compressible|roe_hll_rusanov_recovery|build_block_compressible_roe_hll_rusanov_recovery|system/compressible|system_compressible_roe_hll_rusanov_recovery.cpp"
     # --- AMR multi-block side ----------------------------------------------------------------------
     "amr_block_transport_seam|amr_block|exb|-|build_amr_block_exb|amr/block/base|amr_block_exb.cpp"
     "amr_block_transport_seam|amr_block|isothermal|-|build_amr_block_isothermal|amr/block/base|amr_block_isothermal.cpp"
@@ -62,6 +64,7 @@ set(POPS_SEAM_COMBINATIONS
     "amr_block_flux_seam|amr_block|compressible|hll|build_amr_block_compressible_hll|amr/block/compressible|amr_block_compressible_hll.cpp"
     "amr_block_flux_seam|amr_block|compressible|hllc|build_amr_block_compressible_hllc|amr/block/compressible|amr_block_compressible_hllc.cpp"
     "amr_block_flux_seam|amr_block|compressible|roe|build_amr_block_compressible_roe|amr/block/compressible|amr_block_compressible_roe.cpp"
+    "amr_block_flux_seam|amr_block|compressible|roe_hll_rusanov_recovery|build_amr_block_compressible_roe_hll_rusanov_recovery|amr/block/compressible|amr_block_compressible_roe_hll_rusanov_recovery.cpp"
 )
 
 # Expand one manifest row into a generated seam .cpp under @p out_root, appending the generated path to

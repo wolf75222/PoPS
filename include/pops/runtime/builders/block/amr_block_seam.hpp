@@ -80,4 +80,6 @@ AmrRuntimeBlock build_amr_block_compressible_hllc(const AmrBlockBuildArgs& a,
                                                   const SharedAmrLayout& S);
 AmrRuntimeBlock build_amr_block_compressible_roe(const AmrBlockBuildArgs& a,
                                                  const SharedAmrLayout& S);
+AmrRuntimeBlock build_amr_block_compressible_roe_hll_rusanov_recovery(const AmrBlockBuildArgs& a,
+                                                                      const SharedAmrLayout& S);
 }  // namespace pops::detail
