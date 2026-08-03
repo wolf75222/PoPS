@@ -60,6 +60,8 @@ EXPECTED_REQUIREMENTS = {
     "characteristic_boundary_geometry_matrix",
     "polar_metric_spatial_provider_matrix",
     "measured_load_balance_decision",
+    "amr_rebalance_migration_and_restart_coherence",
+    "bounded_cell_local_program_runtime",
     "prepared_boundary_plan_only_transport_authority",
     "polar_persistent_prepared_boundary_plan",
     "prepared_batch_recovery_only_runtime_authority",
@@ -67,8 +69,7 @@ EXPECTED_REQUIREMENTS = {
 }
 EXPECTED_DEFERRED = (
     "remaining_runtime_nd_metric_eb_characteristic_execution",
-    "amr_regrid_migration_and_restart_coherence",
-    "remaining_local_time_migration_and_load_balance_runtime_integration",
+    "remaining_multirank_multibox_amr_local_time_execution",
 )
 GTEST_PATTERN = re.compile(r"\bTEST(?:_F)?\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
 FULL_GIT_REVISION = re.compile(r"[0-9a-f]{40}")
@@ -244,7 +245,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     for requirement in hardware_requirements:
         coverage[requirement].add("positive")
     identities = Counter()
-    mpi_checks = 0
+    mpi_checks: Counter[str] = Counter()
     for index, row in enumerate(checks, 1):
         where = "check[%d]" % index
         kind = row.get("kind", "ctest")
@@ -305,7 +306,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         suite = suites[target]
         labels = {str(label) for label in suite.get("labels", ())}
         if kind == "mpi_ctest":
-            mpi_checks += 1
+            mpi_checks[str(requirement)] += 1
             nproc = row.get("nproc")
             if "mpi" not in labels:
                 errors.append("%s mpi_ctest target %r lacks the mpi label" % (where, target))
@@ -346,7 +347,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     duplicates = sorted(identity for identity, count in identities.items() if count > 1)
     if duplicates:
         errors.append("duplicate executable checks: %s" % duplicates)
-    if mpi_checks != 2:
+    if mpi_checks["mpi_collective_execution"] != 2:
         errors.append(
             "the closed mpi_collective_execution family requires exactly two MPI CTests"
         )

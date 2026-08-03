@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 87
+    assert len(data["check"]) == 96
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-682",
@@ -144,6 +144,11 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
     assert all("riemann_authority" not in family for family in data["deferred"])
     assert "runtime_consumer_cutover_and_legacy_deletion" not in data["deferred"]
     assert "boundary_geometry_riemann_and_spatial_provider_families" not in data["deferred"]
+    assert "amr_regrid_migration_and_restart_coherence" not in data["deferred"]
+    assert "remaining_local_time_migration_and_load_balance_runtime_integration" not in data[
+        "deferred"
+    ]
+    assert "remaining_multirank_multibox_amr_local_time_execution" in data["deferred"]
     assert [
         row for row in data["check"] if row.get("kind") == "mpi_ctest"
     ] == [
@@ -161,6 +166,30 @@ def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proo
             "kind": "mpi_ctest",
             "target": "test_mpi_flux_failure_collective",
             "test_regex": "^test_mpi_flux_failure_collective_np2$",
+            "nproc": 2,
+        },
+        {
+            "requirement": "amr_rebalance_migration_and_restart_coherence",
+            "polarity": "positive",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_amr_rebalance_migration",
+            "test_regex": "^test_mpi_amr_rebalance_migration_np2$",
+            "nproc": 2,
+        },
+        {
+            "requirement": "amr_rebalance_migration_and_restart_coherence",
+            "polarity": "refusal",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_amr_rebalance_migration",
+            "test_regex": "^test_mpi_amr_rebalance_migration_np4$",
+            "nproc": 4,
+        },
+        {
+            "requirement": "bounded_cell_local_program_runtime",
+            "polarity": "refusal",
+            "kind": "mpi_ctest",
+            "target": "test_mpi_cell_temporal_program_refusal",
+            "test_regex": "^test_mpi_cell_temporal_program_refusal_np2$",
             "nproc": 2,
         },
     ]
@@ -203,6 +232,37 @@ def test_adc757_slice_includes_exact_public_measured_load_balance_policy_proofs(
             "path": "tests/python/unit/amr/test_public_amr_resolution.py",
             "test": "test_measured_knapsack_rejects_invalid_decision_policy",
         },
+    ]
+
+
+def test_adc757_slice_executes_rebalance_and_bounded_cell_local_runtime_proofs():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+
+    migration = [
+        row
+        for row in data["check"]
+        if row["requirement"] == "amr_rebalance_migration_and_restart_coherence"
+    ]
+    assert [(row["polarity"], row.get("kind", "ctest"), row["target"]) for row in migration] == [
+        ("positive", "mpi_ctest", "test_mpi_amr_rebalance_migration"),
+        ("refusal", "mpi_ctest", "test_mpi_amr_rebalance_migration"),
+        ("positive", "ctest", "test_program_reflux_ledger"),
+        ("refusal", "ctest", "test_program_reflux_ledger"),
+    ]
+
+    cell_local = [
+        row
+        for row in data["check"]
+        if row["requirement"] == "bounded_cell_local_program_runtime"
+    ]
+    assert [(row["polarity"], row.get("kind", "ctest")) for row in cell_local] == [
+        ("positive", "ctest"),
+        ("refusal", "ctest"),
+        ("refusal", "mpi_ctest"),
+        ("positive", "pytest"),
+        ("refusal", "pytest"),
     ]
 
 

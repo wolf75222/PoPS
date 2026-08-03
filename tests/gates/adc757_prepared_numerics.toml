@@ -4,8 +4,7 @@ issue = "ADC-757"
 evidence_from = ["ADC-682", "ADC-711", "ADC-733", "ADC-737", "ADC-749", "ADC-750", "ADC-751", "ADC-752", "ADC-753", "ADC-754", "ADC-755", "ADC-756"]
 deferred = [
   "remaining_runtime_nd_metric_eb_characteristic_execution",
-  "amr_regrid_migration_and_restart_coherence",
-  "remaining_local_time_migration_and_load_balance_runtime_integration",
+  "remaining_multirank_multibox_amr_local_time_execution",
 ]
 
 [hardware_evidence]
@@ -498,6 +497,68 @@ polarity = "refusal"
 kind = "pytest"
 path = "tests/python/unit/amr/test_public_amr_resolution.py"
 test = "test_measured_knapsack_rejects_invalid_decision_policy"
+
+[[check]]
+requirement = "amr_rebalance_migration_and_restart_coherence"
+polarity = "positive"
+kind = "mpi_ctest"
+target = "test_mpi_amr_rebalance_migration"
+test_regex = "^test_mpi_amr_rebalance_migration_np2$"
+nproc = 2
+
+[[check]]
+requirement = "amr_rebalance_migration_and_restart_coherence"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_amr_rebalance_migration"
+test_regex = "^test_mpi_amr_rebalance_migration_np4$"
+nproc = 4
+
+[[check]]
+requirement = "amr_rebalance_migration_and_restart_coherence"
+polarity = "positive"
+target = "test_program_reflux_ledger"
+test_regex = "^test_program_reflux_ledger\\.accepted_checkpoint_state_rematerializes_payloads_by_explicit_ownership$"
+
+[[check]]
+requirement = "amr_rebalance_migration_and_restart_coherence"
+polarity = "refusal"
+target = "test_program_reflux_ledger"
+test_regex = "^test_program_reflux_ledger\\.accepted_checkpoint_state_rematerialization_refuses_metadata_disagreement$"
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "positive"
+target = "test_cell_temporal_program_route"
+test_regex = "^test_cell_temporal_program_route\\.installed_program_commits_exact_ticks_state_and_conservative_face_ledger$"
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "refusal"
+target = "test_cell_temporal_program_route"
+test_regex = "^test_cell_temporal_program_route\\.invalid_tick_outer_rollback_and_same_topology_restart_remain_atomic$"
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_cell_temporal_program_refusal"
+test_regex = "^test_mpi_cell_temporal_program_refusal_np2$"
+nproc = 2
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_cell_local_time_codegen.py"
+test = "test_cell_local_time_contract_is_frozen_rebuilt_and_hashed"
+
+[[check]]
+requirement = "bounded_cell_local_program_runtime"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/unit/codegen/test_cell_local_time_codegen.py"
+test = "test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence"
 
 [[check]]
 requirement = "gpu_backend_execution"
