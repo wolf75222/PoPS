@@ -72,7 +72,7 @@ def _nonhyperbolic_roe_model() -> Model:
     # exact signed spectrum of the same flux Jacobian.  Register both explicitly: neither
     # provider is allowed to stand in for the other or fall back to a scalar radius.
     model.wave_speeds_from_jacobian()
-    model.roe_from_jacobian(entropy_fix=1.0e-6)
+    model.roe_from_jacobian(entropy_fix=riemann.Harten(1.0e-6))
     model.rate("transport", equation=ddt(state) == -div(flux))
     return model
 
@@ -154,12 +154,12 @@ def test_dense_roe_complex_spectrum_fails_without_rusanov_fallback(
 
 def test_roe_dense_spectral_capacity_fails_during_authoring() -> None:
     boundary = _diagonal_roe_model("dense_roe_boundary", 16)
-    boundary.roe_from_jacobian(entropy_fix=1.0e-6)
+    boundary.roe_from_jacobian(entropy_fix=riemann.Harten(1.0e-6))
     assert boundary._dsl._m._roe_jacobian is not None
 
     too_large = _diagonal_roe_model("dense_roe_too_large", 17)
     with pytest.raises(DenseSpectralCapacityError) as caught:
-        too_large.roe_from_jacobian(entropy_fix=1.0e-6)
+        too_large.roe_from_jacobian(entropy_fix=riemann.Harten(1.0e-6))
     assert caught.value.components == 17
     assert caught.value.max_components == 16
     assert "HLL" in str(caught.value)
