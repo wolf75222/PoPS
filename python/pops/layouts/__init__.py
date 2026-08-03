@@ -196,6 +196,16 @@ class Uniform(MeshDescriptor):
     def normalized_geometry(self) -> NormalizedGeometry:
         return _delegated_geometry(self.mesh, where="Uniform.mesh")
 
+    def native_spatial_data(self) -> dict[str, Any]:
+        projection = getattr(self.mesh, "native_spatial_data", None)
+        if not callable(projection):
+            raise TypeError(
+                "Uniform.mesh must implement native_spatial_data() for production lowering")
+        first, second = projection(), projection()
+        if not isinstance(first, dict) or first != second:
+            raise TypeError("Uniform.mesh native_spatial_data() must be one deterministic dict")
+        return first
+
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet({
             "layout": "uniform",
@@ -618,6 +628,29 @@ class AMR(MeshDescriptor):
 
     def normalized_geometry(self) -> NormalizedGeometry:
         return _delegated_geometry(self.grid, where="AMR.grid")
+
+    def native_spatial_data(self) -> dict[str, Any]:
+        """Capture exact base topology and adaptive decomposition policies."""
+        projection = getattr(self.grid, "native_spatial_data", None)
+        if not callable(projection):
+            raise TypeError(
+                "AMR.grid must implement native_spatial_data() for production lowering")
+        first, second = projection(), projection()
+        if not isinstance(first, dict) or first != second:
+            raise TypeError("AMR.grid native_spatial_data() must be one deterministic dict")
+        data = dict(first)
+        required = {"schema_version", "periodicity", "centering", "decomposition"}
+        if set(data) != required or data["schema_version"] != 1:
+            raise TypeError("AMR.grid native_spatial_data() uses an unsupported schema")
+        data["decomposition"] = {
+            "schema_version": 1,
+            "kind": "adaptive",
+            "base_domain": data["decomposition"],
+            "hierarchy": _authority_data(self.hierarchy, "hierarchy"),
+            "patch_layout": _patch_layout_data(self.patch_layout),
+            "load_balance": _load_balance_data(self.load_balance),
+        }
+        return data
 
     def inspect(self) -> dict[str, Any]:
         from pops._capabilities_inspect import _layout_amr_report

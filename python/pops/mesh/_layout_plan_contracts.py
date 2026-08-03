@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 import hashlib
 import json
@@ -328,6 +328,163 @@ class NormalizedGeometryProvider(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class NativeSpatialLayout:
+    """Exact immutable spatial specialization accepted by a native runtime.
+
+    The rank is derived exclusively from ``shape``.  Bounds must authenticate the same
+    :class:`NormalizedGeometry`; topology and decomposition remain explicit so neither compile nor
+    bind can recover them from a mutable authoring descriptor or a backend default.
+    """
+
+    layout_id: str
+    coordinate_system: str
+    cell_measure: str
+    axis_names: tuple[str, ...]
+    shape: tuple[int, ...]
+    lower: tuple[float, ...]
+    upper: tuple[float, ...]
+    periodicity: tuple[bool, ...]
+    centering: str
+    decomposition: Mapping[str, Any]
+    identity: Any = field(init=False)
+
+    def __post_init__(self) -> None:
+        from pops.identity import make_identity
+
+        if not isinstance(self.layout_id, str) or not self.layout_id:
+            raise TypeError("NativeSpatialLayout.layout_id must be non-empty text")
+        coordinate_system = _geometry_uri(
+            self.coordinate_system, where="NativeSpatialLayout.coordinate_system")
+        cell_measure = _geometry_uri(
+            self.cell_measure, where="NativeSpatialLayout.cell_measure")
+        axis_names = _geometry_axis_names(self.axis_names)
+        shape = _geometry_cells(self.shape)
+        lower = _geometry_points(self.lower, where="NativeSpatialLayout.lower")
+        upper = _geometry_points(self.upper, where="NativeSpatialLayout.upper")
+        periodicity = tuple(self.periodicity)
+        rank = len(shape)
+        if rank not in (1, 2, 3):
+            raise ValueError("NativeSpatialLayout supports only dimensions 1, 2, and 3")
+        if len(axis_names) != rank or len(lower) != rank or len(upper) != rank \
+                or len(periodicity) != rank:
+            raise ValueError(
+                "NativeSpatialLayout shape, axes, bounds and periodicity must have one rank")
+        if any(high <= low for low, high in zip(lower, upper, strict=True)):
+            raise ValueError("NativeSpatialLayout.upper must be strictly above lower")
+        if any(type(value) is not bool for value in periodicity):
+            raise TypeError("NativeSpatialLayout.periodicity must contain exact bool values")
+        if not isinstance(self.centering, str) or self.centering not in {
+                "cell", "node", "face_x", "face_y", "face_z"}:
+            raise ValueError("NativeSpatialLayout.centering is unsupported")
+        decomposition = json_data(
+            self.decomposition, where="NativeSpatialLayout.decomposition")
+        if not isinstance(decomposition, dict) or not decomposition:
+            raise TypeError("NativeSpatialLayout.decomposition must be a non-empty mapping")
+        object.__setattr__(self, "coordinate_system", coordinate_system)
+        object.__setattr__(self, "cell_measure", cell_measure)
+        object.__setattr__(self, "axis_names", axis_names)
+        object.__setattr__(self, "shape", shape)
+        object.__setattr__(self, "lower", lower)
+        object.__setattr__(self, "upper", upper)
+        object.__setattr__(self, "periodicity", periodicity)
+        object.__setattr__(self, "decomposition", freeze(decomposition))
+        object.__setattr__(
+            self, "identity", make_identity("native-spatial-layout", self._payload()))
+
+    @property
+    def dimension(self) -> int:
+        return len(self.shape)
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "layout_id": self.layout_id,
+            "dimension": self.dimension,
+            "coordinate_system": self.coordinate_system,
+            "cell_measure": self.cell_measure,
+            "axis_names": list(self.axis_names),
+            "shape": list(self.shape),
+            "lower": [value.hex() for value in self.lower],
+            "upper": [value.hex() for value in self.upper],
+            "periodicity": list(self.periodicity),
+            "centering": self.centering,
+            "decomposition": thaw(self.decomposition),
+        }
+
+    def to_data(self) -> dict[str, Any]:
+        return {**self._payload(), "identity": self.identity.token}
+
+    @classmethod
+    def from_data(cls, data: Any) -> NativeSpatialLayout:
+        from pops.identity import Identity
+
+        required = {
+            "schema_version", "layout_id", "dimension", "coordinate_system", "cell_measure",
+            "axis_names", "shape", "lower", "upper", "periodicity", "centering",
+            "decomposition", "identity",
+        }
+        if not isinstance(data, Mapping) or set(data) != required:
+            raise TypeError("NativeSpatialLayout data has an unsupported shape")
+        if data["schema_version"] != 1:
+            raise ValueError("NativeSpatialLayout data uses an unsupported schema")
+        for name in ("lower", "upper"):
+            values = data[name]
+            if not isinstance(values, list) or not values \
+                    or any(not isinstance(value, str) for value in values):
+                raise TypeError("NativeSpatialLayout.%s data must contain float.hex values" % name)
+        try:
+            lower = tuple(float.fromhex(value) for value in data["lower"])
+            upper = tuple(float.fromhex(value) for value in data["upper"])
+        except ValueError:
+            raise ValueError("NativeSpatialLayout bounds contain invalid float.hex data") from None
+        result = cls(
+            layout_id=data["layout_id"],
+            coordinate_system=data["coordinate_system"],
+            cell_measure=data["cell_measure"],
+            axis_names=tuple(data["axis_names"]),
+            shape=tuple(data["shape"]),
+            lower=lower,
+            upper=upper,
+            periodicity=tuple(data["periodicity"]),
+            centering=data["centering"],
+            decomposition=data["decomposition"],
+        )
+        if data["dimension"] != result.dimension:
+            raise ValueError("NativeSpatialLayout.dimension does not match shape")
+        if Identity.from_token(data["identity"]) != result.identity \
+                or result.to_data() != dict(data):
+            raise ValueError("NativeSpatialLayout data does not authenticate its payload")
+        return result
+
+    @classmethod
+    def from_geometry(
+        cls,
+        *,
+        layout: LayoutHandle,
+        geometry: NormalizedGeometry,
+        periodicity: Any,
+        centering: Any,
+        decomposition: Any,
+    ) -> NativeSpatialLayout:
+        if not isinstance(layout, LayoutHandle):
+            raise TypeError("NativeSpatialLayout requires a canonical LayoutHandle")
+        if type(geometry) is not NormalizedGeometry:
+            raise TypeError("NativeSpatialLayout requires an exact NormalizedGeometry")
+        return cls(
+            layout_id=layout.qualified_id,
+            coordinate_system=geometry.coordinate_system,
+            cell_measure=geometry.cell_measure,
+            axis_names=geometry.axis_names,
+            shape=geometry.cells,
+            lower=geometry.lower,
+            upper=geometry.upper,
+            periodicity=tuple(periodicity),
+            centering=centering,
+            decomposition=decomposition,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizedLayout:
     """Algorithm-neutral level plan; Uniform is the one-level degenerate case."""
 
@@ -342,6 +499,7 @@ class NormalizedLayout:
     capabilities: Mapping[str, Any]
     requirements: Mapping[str, Any]
     descriptor_snapshot: Mapping[str, Any]
+    native_spatial_layout: NativeSpatialLayout | None
 
     def __post_init__(self) -> None:
         if not isinstance(self.handle, LayoutHandle):
@@ -351,6 +509,23 @@ class NormalizedLayout:
             raise TypeError("NormalizedLayout.geometry must be an exact NormalizedGeometry")
         object.__setattr__(self, "geometry", NormalizedGeometry.from_data(
             self.geometry.to_data()))
+        native = self.native_spatial_layout
+        if native is not None:
+            if type(native) is not NativeSpatialLayout:
+                raise TypeError(
+                    "NormalizedLayout.native_spatial_layout must be an exact "
+                    "NativeSpatialLayout or None")
+            if native.layout_id != self.handle.qualified_id \
+                    or native.coordinate_system != self.geometry.coordinate_system \
+                    or native.cell_measure != self.geometry.cell_measure \
+                    or native.axis_names != self.geometry.axis_names \
+                    or native.shape != self.geometry.cells \
+                    or native.lower != self.geometry.lower \
+                    or native.upper != self.geometry.upper:
+                raise ValueError(
+                    "NormalizedLayout native spatial facts differ from normalized geometry")
+            object.__setattr__(self, "native_spatial_layout", NativeSpatialLayout.from_data(
+                native.to_data()))
         ratios = tuple(self.transition_ratios)
         if len(ratios) != max(0, len(self.levels) - 1) or any(
                 isinstance(value, bool) or not isinstance(value, int) or value < 2
@@ -386,6 +561,10 @@ class NormalizedLayout:
             "capabilities": thaw(self.capabilities),
             "requirements": thaw(self.requirements),
             "descriptor_snapshot": thaw(self.descriptor_snapshot),
+            "native_spatial_layout": (
+                None if self.native_spatial_layout is None
+                else self.native_spatial_layout.to_data()
+            ),
         }
 
 
@@ -711,6 +890,7 @@ __all__ = [
     "LayoutAssignment", "LayoutHandle", "LayoutLevel", "LayoutMappingOperation",
     "LayoutMappingProvider", "LayoutMappingPort", "LayoutMappingRequirement",
     "LayoutRepresentation", "LayoutSynchronization", "LayoutPlan", "NormalizedLayout",
-    "NormalizedGeometry", "NormalizedGeometryProvider", "POLAR_ANNULUS_2D_COORDINATES",
+    "NativeSpatialLayout", "NormalizedGeometry", "NormalizedGeometryProvider",
+    "POLAR_ANNULUS_2D_COORDINATES",
     "POLAR_ANNULUS_CELL_AREA", "ResolvedLayoutMapping",
 ]

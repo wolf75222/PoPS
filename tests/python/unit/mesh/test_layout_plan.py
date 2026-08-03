@@ -13,6 +13,7 @@ from pops.mesh.layout_plan import (
     LayoutRepresentation,
     LayoutSynchronization,
     LayoutPlanBuilder,
+    NativeSpatialLayout,
     NormalizedGeometry,
     ResolvedLayoutMapping,
     normalize_layout_plan,
@@ -298,8 +299,101 @@ def test_normalized_geometry_is_exact_detached_and_delegated_by_uniform_and_amr(
     assert uniform.geometry.upper == (2.5, 2.5)
     assert uniform.geometry.cells == (8, 8)
     assert uniform.to_data()["geometry"] == adaptive.to_data()["geometry"]
+    assert uniform.native_spatial_layout is not None
+    assert adaptive.native_spatial_layout is not None
+    assert uniform.native_spatial_layout.dimension == 2
+    assert uniform.native_spatial_layout.shape == uniform.geometry.cells
+    assert uniform.native_spatial_layout.periodicity == (True, True)
+    assert uniform.native_spatial_layout.decomposition["kind"] == "single_box"
+    assert adaptive.native_spatial_layout.decomposition["kind"] == "adaptive"
     with pytest.raises(AttributeError):
         uniform.geometry.cells = (16, 16)
+
+
+def test_native_spatial_layout_round_trip_and_identity_cover_every_spatial_fact():
+    row = normalize_layout_plan(
+        Uniform(cartesian_grid(n=8)), owner=OwnerPath.case("native-spatial")).layouts[0]
+    native = row.native_spatial_layout
+    assert native is not None
+    assert NativeSpatialLayout.from_data(native.to_data()) == native
+
+    data = native.to_data()
+    data["periodicity"][0] = False
+    data.pop("identity")
+    changed = NativeSpatialLayout(
+        layout_id=data["layout_id"],
+        coordinate_system=data["coordinate_system"],
+        cell_measure=data["cell_measure"],
+        axis_names=tuple(data["axis_names"]),
+        shape=tuple(data["shape"]),
+        lower=tuple(float.fromhex(value) for value in data["lower"]),
+        upper=tuple(float.fromhex(value) for value in data["upper"]),
+        periodicity=tuple(data["periodicity"]),
+        centering=data["centering"],
+        decomposition=data["decomposition"],
+    )
+    assert changed.identity != native.identity
+
+    forged = native.to_data()
+    forged["dimension"] = 3
+    with pytest.raises(ValueError, match="dimension does not match shape"):
+        NativeSpatialLayout.from_data(forged)
+
+
+def test_native_dimension_refuses_structurally_before_artifact_creation():
+    class ThreeDimensionalLayout:
+        name = "three-dimensional"
+
+        def validate(self):
+            return True
+
+        def capabilities(self):
+            return {"levels": 1, "supports_amr": False, "transition_ratios": []}
+
+        def options(self):
+            return {}
+
+        def requirements(self):
+            return {}
+
+        def normalized_geometry(self):
+            return NormalizedGeometry(
+                "pops://coordinates/test-3d@1",
+                "pops://cell-measures/test-volume@1",
+                ("x", "y", "z"),
+                (0.0, 0.0, 0.0),
+                (1.0, 1.0, 1.0),
+                (4, 5, 6),
+            )
+
+        def native_spatial_data(self):
+            return {
+                "schema_version": 1,
+                "periodicity": [True, False, True],
+                "centering": "cell",
+                "decomposition": {
+                    "schema_version": 1,
+                    "kind": "single_box",
+                    "boxes": [{"lower": [0, 0, 0], "upper_exclusive": [4, 5, 6]}],
+                },
+            }
+
+    plan = normalize_layout_plan(
+        ThreeDimensionalLayout(), owner=OwnerPath.case("three-dimensional"))
+    assert plan.layouts[0].native_spatial_layout.dimension == 3
+
+    from pops.codegen._layout_resolution import (
+        LayoutCapabilityError,
+        resolve_native_spatial_layouts,
+    )
+
+    with pytest.raises(LayoutCapabilityError) as error:
+        resolve_native_spatial_layouts(plan)
+    assert error.value.evidence["gate"] == "native_dimension_unavailable"
+    assert error.value.evidence["refusal"]["evidence"] == {
+        "resolved_dimension": 3,
+        "supported_dimensions": [2],
+    }
 
 
 def test_normalized_geometry_protocol_is_called_twice_and_must_be_deterministic():

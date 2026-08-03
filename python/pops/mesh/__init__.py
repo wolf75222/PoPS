@@ -31,7 +31,8 @@ from .boxes import PatchBox, BoxLayout
 from .layout_plan import (
     LayoutHandle, LayoutMappingOperation, LayoutMappingPort, LayoutMappingProvider,
     LayoutMappingRequirement, LayoutRepresentation, LayoutSynchronization,
-    LayoutPlan, LayoutPlanBuilder, NormalizedGeometry, NormalizedGeometryProvider,
+    LayoutPlan, LayoutPlanBuilder, NativeSpatialLayout, NormalizedGeometry,
+    NormalizedGeometryProvider,
     normalize_layout_plan)
 from .layout_mapping import NativeLayoutMapping
 from . import geometry, masks, boundaries
@@ -43,7 +44,7 @@ __all__ = [
     "LayoutHandle", "LayoutMappingOperation", "LayoutMappingPort", "LayoutMappingProvider",
     "LayoutMappingRequirement", "LayoutRepresentation", "LayoutSynchronization",
     "LayoutPlan", "LayoutPlanBuilder", "NativeLayoutMapping",
-    "NormalizedGeometry", "NormalizedGeometryProvider",
+    "NativeSpatialLayout", "NormalizedGeometry", "NormalizedGeometryProvider",
     "normalize_layout_plan",
     "geometry", "masks", "boundaries",
 ]

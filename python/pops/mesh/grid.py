@@ -216,6 +216,23 @@ class CartesianGrid:
             frame_id=self.frame.canonical_id,
         )
 
+    def native_spatial_data(self) -> dict[str, Any]:
+        """Exact topology and base decomposition consumed by native layout normalization."""
+        periodic_indices = {axis.index for axis in self.topology.periodic_axes}
+        return {
+            "schema_version": 1,
+            "periodicity": [index in periodic_indices for index in range(len(self.cells))],
+            "centering": "cell",
+            "decomposition": {
+                "schema_version": 1,
+                "kind": "single_box",
+                "boxes": [{
+                    "lower": [0 for _ in self.cells],
+                    "upper_exclusive": list(self.cells),
+                }],
+            },
+        }
+
     def validate(self, context: Any = None) -> bool:
         del context
         return True
