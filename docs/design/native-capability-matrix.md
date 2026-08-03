@@ -146,7 +146,10 @@ Supported native routes include:
   routes. The capability matrix marks this route `partial` and names its exact built-ins:
   periodicity, extrapolation, constant or `RuntimeParam` fixed state, conservative device-side
   analytic fixed state over typed `(x,y,t,params)`, fixed-state primitive inflow converted once
-  through the exact compiled block-model `to_conservative` provider, and typed-role slip wall.
+  through the exact compiled block-model `to_conservative` provider, typed-role slip wall, and a
+  typed `NoFlux` face. `NoFlux` uses the plan's prepared extrapolation for reconstruction ghosts,
+  then zeroes the already evaluated face flux before divergence and AMR reflux; it is not a masked,
+  polar, or embedded-boundary side channel.
   Analytic programs are immutable postfix tables evaluated in native device kernels at the exact
   `BoundaryEvaluationPoint`; no Python callback or hot-loop allocation is retained. The analytic
   finite-value contract is strictly non-mutating: one device preflight and one communicator

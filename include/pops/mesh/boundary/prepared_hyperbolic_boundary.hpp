@@ -36,7 +36,14 @@
 
 namespace pops {
 
-enum class HyperbolicBoundaryLaw { Periodic, Extrapolate, FixedState, ReflectiveSlip, External };
+enum class HyperbolicBoundaryLaw {
+  Periodic,
+  Extrapolate,
+  FixedState,
+  NoFlux,
+  ReflectiveSlip,
+  External
+};
 
 enum class HyperbolicComponentParity { Scalar, PolarVector, AxialVector };
 
@@ -168,7 +175,7 @@ POPS_HD inline HyperbolicBoundarySample hyperbolic_boundary_sample_1d(
     const bool below = current < lo;
     const HyperbolicBoundaryLaw law = below ? low : high;
     const std::int64_t boundary = below ? lo : hi;
-    if (law == HyperbolicBoundaryLaw::Extrapolate) {
+    if (law == HyperbolicBoundaryLaw::Extrapolate || law == HyperbolicBoundaryLaw::NoFlux) {
       current = boundary;
       break;
     }
@@ -195,7 +202,7 @@ POPS_HD inline HyperbolicBoundarySample hyperbolic_boundary_sample_1d(
 
 inline bool is_physical_hyperbolic_law(HyperbolicBoundaryLaw law) {
   return law == HyperbolicBoundaryLaw::Extrapolate || law == HyperbolicBoundaryLaw::FixedState ||
-         law == HyperbolicBoundaryLaw::ReflectiveSlip;
+         law == HyperbolicBoundaryLaw::NoFlux || law == HyperbolicBoundaryLaw::ReflectiveSlip;
 }
 
 inline const char* hyperbolic_law_name(HyperbolicBoundaryLaw law) {
@@ -206,6 +213,8 @@ inline const char* hyperbolic_law_name(HyperbolicBoundaryLaw law) {
       return "extrapolate";
     case HyperbolicBoundaryLaw::FixedState:
       return "fixed_state";
+    case HyperbolicBoundaryLaw::NoFlux:
+      return "no_flux";
     case HyperbolicBoundaryLaw::ReflectiveSlip:
       return "reflective_slip";
     case HyperbolicBoundaryLaw::External:
@@ -230,7 +239,7 @@ inline void validate_hyperbolic_extension(int index, int lo, int hi, int axis,
       throw std::invalid_argument(std::string("prepared hyperbolic halo reaches a ") +
                                   hyperbolic_law_name(law) +
                                   " face whose values belong to another topology authority");
-    if (law == HyperbolicBoundaryLaw::Extrapolate)
+    if (law == HyperbolicBoundaryLaw::Extrapolate || law == HyperbolicBoundaryLaw::NoFlux)
       return;
 
     Real face_scale = Real(1);
@@ -386,6 +395,8 @@ inline HyperbolicBoundaryLaw hyperbolic_law_from_token(std::string_view token) {
     return HyperbolicBoundaryLaw::Extrapolate;
   if (token == "dirichlet")
     return HyperbolicBoundaryLaw::FixedState;
+  if (token == "no_flux")
+    return HyperbolicBoundaryLaw::NoFlux;
   if (token == "slip_wall")
     return HyperbolicBoundaryLaw::ReflectiveSlip;
   if (token == "external")
@@ -1024,6 +1035,13 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
         face_converter_identities.empty()
             ? std::string{}
             : face_converter_identities[static_cast<std::size_t>(face)];
+    if (destination.law == HyperbolicBoundaryLaw::NoFlux) {
+      for (std::size_t component = 0; component < component_roles.size(); ++component)
+        if (face_values[component * static_cast<std::size_t>(2 * Dim) +
+                        static_cast<std::size_t>(face)] != 0.0)
+          throw std::invalid_argument(
+              "a no-flux hyperbolic boundary cannot carry component values");
+    }
     if (destination.law == HyperbolicBoundaryLaw::FixedState) {
       destination.fixed_state.reserve(component_roles.size());
       for (std::size_t component = 0; component < component_roles.size(); ++component)

@@ -7,7 +7,7 @@ import pytest
 import pops
 from pops.boundary import TransportBoundarySet, model_primitive_to_conservative
 from pops.boundary.transport import ResolvedTransportBoundarySet
-from pops.boundary.transport import Inflow, Outflow, SlipWall
+from pops.boundary.transport import Inflow, NoFlux, Outflow, SlipWall
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D, Z_AXIS
 from pops.math import ddt, div
@@ -111,6 +111,50 @@ def test_transport_set_resolves_exact_ports_values_and_derived_stencil_requireme
         inflow_values[0], where="compiled inflow") == {
             ("qid", canonical_inlet.qualified_id)
         }
+
+
+def test_no_flux_lowers_to_one_prepared_ghost_and_post_riemann_face_law():
+    from pops.mesh.boundaries import BoundaryProviderKind, NumericalFlux
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+
+    frame, _, _, _, numerics, case, block, block_state = _authoring()
+    numerics.boundaries.add(TransportBoundarySet({
+        boundary: NoFlux(state=block_state) for boundary in frame.boundaries.all
+    }))
+    case.numerics(numerics, block=block)
+
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    assert {row.condition_type for row in authority.conditions} == {"no_flux"}
+    for condition in authority.conditions:
+        assert condition.values == ()
+        assert condition.provider.kind is BoundaryProviderKind.NO_FLUX
+        assert isinstance(condition.provider.outputs[0], NumericalFlux)
+        assert condition.provider.dependencies.states == (condition.state,)
+
+    compiled = authority.compile_boundary_data()
+    runtime = authority.runtime_boundary_data({})
+    assert [row["type"] for row in compiled["faces"]] == ["no_flux"] * 4
+    assert [row["type"] for row in runtime["faces"]] == ["no_flux"] * 4
+    assert all(row["values"] == [0.0] for row in runtime["faces"])
+
+    detached = dict(compiled)
+    detached.update({
+        "ghost_plan_identity": authority.plan.canonical_id,
+        "producer_order": [],
+        "component_region_templates": [],
+    })
+    assert [
+        row["type"]
+        for row in CompiledBoundaryPlan(detached).runtime_boundary_data({})["faces"]
+    ] == ["no_flux"] * 4
+
+    # The immutable provider contract rejects a NumericalFlux law forged into a ghost-state family.
+    foreign_provider = next(
+        row.provider for row in authority.conditions
+        if row.provider.kind is BoundaryProviderKind.NO_FLUX
+    )
+    with pytest.raises((TypeError, ValueError)):
+        replace(foreign_provider, kind=BoundaryProviderKind.OUTFLOW)
 
 
 def test_primitive_fixed_state_lowers_only_through_the_exact_block_model_converter():

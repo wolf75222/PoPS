@@ -202,3 +202,25 @@ def test_post_riemann_flux_is_one_typed_outward_oriented_pipeline_stage() -> Non
     first_transform = amr.index("transform_grid_boundary_fluxes", first_flux)
     first_divergence = amr.index("pops::mf_eval_rhs", first_transform)
     assert first_flux < first_transform < first_divergence
+
+
+def test_no_flux_is_a_builtin_face_law_of_the_same_prepared_pipeline() -> None:
+    transport = (ROOT / "python/pops/boundary/transport.py").read_text(encoding="utf-8")
+    hyperbolic = (
+        ROOT / "include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp"
+    ).read_text(encoding="utf-8")
+    plan = (
+        ROOT / "include/pops/mesh/boundary/prepared_boundary_plan.hpp"
+    ).read_text(encoding="utf-8")
+    operator = (
+        ROOT / "include/pops/runtime/builders/block/block_builder.hpp"
+    ).read_text(encoding="utf-8")
+
+    assert 'condition_type: ClassVar[str] = "no_flux"' in transport
+    assert '"no_flux": LowLevelNoFlux' in transport
+    assert 'token == "no_flux"' in hyperbolic
+    assert "HyperbolicBoundaryLaw::NoFlux" in plan
+    assert "zero_prepared_boundary_fluxes" in operator
+    assert "has_zero_flux_faces()" in operator
+    assert operator.count("prepared_boundary_face_omission(ctx)") >= 2
+    assert operator.count("PreparedBoundaryFluxFilter{&ctx}") >= 2

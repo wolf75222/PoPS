@@ -364,6 +364,52 @@ TEST(test_prepared_boundary_plan, analytic_inflow_authenticates_one_clock_and_ti
 }
 
 TEST(test_prepared_boundary_plan,
+     no_flux_uses_prepared_extrapolation_and_marks_only_its_post_riemann_face) {
+  const Box2D domain = Box2D::from_extents(3, 3);
+  MultiFab state = scalar_field(domain, 1, 1);
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(10 * j + i + 1); });
+  }
+  auto boundary = prepare_hyperbolic_boundary<2>(
+      {"no_flux", "foextrap", "foextrap", "foextrap"}, std::vector<double>(4, 0.0),
+      {"case::closed::xlo", "case::closed::xhi", "case::closed::ylo", "case::closed::yhi"},
+      {"Scalar"});
+  PreparedBoundaryPlan plan("case::closed::plan", 1, std::move(boundary));
+
+  EXPECT_TRUE(plan.has_zero_flux_faces());
+  EXPECT_TRUE(plan.zeroes_face(0, -1));
+  EXPECT_FALSE(plan.zeroes_face(0, 1));
+  EXPECT_FALSE(plan.zeroes_face(1, -1));
+  EXPECT_FALSE(plan.zeroes_face(1, 1));
+  plan.fill_same_level_and_physical(state, domain);
+  state.sync_host();
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& values = state.fab(local);
+    const Box2D valid = state.box(local);
+    if (valid.lo[0] != domain.lo[0])
+      continue;
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      EXPECT_EQ(values(domain.lo[0] - 1, j, 0), values(domain.lo[0], j, 0));
+  }
+
+  EXPECT_THROW(
+      prepare_hyperbolic_boundary<2>(
+          {"no_flux", "foextrap", "foextrap", "foextrap"}, {1.0, 0.0, 0.0, 0.0},
+          {"case::bad::xlo", "case::bad::xhi", "case::bad::ylo", "case::bad::yhi"}, {"Scalar"}),
+      std::invalid_argument);
+  EXPECT_THROW(PreparedBoundaryPlan(
+                   "case::closed::interface-conflict", 1,
+                   prepare_hyperbolic_boundary<2>({"no_flux", "foextrap", "foextrap", "foextrap"},
+                                                  std::vector<double>(4, 0.0),
+                                                  {"case::conflict::xlo", "case::conflict::xhi",
+                                                   "case::conflict::ylo", "case::conflict::yhi"},
+                                                  {"Scalar"}),
+                   {0}),
+               std::invalid_argument);
+}
+
+TEST(test_prepared_boundary_plan,
      converts_primitive_fixed_state_once_before_conservative_face_execution) {
   const Box2D domain = Box2D::from_extents(4, 4);
   MultiFab state = scalar_field(domain, 4, 1);

@@ -119,6 +119,8 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert prepared.gpu is False
     assert "one prepared 2D model-aware plan" in prepared.limitation
     assert "typed-role slip wall" in prepared.limitation
+    assert "typed no-flux faces" in prepared.limitation
+    assert "before divergence/reflux" in prepared.limitation
     assert "model primitive-to-conservative" in prepared.limitation
     assert "coarse-fine ghosts under the prepared transfer authority" in prepared.limitation
     assert "corners explicitly not required" in prepared.limitation

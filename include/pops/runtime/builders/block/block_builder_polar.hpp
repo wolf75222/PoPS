@@ -131,8 +131,8 @@ inline void fill_ghosts_polar(MultiFab& U, const Box2D& dom, const BCRec& bc) {
 
 /// Polar residual functor R = -div_polar F + S (fill_ghosts then assemble_rhs_polar). NAMED FUNCTOR
 /// (counterpart of cartesian detail::BlockRhsEval): this is what take_step receives, triggering the
-/// instantiation of assemble_rhs_polar<Limiter, Flux> and its device kernels. @c wall_radial: solid
-/// radial wall (no-penetration) -> mass conserved to machine precision (see assemble_rhs_polar).
+/// instantiation of assemble_rhs_polar<Limiter, Flux> and its device kernels. The retained legacy
+/// radial-wall flag is bounded by the ADC-749 authority ratchet until the metric-aware cutover.
 template <class Limiter, class Flux, class Model>
 struct PolarBlockRhsEval {
   Model model;
@@ -246,8 +246,8 @@ inline void derive_aux_polar(const MultiFab& phi, MultiFab& aux, const PolarGeom
 }
 
 /// Spatial closures of a POLAR block for a frozen scheme (Limiter x Flux). Counterpart of Cartesian
-/// build_block. @p wall_radial: solid radial wall (no-penetration) -> mass conservation to machine
-/// precision.
+/// build_block. The boolean argument remains the bounded legacy radial-wall authority pending the
+/// metric-aware prepared-face cutover.
 template <class Limiter, class Flux, class Model>
 BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, bool recon_prim,
                                 bool wall_radial, Real pos_floor = Real(0)) {
