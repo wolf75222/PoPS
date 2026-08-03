@@ -1,4 +1,5 @@
 """ADC-682 fences for the final PhysicalFlux/NumericalFlux/SpatialOperator split."""
+import json
 from pathlib import Path
 import re
 
@@ -118,3 +119,24 @@ def test_capability_driven_riemann_has_no_euler_specific_production_authority():
         "euler_roe",
     ):
         assert retired_authority not in production
+
+
+def test_polar_riemann_dispatch_uses_model_capabilities_not_a_coordinate_allowlist():
+    builder = _behavior(
+        ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
+    )
+    catalog = json.loads(
+        (ROOT / "schemas/component_catalog.v2.json").read_text(encoding="utf-8")
+    )
+
+    assert "case RiemannRouteId::kHllc" in builder
+    assert "if constexpr (HasHLLCStructure<Model>)" in builder
+    assert "case RiemannRouteId::kRoe" in builder
+    assert "if constexpr (HasRoeDissipation<Model>)" in builder
+    assert "no fallback" in builder
+    riemann = next(
+        family for family in catalog["route_families"] if family["name"] == "riemann"
+    )
+    routes = {route["token"]: route for route in riemann["routes"]}
+    assert routes["hllc"]["metadata"]["polar_ok"] is True
+    assert routes["roe"]["metadata"]["polar_ok"] is True

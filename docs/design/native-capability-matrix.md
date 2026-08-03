@@ -175,7 +175,9 @@ Supported native routes include:
   converter=pops.boundary.model_primitive_to_conservative(U))`; the converter is derived from the
   authenticated block state and cannot name an unrelated callback or kernel.
   `primitive_values` follows the model's declared primitive-variable order.
-- Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
+- Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject only to exact model capability
+  requirements. Cartesian, AMR and annular-polar dispatch use the same provider identity; the
+  native isothermal provider supplies HLLC/Roe on the polar route while scalar ExB refuses them.
   `riemann:typed_failure_outcome` is deliberately `partial`: every built-in returns the common
   device-copyable `FluxEvaluation` with typed status, stability bound, and reason code, and a
   reduced failure rejects the owning transaction instead of publishing a candidate or silently

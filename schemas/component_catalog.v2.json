@@ -502,15 +502,13 @@
             "contact_speed",
             "hllc_star_state"
           ],
-          "limitations": [
-            "polar metric provider not wired; requires exact HasHLLCStructure capability"
-          ],
+          "limitations": [],
           "aliases": [],
           "metadata": {
             "needs_wave_speeds": false,
             "needs_hllc_struct": true,
             "needs_roe_diss": false,
-            "polar_ok": false
+            "polar_ok": true
           }
         },
         {
@@ -524,15 +522,13 @@
             "stability_bound",
             "roe_dissipation"
           ],
-          "limitations": [
-            "polar metric provider not wired; requires exact HasRoeDissipation capability"
-          ],
+          "limitations": [],
           "aliases": [],
           "metadata": {
             "needs_wave_speeds": false,
             "needs_hllc_struct": false,
             "needs_roe_diss": true,
-            "polar_ok": false
+            "polar_ok": true
           }
         }
       ]

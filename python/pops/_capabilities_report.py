@@ -818,7 +818,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="requires exact HLLC model capability; polar metric provider unavailable",
+            limitation="requires exact HLLC model capability on the selected geometry",
             source=source,
         ),
         _row(
@@ -828,7 +828,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            limitation="requires exact Roe dissipation capability; polar metric provider unavailable",
+            limitation="requires exact Roe dissipation capability on the selected geometry",
             source=source,
         ),
         # ADC-552: the typed wave-speed provider families a model can bind HLL to. Descriptor-level

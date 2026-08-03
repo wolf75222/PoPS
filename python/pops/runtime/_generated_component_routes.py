@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 4
 
-COMPONENT_CATALOG_SHA256 = '70d4fca514bae5f479cc2f3f6e1a79b391fa8804ed1cabc0e6b354d45fd68f5f'
+COMPONENT_CATALOG_SHA256 = 'ad1dbd6838d52c41b7d797ffdb3e43d07da701c0adbe00845acaf5e41ae67640'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = 'a367ad2c24684dd232edd73ccee075d36b01132ba9ac2b740cfacfd44366dd61'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = '34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:a367ad2c24684dd232edd73ccee075d36b01132ba9ac2b740cfacfd44366dd61'
+ROUTE_REGISTRY_SIGNATURE = 'v2:34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -32,11 +32,11 @@ ROUTE_TABLES = {'riemann': (('rusanov',
                'wave_speeds',
                'contact_speed',
                'hllc_star_state'),
-              ('polar metric provider not wired; requires exact HasHLLCStructure capability',)),
+              ()),
              ('roe',
               'pops::RoeFlux',
               ('physical_flux', 'provider_pack', 'stability_bound', 'roe_dissipation'),
-              ('polar metric provider not wired; requires exact HasRoeDissipation capability',))),
+              ())),
  'limiter': (('none', 'pops::NoSlope', (), ()),
              ('minmod', 'pops::Minmod', (), ()),
              ('vanleer', 'pops::VanLeer', (), ()),
@@ -119,11 +119,11 @@ ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
              'hllc': {'needs_wave_speeds': False,
                       'needs_hllc_struct': True,
                       'needs_roe_diss': False,
-                      'polar_ok': False},
+                      'polar_ok': True},
              'roe': {'needs_wave_speeds': False,
                      'needs_hllc_struct': False,
                      'needs_roe_diss': True,
-                     'polar_ok': False}},
+                     'polar_ok': True}},
  'limiter': {'none': {'n_ghost': 1, 'formal_order': 1, 'muscl_compatible': False},
              'minmod': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},
              'vanleer': {'n_ghost': 2, 'formal_order': 2, 'muscl_compatible': True},

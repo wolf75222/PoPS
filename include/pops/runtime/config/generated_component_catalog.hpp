@@ -92,8 +92,8 @@ enum class RiemannRouteId : int {
 inline constexpr RouteInfo kRiemannRoutes[] = {
   {0, "rusanov", "pops::RusanovFlux", "physical_flux,provider_pack,stability_bound", ""},
   {1, "hll", "pops::HLLFlux", "physical_flux,provider_pack,stability_bound,wave_speeds", ""},
-  {2, "hllc", "pops::HLLCFlux", "physical_flux,provider_pack,stability_bound,pressure,wave_speeds,contact_speed,hllc_star_state", "polar metric provider not wired; requires exact HasHLLCStructure capability"},
-  {3, "roe", "pops::RoeFlux", "physical_flux,provider_pack,stability_bound,roe_dissipation", "polar metric provider not wired; requires exact HasRoeDissipation capability"},
+  {2, "hllc", "pops::HLLCFlux", "physical_flux,provider_pack,stability_bound,pressure,wave_speeds,contact_speed,hllc_star_state", ""},
+  {3, "roe", "pops::RoeFlux", "physical_flux,provider_pack,stability_bound,roe_dissipation", ""},
 };
 inline constexpr const char* kRiemannRouteTokensCsv = "rusanov|hll|hllc|roe";
 
@@ -256,8 +256,8 @@ struct RiemannTag {
 inline constexpr RiemannTag kRiemanns[] = {
   {"rusanov", false, false, false, true},
   {"hll", true, false, false, true},
-  {"hllc", false, true, false, false},
-  {"roe", false, false, true, false},
+  {"hllc", false, true, false, true},
+  {"roe", false, false, true, true},
 };
 
 struct TransportTag { const char* name; int n_vars; bool polar_ok; const char* summary; };
@@ -307,9 +307,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 4;
-inline constexpr const char* kComponentCatalogSha256 = "70d4fca514bae5f479cc2f3f6e1a79b391fa8804ed1cabc0e6b354d45fd68f5f";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "a367ad2c24684dd232edd73ccee075d36b01132ba9ac2b740cfacfd44366dd61";
-inline constexpr const char* kRouteRegistrySignature = "v2:a367ad2c24684dd232edd73ccee075d36b01132ba9ac2b740cfacfd44366dd61";
+inline constexpr const char* kComponentCatalogSha256 = "ad1dbd6838d52c41b7d797ffdb3e43d07da701c0adbe00845acaf5e41ae67640";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8";
+inline constexpr const char* kRouteRegistrySignature = "v2:34a068f57283dd563408802ea6b1782079d0a48d27e951100335871b6bfb3ff8";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

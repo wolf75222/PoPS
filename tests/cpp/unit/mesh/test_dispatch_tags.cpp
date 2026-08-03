@@ -77,18 +77,16 @@ TEST(test_dispatch_tags, validate_riemann_cartesian_matrix) {
 TEST(test_dispatch_tags, validate_riemann_polar_matrix) {
   std::string msg;
 
-  // seul rusanov est cable en polaire pour les flux CONNUS mais NON explicitement geres.
+  // Every public provider is admitted by the geometry registry. Model capabilities are checked
+  // by the exact dispatch leaf; the registry never infers a model or changes the solver.
   EXPECT_FALSE(throws([] { validate_riemann("rusanov", /*polar=*/true, "System (polaire)"); }, msg))
       << "riemann rusanov accepte (polaire)";
-  // hll/hllc/roe sont des tags CONNUS mais NON cables en polaire -> rejet avec le message polaire.
-  EXPECT_TRUE(throws([] { validate_riemann("hllc", /*polar=*/true, "System (polaire)"); }, msg))
-      << "riemann hllc rejete en polaire";
-  EXPECT_TRUE(contains(msg, "unsupported") && contains(msg, "polar") && contains(msg, "rusanov"))
-      << "message polaire : unsupported / polar / rusanov";
   EXPECT_FALSE(throws([] { validate_riemann("hll", /*polar=*/true, "System (polaire)"); }, msg))
-      << "riemann hll ACCEPTE en polaire (solde audit : gate wave_speeds au call-site)";
-  EXPECT_TRUE(throws([] { validate_riemann("roe", /*polar=*/true, "System (polaire)"); }, msg))
-      << "riemann roe rejete en polaire";
+      << "riemann hll accepte en polaire (gate wave_speeds au call-site)";
+  EXPECT_FALSE(throws([] { validate_riemann("hllc", /*polar=*/true, "System (polaire)"); }, msg))
+      << "riemann hllc accepte en polaire (gate HasHLLCStructure au call-site)";
+  EXPECT_FALSE(throws([] { validate_riemann("roe", /*polar=*/true, "System (polaire)"); }, msg))
+      << "riemann roe accepte en polaire (gate HasRoeDissipation au call-site)";
   EXPECT_TRUE(throws([] { validate_riemann("bogus", /*polar=*/true, "System (polaire)"); }, msg))
       << "riemann inconnu rejete en polaire (meme message)";
   EXPECT_TRUE(contains(msg, "unsupported"))
@@ -126,14 +124,16 @@ TEST(test_dispatch_tags, klimiters_kriemanns_tables) {
   EXPECT_TRUE(std::string(kRiemanns[1].name) == "hll" && kRiemanns[1].needs_wave_speeds &&
               kRiemanns[1].polar_ok)
       << "kRiemanns[1] hll needs_wave_speeds, pas polaire";
-  EXPECT_TRUE(std::string(kRiemanns[2].name) == "hllc" && kRiemanns[2].needs_hllc_struct)
+  EXPECT_TRUE(std::string(kRiemanns[2].name) == "hllc" && kRiemanns[2].needs_hllc_struct &&
+              kRiemanns[2].polar_ok)
       << "kRiemanns[2] hllc";
-  EXPECT_TRUE(std::string(kRiemanns[3].name) == "roe" && kRiemanns[3].needs_roe_diss)
+  EXPECT_TRUE(std::string(kRiemanns[3].name) == "roe" && kRiemanns[3].needs_roe_diss &&
+              kRiemanns[3].polar_ok)
       << "kRiemanns[3] roe";
-  // DEUX flux cables en polaire (rusanov + hll, solde de l'audit) : verrouille polar_ok.
+  // Every public provider has a polar leaf; exact model capabilities decide availability.
   int n_polar = 0;
   for (const RiemannTag& t : kRiemanns)
     if (t.polar_ok)
       ++n_polar;
-  EXPECT_EQ(n_polar, 2) << "deux flux polar_ok (rusanov + hll)";
+  EXPECT_EQ(n_polar, 4) << "quatre flux polar_ok, chacun capability-gated au dispatch";
 }
