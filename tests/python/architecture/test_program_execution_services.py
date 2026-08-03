@@ -390,11 +390,19 @@ def test_contexts_expose_explicit_provider_hooks_for_the_shared_surface():
             "program_execution_clock_coordinate_",
             "program_execution_field_facade_",
         ):
-            definitions = re.findall(rf"(?m)^  [^\n;=]*\b{re.escape(hook)}\s*\(", source)
+            definitions = re.findall(rf"(?m)^  \S[^\n;=]*\b{re.escape(hook)}\s*\(", source)
             assert len(definitions) == 1, "%s must define exactly one explicit provider hook %s" % (
                 context,
                 hook,
             )
+
+
+def test_boundary_point_provider_is_the_topology_primitive_not_a_mirrored_trampoline():
+    for path in (UNIFORM, AMR):
+        source = _read(path)
+        assert "BoundaryEvaluationPoint boundary_point_(" not in source
+        assert "return boundary_point_(stage_id);" not in source
+        assert "BoundaryEvaluationPoint program_execution_boundary_point_(" in source
 
 
 def test_field_state_evaluation_consumes_outcomes_in_the_shared_service():

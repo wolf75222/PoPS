@@ -858,7 +858,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     // Keep rate_id separate: it remains the conservative-ledger/provenance identity for this
     // individual residual even when the prepared boundary registry observes the atomic group point.
     const auto boundary_point =
-        grouped_point == nullptr ? boundary_point_(rate_id) : *grouped_point;
+        grouped_point == nullptr ? program_execution_boundary_point_(rate_id) : *grouped_point;
     if (active_parent_ && active_parent_->child_level == level_) {
       const amr::Rational target_phase = active_parent_->child_window.begin.phase +
                                          stage_time_ * (active_parent_->child_window.end.phase -
@@ -2096,7 +2096,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
             false};
   }
 
-  runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
+  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(int stage) const {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !current_window_ || !std::isfinite(current_level_dt_) ||
         current_level_dt_ <= 0.0)
@@ -2771,10 +2771,6 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     facade_->install_program_step(std::move(step));
   }
 
-  runtime::multiblock::BoundaryEvaluationPoint program_execution_boundary_point_(
-      int stage_id) const {
-    return boundary_point_(stage_id);
-  }
   void program_execution_rhs_into_(int program_block, int runtime_block, MultiFab& state,
                                    MultiFab& rhs, int rate_id) const {
     if (capturing()) {
@@ -2782,7 +2778,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       return;
     }
     eng_->level_rhs_into_at(static_cast<std::size_t>(runtime_block), level_,
-                            boundary_point_(rate_id), state, rhs);
+                            program_execution_boundary_point_(rate_id), state, rhs);
   }
   bool program_execution_has_boundary_linearization_(int runtime_block) const {
     return eng_->has_boundary_linearization(static_cast<std::size_t>(runtime_block));
@@ -2831,7 +2827,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       return;
     }
     eng_->level_neg_div_flux_into_at(static_cast<std::size_t>(runtime_block), level_,
-                                     boundary_point_(rate_id), state, rhs);
+                                     program_execution_boundary_point_(rate_id), state, rhs);
   }
   [[noreturn]] void program_execution_neg_div_named_flux_into_(
       MultiFab& /*rhs*/, MultiFab& /*flux_x*/, MultiFab& /*flux_y*/,
@@ -2846,7 +2842,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       const bool has_interfaces = eng_->has_level_interfaces(level_);
       if (has_interfaces)
         register_interface_flux_group_(batch.group_id, batch.runtime_blocks, batch.rate_ids);
-      const auto group_point = boundary_point_(batch.group_id);
+      const auto group_point = program_execution_boundary_point_(batch.group_id);
       eng_->with_boundary_stage_states(group_point, batch.runtime_blocks, batch.states, [&] {
         for (std::size_t index = 0; index < batch.states.size(); ++index) {
           const auto& request = batch.requests.begin()[index];
@@ -2865,8 +2861,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       return;
     }
     count_kernel(static_cast<std::int64_t>(batch.requests.size()));
-    eng_->level_rhs_group(level_, boundary_point_(batch.group_id), batch.runtime_blocks,
-                          batch.states, batch.rhs, batch.flux_only);
+    eng_->level_rhs_group(level_, program_execution_boundary_point_(batch.group_id),
+                          batch.runtime_blocks, batch.states, batch.rhs, batch.flux_only);
   }
   void program_execution_source_default_into_(int runtime_block, MultiFab& state,
                                               MultiFab& rhs) const {
