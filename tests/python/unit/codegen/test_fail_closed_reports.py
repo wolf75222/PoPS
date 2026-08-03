@@ -157,19 +157,14 @@ def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_k
     assert "state/field/input reads remain unavailable" in analytic.limitation
     assert "axis-permuted periodic coordinates" in analytic.limitation
 
-    expected_unavailable = {
-        "boundary:characteristic_no_inflow": (
-            "executable model eigenstructure",
-            "prepared characteristic kernel",
-        ),
-    }
-    for feature, (limitation, alternative) in expected_unavailable.items():
-        route = routes[feature]
-        assert route.status == "unavailable"
-        assert route.layout == "uniform|amr"
-        assert limitation in route.limitation
-        assert alternative in route.alternative
-        assert route.error_message
+    characteristic = routes["boundary:characteristic_no_inflow"]
+    assert characteristic.status == "partial"
+    assert characteristic.layout == "uniform|amr"
+    assert characteristic.backend == "production"
+    assert characteristic.mpi is False and characteristic.gpu is False
+    assert "m.roe_from_jacobian()" in characteristic.limitation
+    assert "sonic subspace as neutral" in characteristic.limitation
+    assert "rolls back ghosts" in characteristic.limitation
     post_riemann = routes["boundary:post_riemann_flux"]
     assert post_riemann.status == "partial"
     assert post_riemann.layout == "uniform|amr"

@@ -451,6 +451,55 @@ def test_directional_characteristic_provider_cannot_fall_back_to_native_inflow()
         case._resolved_numerics_for("tracer")
 
 
+def test_model_characteristic_no_inflow_lowers_one_exact_prepared_face():
+    from pops.boundary import model_characteristic_no_inflow
+
+    frame, _, inlet, inlet_value, numerics, case, block, block_state = _authoring()
+    provider = model_characteristic_no_inflow(block_state)
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: Inflow(
+            state=block_state,
+            value=inlet_value,
+            characteristic=provider,
+        ),
+        frame.boundaries.x_max: Outflow(state=block_state),
+        frame.boundaries.y_min: Inflow(state=block_state, value=inlet_value),
+        frame.boundaries.y_max: Outflow(state=block_state),
+    }))
+    case.numerics(numerics, block=block)
+
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    compiled = authority.compile_boundary_data()
+    canonical_inlet = case.resolve(inlet, block=block)
+    runtime = authority.runtime_boundary_data({canonical_inlet: 0.25})
+    assert compiled["faces"][0]["type"] == "characteristic_no_inflow"
+    assert runtime["faces"][0]["type"] == "characteristic_no_inflow"
+    assert runtime["faces"][0]["values"] == [0.25]
+    assert runtime["faces"][1]["type"] == "foextrap"
+
+
+def test_characteristic_no_inflow_rejects_forged_or_primitive_provider():
+    from pops.boundary import model_characteristic_no_inflow
+    from pops.model import Handle
+    from pops.representations import Primitive
+
+    _, _, _, inlet_value, _, _, _, block_state = _authoring()
+    forged = Handle(
+        "forged-characteristics",
+        kind="boundary_eigenstructure",
+        owner=block_state.owner_path,
+    )
+    with pytest.raises(ValueError, match="exact model_characteristic_no_inflow"):
+        Inflow(state=block_state, value=inlet_value, characteristic=forged)
+    with pytest.raises(NotImplementedError, match="conservative reference"):
+        Inflow(
+            state=block_state,
+            value=inlet_value,
+            representation=Primitive(),
+            characteristic=model_characteristic_no_inflow(block_state),
+        )
+
+
 def test_resolved_transport_condition_rejects_a_forged_provider_law():
     from pops.mesh.boundaries import BoundaryProviderKind
 

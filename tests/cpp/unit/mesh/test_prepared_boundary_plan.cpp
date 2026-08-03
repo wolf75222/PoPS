@@ -6,6 +6,7 @@
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/runtime/context/grid_context.hpp>
+#include <pops/runtime/builders/block/block_builder.hpp>
 
 #include <cmath>
 #include <limits>
@@ -101,7 +102,94 @@ RecoveryReport recover_positive_scalar(const double* conserved, double* primitiv
   return report;
 }
 
+struct TwoModeCharacteristicModel {
+  static constexpr int n_vars = 2;
+  using State = StateVec<n_vars>;
+
+  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference, int axis,
+                                        int outward_sign, State& ghost) const {
+    if (axis != 0 || outward_sign != -1)
+      return false;
+    ghost[0] = Real(2) * reference[0] - interior[0];
+    ghost[1] = interior[1];
+    return true;
+  }
+};
+
+struct RefusingCharacteristicModel {
+  static constexpr int n_vars = 2;
+  using State = StateVec<n_vars>;
+
+  POPS_HD bool characteristic_no_inflow(const State&, const State&, int, int, State&) const {
+    return false;
+  }
+};
+
+PreparedHyperbolicBoundary<2> characteristic_boundary() {
+  return prepare_hyperbolic_boundary<2>(
+      {"characteristic_no_inflow", "foextrap", "foextrap", "foextrap"},
+      {10.0, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0},
+      {"case::characteristic::xlo", "case::characteristic::xhi", "case::characteristic::ylo",
+       "case::characteristic::yhi"},
+      {"Scalar", "Scalar"});
+}
+
 }  // namespace
+
+TEST(test_prepared_boundary_plan, executes_prepared_model_characteristics_without_scalar_fallback) {
+  const Box2D domain = Box2D::from_extents(4, 3);
+  MultiFab state = scalar_field(domain, 2, 1);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      values(i, j, 0) = Real(1);
+      values(i, j, 1) = Real(2);
+    });
+  }
+  auto boundary = characteristic_boundary();
+  PreparedBoundaryPlan plan("case::characteristic", 1, boundary);
+  EXPECT_THROW(plan.fill_same_level_and_physical(state, domain), std::runtime_error);
+
+  plan.prepare_characteristic_no_inflow(
+      detail::make_characteristic_no_inflow_fill(TwoModeCharacteristicModel{}, boundary));
+  ASSERT_NO_THROW(plan.fill_same_level_and_physical(state, domain));
+  state.sync_host();
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& values = state.fab(local);
+    if (values.grown_box().contains(domain.lo[0] - 1, 1)) {
+      EXPECT_EQ(values(domain.lo[0] - 1, 1, 0), Real(19));
+      EXPECT_EQ(values(domain.lo[0] - 1, 1, 1), Real(2));
+    }
+  }
+}
+
+TEST(test_prepared_boundary_plan, rolls_back_every_ghost_when_characteristic_preflight_refuses) {
+  const Box2D domain = Box2D::from_extents(4, 3);
+  MultiFab state = scalar_field(domain, 2, 1);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) {
+      values(i, j, 0) = Real(1);
+      values(i, j, 1) = Real(2);
+    });
+  }
+  auto boundary = characteristic_boundary();
+  PreparedBoundaryPlan plan("case::characteristic-refusal", 1, boundary);
+  plan.prepare_characteristic_no_inflow(
+      detail::make_characteristic_no_inflow_fill(RefusingCharacteristicModel{}, boundary));
+
+  EXPECT_THROW(plan.fill_same_level_and_physical(state, domain), std::runtime_error);
+  state.sync_host();
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& values = state.fab(local);
+    if (values.grown_box().contains(domain.lo[0] - 1, 1))
+      EXPECT_EQ(values(domain.lo[0] - 1, 1, 0), Real(-99));
+    if (values.grown_box().contains(domain.hi[0] + 1, 1))
+      EXPECT_EQ(values(domain.hi[0] + 1, 1, 0), Real(-99));
+  }
+}
 
 TEST(PreparedBoundaryTraceRecovery,
      accepts_admissible_physical_traces_without_hot_path_allocation) {
