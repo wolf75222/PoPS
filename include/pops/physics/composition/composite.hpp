@@ -121,6 +121,14 @@ struct CompositeModel {
     return hyp.roe_dissipation(ul, left_providers, ur, right_providers, dir);
   }
 
+  POPS_HD bool characteristic_no_inflow(const State& interior, const State& reference, int dir,
+                                        int outward_sign, State& ghost) const
+    requires requires(const Hyperbolic h, const State a_, const State b_, int d, int side,
+                      State& out) { h.characteristic_no_inflow(a_, b_, d, side, out); }
+  {
+    return hyp.characteristic_no_inflow(interior, reference, dir, outward_sign, ghost);
+  }
+
   /// GEOMETRIC source term of polar curvature, delegated to the hyperbolic brick when it
   /// exposes it (polar fluid: IsothermalFluxPolar). Concept-gated like pressure / wave_speeds:
   /// if the hyperbolic does not provide it (polar ExB scalar transport), CompositeModel does not

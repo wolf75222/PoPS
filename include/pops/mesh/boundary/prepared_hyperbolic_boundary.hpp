@@ -40,6 +40,7 @@ enum class HyperbolicBoundaryLaw {
   Periodic,
   Extrapolate,
   FixedState,
+  CharacteristicNoInflow,
   NoFlux,
   ReflectiveSlip,
   External
@@ -213,6 +214,8 @@ inline const char* hyperbolic_law_name(HyperbolicBoundaryLaw law) {
       return "extrapolate";
     case HyperbolicBoundaryLaw::FixedState:
       return "fixed_state";
+    case HyperbolicBoundaryLaw::CharacteristicNoInflow:
+      return "characteristic_no_inflow";
     case HyperbolicBoundaryLaw::NoFlux:
       return "no_flux";
     case HyperbolicBoundaryLaw::ReflectiveSlip:
@@ -395,6 +398,8 @@ inline HyperbolicBoundaryLaw hyperbolic_law_from_token(std::string_view token) {
     return HyperbolicBoundaryLaw::Extrapolate;
   if (token == "dirichlet")
     return HyperbolicBoundaryLaw::FixedState;
+  if (token == "characteristic_no_inflow")
+    return HyperbolicBoundaryLaw::CharacteristicNoInflow;
   if (token == "no_flux")
     return HyperbolicBoundaryLaw::NoFlux;
   if (token == "slip_wall")
@@ -506,6 +511,12 @@ class PreparedHyperbolicBoundary {
   bool has_analytic_state() const {
     return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& face) {
       return !face.analytic_state.empty();
+    });
+  }
+
+  bool has_characteristic_no_inflow() const {
+    return std::any_of(faces_.begin(), faces_.end(), [](const PreparedHyperbolicFace& face) {
+      return face.law == HyperbolicBoundaryLaw::CharacteristicNoInflow;
     });
   }
 
@@ -901,12 +912,17 @@ class PreparedHyperbolicBoundary {
         throw std::invalid_argument(
             "only an analytic hyperbolic boundary may carry a logical Clock");
       }
-      if (prepared_face.law == HyperbolicBoundaryLaw::FixedState) {
+      if (prepared_face.law == HyperbolicBoundaryLaw::FixedState ||
+          prepared_face.law == HyperbolicBoundaryLaw::CharacteristicNoInflow) {
         if (prepared_face.fixed_state.size() != component_transforms_.size() ||
             std::any_of(prepared_face.fixed_state.begin(), prepared_face.fixed_state.end(),
                         [](Real value) { return !std::isfinite(value); }))
           throw std::invalid_argument(
               "fixed-state hyperbolic boundary must provide one finite value per component");
+        if (prepared_face.law == HyperbolicBoundaryLaw::CharacteristicNoInflow &&
+            prepared_face.authored_representation != HyperbolicStateRepresentation::Conservative)
+          throw std::invalid_argument(
+              "characteristic no-inflow requires a conservative reference state");
         if (prepared_face.authored_representation == HyperbolicStateRepresentation::Primitive) {
           if (prepared_face.converter_identity.empty())
             throw std::invalid_argument(
@@ -918,7 +934,7 @@ class PreparedHyperbolicBoundary {
         }
       } else if (!prepared_face.fixed_state.empty()) {
         throw std::invalid_argument(
-            "only a fixed-state hyperbolic boundary may carry component values");
+            "only fixed-state or characteristic no-inflow boundaries may carry component values");
       } else if (prepared_face.authored_representation !=
                      HyperbolicStateRepresentation::Conservative ||
                  !prepared_face.converter_identity.empty() ||
@@ -1042,7 +1058,8 @@ PreparedHyperbolicBoundary<Dim> prepare_hyperbolic_boundary(
           throw std::invalid_argument(
               "a no-flux hyperbolic boundary cannot carry component values");
     }
-    if (destination.law == HyperbolicBoundaryLaw::FixedState) {
+    if (destination.law == HyperbolicBoundaryLaw::FixedState ||
+        destination.law == HyperbolicBoundaryLaw::CharacteristicNoInflow) {
       destination.fixed_state.reserve(component_roles.size());
       for (std::size_t component = 0; component < component_roles.size(); ++component)
         destination.fixed_state.push_back(

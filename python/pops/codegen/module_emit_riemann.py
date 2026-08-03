@@ -28,6 +28,26 @@ from pops.codegen.module_emit_helpers import (
 from pops.identity.scalar import scalar_cpp
 
 
+def has_characteristic_no_inflow_provider(model: Any) -> bool:
+    """Whether the generated block can evaluate its characteristic Jacobian locally.
+
+    Boundary kernels receive the conservative cell state and model value parameters, but no
+    auxiliary field pack.  Refuse a Jacobian that transitively reads an auxiliary field instead of
+    emitting a hook with an undeclared dependency or silently freezing that field.
+    """
+    jacobian = getattr(model, "_roe_jacobian", None)
+    requirements = getattr(model, "_aux_requirements", None)
+    if jacobian is None or not callable(requirements):
+        return False
+    expressions = [
+        expression
+        for direction in ("x", "y")
+        for row in jacobian[direction]
+        for expression in row
+    ]
+    return not bool(requirements(expressions).get("aux"))
+
+
 def _certified_roe_blocks(model: Any, jacobians: Any) -> Any:
     """Return exact block-triangular certificates reusable by dense Roe, or ``None``.
 
@@ -340,4 +360,44 @@ def _emit_roe_jacobian(model: Any, nc: Any, cse: Any) -> list:
             for i in range(nc)]
     out.append("    }")
     out += ["    return d;", "  }", ""]
+    if not has_characteristic_no_inflow_provider(model):
+        return out
+    out.append("  // Prepared characteristic no-inflow: the same complete model Jacobian, oriented")
+    out.append("  // by the physical-face normal. Sonic modes are neutral; no model-specific fallback.")
+    out.append("  POPS_HD bool characteristic_no_inflow(const State& interior, ")
+    out.append("      const State& reference, int dir, int outward_sign, State& ghost) const {")
+    out += ["    const pops::Real %s = interior[%d];" % (c, i)
+            for i, c in enumerate(model.cons_names)]
+    out += _prim_block(model, live)
+    out.append("    pops::Real A[%d][%d];" % (nc, nc))
+    out.append("    if (dir == 0) {")
+    ctlx, ccppx = _codegen_exprs(
+        model, [Jx[i][j] for i in range(nc) for j in range(nc)], cse, indent="      ")
+    out += ctlx
+    for i in range(nc):
+        out += ["      A[%d][%d] = %s;" % (i, j, ccppx[i * nc + j])
+                for j in range(nc)]
+    out.append("    } else if (dir == 1) {")
+    ctly, ccppy = _codegen_exprs(
+        model, [Jy[i][j] for i in range(nc) for j in range(nc)], cse, indent="      ")
+    out += ctly
+    for i in range(nc):
+        out += ["      A[%d][%d] = %s;" % (i, j, ccppy[i * nc + j])
+                for j in range(nc)]
+    out.append("    } else {")
+    out.append("      return false;")
+    out.append("    }")
+    out.append("    pops::Real jump[%d], incoming[%d];" % (nc, nc))
+    out += ["    jump[%d] = interior[%d] - reference[%d];" % (i, i, i)
+            for i in range(nc)]
+    out.append(
+        "    if (!pops::characteristic_incoming_apply(A, jump, incoming, outward_sign, "
+        "80, static_cast<pops::Real>(1e-13), static_cast<pops::Real>(%s), %d))"
+        % (im_tol_cpp, eig_max_iter_value)
+    )
+    out.append("      return false;")
+    for i in range(nc):
+        out.append("    ghost[%d] = interior[%d] - pops::Real(2) * incoming[%d];" % (i, i, i))
+        out.append("    if (!std::isfinite(ghost[%d])) return false;" % i)
+    out += ["    return true;", "  }", ""]
     return out

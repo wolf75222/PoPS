@@ -20,8 +20,11 @@
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (shared lightweight header)
 #include <pops/runtime/numerical_defaults.hpp>
 
+#include <array>
 #include <cmath>
+#include <concepts>
 #include <functional>
+#include <limits>
 #include <memory>  // std::shared_ptr (shared scratch of the HLL wave speed cache, opt-in)
 #include <stdexcept>
 #include <string>
@@ -938,6 +941,162 @@ auto make_recovery_validated_forward_conversion(Forward forward, Recovery recove
       out[component] = candidate[component];
   };
 }
+}  // namespace detail
+
+namespace detail {
+
+template <class Model>
+concept HasCharacteristicNoInflow = requires(
+    const Model model, const typename Model::State interior, const typename Model::State reference,
+    int axis, int side, typename Model::State& ghost) {
+  { model.characteristic_no_inflow(interior, reference, axis, side, ghost) } -> std::same_as<bool>;
+};
+
+template <class Model>
+struct CharacteristicNoInflowPreflightKernel {
+  Model model;
+  ConstArray4 state;
+  typename Model::State reference;
+  int axis = 0;
+  int side = -1;
+  int boundary = 0;
+
+  POPS_HD Real operator()(int i, int j) const {
+    const int source_i = axis == 0 ? (side < 0 ? 2 * boundary - i - 1 : 2 * boundary - i + 1) : i;
+    const int source_j = axis == 1 ? (side < 0 ? 2 * boundary - j - 1 : 2 * boundary - j + 1) : j;
+    const typename Model::State interior = load_state<Model>(state, source_i, source_j);
+    typename Model::State ghost{};
+    if (!model.characteristic_no_inflow(interior, reference, axis, side, ghost))
+      return Real(1);
+    for (int component = 0; component < Model::n_vars; ++component)
+      if (!std::isfinite(ghost[component]))
+        return Real(1);
+    return Real(0);
+  }
+};
+
+template <class Model>
+struct CharacteristicNoInflowCommitKernel {
+  Model model;
+  Array4 state;
+  ConstArray4 source;
+  typename Model::State reference;
+  int axis = 0;
+  int side = -1;
+  int boundary = 0;
+
+  POPS_HD void operator()(int i, int j) const {
+    const int source_i = axis == 0 ? (side < 0 ? 2 * boundary - i - 1 : 2 * boundary - i + 1) : i;
+    const int source_j = axis == 1 ? (side < 0 ? 2 * boundary - j - 1 : 2 * boundary - j + 1) : j;
+    const typename Model::State interior = load_state<Model>(source, source_i, source_j);
+    typename Model::State ghost{};
+    const bool accepted = model.characteristic_no_inflow(interior, reference, axis, side, ghost);
+    for (int component = 0; component < Model::n_vars; ++component)
+      state(i, j, component) = accepted ? ghost[component] : std::numeric_limits<Real>::quiet_NaN();
+  }
+};
+
+template <class Visitor>
+void for_each_characteristic_no_inflow_region(const PreparedHyperbolicBoundary<2>& boundary,
+                                              const MultiFab& state, const Box2D& domain,
+                                              Visitor&& visitor) {
+  const int depth = state.n_grow();
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Box2D valid = state.box(local);
+    int tangential_lo = valid.lo[1] - depth;
+    int tangential_hi = valid.hi[1] + depth;
+    if (boundary.face(1, -1).law != HyperbolicBoundaryLaw::Periodic)
+      tangential_lo = std::max(tangential_lo, domain.lo[1]);
+    if (boundary.face(1, 1).law != HyperbolicBoundaryLaw::Periodic)
+      tangential_hi = std::min(tangential_hi, domain.hi[1]);
+    if (boundary.face(0, -1).law == HyperbolicBoundaryLaw::CharacteristicNoInflow &&
+        valid.lo[0] == domain.lo[0])
+      visitor(local, 0, -1, domain.lo[0],
+              Box2D{{domain.lo[0] - depth, tangential_lo}, {domain.lo[0] - 1, tangential_hi}});
+    if (boundary.face(0, 1).law == HyperbolicBoundaryLaw::CharacteristicNoInflow &&
+        valid.hi[0] == domain.hi[0])
+      visitor(local, 0, 1, domain.hi[0],
+              Box2D{{domain.hi[0] + 1, tangential_lo}, {domain.hi[0] + depth, tangential_hi}});
+
+    tangential_lo = valid.lo[0] - depth;
+    tangential_hi = valid.hi[0] + depth;
+    if (boundary.face(0, -1).law != HyperbolicBoundaryLaw::Periodic)
+      tangential_lo = std::max(tangential_lo, domain.lo[0]);
+    if (boundary.face(0, 1).law != HyperbolicBoundaryLaw::Periodic)
+      tangential_hi = std::min(tangential_hi, domain.hi[0]);
+    if (boundary.face(1, -1).law == HyperbolicBoundaryLaw::CharacteristicNoInflow &&
+        valid.lo[1] == domain.lo[1])
+      visitor(local, 1, -1, domain.lo[1],
+              Box2D{{tangential_lo, domain.lo[1] - depth}, {tangential_hi, domain.lo[1] - 1}});
+    if (boundary.face(1, 1).law == HyperbolicBoundaryLaw::CharacteristicNoInflow &&
+        valid.hi[1] == domain.hi[1])
+      visitor(local, 1, 1, domain.hi[1],
+              Box2D{{tangential_lo, domain.hi[1] + 1}, {tangential_hi, domain.hi[1] + depth}});
+  }
+}
+
+template <class Model>
+PreparedBoundaryPlan::CharacteristicNoInflowFill make_characteristic_no_inflow_fill(
+    const Model& model, const PreparedHyperbolicBoundary<2>& boundary) {
+  if (!boundary.has_characteristic_no_inflow())
+    return {};
+  if constexpr (!HasCharacteristicNoInflow<Model>) {
+    throw std::runtime_error(
+        "characteristic no-inflow requires the exact block-model flux-Jacobian provider; "
+        "no component-wise or Euler-specific fallback exists");
+  } else {
+    std::array<typename Model::State, 4> references{};
+    for (int face = 0; face < 4; ++face) {
+      const auto& prepared = boundary.face(face / 2, face % 2 == 0 ? -1 : 1);
+      if (prepared.law != HyperbolicBoundaryLaw::CharacteristicNoInflow)
+        continue;
+      if (prepared.fixed_state.size() != static_cast<std::size_t>(Model::n_vars))
+        throw std::runtime_error(
+            "characteristic no-inflow reference does not cover the exact model state");
+      for (int component = 0; component < Model::n_vars; ++component)
+        references[static_cast<std::size_t>(face)][component] =
+            prepared.fixed_state[static_cast<std::size_t>(component)];
+    }
+    return [model, boundary, references](MultiFab& state, const Box2D& domain,
+                                         CommunicatorView communicator) {
+      const int depth = state.n_grow();
+      const bool characteristic_x =
+          boundary.face(0, -1).law == HyperbolicBoundaryLaw::CharacteristicNoInflow ||
+          boundary.face(0, 1).law == HyperbolicBoundaryLaw::CharacteristicNoInflow;
+      const bool characteristic_y =
+          boundary.face(1, -1).law == HyperbolicBoundaryLaw::CharacteristicNoInflow ||
+          boundary.face(1, 1).law == HyperbolicBoundaryLaw::CharacteristicNoInflow;
+      if ((characteristic_x && depth > domain.nx()) || (characteristic_y && depth > domain.ny()))
+        throw std::invalid_argument(
+            "characteristic no-inflow does not support multi-reflection ghost depth");
+      long invalid_local = 0;
+      for_each_characteristic_no_inflow_region(
+          boundary, state, domain,
+          [&](int local, int axis, int side, int coordinate, const Box2D& region) {
+            const int face = 2 * axis + (side > 0 ? 1 : 0);
+            invalid_local += static_cast<long>(for_each_cell_reduce_sum(
+                region, CharacteristicNoInflowPreflightKernel<Model>{
+                            model, state.fab(local).const_array(),
+                            references[static_cast<std::size_t>(face)], axis, side, coordinate}));
+          });
+      const long invalid = all_reduce_sum(invalid_local, communicator);
+      if (invalid != 0)
+        throw std::runtime_error(
+            "characteristic no-inflow lost a real prepared spectrum (failed cells=" +
+            std::to_string(invalid) + ")");
+      for_each_characteristic_no_inflow_region(
+          boundary, state, domain,
+          [&](int local, int axis, int side, int coordinate, const Box2D& region) {
+            const int face = 2 * axis + (side > 0 ? 1 : 0);
+            for_each_cell(region,
+                          CharacteristicNoInflowCommitKernel<Model>{
+                              model, state.fab(local).array(), state.fab(local).const_array(),
+                              references[static_cast<std::size_t>(face)], axis, side, coordinate});
+          });
+    };
+  }
+}
+
 }  // namespace detail
 
 /// PER-CELL (one cell) cons <-> prim conversions of the MODEL, type-erased over arrays of

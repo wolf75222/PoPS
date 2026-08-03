@@ -116,6 +116,7 @@ class _FacadeCompileMixin(_FacadeModel):
         )
         from pops.codegen.abi import _abi_key_python
         from pops.codegen._compile_emit import compiled_capability_flags
+        from pops.codegen.module_emit_riemann import has_characteristic_no_inflow_provider
         from pops.codegen.loader import CompiledModel
         from pops.codegen._compiled_model_identity import model_compile_identity
         from pops.codegen._backends import lower_backend
@@ -194,6 +195,7 @@ class _FacadeCompileMixin(_FacadeModel):
             cxx=eff_cxx, std=eff_std, hllc=m._hllc,
             roe=(m._roe or getattr(m, '_roe_rows', None) is not None
                  or getattr(m, '_roe_jacobian', None) is not None),
+            characteristic_no_inflow=has_characteristic_no_inflow_provider(m),
             aux_extra_names=m.aux_extra_names,
             wave_speeds=wave_speed_provider is not None,
             wave_speed_provider=(

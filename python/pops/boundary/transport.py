@@ -102,6 +102,27 @@ def model_primitive_to_conservative(state: Any) -> Handle:
     )
 
 
+def model_characteristic_no_inflow(state: Any) -> Handle:
+    """Return the exact block-model flux-Jacobian characteristic provider.
+
+    The provider is generated only for models compiled with
+    ``m.roe_from_jacobian()``.  It projects the authored conservative reference state onto the
+    incoming eigenspace of the outward-normal flux Jacobian.  The returned Handle is data-only and
+    block-qualified; it never names a Python callback or an Euler-specific implementation.
+    """
+    checked = _state(state, where="model_characteristic_no_inflow.state")
+    if getattr(getattr(checked, "space", None), "representation", None) != "conservative":
+        raise ValueError(
+            "model_characteristic_no_inflow requires a conservative target state"
+        )
+    digest = hashlib.sha256(checked.qualified_id.encode("utf-8")).hexdigest()[:24]
+    return Handle(
+        "model-characteristic-no-inflow-%s" % digest,
+        kind="boundary_eigenstructure",
+        owner=checked.owner_path,
+    )
+
+
 def _condition_protocol(value: Any, *, where: str) -> Any:
     _state(getattr(value, "state", None), where="%s.state" % where)
     for method in ("inspect", "resolve_references", "resolve_condition"):
@@ -193,7 +214,7 @@ def _dependency_handles(
     return tuple(states), tuple(fields), tuple(time), tuple(params)
 
 
-def _closure() -> Any:
+def _closure(characteristic: Handle | None = None) -> Any:
     from pops.mesh.boundaries import (
         CharacteristicClosure,
         ClosureMode,
@@ -202,12 +223,20 @@ def _closure() -> Any:
         SonicPolicy,
     )
 
+    if characteristic is None:
+        return CharacteristicClosure(
+            mode=ClosureMode.NONE,
+            sign_dependence=SignDependence.FIXED,
+            sonic=SonicPolicy.NEUTRAL,
+            incoming=IncomingMultiplicity.SINGLE,
+            characteristics=(),
+        )
     return CharacteristicClosure(
-        mode=ClosureMode.NONE,
-        sign_dependence=SignDependence.FIXED,
+        mode=ClosureMode.DIRECTIONAL,
+        sign_dependence=SignDependence.SPATIAL,
         sonic=SonicPolicy.NEUTRAL,
-        incoming=IncomingMultiplicity.SINGLE,
-        characteristics=(),
+        incoming=IncomingMultiplicity.MULTIPLE,
+        characteristics=(characteristic,),
     )
 
 
@@ -338,13 +367,16 @@ def _resolved_condition(
         condition.values,
         include_state=state if include_state_dependency else None,
     )
+    characteristic = getattr(condition, "characteristic", None)
+    if characteristic is not None and state not in states:
+        states = (*states, state)
     dependencies = BoundaryDependencies(
         states=states,
         fields=fields,
         time=time,
         runtime_params=params,
         representation=flow,
-        characteristic=_closure(),
+        characteristic=_closure(characteristic),
     )
     output = (
         NumericalFlux(boundary=boundary, subject=state, representation=target)
@@ -357,6 +389,12 @@ def _resolved_condition(
         "outflow": LowLevelOutflow,
         "slip_wall": GhostFormula,
     }[condition_type]
+    if characteristic is not None:
+        if condition_type != "inflow":
+            raise ValueError("characteristic no-inflow is defined only for Inflow")
+        from pops.mesh.boundaries import DirectionalTransport
+
+        factory = DirectionalTransport
     if condition_type == "no_flux":
         provider = factory(
             handle=_provider_handle(state, geometry, condition_type),
@@ -388,6 +426,7 @@ class Inflow:
     values: tuple[Expr | ScalarExpr, ...]
     representation: Representation | None
     converter: Handle | None
+    characteristic: Handle | None
 
     def __init__(
         self,
@@ -396,6 +435,7 @@ class Inflow:
         value: Any,
         representation: Representation | None = None,
         converter: Any = None,
+        characteristic: Any = None,
     ) -> None:
         checked_state = _state(state, where="Inflow.state")
         if representation is not None and not isinstance(representation, Representation):
@@ -433,9 +473,26 @@ class Inflow:
         object.__setattr__(self, "values", tuple(checked_values))
         object.__setattr__(self, "representation", representation)
         object.__setattr__(self, "converter", _converter(converter))
+        if characteristic is not None:
+            expected = model_characteristic_no_inflow(checked_state)
+            if not isinstance(characteristic, Handle) or characteristic != expected:
+                raise ValueError(
+                    "Inflow.characteristic must be the exact "
+                    "model_characteristic_no_inflow(state) provider"
+                )
+            if representation is not None or converter is not None:
+                raise NotImplementedError(
+                    "characteristic no-inflow currently requires a conservative reference state"
+                )
+            if analytic:
+                raise NotImplementedError(
+                    "characteristic no-inflow requires one finite fixed conservative reference"
+                )
+        object.__setattr__(self, "characteristic", characteristic)
 
     def declaration_references(self) -> tuple[Handle, ...]:
         converter = () if self.converter is None else (self.converter,)
+        characteristic = () if self.characteristic is None else (self.characteristic,)
         return _unique_references(
             (self.state,),
             *(
@@ -445,6 +502,7 @@ class Inflow:
                 for value in self.values
             ),
             converter,
+            characteristic,
         )
 
     def resolve_references(self, resolver: Any) -> Inflow:
@@ -459,11 +517,17 @@ class Inflow:
             converter = model_primitive_to_conservative(resolved_state)
         else:
             converter = resolver(self.converter)
+        characteristic = None
+        if self.characteristic is not None:
+            if self.characteristic != model_characteristic_no_inflow(self.state):
+                raise ValueError("Inflow retained a forged characteristic provider")
+            characteristic = model_characteristic_no_inflow(resolved_state)
         return type(self)(
             state=resolved_state,
             value=tuple(value.resolve_references(resolver) for value in self.values),
             representation=self.representation,
             converter=converter,
+            characteristic=characteristic,
         )
 
     def inspect(self) -> dict[str, Any]:
@@ -475,6 +539,8 @@ class Inflow:
             "representation": (
                 None if self.representation is None else self.representation.canonical_identity()),
             "converter": None if self.converter is None else self.converter.inspect(),
+            "characteristic": (
+                None if self.characteristic is None else self.characteristic.inspect()),
         }
 
     def resolve_condition(
@@ -744,7 +810,12 @@ class ResolvedTransportBoundarySet:
 
         This is the sole acceptance contract used at numerical resolution, compile, and bind.
         """
-        from pops.mesh.boundaries import ClosureMode
+        from pops.mesh.boundaries import (
+            ClosureMode,
+            IncomingMultiplicity,
+            SignDependence,
+            SonicPolicy,
+        )
 
         states = {row.state for row in self.conditions}
         if len(states) != 1:
@@ -771,12 +842,27 @@ class ResolvedTransportBoundarySet:
             face_rows[face] = condition
             depth = max(depth, condition.requirement.ghost_depth)
             dependencies = condition.provider.dependencies
-            if dependencies.characteristic.mode is not ClosureMode.NONE:
-                raise NotImplementedError(
-                    "native transport boundary lowering requires prepared model eigenstructure "
-                    "for characteristic closure; directional modes cannot fall back to "
-                    "component-wise ghost filling"
+            characteristic = dependencies.characteristic
+            if characteristic.mode is not ClosureMode.NONE:
+                expected = model_characteristic_no_inflow(state)
+                exact_no_inflow = (
+                    condition.condition_type == "inflow"
+                    and characteristic.mode is ClosureMode.DIRECTIONAL
+                    and characteristic.sign_dependence is SignDependence.SPATIAL
+                    and characteristic.sonic is SonicPolicy.NEUTRAL
+                    and characteristic.incoming is IncomingMultiplicity.MULTIPLE
+                    and characteristic.characteristics == (expected,)
+                    and dependencies.states == (state,)
+                    and not dependencies.fields
+                    and not dependencies.time
                 )
+                if not exact_no_inflow:
+                    raise NotImplementedError(
+                        "native characteristic boundary requires prepared model eigenstructure "
+                        "through the exact "
+                        "model_characteristic_no_inflow(state) contract; directional modes "
+                        "cannot fall back to component-wise ghost filling"
+                    )
             representation, _ = self._native_representation_contract(condition, state)
             if condition.condition_type == "inflow":
                 if len(condition.values) != ncomp:
@@ -819,7 +905,10 @@ class ResolvedTransportBoundarySet:
                         raise TypeError(
                             "native inflow values must use one expression protocol per face"
                         )
-                    if dependencies.states or dependencies.fields or dependencies.time:
+                    if (
+                        dependencies.characteristic.mode is ClosureMode.NONE
+                        and (dependencies.states or dependencies.fields or dependencies.time)
+                    ):
                         raise NotImplementedError(
                             "state/field/time-dependent PoPS Expr inflow requires a compiled "
                             "boundary component"
@@ -873,6 +962,8 @@ class ResolvedTransportBoundarySet:
         RuntimeParam values intentionally remain unbound here.  Their expression protocol and
         dependency set are authenticated now; numeric evaluation happens exactly once at bind.
         """
+        from pops.mesh.boundaries import ClosureMode
+
         state, ncomp, conditions, depth = self._native_contract()
         return {
             "schema_version": 1,
@@ -889,12 +980,17 @@ class ResolvedTransportBoundarySet:
                     "condition_type": row.condition_type,
                     "producer": row.provider.qualified_id,
                     "geometry": row.geometry.canonical_identity(),
-                    "type": {
+                    "type": (
+                        "characteristic_no_inflow"
+                        if row.provider.dependencies.characteristic.mode
+                        is not ClosureMode.NONE
+                        else {
                         "outflow": "foextrap",
                         "inflow": "dirichlet",
                         "no_flux": "no_flux",
                         "slip_wall": "slip_wall",
-                    }[row.condition_type],
+                        }[row.condition_type]
+                    ),
                     "representation": self._native_representation_contract(
                         row, state)[0],
                     "converter": self._native_representation_contract(
@@ -926,6 +1022,7 @@ class ResolvedTransportBoundarySet:
         ignored metadata.
         """
         from pops.model._bind_expression import eval_expression_key
+        from pops.mesh.boundaries import ClosureMode
         from pops.runtime._analytic_expression_lowering import lower_analytic_components
 
         if not isinstance(params, Mapping):
@@ -989,7 +1086,12 @@ class ResolvedTransportBoundarySet:
                                 % value
                             )
                         values.append(float(value))
-                face_type = "dirichlet"
+                face_type = (
+                    "characteristic_no_inflow"
+                    if condition.provider.dependencies.characteristic.mode
+                    is not ClosureMode.NONE
+                    else "dirichlet"
+                )
             if condition.condition_type in {"no_flux", "outflow", "slip_wall"}:
                 analytic_programs = []
                 clock_id = None
@@ -1232,6 +1334,7 @@ class TransportBoundarySet:
 __all__ = [
     "BoundaryStencilRequirement",
     "Inflow",
+    "model_characteristic_no_inflow",
     "model_primitive_to_conservative",
     "NoFlux",
     "Outflow",

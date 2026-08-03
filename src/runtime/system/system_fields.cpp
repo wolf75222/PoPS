@@ -206,6 +206,17 @@ POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConve
   s.cons_to_prim = std::move(cons_to_prim);
 }
 
+POPS_EXPORT void System::set_block_characteristic_no_inflow(const std::string& name,
+                                                            CharacteristicNoInflowFill fill) {
+  (void)p_->find(name);
+  const auto boundary = p_->boundary_plans_.find(name);
+  if (boundary == p_->boundary_plans_.end() ||
+      !boundary->second->requires_characteristic_no_inflow())
+    throw std::runtime_error(
+        "System characteristic no-inflow was not requested by the exact block boundary plan");
+  boundary->second->prepare_characteristic_no_inflow(std::move(fill));
+}
+
 POPS_EXPORT void System::set_block_batch_recovery(const std::string& name,
                                                   CellBatchRecovery batch_cons_to_prim) {
   Impl::Species& state = p_->find(name);

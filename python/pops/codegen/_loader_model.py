@@ -31,10 +31,16 @@ class CompiledModel:
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
                  bind_schema: Any = None, definition_identity: Any = None,
                  state_spaces: Any = ("U",), wave_speed_provider: Any = None,
-                 module_manifest: Any = None) -> None:
+                 module_manifest: Any = None,
+                 characteristic_no_inflow: Any = False) -> None:
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
+        self.has_characteristic_no_inflow = bool(characteristic_no_inflow)
+        if self.has_characteristic_no_inflow and not self.has_roe:
+            raise ValueError(
+                "characteristic no-inflow requires the compiled flux-Jacobian Roe provider"
+            )
         allowed_wave_speed_providers = {"explicit_pair", "jacobian", "pressure_derived"}
         if self.has_wave_speeds:
             if wave_speed_provider not in allowed_wave_speed_providers:
