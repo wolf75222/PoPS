@@ -166,6 +166,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_cell_temporal_program_refusal"
+sources = ["tests/cpp/integration/mpi/test_mpi_cell_temporal_program_refusal.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_amr_prepared_boundary_cf"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_prepared_boundary_cf.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -1211,6 +1217,11 @@ labels = ["integration", "runtime", "amr", "medium"]
 [[cpp.suite]]
 name = "test_cell_temporal_partition_executor"
 sources = ["tests/cpp/integration/amr/test_cell_temporal_partition_executor.cpp"]
+labels = ["integration", "runtime", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_cell_temporal_program_route"
+sources = ["tests/cpp/integration/amr/test_cell_temporal_program_route.cpp"]
 labels = ["integration", "runtime", "amr", "medium"]
 
 [[cpp.suite]]

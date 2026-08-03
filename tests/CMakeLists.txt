@@ -707,6 +707,9 @@ pops_add_gtest_suite(NAME test_temporal_partition_restart SOURCES "${_src}" EXTR
 pops_test_source(_src test_cell_temporal_partition_executor)
 pops_add_gtest_suite(NAME test_cell_temporal_partition_executor SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_cell_temporal_program_route)
+pops_add_gtest_suite(NAME test_cell_temporal_program_route SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_transfer_properties)
 pops_add_gtest_suite(NAME test_amr_transfer_properties SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
@@ -801,6 +804,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_dynamic_active_depth 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_cell_temporal_program_refusal 2)
   set(POPS_MPI_RANKS_test_mpi_amr_prepared_boundary_cf 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
@@ -846,6 +850,7 @@ if(POPS_HAS_MPI)
     test_mpi_composite_fac
     test_amr_regrid_mpi_parity
     test_mpi_amr_dynamic_active_depth
+    test_mpi_cell_temporal_program_refusal
     test_mpi_amr_prepared_boundary_cf
     test_mpi_system_solve_fields
     test_mpi_system_fft
