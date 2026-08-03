@@ -7,6 +7,7 @@
 #pragma once
 
 #include <pops/mesh/index/box.hpp>
+#include <pops/mesh/topology/boundary_topology.hpp>
 
 #include <algorithm>
 #include <array>
@@ -86,30 +87,10 @@ Box<Dim> grow_box(const Box<Dim>& source, const Extent<Dim>& ghosts) {
 
 }  // namespace periodicity_detail
 
-enum class Side : unsigned char { lower, upper };
+using Side = ::pops::BoundarySide;
 
-/// An oriented coordinate face.  Ordinals are deterministic: axis 0 lower/upper, axis 1, ... .
-template <int Dim>
-struct Face {
-  static_assert(Dim >= 1 && Dim <= 3, "nd_proof::Face only supports dimensions 1, 2, and 3");
-
-  int axis = 0;
-  Side side = Side::lower;
-
-  constexpr Face() = default;
-  constexpr Face(int face_axis, Side face_side) : axis(face_axis), side(face_side) {
-    if (axis < 0 || axis >= Dim)
-      throw std::invalid_argument("nd_proof::Face axis is outside the compile-time rank");
-  }
-
-  constexpr int ordinal() const noexcept { return 2 * axis + (side == Side::upper ? 1 : 0); }
-  constexpr bool operator==(const Face&) const = default;
-};
-
-template <int Dim>
-constexpr bool face_less(const Face<Dim>& left, const Face<Dim>& right) noexcept {
-  return left.ordinal() < right.ordinal();
-}
+using ::pops::Face;
+using ::pops::face_less;
 
 /// A signed source-axis -> target-axis permutation.
 template <int Dim>

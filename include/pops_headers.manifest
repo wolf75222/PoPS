@@ -49,6 +49,7 @@ api pops/diagnostics/runtime_diagnostics.hpp
 api pops/mesh/boundary/boundary_component_executor.hpp
 api pops/mesh/boundary/fill_boundary.hpp
 api pops/mesh/boundary/halo_schedule.hpp
+api pops/mesh/boundary/nd_boundary_schedule.hpp
 api pops/mesh/boundary/periodicity.hpp
 api pops/mesh/boundary/physical_bc.hpp
 api pops/mesh/boundary/prepared_boundary_component.hpp
@@ -83,6 +84,7 @@ sdk-support pops/mesh/storage/field_replica_consensus.hpp
 api pops/mesh/storage/field_view.hpp
 api pops/mesh/storage/mf_arith.hpp
 api pops/mesh/storage/multifab.hpp
+api pops/mesh/topology/boundary_topology.hpp
 api pops/numerics/elliptic/eb/cut_fraction.hpp
 test-only pops/numerics/elliptic/interface/elliptic_interface.hpp
 api pops/numerics/elliptic/interface/elliptic_problem.hpp
