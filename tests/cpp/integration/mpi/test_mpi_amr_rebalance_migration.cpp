@@ -35,7 +35,7 @@ ModelSpec exb_spec() {
   spec.transport = "exb";
   spec.source = "none";
   spec.elliptic = "charge";
-  spec.q = 1.0;
+  spec.q = 0.0;
   spec.B0 = 1.0;
   return spec;
 }
