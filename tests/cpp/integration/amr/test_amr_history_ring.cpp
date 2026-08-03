@@ -483,6 +483,38 @@ TEST(test_amr_history_ring, SharedProgramServiceInterpolatesEveryActiveAmrLevel)
   EXPECT_EQ(interpolation_visits[1], 2);
 }
 
+TEST(test_amr_history_ring, SharedGeneratedFieldWorkspaceReachesRealAmrTerminal) {
+  constexpr int n = 8;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodicity = {true, true};
+  cfg.regrid_every = 0;
+  AmrSystem sim(cfg);
+  AmrRuntime* rt = configure_native_ab2_regrid_system(sim, n, /*temporal_ratio=*/2);
+  ASSERT_NE(rt, nullptr);
+  ASSERT_EQ(rt->nlev(), 2);
+
+  runtime::program::AmrProgramContext context(rt, &sim);
+  context.set_level(0);
+  MultiFab stage = rt->level_state(0, 0);
+  stage.set_val(Real(7));
+  const std::vector<double> accepted_density = sim.density("a");
+  const runtime::multiblock::BoundaryEvaluationPoint point{
+      "clock.macro", 0, 0, 0, 0, ::pops::amr::Rational(0, 1), 0.01, 0.0};
+
+  std::string diagnostic;
+  try {
+    (void)context.solve_fields_from_blocks_at(point, 700, "missing.provider", {{0, &stage}});
+    FAIL() << "the shared route fabricated a field result instead of reaching AmrRuntime";
+  } catch (const std::runtime_error& error) {
+    diagnostic = error.what();
+  }
+  EXPECT_NE(diagnostic.find("AmrRuntime"), std::string::npos) << diagnostic;
+  EXPECT_EQ(sim.density("a"), accepted_density)
+      << "the real AMR terminal must restore accepted state after provider rejection";
+}
+
 TEST(test_amr_history_ring, CommitManySnapshotsSourcesThatAreAlsoTargetsOnAFlatHierarchy) {
   constexpr int n = 16;
   AmrSystemConfig cfg;
