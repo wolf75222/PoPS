@@ -596,12 +596,13 @@ class PreparedLoadBalanceAuthority {
   }
 
   [[nodiscard]] RebalanceDecision decide_rebalance(
-      const BoxArray& boxes, const DistributionMapping& current, int rank_count,
+      int source_level, const BoxArray& boxes, const DistributionMapping& current, int rank_count,
       std::uint64_t topology_epoch, std::uint64_t materialization_generation,
       ResourceEstimates estimates,
       const CommunicatorView& communicator = world_communicator_view()) const {
-    return decide_rebalance(boxes, current, rank_count, topology_epoch, materialization_generation,
-                            estimates, default_rebalance_policy(), communicator);
+    return decide_rebalance(source_level, boxes, current, rank_count, topology_epoch,
+                            materialization_generation, estimates, default_rebalance_policy(),
+                            communicator);
   }
 
  private:

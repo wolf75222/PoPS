@@ -310,6 +310,15 @@ TEST(test_load_balance, measured_knapsack_provider_owns_exact_default_decision_p
   EXPECT_EQ(policy.migration_bandwidth_bytes_per_second, 25'000'000'000);
   EXPECT_EQ(policy.per_patch_migration_latency_nanoseconds, 2'500);
 
+  const BoxArray boxes = BoxArray::from_domain(Box2D::from_extents(2, 1), 1);
+  const DistributionMapping current(std::vector<int>{0, 0});
+  const RebalanceDecision defaulted = authority.decide_rebalance(
+      1, boxes, current, 1, 7, 3,
+      std::vector<ResourceEstimate>{measured_patch_cost(100), measured_patch_cost(1)});
+  EXPECT_FALSE(defaulted.accepted);
+  EXPECT_EQ(defaulted.reason, RebalanceReason::MappingUnchanged);
+  EXPECT_FALSE(defaulted.source_contract.empty());
+
   PreparedProviderOptions incomplete = options;
   incomplete.values.erase("amortization_steps");
   EXPECT_THROW(prepare_load_balance_authority("measured_knapsack", "test.invalid", incomplete),
