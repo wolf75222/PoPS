@@ -509,47 +509,118 @@ struct AmrHistoryOps {
   // (level pk) is stable. No-op when no ring exists.
   static void remap_rings(AmrRuntime& eng, const BoxArray& fb, const DistributionMapping& dmap,
                           int fk, int pk, bool prolong) {
+    const CommunicatorView communicator = world_communicator_view();
+    std::string registry_contract;
+    regrid_detail::collective_stage("AMR history remap registry", communicator, [&] {
+      const std::size_t registry_size = eng.hist_rings_.size();
+      if (eng.hist_depth_.size() != registry_size ||
+          eng.hist_block_owner_.size() != registry_size || eng.hist_init_.size() != registry_size ||
+          eng.hist_fill_count_.size() != registry_size ||
+          eng.hist_store_pending_.size() != registry_size ||
+          eng.hist_slot_dt_.size() != registry_size)
+        throw std::runtime_error("AMR history remap registry is incomplete");
+      if (pk < 0 || fk != pk + 1 ||
+          eng.hierarchy_.refinement_ratios.size() <= static_cast<std::size_t>(pk))
+        throw std::runtime_error("AMR history remap transition is invalid");
+      ExactContractBuilder contract;
+      contract.text("pops.amr.history-remap-registry")
+          .scalar(std::uint32_t{1})
+          .scalar(fk)
+          .scalar(pk)
+          .scalar(static_cast<std::uint8_t>(prolong ? 1 : 0))
+          .scalar(static_cast<std::uint64_t>(eng.hist_rings_.size()));
+      for (const auto& [name, ring] : eng.hist_rings_) {
+        const std::size_t owner = eng.hist_block_owner_.at(name);
+        const std::size_t depth = static_cast<std::size_t>(eng.hist_depth_.at(name));
+        const std::size_t metadata_levels = eng.hist_init_.at(name).size();
+        if (owner >= eng.blocks_.size() || depth < 2 || ring.size() != depth ||
+            eng.hist_fill_count_.at(name).size() != metadata_levels ||
+            eng.hist_store_pending_.at(name).size() != metadata_levels ||
+            eng.hist_slot_dt_.at(name).size() != depth)
+          throw std::runtime_error("AMR history remap entry is incomplete");
+        std::optional<bool> level_existed;
+        std::optional<std::size_t> slot_levels;
+        for (const auto& slot : ring) {
+          if (slot.size() <= static_cast<std::size_t>(pk))
+            throw std::runtime_error("AMR history remap slot is missing its parent level");
+          const bool slot_existed = slot.size() > static_cast<std::size_t>(fk);
+          if (level_existed && *level_existed != slot_existed)
+            throw std::runtime_error("AMR history remap slots disagree on active levels");
+          if (slot_levels && *slot_levels != slot.size())
+            throw std::runtime_error("AMR history remap slots disagree on level count");
+          level_existed = slot_existed;
+          slot_levels = slot.size();
+        }
+        if (slot_levels && metadata_levels != *slot_levels)
+          throw std::runtime_error("AMR history remap metadata disagrees with its slots");
+        contract.text(name)
+            .scalar(static_cast<std::uint64_t>(owner))
+            .scalar(eng.hist_depth_.at(name))
+            .scalar(static_cast<std::uint64_t>(ring.size()));
+        for (const auto& slot : ring) {
+          contract.scalar(static_cast<std::uint64_t>(slot.size()));
+          for (const MultiFab& field : slot) {
+            contract.scalar(field.ncomp())
+                .scalar(field.n_grow())
+                .scalar(static_cast<std::uint64_t>(field.box_array().size()));
+            for (const Box2D& box : field.box_array().boxes())
+              contract.scalar(box.lo[0]).scalar(box.lo[1]).scalar(box.hi[0]).scalar(box.hi[1]);
+            contract.sequence(field.dmap().ranks());
+          }
+        }
+        contract.sequence(eng.hist_init_.at(name))
+            .sequence(eng.hist_fill_count_.at(name))
+            .sequence(eng.hist_store_pending_.at(name))
+            .scalar(static_cast<std::uint64_t>(eng.hist_slot_dt_.at(name).size()));
+      }
+      registry_contract = std::move(contract).release();
+    });
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"pops.amr.history-remap-registry", registry_contract}}, communicator))
+      throw std::runtime_error("AMR history remap registry differs between MPI ranks");
+
     for (auto& [name, ring] : eng.hist_rings_) {
-      const auto owner = eng.hist_block_owner_.find(name);
-      if (owner == eng.hist_block_owner_.end() || owner->second >= eng.blocks_.size())
-        throw std::runtime_error("AMR history ring lost its owner-qualified transfer authority");
-      const std::size_t block = owner->second;
+      const std::size_t block = eng.hist_block_owner_.at(name);
       bool appended_level = false;
       for (auto& slot : ring) {  // slot = per-level vector<MultiFab>
-        if (slot.size() <= static_cast<std::size_t>(pk))
-          throw std::runtime_error("AMR history ring is missing its parent level during regrid");
         const bool existed = slot.size() > static_cast<std::size_t>(fk);
         const int ngf = existed ? slot[static_cast<std::size_t>(fk)].n_grow()
                                 : slot[static_cast<std::size_t>(pk)].n_grow();
         const int ncomp = slot[static_cast<std::size_t>(pk)].ncomp();
         if (!existed) {
-          slot.emplace_back(BoxArray{}, DistributionMapping{}, ncomp, ngf);
+          regrid_detail::collective_stage("AMR history remap level activation", communicator, [&] {
+            slot.emplace_back(BoxArray{}, DistributionMapping{}, ncomp, ngf);
+          });
           appended_level = true;
         }
         MultiFab& fine = slot[static_cast<std::size_t>(fk)];
         if (prolong) {
           const int ratio = eng.hierarchy_.refinement_ratios[static_cast<std::size_t>(pk)];
-          fine = eng.regrid_block_field(block, fb, dmap, slot[static_cast<std::size_t>(pk)], fine,
-                                        pk, ngf, ratio);
+          MultiFab candidate = eng.regrid_block_field(
+              block, fb, dmap, slot[static_cast<std::size_t>(pk)], fine, pk, ngf, ratio);
+          regrid_detail::collective_stage("AMR history remap slot publication", communicator,
+                                          [&] { fine = std::move(candidate); });
         } else {
-          fine = MultiFab(fb, dmap, ncomp, ngf);
+          regrid_detail::collective_stage("AMR history remap slot allocation", communicator,
+                                          [&] { fine = MultiFab(fb, dmap, ncomp, ngf); });
         }
       }
       if (appended_level) {
-        auto initialized = eng.hist_init_.find(name);
-        auto fill_count = eng.hist_fill_count_.find(name);
-        auto pending = eng.hist_store_pending_.find(name);
-        if (initialized == eng.hist_init_.end() || fill_count == eng.hist_fill_count_.end() ||
-            pending == eng.hist_store_pending_.end() ||
-            initialized->second.size() != static_cast<std::size_t>(pk + 1) ||
-            fill_count->second.size() != static_cast<std::size_t>(pk + 1) ||
-            pending->second.size() != static_cast<std::size_t>(pk + 1))
-          throw std::runtime_error("AMR history initialization mask disagrees with activation");
-        initialized->second.push_back(prolong ? initialized->second[static_cast<std::size_t>(pk)]
-                                              : char(0));
-        fill_count->second.push_back(prolong ? fill_count->second[static_cast<std::size_t>(pk)]
-                                             : 0);
-        pending->second.push_back(0);
+        regrid_detail::collective_stage(
+            "AMR history remap metadata publication", communicator, [&] {
+              auto& initialized = eng.hist_init_.at(name);
+              auto& fill_count = eng.hist_fill_count_.at(name);
+              auto& pending = eng.hist_store_pending_.at(name);
+              if (initialized.size() != static_cast<std::size_t>(pk + 1) ||
+                  fill_count.size() != static_cast<std::size_t>(pk + 1) ||
+                  pending.size() != static_cast<std::size_t>(pk + 1))
+                throw std::runtime_error(
+                    "AMR history initialization mask disagrees with "
+                    "activation");
+              initialized.push_back(prolong ? initialized[static_cast<std::size_t>(pk)] : char(0));
+              fill_count.push_back(prolong ? fill_count[static_cast<std::size_t>(pk)] : 0);
+              pending.push_back(0);
+            });
       }
     }
   }

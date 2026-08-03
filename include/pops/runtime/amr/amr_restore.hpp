@@ -418,23 +418,27 @@ inline bool AmrRuntime::apply_rebalance_decision(int level, const RebalanceDecis
                                             [&] { capture_step_snapshot(accepted); });
 
   const std::size_t index = static_cast<std::size_t>(level);
-  const BoxArray boxes = hierarchy_.ba[index];
   const int parent_level = level - 1;
-  const int refinement_ratio = hierarchy_.refinement_ratios[static_cast<std::size_t>(parent_level)];
+  int refinement_ratio = 0;
+  std::optional<BoxArray> boxes;
   std::optional<MultiFab> migrated_aux;
   detail::collective_load_balance_preflight("AMR rebalance carrier allocation", communicator, [&] {
     // Aux fields are not part of a block's conservative prolongation route. Prepare an exact
     // owner-only copy before mutating the hierarchy; field publication may refresh derived ghosts
     // and provider-owned components only after these accepted valid cells are restored.
-    migrated_aux.emplace(boxes, decision.proposed_mapping, aux_[index].ncomp(),
+    boxes.emplace(hierarchy_.ba[index]);
+    refinement_ratio = hierarchy_.refinement_ratios[static_cast<std::size_t>(parent_level)];
+    migrated_aux.emplace(*boxes, decision.proposed_mapping, aux_[index].ncomp(),
                          aux_[index].n_grow());
   });
 
   std::exception_ptr migration_failure;
   try {
-    parallel_copy(*migrated_aux, aux_[index], communicator);
+    regrid_detail::collective_stage("AMR rebalance aux redistribution", communicator, [&] {
+      parallel_copy(*migrated_aux, aux_[index], communicator);
+    });
 
-    materialize_regrid_transition_(parent_level, boxes, decision.proposed_mapping,
+    materialize_regrid_transition_(parent_level, *boxes, decision.proposed_mapping,
                                    refinement_ratio);
     detail::collective_load_balance_preflight(
         "AMR rebalance carrier publication", communicator, [&] {
@@ -445,11 +449,16 @@ inline bool AmrRuntime::apply_rebalance_decision(int level, const RebalanceDecis
                   &aux_[static_cast<std::size_t>(active_level)];
         });
 
-    invalidate_named_field_topology();
-    record_topology_replacement_();
-    require_solved_field_outcome(solve_fields(),
-                                 "AmrRuntime::apply_rebalance_decision publication");
-    materialize_boundary_sessions_();
+    regrid_detail::collective_stage("AMR rebalance topology publication", communicator, [&] {
+      invalidate_named_field_topology();
+      record_topology_replacement_();
+    });
+    regrid_detail::collective_stage("AMR rebalance field publication", communicator, [&] {
+      require_solved_field_outcome(solve_fields(),
+                                   "AmrRuntime::apply_rebalance_decision publication");
+    });
+    regrid_detail::collective_stage("AMR rebalance boundary publication", communicator,
+                                    [&] { materialize_boundary_sessions_(); });
 
     detail::collective_load_balance_preflight(
         "AMR rebalance publication validation", communicator, [&] {
@@ -460,7 +469,7 @@ inline bool AmrRuntime::apply_rebalance_decision(int level, const RebalanceDecis
               throw std::runtime_error(
                   "AMR rebalance produced different level "
                   "counts across blocks");
-            if (levels[index].U.box_array().boxes() != boxes.boxes() ||
+            if (levels[index].U.box_array().boxes() != boxes->boxes() ||
                 levels[index].U.dmap().ranks() != decision.proposed_mapping.ranks())
               throw std::runtime_error(
                   "AMR rebalance did not publish its exact "
@@ -468,7 +477,8 @@ inline bool AmrRuntime::apply_rebalance_decision(int level, const RebalanceDecis
           }
         });
     require_complete_history_materialization_collective_("AmrRuntime::apply_rebalance_decision");
-    device_fence();
+    regrid_detail::collective_stage("AMR rebalance final device fence", communicator,
+                                    [] { device_fence(); });
   } catch (...) {
     migration_failure = std::current_exception();
   }

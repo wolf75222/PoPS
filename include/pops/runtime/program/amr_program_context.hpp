@@ -367,9 +367,17 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
 
     bool applied = false;
     local_failure = nullptr;
-    try {
-      if (decision.accepted)
+    if (decision.accepted) {
+      try {
         eng_->set_component_logical_time(macro_step(), facade_->time());
+      } catch (...) {
+        local_failure = std::current_exception();
+      }
+      require_collective_rebalance_program_success_(
+          local_failure, "AMR Program rebalance logical-time publication");
+    }
+    local_failure = nullptr;
+    try {
       applied = eng_->apply_rebalance_decision(level, decision);
       if (applied) {
         if (!rematerialized_program_state)
