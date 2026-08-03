@@ -7,7 +7,8 @@
 
 namespace pops::detail {
 
-BuiltBlock build_block_polar(const ModelSpec& model, const std::string& limiter,
+BuiltBlock build_block_polar(const ModelSpec& model, const std::string& name,
+                             const std::string& state_identity, const std::string& limiter,
                              const std::string& riemann, const PolarGridContext& pctx,
                              bool recon_prim, Real positivity_floor, const MultiFab* aux) {
   BuiltBlock out;
@@ -21,11 +22,14 @@ BuiltBlock build_block_polar(const ModelSpec& model, const std::string& limiter,
     // exactly like the Cartesian path. Without it a polar model with n_aux>3 read past the aux fab
     // (load_aux<aux_comps<M>> on a 3-wide channel) -- a silent out-of-bounds (#51-class).
     out.aux_width = aux_comps<M>();
-    // wall_radial = true: solid wall at both radial edges (no-penetration) -> zero radial flux at
-    // r_min / r_max -> mass Sum n r dr dtheta conserved TO MACHINE precision (diocotron ring bounded by
-    // two conducting walls). This is the BC that makes the coupled step conservative.
-    out.clo = make_block_polar(m, limiter, riemann, pctx, recon_prim, /*wall_radial=*/true,
-                               positivity_floor);
+    PolarGridContext prepared = pctx;
+    if (!prepared.boundary_plan) {
+      out.synthesized_boundary_plan = prepare_builtin_boundary_plan(
+          name, state_identity, limiter_n_ghost(limiter), out.cons_vs, prepared.bc,
+          /*close_radial_flux=*/true);
+      prepared.boundary_plan = out.synthesized_boundary_plan;
+    }
+    out.clo = make_block_polar(m, limiter, riemann, prepared, recon_prim, positivity_floor);
     // POLAR StabilityPolicy (audit wave 3): same policy as the Cartesian -- stability lambda* (trait)
     // otherwise max_wave_speed; source/admissible-step bounds if declared, EMPTY closures otherwise
     // (historical step policy, bit-identical).

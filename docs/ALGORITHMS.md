@@ -1606,8 +1606,9 @@ $S_g$ is the geometric curvature source ($-\rho v_\theta^2/r$ etc.), not capture
 divergence in a rotating local basis; it is carried per cell (null for a scalar ExB brick
 -> bit-identical to the historical polar ExB transport). The weight $r_{i+1/2}$ of an interior face is
 shared by the two neighboring cells, so the radial term telescopes; the azimuthal term telescopes
-exactly (periodic). With `wall_radial`, the radial flux is forced to zero at the two physical boundary
-faces -> mass $\sum n_{ij}\, r_i\, dr\, d\theta$ conserved to the machine whatever $v_r$.
+exactly (periodic). When the immutable `PreparedBoundaryPlan` assigns `NoFlux` to the two radial
+faces, their evaluated numerical flux is forced to zero -> mass
+$\sum n_{ij}\, r_i\, dr\, d\theta$ conserved to the machine whatever $v_r$.
 
 **Formula / discretization (Poisson, FFT-in-theta + tridiag-in-r).** We solve
 $\tfrac{1}{r}\partial_r(r\,\partial_r\phi) + \tfrac{1}{r^2}\partial_\theta^2\phi = f$ directly
@@ -1657,8 +1658,8 @@ the gauge by pinning $\hat\phi(0,0) = 0$ (row 0 replaced by the identity in Thom
 opt-in via the advanced `pops.mesh.PolarMesh`; `cfg.geometry == "polar"` on the
 [`src/runtime/system/system.cpp`](../src/runtime/system/system.cpp) side). Transport:
 [`include/pops/numerics/spatial/operators/polar_operator.hpp`](../include/pops/numerics/spatial/operators/polar_operator.hpp)`::assemble_rhs_polar<Limiter, NumericalFlux>`
-(`recon_prim`, `wall_radial`), via the named functors `detail::PolarFaceFluxRKernel` (radial flux
-weighted by `r_face`, optional wall at the boundary faces), `PolarFaceFluxThetaKernel`,
+(`PreparedBoundaryPlan`, `recon_prim`), via the named functors `detail::PolarFaceFluxRKernel` (radial
+flux weighted by `r_face`, with `NoFlux` derived from the prepared face laws), `PolarFaceFluxThetaKernel`,
 `PolarAssembleRhsKernel`; the physical source and the geometric source are routed by the concepts
 `PolarHasSource` / `PolarHasGeomSource` (`if constexpr`: zero codegen for a scalar brick,
 ExB path bit-identical). Instantiated via `runtime/block_builder_polar.hpp`, wired in

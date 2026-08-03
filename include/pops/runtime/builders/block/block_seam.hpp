@@ -6,6 +6,7 @@
 #include <pops/runtime/builders/factory/model_factory.hpp>  // dispatch_model_for + resolve_implicit_components + ModelSpec
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,6 +43,9 @@ struct BuiltBlock {
   std::function<void(const double*, double*)> prim_to_cons;  // System::CellConvert
   std::function<RecoveryReport(const double*, double*)> cons_to_prim;  // System::CellRecovery
   UniformCellRecovery batch_cons_to_prim;  // generation-qualified host/Uniform materialization
+  /// Compatibility-only plan lowered once while building a native polar block. System publishes
+  /// this same shared object before installation; the generated closures already capture it.
+  std::shared_ptr<PreparedBoundaryPlan> synthesized_boundary_plan;
   int aux_width =
       0;  // aux_comps<Model>() (Cartesian); unused on the polar path (no ensure_aux_width)
 };
@@ -138,7 +142,8 @@ BuiltBlock build_block_compressible_roe_hll_rusanov_recovery(const ModelSpec& mo
 
 // Polar (ring) seam: VERBATIM polar visitor body (make_block_polar + polar makers). IMEX is rejected on
 // the ring by add_block before this is called. @p aux is &System::Impl::aux (the polar makers read it).
-BuiltBlock build_block_polar(const ModelSpec& model, const std::string& limiter,
+BuiltBlock build_block_polar(const ModelSpec& model, const std::string& name,
+                             const std::string& state_identity, const std::string& limiter,
                              const std::string& riemann, const PolarGridContext& pctx,
                              bool recon_prim, Real positivity_floor, const MultiFab* aux);
 

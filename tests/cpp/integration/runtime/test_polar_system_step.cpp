@@ -8,7 +8,7 @@
 //         aux[1] = grad_r     = d phi/dr,
 //         aux[2] = grad_theta = (1/r) d phi/d theta  (derivee PHYSIQUE, deja divisee par r),
 //       d'ou la vitesse ExB polaire de ExBVelocityPolar : v_r = -grad_theta/B, v_theta = grad_r/B ;
-//   (3) AVANCE SSPRK3 du transport polaire (assemble_rhs_polar) avec PAROI RADIALE solide (wall_radial)
+//   (3) AVANCE SSPRK3 du transport polaire avec un PreparedBoundaryPlan NoFlux radial
 //       -> flux radial nul a r_min/r_max -> masse Sum_ij n_ij r_i dr dtheta conservee A LA MACHINE.
 //
 // Deux verifications :
@@ -39,6 +39,11 @@
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 #include <pops/physics/bricks/bricks.hpp>  // ExBVelocityPolar, CompositeModel, NoSource, ChargeDensity
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar : MEME derivation aux que System::solve_fields_polar
+#include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/system.hpp>
+
+#include "explicit_system_program.hpp"
+#include "polar_boundary_plan.hpp"
 
 #include <cmath>
 #include <vector>
@@ -90,6 +95,8 @@ static double min_density(const MultiFab& U, const Box2D& dom) {
 static void coupled_step(const PolarModel& model, MultiFab& U, MultiFab& aux,
                          PolarPoissonSolver& solver, const PolarGeometry& g, const Box2D& dom,
                          const BCRec& bc, double dt) {
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(PolarModel::n_vars, true, Weno5::n_ghost);
   // --- solve_fields_polar : f = q n, resolu, puis aux = (phi, grad_r, grad_theta) ---
   {
     MultiFab& rhs = solver.rhs();
@@ -105,12 +112,12 @@ static void coupled_step(const PolarModel& model, MultiFab& U, MultiFab& aux,
     derive_aux_polar(solver.phi(), aux, g);
     fill_ghosts(aux, dom, bc);  // theta periodique, r physique (extrapolation)
   }
-  // --- avance SSPRK3 du transport polaire avec PAROI RADIALE solide (wall_radial = true) ---
+  // --- avance SSPRK3 du transport polaire avec des faces radiales NoFlux preparees ---
   SSPRK3Step{}.take_step(
       [&](MultiFab& stage, MultiFab& R) {
         fill_ghosts(stage, dom, bc);
-        assemble_rhs_polar<Weno5, RusanovFlux>(model, stage, aux, g, R, /*recon_prim=*/false,
-                                               /*wall_radial=*/true);
+        assemble_rhs_polar<Weno5, RusanovFlux>(model, stage, aux, g, R, *boundary_plan,
+                                               /*recon_prim=*/false);
       },
       U, static_cast<Real>(dt));
 }
@@ -122,9 +129,8 @@ TEST(PolarSystemStep, CoupledStepAdvectsDensityAndConservesMassUnderRadialWall) 
   BoxArray ba(std::vector<Box2D>{dom});
   DistributionMapping dm(1, n_ranks());
 
-  // BC : radial Neumann homogene (Foextrap) pour le Poisson (paroi), theta periodique. (La paroi
-  // SOLIDE du transport est portee par wall_radial dans coupled_step, independamment de la BC du
-  // Poisson : le test verifie precisement que la masse est conservee a la machine grace a wall_radial.)
+  // BC : radial Neumann homogene (Foextrap) pour le Poisson, theta periodique. La paroi SOLIDE du
+  // transport est portee par le plan NoFlux de coupled_step, independamment de la BC du Poisson.
   BCRec bc;
   bc.xlo = bc.xhi = BCType::Foextrap;
   bc.ylo = bc.yhi = BCType::Periodic;
@@ -212,4 +218,54 @@ TEST(PolarSystemStep, CoupledStepAdvectsDensityAndConservesMassUnderRadialWall) 
                             << " finale=" << m1;
   EXPECT_TRUE(minrho1 > 0.0) << "(B) densite devenue negative (pas couple instable) : minrho1="
                              << minrho1;
+}
+
+TEST(PolarSystemStep, BoundProgramUsesPersistentPreparedBoundaryClosures) {
+  SystemConfig config;
+  config.n = 8;
+  config.geometry = "polar";
+  config.nr = 8;
+  config.ntheta = 16;
+  config.r_min = kRmin;
+  config.r_max = kRmax;
+  System system(config);
+
+  ModelSpec model;
+  model.transport = "exb";
+  model.source = "none";
+  model.elliptic = "charge";
+  model.q = kQ;
+  model.B0 = kB0;
+  system.add_block("density", model, "none");
+
+  std::vector<double> density(static_cast<std::size_t>(config.nr * config.ntheta));
+  for (int j = 0; j < config.ntheta; ++j)
+    for (int i = 0; i < config.nr; ++i)
+      density[static_cast<std::size_t>(j * config.nr + i)] =
+          1.0 + 0.1 * std::cos(2.0 * kPiL * (static_cast<double>(j) + 0.5) / config.ntheta);
+  system.set_density("density", density);
+  test::install_forward_euler_program(system);
+  system.mark_bound();
+
+  EXPECT_NO_THROW(system.step(1e-4));
+  for (const double value : system.get_state("density"))
+    EXPECT_TRUE(std::isfinite(value));
+}
+
+TEST(PolarSystemStep, RefusesUnsupportedPostRiemannBoundaryComponentAtInstallation) {
+  SystemConfig config;
+  config.geometry = "polar";
+  config.nr = 8;
+  config.ntheta = 16;
+  config.r_min = kRmin;
+  config.r_max = kRmax;
+  System system(config);
+
+  ModelSpec model;
+  model.transport = "exb";
+  model.source = "none";
+  model.elliptic = "charge";
+  system.add_block("density", model, "none");
+
+  EXPECT_THROW(system.install_boundary_flux_component("density", {}, {}), std::runtime_error);
 }
