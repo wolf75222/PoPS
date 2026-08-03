@@ -1641,16 +1641,40 @@ class RuntimeInstance:
             safe_console_completed(console_session, report)
         return report
 
-    def _checkpoint_payload(self, path: Any) -> str:
+    def _checkpoint_payload(self, path: Any, *, transaction_receipt: Any = None) -> str:
         from pops.output._checkpoint_collective import (
             canonical_checkpoint_path,
             checkpoint_topology,
             consensus,
             root_value,
         )
+        from pops.output._restart_provider import (
+            _CheckpointTransactionReceipt,
+            _unlink_checkpoint_path_if_owned,
+        )
+        from pops.output._writers.common import _StagingAuthority
 
         topology = checkpoint_topology(self)
         expected = canonical_checkpoint_path(path)
+        receipt_error = None
+        try:
+            if type(transaction_receipt) is not _CheckpointTransactionReceipt:
+                raise RuntimeError(
+                    "RuntimeInstance checkpoint capture requires an authenticated private "
+                    "transaction receipt; the path-only native ABI cannot prove creator ownership"
+                )
+            transaction_receipt.require_entry_path(expected)
+            if topology.rank == 0 and not transaction_receipt.has_root_descriptor:
+                raise RuntimeError("rank zero lacks the checkpoint transaction descriptor")
+        except BaseException as error:
+            receipt_error = error
+        consensus(topology, "private transaction receipt", error=receipt_error)
+        root_value(
+            topology,
+            "native staging absence",
+            lambda: transaction_receipt.require_absent_entry(expected),
+        )
+
         target = None
         capture_error = None
         try:
@@ -1671,26 +1695,6 @@ class RuntimeInstance:
         if any(row["value"] != str(expected) for row in rows):
             raise RuntimeError("native checkpoint ranks returned different staged paths")
 
-        from pops.output._restart_provider import (
-            _checkpoint_path_inode,
-            _unlink_checkpoint_path_if_owned,
-        )
-
-        native_inode_data = root_value(
-            topology,
-            "native staging inode",
-            lambda: list(_checkpoint_path_inode(expected)),
-        )
-        if (
-            not isinstance(native_inode_data, list)
-            or len(native_inode_data) != 2
-            or any(
-                isinstance(value, bool) or not isinstance(value, int) for value in native_inode_data
-            )
-        ):
-            raise RuntimeError("rank zero returned an invalid native checkpoint staging inode")
-        staging_authority = {"inode": (int(native_inode_data[0]), int(native_inode_data[1]))}
-
         import numpy as np
         from ._checkpoint_manifest import (
             IDENTITY_KEY,
@@ -1699,22 +1703,36 @@ class RuntimeInstance:
             seal_checkpoint_payload,
         )
 
+        entries: dict[str, Any] = {
+            "expected_owned": False,
+            "expected_owner": None,
+            "temporary_owned": False,
+            "temporary": None,
+        }
+
         def seal_root() -> str:
-            if not expected.is_file():
-                raise RuntimeError("native checkpoint did not create the shared staged file")
-            with np.load(expected, allow_pickle=False) as stored:
-                old_manifest = json.loads(str(stored[MANIFEST_KEY]))
-                runtime_kind = old_manifest.get("runtime_kind")
-                if not isinstance(runtime_kind, str) or not runtime_kind:
-                    raise ValueError("native checkpoint manifest lacks its runtime kind")
-                # Authenticate every native byte before replacing its envelope with the
-                # RuntimeInstance consumer/cursor authority.
-                authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
-                payload = {
-                    name: np.asarray(stored[name]).copy()
-                    for name in stored.files
-                    if name not in {MANIFEST_KEY, IDENTITY_KEY}
-                }
+            candidate_descriptor, candidate_owner = transaction_receipt.open_candidate(expected)
+            try:
+                with os.fdopen(os.dup(candidate_descriptor), "rb") as stream:
+                    with np.load(stream, allow_pickle=False) as stored:
+                        old_manifest = json.loads(str(stored[MANIFEST_KEY]))
+                        runtime_kind = old_manifest.get("runtime_kind")
+                        if not isinstance(runtime_kind, str) or not runtime_kind:
+                            raise ValueError("native checkpoint manifest lacks its runtime kind")
+                        # Creator ownership is granted only after the native bytes authenticate.
+                        # The retained fd prevents a path swap from changing the inspected payload.
+                        authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
+                        payload = {
+                            name: np.asarray(stored[name]).copy()
+                            for name in stored.files
+                            if name not in {MANIFEST_KEY, IDENTITY_KEY}
+                        }
+            finally:
+                os.close(candidate_descriptor)
+            transaction_receipt.authenticate_entry(expected, candidate_owner)
+            entries["expected_owner"] = candidate_owner
+            entries["expected_owned"] = True
+
             payload["runtime_consumer_graph"] = np.asarray(self._consumer_graph.identity.token)
             cursors = self._checkpoint_cursor_override or self._consumer_cursors
             payload["runtime_consumer_cursors"] = np.asarray(
@@ -1728,34 +1746,83 @@ class RuntimeInstance:
                 )
             )
             seal_checkpoint_payload(self, payload, runtime_kind=runtime_kind)
-            temporary = expected.with_name(expected.name + ".runtime-instance.tmp")
+            temporary = _StagingAuthority.created(
+                expected,
+                suffix=".runtime-instance.tmp",
+            )
+            entries["temporary"] = temporary
+            entries["temporary_owned"] = True
+            with os.fdopen(temporary.duplicate(), "wb") as stream:
+                np.savez_compressed(stream, **payload)
+            temporary.authenticate_path()
+            # Validate the completed reseal before detaching the authenticated native entry.
+            self._inspect_checkpoint_file(temporary.path)
+
+            entries["expected_owned"] = False
+            _unlink_checkpoint_path_if_owned(
+                expected,
+                candidate_owner,
+                phase="runtime envelope replacement",
+            )
             try:
-                with open(temporary, "wb") as stream:
-                    np.savez_compressed(stream, **payload)
-                resealed_inode = _checkpoint_path_inode(temporary)
-                _unlink_checkpoint_path_if_owned(
-                    expected,
-                    staging_authority["inode"],
-                    phase="runtime envelope replacement",
-                )
-                # Once the native staging inode is released, publish the resealed inode with
-                # no-clobber semantics.  A concurrent creator wins the path and is never replaced.
-                staging_authority["inode"] = resealed_inode
-                try:
-                    os.link(temporary, expected)
-                except FileExistsError as error:
-                    raise FileExistsError(
-                        "runtime checkpoint staging path was replaced during envelope sealing: %s"
-                        % expected
-                    ) from error
-                if _checkpoint_path_inode(expected) != resealed_inode:
-                    raise RuntimeError("runtime checkpoint reseal published a different inode")
-            finally:
-                temporary.unlink(missing_ok=True)
+                transaction_receipt.rename_no_replace(temporary.path, expected)
+            except FileExistsError as error:
+                # Even an entry already hard-linked to the temporary inode was not created by
+                # this rename.  Never infer directory-entry ownership merely from inode equality.
+                raise FileExistsError(
+                    "runtime checkpoint staging path appeared during envelope publication: %s"
+                    % expected
+                ) from error
+            entries["temporary_owned"] = False
+            entries["expected_owner"] = temporary.owner
+            entries["expected_owned"] = True
+            transaction_receipt.authenticate_entry(expected, temporary.owner)
+            temporary.close()
+            entries["temporary"] = None
             # A staged checkpoint is not publishable until its final envelope has been read back
             # and authenticated by the same strict path used during restart.
             self._inspect_checkpoint_file(expected)
             return str(expected)
+
+        def cleanup_root() -> None:
+            failures = []
+            temporary = entries["temporary"]
+            if temporary is not None:
+                if entries["temporary_owned"]:
+                    # Relinquish the public name before quarantine begins.  If quarantine moves a
+                    # replacement, a second cleanup must never treat that entry as ours.
+                    entries["temporary_owned"] = False
+                    try:
+                        _unlink_checkpoint_path_if_owned(
+                            temporary.path,
+                            temporary.owner,
+                            phase="failed runtime envelope temporary cleanup",
+                        )
+                    except BaseException as cleanup_error:
+                        failures.append(cleanup_error)
+                try:
+                    temporary.close()
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+                entries["temporary"] = None
+            if entries["expected_owned"]:
+                owner = entries["expected_owner"]
+                entries["expected_owned"] = False
+                try:
+                    _unlink_checkpoint_path_if_owned(
+                        expected,
+                        owner,
+                        phase="failed runtime envelope staging cleanup",
+                    )
+                except BaseException as cleanup_error:
+                    failures.append(cleanup_error)
+            if failures:
+                raise RuntimeError(
+                    "runtime checkpoint cleanup failed: "
+                    + "; ".join(
+                        "%s: %s" % (type(failure).__name__, failure) for failure in failures
+                    )
+                )
 
         try:
             sealed = Path(root_value(topology, "runtime envelope sealing", seal_root))
@@ -1765,11 +1832,7 @@ class RuntimeInstance:
                 root_value(
                     topology,
                     "runtime envelope staging cleanup",
-                    lambda: _unlink_checkpoint_path_if_owned(
-                        expected,
-                        staging_authority["inode"],
-                        phase="failed runtime envelope sealing",
-                    ),
+                    cleanup_root,
                 )
             except BaseException as caught:
                 cleanup_error = caught

@@ -546,8 +546,7 @@ def test_checkpoint_reseal_failure_removes_its_owned_native_staging(monkeypatch,
 
     assert calls == 2
     assert not (tmp_path / "restart.npz").exists()
-    assert not tuple(tmp_path.glob(".pops-restart-snapshot.*"))
-    assert not tuple(tmp_path.glob("*.runtime-instance.tmp"))
+    assert not tuple(tmp_path.glob(".pops-restart-transaction.*"))
 
 
 def test_checkpoint_reseal_failure_never_deletes_a_replaced_staging_inode(monkeypatch, tmp_path):
@@ -573,7 +572,8 @@ def test_checkpoint_reseal_failure_never_deletes_a_replaced_staging_inode(monkey
         nonlocal calls
         calls += 1
         if calls == 2:
-            (staging,) = tuple(tmp_path.glob(".pops-restart-snapshot.*.npz"))
+            (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
+            staging = transaction / "native.npz"
             owned_inode = _checkpoint_path_inode(staging)
             third_party = tmp_path / "third-party-replacement.npz"
             third_party.write_bytes(replacement)
@@ -602,6 +602,206 @@ def test_checkpoint_reseal_failure_never_deletes_a_replaced_staging_inode(monkey
     assert any(
         "refuses to delete replaced path" in note for note in getattr(caught.value, "__notes__", ())
     )
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_refuses_path_only_capture_without_a_private_transaction_receipt(tmp_path):
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    with pytest.raises(RuntimeError, match="path-only native ABI cannot prove creator ownership"):
+        runtime._checkpoint_payload(tmp_path / "unreceipted")
+
+    assert not (tmp_path / "unreceipted.npz").exists()
+
+
+def test_checkpoint_replacement_before_entry_acquisition_is_never_cleaned(monkeypatch, tmp_path):
+    from pops.output._restart_provider import _checkpoint_path_inode
+    from pops.runtime import _checkpoint_manifest
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-pre-acquisition-replacement"}
+    )
+    original_authenticate = _checkpoint_manifest.authenticate_checkpoint_payload
+    replacement = b"third-party replacement before entry ownership"
+    evidence = {}
+
+    def replace_after_native_authentication(owner, payload, *, runtime_kind):
+        identity = original_authenticate(owner, payload, runtime_kind=runtime_kind)
+        (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
+        staging = transaction / "native.npz"
+        third_party = tmp_path / "third-party-before-acquisition.npz"
+        third_party.write_bytes(replacement)
+        os.replace(third_party, staging)
+        evidence.update(path=staging, inode=_checkpoint_path_inode(staging))
+        return identity
+
+    monkeypatch.setattr(
+        _checkpoint_manifest,
+        "authenticate_checkpoint_payload",
+        replace_after_native_authentication,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="replaced before ownership acquisition",
+    ) as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    staging = evidence["path"]
+    assert staging.read_bytes() == replacement
+    assert _checkpoint_path_inode(staging) == evidence["inode"]
+    assert any(
+        "transaction directory is not empty" in note
+        for note in getattr(caught.value, "__notes__", ())
+    )
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_eexist_same_inode_never_grants_expected_entry_ownership(monkeypatch, tmp_path):
+    from pops.output._restart_provider import _checkpoint_path_inode
+    from pops.output._writers import common
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-eexist-same-inode"}
+    )
+    original_rename = common._rename_no_replace
+    evidence = {}
+
+    def create_same_inode_entry_before_rename(source, destination, *args, **kwargs):
+        if destination == "native.npz" and source.endswith(".runtime-instance.tmp"):
+            os.link(
+                source,
+                destination,
+                src_dir_fd=kwargs["src_dir_fd"],
+                dst_dir_fd=kwargs["dst_dir_fd"],
+                follow_symlinks=False,
+            )
+            linked = os.stat(
+                destination,
+                dir_fd=kwargs["dst_dir_fd"],
+                follow_symlinks=False,
+            )
+            evidence["inode"] = (int(linked.st_dev), int(linked.st_ino))
+        return original_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(common, "_rename_no_replace", create_same_inode_entry_before_rename)
+
+    with pytest.raises(OSError, match="appeared during envelope publication") as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
+    expected = transaction / "native.npz"
+    assert _checkpoint_path_inode(expected) == evidence["inode"]
+    assert not tuple(transaction.glob("*.runtime-instance.tmp"))
+    assert any(
+        "transaction directory is not empty" in note
+        for note in getattr(caught.value, "__notes__", ())
+    )
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_temporary_substitution_preserves_primary_error_and_replacement(
+    monkeypatch, tmp_path
+):
+    from pops.output._restart_provider import _checkpoint_path_inode
+    from pops.output._writers import common
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-temporary-substitution"}
+    )
+    original_authenticate = common._StagingAuthority.authenticate_path
+    replacement = b"third-party runtime envelope temporary"
+    evidence = {}
+
+    def replace_temporary_before_authentication(authority):
+        if authority.path.name.endswith(".runtime-instance.tmp") and not evidence:
+            third_party = tmp_path / "third-party-temporary.npz"
+            third_party.write_bytes(replacement)
+            os.replace(third_party, authority.path)
+            evidence.update(
+                path=authority.path,
+                inode=_checkpoint_path_inode(authority.path),
+            )
+        return original_authenticate(authority)
+
+    monkeypatch.setattr(
+        common._StagingAuthority,
+        "authenticate_path",
+        replace_temporary_before_authentication,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="staging path was replaced before authority transfer",
+    ) as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    temporary = evidence["path"]
+    assert temporary.read_bytes() == replacement
+    assert _checkpoint_path_inode(temporary) == evidence["inode"]
+    notes = getattr(caught.value, "__notes__", ())
+    assert any("temporary cleanup" in note for note in notes)
+    assert any("transaction directory is not empty" in note for note in notes)
+    assert not (tmp_path / "restart.npz").exists()
+
+
+def test_checkpoint_reseal_fails_closed_when_atomic_quarantine_is_unavailable(
+    monkeypatch, tmp_path
+):
+    from pops.output._writers import common
+
+    plan, _, _ = _with_graph(
+        tmp_path,
+        kind=ConsumerKind.CHECKPOINT,
+        output_format=None,
+        operation=RestartV3(),
+    )
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+    runtime._executor._last_run_identity = make_identity(
+        "run", {"test": "checkpoint-atomic-quarantine-unavailable"}
+    )
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("injected atomic rename primitive unavailable")
+
+    monkeypatch.setattr(common, "_rename_no_replace", unavailable)
+
+    with pytest.raises(RuntimeError, match="atomic rename primitive unavailable") as caught:
+        runtime.checkpoint(tmp_path / "restart")
+
+    (transaction,) = tuple(tmp_path.glob(".pops-restart-transaction.*"))
+    assert (transaction / "native.npz").is_file()
+    assert tuple(transaction.glob("*.runtime-instance.tmp"))
+    notes = getattr(caught.value, "__notes__", ())
+    assert any("runtime envelope staging cleanup" in note for note in notes)
+    assert any("transaction directory is not empty" in note for note in notes)
     assert not (tmp_path / "restart.npz").exists()
 
 
