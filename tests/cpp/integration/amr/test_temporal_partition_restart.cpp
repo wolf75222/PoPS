@@ -119,6 +119,24 @@ TEST(test_temporal_partition_restart, accepted_image_round_trips_canonically) {
   EXPECT_THROW(serialize_amr_program_accepted_state(accepted), std::invalid_argument);
 }
 
+TEST(test_temporal_partition_restart,
+     regrid_restart_refuses_cell_local_partition_before_topology_mutation) {
+  const CellTemporalPartitionAcceptedState cell_local = cell_local_state();
+  try {
+    require_regrid_rematerializable_temporal_partition(cell_local);
+    FAIL() << "cell-local restart regrid requires unavailable provider rematerialization";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("stage provider and integrated flux ledger"),
+              std::string::npos);
+  }
+
+  CellTemporalPartitionAcceptedState global;
+  global.kind = TemporalPartitionKind::Global;
+  global.provider_identity = "pops.temporal-partition.global@1";
+  global.tick_denominator = 1;
+  EXPECT_NO_THROW(require_regrid_rematerializable_temporal_partition(global));
+}
+
 TEST(test_temporal_partition_restart, legacy_image_without_temporal_authority_is_refused) {
   std::vector<std::uint8_t> legacy = {'P', 'O', 'P', 'S', 'A', 'S', 'T', '4'};
   legacy.resize(17 * sizeof(std::uint64_t), 0);

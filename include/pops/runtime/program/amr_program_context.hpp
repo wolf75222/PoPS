@@ -1312,6 +1312,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     try {
       require_restart_regrid_boundary_();
       import_program_accepted_state_(true);
+      require_regrid_rematerializable_temporal_partition(temporal_partition_.checkpoint());
       const std::int64_t accepted_step = macro_step();
       const double accepted_time = facade_->time();
       if (accepted_step < 0 || accepted_step > std::numeric_limits<int>::max() ||

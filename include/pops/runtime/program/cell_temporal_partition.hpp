@@ -91,6 +91,21 @@ inline void validate_cell_temporal_partition_state(
   }
 }
 
+/// Require a temporal partition whose topology-bound execution resources can be rebuilt after a
+/// scientific restart regrid. Global schedules carry no cell/storage identity. Cell-local schedules
+/// additionally own a prepared stage provider and integrated flux ledger; until those accepted
+/// resources have a versioned rematerialization contract, changing the hierarchy must fail before
+/// the first native mutation.
+inline void require_regrid_rematerializable_temporal_partition(
+    const CellTemporalPartitionAcceptedState& state) {
+  validate_cell_temporal_partition_state(state);
+  if (state.kind == TemporalPartitionKind::CellLocal)
+    throw std::runtime_error(
+        "AMR RegridOnRestart does not yet support cell-local temporal partitions; restore the "
+        "recorded hierarchy until the stage provider and integrated flux ledger can be "
+        "rematerialized");
+}
+
 /// Host authority for one bounded batch schedule and its transactional clocks.
 ///
 /// This class owns no numerical field and launches no per-cell task. A future Kokkos execution
