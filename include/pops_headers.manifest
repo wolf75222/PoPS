@@ -16,6 +16,8 @@ api pops/amr/tagging/cluster.hpp
 api pops/amr/tagging/clustering_provider.hpp
 api pops/amr/tagging/tag_box.hpp
 api pops/amr/tagging/tagging_truth.hpp
+api pops/amr/transfer/nd/refinement_ratio.hpp
+api pops/amr/transfer/nd/transfer_provider.hpp
 api pops/core/foundation/allocator.hpp
 api pops/core/foundation/cold.hpp
 api pops/core/foundation/kokkos_env.hpp
