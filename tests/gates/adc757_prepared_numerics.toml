@@ -353,6 +353,18 @@ target = "test_temporal_partition_restart"
 test_regex = "^test_temporal_partition_restart\\.strict_amr_restore_consumes_manifest_and_refuses_global_step_bypass$"
 
 [[check]]
+requirement = "cell_local_temporal_scientific_provider"
+polarity = "positive"
+target = "test_cell_temporal_partition_executor"
+test_regex = "^test_cell_temporal_partition_executor\\.production_same_level_provider_commits_real_state_and_integrated_face_fluxes$"
+
+[[check]]
+requirement = "cell_local_temporal_scientific_provider"
+polarity = "refusal"
+target = "test_cell_temporal_partition_executor"
+test_regex = "^test_cell_temporal_partition_executor\\.production_same_level_provider_rolls_back_and_refuses_unproved_envelopes$"
+
+[[check]]
 requirement = "host_workspace_reentrancy"
 polarity = "positive"
 target = "test_krylov_workspace_reentrancy"

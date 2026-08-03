@@ -46,6 +46,7 @@ EXPECTED_REQUIREMENTS = {
     "model_declared_admissibility",
     "prepared_limiter_provider",
     "cell_local_temporal_partition_authority",
+    "cell_local_temporal_scientific_provider",
     "python_ir_generated_abi_and_restart_parity",
     "host_workspace_reentrancy",
 }
