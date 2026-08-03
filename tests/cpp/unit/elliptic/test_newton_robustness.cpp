@@ -1020,4 +1020,6 @@ TEST(LocalNonlinearCollective, SignedLargeIndicesPreservePriorityAndLexicographi
   EXPECT_EQ(location.i, -1000000000);
   EXPECT_EQ(location.j, -700000000);
   EXPECT_EQ(location.component, 7);
+  EXPECT_THROW((void)pops::collective_first_local_nonlinear_failure(statistics, fatal + 1, 10, 8),
+               std::runtime_error);
 }
