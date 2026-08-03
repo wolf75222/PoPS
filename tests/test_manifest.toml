@@ -1156,6 +1156,11 @@ sources = ["tests/cpp/unit/mesh/test_prepared_boundary_plan.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_stream_executor"
+sources = ["tests/cpp/unit/runtime/test_prepared_stream_executor.cpp"]
+labels = ["unit", "runtime", "accelerator", "fast"]
+
+[[cpp.suite]]
 name = "test_program_reflux_ledger"
 sources = ["tests/cpp/integration/amr/test_program_reflux_ledger.cpp"]
 labels = ["integration", "amr", "medium"]
