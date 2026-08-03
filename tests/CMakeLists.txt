@@ -435,6 +435,10 @@ set(POPS_CPP_STANDARD_TESTS
   test_fab2d
   test_box_array
   test_multifab
+  test_nd_distribution
+  test_nd_layout
+  test_nd_topology
+  test_nd_translation_schedule
   test_multiblock_interface_scheduler
   test_sync_residence
   test_reduce
@@ -780,6 +784,10 @@ add_dependencies(test_external_brick_isolation pops_iso_fixture_a pops_iso_fixtu
 
 if(POPS_HAS_MPI)
   pops_add_mpi_standalone_suite(test_mpi_external_lifecycle RANKS 1 2)
+  pops_add_mpi_standalone_suite(test_mpi_nd_translation_completion_failstop RANKS 1)
+  set_tests_properties(test_mpi_nd_translation_completion_failstop_np1 PROPERTIES
+    PASS_REGULAR_EXPRESSION "POPS_ND_COMPLETION_FAILSTOP_OBSERVED"
+    TIMEOUT 20)
 
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_mbox_parity 1 2 4)
@@ -806,6 +814,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_load_balance_authority 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
   set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
+  set(POPS_MPI_RANKS_test_mpi_nd_translation_exchange 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
   set(POPS_MPI_RANKS_test_mpi_fillboundary 4)
@@ -849,6 +858,7 @@ if(POPS_HAS_MPI)
     test_mpi_load_balance_authority
     test_mpi_array_reduce
     test_mpi_multiblock_interface_scheduler
+    test_mpi_nd_translation_exchange
     test_mpi_coupler_inject
     test_mpi_fft_distributed
     test_mpi_fillboundary

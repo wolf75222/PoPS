@@ -13,6 +13,7 @@
 #include <pops/parallel/comm.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -115,6 +116,34 @@ class ExecutionCommunicator {
 
 class ExecutionLane {
  public:
+  /// Non-copyable stable-address pin for a borrower that retains a lane pointer.  A lane with an
+  /// active pin cannot be moved or destroyed: moving would invalidate the borrowed object address
+  /// even though its communicator remains valid.
+  class ImmutableBorrow {
+   public:
+    ImmutableBorrow() = delete;
+    ImmutableBorrow(const ImmutableBorrow&) = delete;
+    ImmutableBorrow& operator=(const ImmutableBorrow&) = delete;
+
+    ImmutableBorrow(ImmutableBorrow&& other) noexcept
+        : lane_(std::exchange(other.lane_, nullptr)) {}
+    ImmutableBorrow& operator=(ImmutableBorrow&&) = delete;
+
+    ~ImmutableBorrow() {
+      if (lane_ != nullptr)
+        lane_->release_immutable_borrow_();
+    }
+
+   private:
+    friend class ExecutionLane;
+
+    explicit ImmutableBorrow(const ExecutionLane& lane) noexcept : lane_(&lane) {
+      lane_->acquire_immutable_borrow_();
+    }
+
+    const ExecutionLane* lane_ = nullptr;
+  };
+
   /// Collective-lifetime object. Owning lanes must be materialized and destroyed in the same
   /// canonical order on every parent rank. PoPS runtime owners keep them in deterministic object
   /// graphs and convert every post-duplication construction failure into a uniform collective
@@ -124,6 +153,7 @@ class ExecutionLane {
   /// the same values are safe in concurrent lanes without a process-global tag allocator.
   static constexpr int halo_message_tag = 0;
   static constexpr int parallel_copy_message_tag = 1;
+  static constexpr int translation_message_tag = 2;
 
   /// Non-owning sequential view of MPI_COMM_WORLD for preparation/control paths. This explicitly
   /// initializes or validates MPI, but its destructor never frees the process communicator.
@@ -258,11 +288,16 @@ class ExecutionLane {
   ExecutionLane& operator=(const ExecutionLane&) = delete;
 
   ExecutionLane(ExecutionLane&& other) noexcept { move_from_(std::move(other)); }
+  /// Replacement preserves the historical movable-lane API only while neither object is borrowed.
+  /// A borrowed lane has a stable address contract, so replacing either endpoint fails closed.
   ExecutionLane& operator=(ExecutionLane&& other) noexcept {
-    if (this != &other) {
-      release_();
-      move_from_(std::move(other));
-    }
+    if (this == &other)
+      return *this;
+    if (immutable_borrow_count_.load(std::memory_order_acquire) != 0 ||
+        other.immutable_borrow_count_.load(std::memory_order_acquire) != 0)
+      std::terminate();
+    release_();
+    move_from_(std::move(other));
     return *this;
   }
 
@@ -279,6 +314,16 @@ class ExecutionLane {
 #endif
   }
   [[nodiscard]] bool active() const noexcept { return communicator().active(); }
+  /// True only for a collectively duplicated MPI communicator. World and serial lanes borrow none.
+  [[nodiscard]] bool owns_communicator() const noexcept {
+#ifdef POPS_HAS_MPI
+    return owns_communicator_;
+#else
+    return false;
+#endif
+  }
+  /// Pins this exact lane object against move/destruction until the returned guard dies.
+  [[nodiscard]] ImmutableBorrow borrow_immutably() const noexcept { return ImmutableBorrow(*this); }
   [[nodiscard]] int rank() const { return communicator().rank(); }
   [[nodiscard]] int size() const { return communicator().size(); }
 
@@ -323,6 +368,8 @@ class ExecutionLane {
 #endif
 
   void move_from_(ExecutionLane&& other) noexcept {
+    if (other.immutable_borrow_count_.load(std::memory_order_acquire) != 0)
+      std::terminate();
     identity_ = std::move(other.identity_);
     static_identity_ = std::exchange(other.static_identity_, std::string_view{});
 #ifdef POPS_HAS_MPI
@@ -332,6 +379,8 @@ class ExecutionLane {
   }
 
   void release_() noexcept {
+    if (immutable_borrow_count_.load(std::memory_order_acquire) != 0)
+      std::terminate();
 #ifdef POPS_HAS_MPI
     if (communicator_ != MPI_COMM_NULL && owns_communicator_) {
       if (detail::comm_active_unlocked())
@@ -342,8 +391,26 @@ class ExecutionLane {
 #endif
   }
 
+  void acquire_immutable_borrow_() const noexcept {
+    std::size_t current = immutable_borrow_count_.load(std::memory_order_relaxed);
+    for (;;) {
+      if (current == std::numeric_limits<std::size_t>::max())
+        std::terminate();
+      if (immutable_borrow_count_.compare_exchange_weak(
+              current, current + 1, std::memory_order_acq_rel, std::memory_order_relaxed))
+        return;
+    }
+  }
+
+  void release_immutable_borrow_() const noexcept {
+    const std::size_t previous = immutable_borrow_count_.fetch_sub(1, std::memory_order_acq_rel);
+    if (previous == 0)
+      std::terminate();
+  }
+
   std::string identity_;
   std::string_view static_identity_;
+  mutable std::atomic<std::size_t> immutable_borrow_count_{0};
 #ifdef POPS_HAS_MPI
   MPI_Comm communicator_ = MPI_COMM_NULL;
   bool owns_communicator_ = false;
