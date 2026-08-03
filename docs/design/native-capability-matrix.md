@@ -163,8 +163,19 @@ Supported native routes include:
   axis-permuted periodic coordinates also fail closed until a prepared coordinate map exists. The
   conversion route is explicitly `partial`: conservative-to-primitive recovery and arbitrary
   representation components remain unavailable, and conversion does not invent a boundary
-  admissibility projection. A separate `unavailable` row exposes the missing characteristic
-  no-inflow kernel. Post-Riemann transformation is instead an explicit `partial` route: a typed
+  admissibility projection. Characteristic no-inflow is now an explicit narrow `partial` route:
+  `Inflow(state=U, value=U_ref,
+  characteristic=pops.boundary.model_characteristic_no_inflow(U))` requires a conservative
+  constant/`RuntimeParam` fixed reference and the exact generated `m.roe_from_jacobian()` provider.
+  Its Kokkos kernel evaluates
+  the complete model flux Jacobian (1..16 components), orients it with the physical-face normal,
+  applies the strictly incoming spectral projector, and leaves the scale-relative sonic subspace
+  neutral. A collective real-spectrum preflight precedes publication; any failure restores the
+  complete ghost transaction and never selects scalar, Rusanov, or Euler-specific logic. This
+  qualification is currently 2D Cartesian host serial; primitive/analytic reference states,
+  state/field-dependent auxiliary eigenstructure, sonic-error policy, MPI/GPU qualification, 3D,
+  polar and embedded/cut-cell geometry remain unavailable. Post-Riemann transformation is instead
+  an explicit `partial` route: a typed
   `BoundaryFlux` component receives the already evaluated outward-normal flux and executes between
   the Riemann solve and divergence/reflux through the same prepared Uniform/AMR plan. The runtime
   converts lower and upper faces to outward orientation before the call and converts the result
