@@ -973,10 +973,10 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     AttemptSnapshot& saved = attempt_snapshot_;
     capture_engine_attempt_snapshot_(saved, borrows_facade_snapshot);
     import_program_accepted_state_();
-    // ADC-756 foundation: an authenticated cell-local checkpoint must never fall through to the
-    // existing hierarchy-global driver. The future prepared Kokkos partition executor will consume
-    // this same authority; until then, fail before the Program body or any published clock mutates.
-    temporal_partition_.require_global_execution_route();
+    // The hierarchy-global Program body has no prepared cell-local stage/space-time-flux provider.
+    // Authenticate that absence explicitly: a cell-local checkpoint must use the dedicated batched
+    // executor and cannot fall through here before the Program body or any published clock mutates.
+    temporal_partition_.require_prepared_execution_route({});
     capture_program_attempt_snapshot_(saved);
     conservative_ledger_.begin();
     try {
