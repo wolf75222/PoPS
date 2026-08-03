@@ -190,7 +190,8 @@ Supported native routes include:
   RejectRiemannRecovery>` can execute the declared ordered chain in the ordinary Uniform/AMR face
   hot loop. Only a typed candidate rejection advances; retry and fatal outcomes remain terminal.
   The route remains `partial`: Python/component preparation, block/team and MPI fallback counters,
-  restart publication metadata, backend matrices and performance budgets are not yet delivered.
+  GPU qualification, restart publication metadata, backend matrices and performance budgets are not
+  yet delivered.
 - Prepared variable recovery is explicitly `partial`. One block-prepared closed-form method returns
   a device-copyable `RecoveryOutcome`/`RecoveryReport`. Type erasure retains both the selected and
   last-attempted method kinds, so a successful fallback or a refusal cannot be reported as an opaque

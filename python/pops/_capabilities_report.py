@@ -489,16 +489,16 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             layout="uniform|amr",
             backend="production",
             platform="host",
-            mpi=mpi,
-            gpu=gpu,
+            mpi=False,
+            gpu=False,
             status="partial",
             limitation=(
                 "a fixed device-copyable C++ PreparedRiemannRecoveryPolicy executes a validated "
                 "ordered candidate chain in the ordinary face hot loop and records requested, "
                 "used, last-attempted, first-cause, and attempt-count provenance; only typed "
                 "candidate rejection advances, but no public Python/component preparation route, "
-                "block/team counter, MPI fallback reduction, restart metadata, or benchmark gate "
-                "exists yet"
+                "block/team counter, MPI fallback reduction, GPU qualification, restart metadata, "
+                "or benchmark gate exists yet"
             ),
             requested=(
                 "prepared Riemann recovery chain with requested/used solver diagnostics"
