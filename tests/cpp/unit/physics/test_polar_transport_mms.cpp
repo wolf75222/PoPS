@@ -356,7 +356,7 @@ TEST(test_polar_transport_mms, RejectsSharedInterfaceFaceOmission) {
       {"test-polar-xlo", "test-polar-xhi", "test-polar-ylo", "test-polar-yhi"}, {"Scalar"});
   PreparedBoundaryPlan omitted("test-polar-omitted-face", Weno5::n_ghost, std::move(hyperbolic),
                                {0});
-  EXPECT_THROW(assemble_rhs_polar<Weno5, RusanovFlux>(ExBVelocityPolar{}, state, auxiliary,
-                                                      geometry, residual, omitted),
+  EXPECT_THROW((assemble_rhs_polar<Weno5, RusanovFlux>(ExBVelocityPolar{}, state, auxiliary,
+                                                       geometry, residual, omitted)),
                std::invalid_argument);
 }
