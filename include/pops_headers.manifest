@@ -78,6 +78,9 @@ api pops/mesh/layout/box_array.hpp
 api pops/mesh/layout/copy_schedule.hpp
 api pops/mesh/layout/distribution_mapping.hpp
 api pops/mesh/layout/field_distribution.hpp
+api pops/mesh/layout/nd/box_array.hpp
+api pops/mesh/layout/nd/distribution.hpp
+api pops/mesh/layout/nd/rank_space.hpp
 api pops/mesh/layout/patch_box.hpp
 api pops/mesh/layout/refinement.hpp
 api pops/mesh/storage/fab.hpp
