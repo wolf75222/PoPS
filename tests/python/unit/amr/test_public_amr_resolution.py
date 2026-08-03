@@ -206,6 +206,7 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
     [
         ("SpaceFillingCurve", "space_filling_curve", True),
         ("Knapsack", "knapsack", True),
+        ("MeasuredKnapsack", "measured_knapsack", True),
         ("RoundRobin", "round_robin", False),
     ],
 )
@@ -232,6 +233,57 @@ def test_public_load_balance_roundtrips_exact_identity(
     }
     assert data["provider_identity"] in (
         authorities.hierarchy.plan.load_balance.provider.local_id)
+
+
+def test_measured_knapsack_roundtrips_exact_native_decision_policy(monkeypatch):
+    from pops.lib.amr import MeasuredKnapsack
+    from pops.runtime._amr_bind_lowering import amr_config_from_layout
+
+    class NativeConfigProbe:
+        def _set_load_balance_provider(self, *values):
+            self.load_balance_provider = values
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pops._bootstrap",
+        SimpleNamespace(AmrSystemConfig=NativeConfigProbe),
+    )
+    policy = MeasuredKnapsack(
+        minimum_improvement_ppm=125_000,
+        amortization_steps=40,
+        migration_bandwidth_bytes_per_second=25_000_000_000,
+        per_patch_migration_latency_nanoseconds=2_500,
+    )
+    _, layout, _, authorities = _resolved_target(load_balance=policy)
+    config = amr_config_from_layout(layout, hierarchy=authorities.hierarchy)
+    assert config.load_balance_provider == (
+        "measured_knapsack",
+        policy.load_balance_provider_data()["provider_identity"],
+        "pops.amr.load-balance.measured-knapsack@1",
+        {
+            "minimum_improvement_ppm": 125_000,
+            "amortization_steps": 40,
+            "migration_bandwidth_bytes_per_second": 25_000_000_000,
+            "per_patch_migration_latency_nanoseconds": 2_500,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value"),
+    [
+        ("minimum_improvement_ppm", True),
+        ("minimum_improvement_ppm", 1_000_000),
+        ("amortization_steps", 0),
+        ("migration_bandwidth_bytes_per_second", 0),
+        ("per_patch_migration_latency_nanoseconds", -1),
+    ],
+)
+def test_measured_knapsack_rejects_invalid_decision_policy(keyword, value):
+    from pops.lib.amr import MeasuredKnapsack
+
+    with pytest.raises((TypeError, ValueError)):
+        MeasuredKnapsack(**{keyword: value})
 
 
 def test_load_balance_extension_protocol_needs_no_core_class_branch():

@@ -281,3 +281,33 @@ TEST(test_load_balance, measured_rebalance_keeps_an_unchanged_mapping) {
   EXPECT_EQ(decision.migration_bytes, 0);
   EXPECT_DOUBLE_EQ(decision.predicted_net_speedup, 1.0);
 }
+
+TEST(test_load_balance, measured_knapsack_provider_owns_exact_default_decision_policy) {
+  const PreparedProviderOptions options{
+      "pops.amr.load-balance.measured-knapsack@1",
+      {
+          {"minimum_improvement_ppm", std::int64_t{125'000}},
+          {"amortization_steps", std::int64_t{40}},
+          {"migration_bandwidth_bytes_per_second", std::int64_t{25'000'000'000}},
+          {"per_patch_migration_latency_nanoseconds", std::int64_t{2'500}},
+      },
+  };
+  const PreparedLoadBalanceAuthority authority = prepare_load_balance_authority(
+      "measured_knapsack", "test.measured-knapsack.identity", options);
+  ASSERT_TRUE(authority.has_default_rebalance_policy());
+  EXPECT_EQ(authority.implementation(), "pops.load_balance.measured_knapsack");
+  const RebalancePolicy& policy = authority.default_rebalance_policy();
+  EXPECT_EQ(policy.minimum_improvement_ppm, 125'000);
+  EXPECT_EQ(policy.amortization_steps, 40);
+  EXPECT_EQ(policy.migration_bandwidth_bytes_per_second, 25'000'000'000);
+  EXPECT_EQ(policy.per_patch_migration_latency_nanoseconds, 2'500);
+
+  PreparedProviderOptions incomplete = options;
+  incomplete.values.erase("amortization_steps");
+  EXPECT_THROW(prepare_load_balance_authority("measured_knapsack", "test.invalid", incomplete),
+               std::invalid_argument);
+  PreparedProviderOptions wrong_type = options;
+  wrong_type.values["amortization_steps"] = std::uint64_t{40};
+  EXPECT_THROW(prepare_load_balance_authority("measured_knapsack", "test.invalid", wrong_type),
+               std::invalid_argument);
+}

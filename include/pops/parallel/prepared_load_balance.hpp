@@ -8,6 +8,7 @@
 #include <pops/parallel/load_balance.hpp>
 
 #include <cstdint>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -244,6 +245,41 @@ inline void require_empty_load_balance_options(const PreparedProviderOptions& op
     throw std::invalid_argument("builtin load-balance provider options are not canonical");
 }
 
+inline std::int64_t require_signed_option(const PreparedProviderOptions& options,
+                                          std::string_view key) {
+  const auto found = options.values.find(std::string(key));
+  if (found == options.values.end() || !std::holds_alternative<std::int64_t>(found->second))
+    throw std::invalid_argument("measured load-balance option '" + std::string(key) +
+                                "' must be one exact int64");
+  return std::get<std::int64_t>(found->second);
+}
+
+inline RebalancePolicy measured_rebalance_policy(const PreparedProviderOptions& options) {
+  static const std::string schema = "pops.amr.load-balance.measured-knapsack@1";
+  static const std::array<std::string_view, 4> keys{
+      "minimum_improvement_ppm",
+      "amortization_steps",
+      "migration_bandwidth_bytes_per_second",
+      "per_patch_migration_latency_nanoseconds",
+  };
+  if (options.schema_identity != schema || options.values.size() != keys.size())
+    throw std::invalid_argument("measured knapsack options are not canonical");
+  for (const std::string_view key : keys)
+    if (!options.values.contains(std::string(key)))
+      throw std::invalid_argument("measured knapsack options are not canonical");
+  RebalancePolicy policy{
+      .minimum_improvement_ppm = require_signed_option(options, keys[0]),
+      .amortization_steps = require_signed_option(options, keys[1]),
+      .migration_bandwidth_bytes_per_second = require_signed_option(options, keys[2]),
+      .per_patch_migration_latency_nanoseconds = require_signed_option(options, keys[3]),
+  };
+  if (policy.minimum_improvement_ppm < 0 || policy.minimum_improvement_ppm >= 1'000'000 ||
+      policy.amortization_steps <= 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
+      policy.per_patch_migration_latency_nanoseconds < 0)
+    throw std::invalid_argument("measured knapsack policy is outside its bounded envelope");
+  return policy;
+}
+
 struct SpaceFillingCurveLoadBalance {
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.load_balance.space_filling_curve", 1};
@@ -263,6 +299,26 @@ struct KnapsackLoadBalance {
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
     contract.text("knapsack").scalar(std::uint32_t{1});
+  }
+  DistributionMapping operator()(const BoxArray& boxes, int ranks,
+                                 LoadBalanceWeights weights) const {
+    return make_knapsack_distribution(boxes, ranks, weights);
+  }
+};
+
+struct MeasuredKnapsackLoadBalance {
+  RebalancePolicy policy;
+
+  [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
+    return {"pops.load_balance.measured_knapsack", 1};
+  }
+  void serialize_exact_parameters(ExactContractBuilder& contract) const {
+    contract.text("measured-knapsack")
+        .scalar(std::uint32_t{1})
+        .scalar(policy.minimum_improvement_ppm)
+        .scalar(policy.amortization_steps)
+        .scalar(policy.migration_bandwidth_bytes_per_second)
+        .scalar(policy.per_patch_migration_latency_nanoseconds);
   }
   DistributionMapping operator()(const BoxArray& boxes, int ranks,
                                  LoadBalanceWeights weights) const {
@@ -371,10 +427,21 @@ inline RebalanceDecision make_rebalance_decision(
 /// and never inspect an implementation name.
 class PreparedLoadBalanceAuthority {
  public:
-  PreparedLoadBalanceAuthority(std::string semantic_identity, PreparedLoadBalanceProvider provider)
-      : semantic_identity_(std::move(semantic_identity)), provider_(std::move(provider)) {
+  PreparedLoadBalanceAuthority(
+      std::string semantic_identity, PreparedLoadBalanceProvider provider,
+      std::optional<RebalancePolicy> default_rebalance_policy = std::nullopt)
+      : semantic_identity_(std::move(semantic_identity)),
+        provider_(std::move(provider)),
+        default_rebalance_policy_(std::move(default_rebalance_policy)) {
     if (semantic_identity_.empty() || !provider_)
       throw std::invalid_argument("prepared load-balance authority is incomplete");
+    if (default_rebalance_policy_) {
+      const RebalancePolicy& policy = *default_rebalance_policy_;
+      if (policy.minimum_improvement_ppm < 0 || policy.minimum_improvement_ppm >= 1'000'000 ||
+          policy.amortization_steps <= 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
+          policy.per_patch_migration_latency_nanoseconds < 0)
+        throw std::invalid_argument("prepared load-balance default rebalance policy is invalid");
+    }
   }
 
   [[nodiscard]] const std::string& semantic_identity() const noexcept { return semantic_identity_; }
@@ -383,6 +450,14 @@ class PreparedLoadBalanceAuthority {
   }
   [[nodiscard]] std::string_view collective_contract() const noexcept {
     return provider_.collective_contract();
+  }
+  [[nodiscard]] bool has_default_rebalance_policy() const noexcept {
+    return default_rebalance_policy_.has_value();
+  }
+  [[nodiscard]] const RebalancePolicy& default_rebalance_policy() const {
+    if (!default_rebalance_policy_)
+      throw std::logic_error("load-balance authority has no measured rebalance policy");
+    return *default_rebalance_policy_;
   }
 
   [[nodiscard]] DistributionMapping distribute(
@@ -486,9 +561,19 @@ class PreparedLoadBalanceAuthority {
     return std::move(*result);
   }
 
+  [[nodiscard]] RebalanceDecision decide_rebalance(
+      const BoxArray& boxes, const DistributionMapping& current, int rank_count,
+      std::uint64_t topology_epoch, std::uint64_t materialization_generation,
+      ResourceEstimates estimates,
+      const CommunicatorView& communicator = world_communicator_view()) const {
+    return decide_rebalance(boxes, current, rank_count, topology_epoch, materialization_generation,
+                            estimates, default_rebalance_policy(), communicator);
+  }
+
  private:
   std::string semantic_identity_;
   PreparedLoadBalanceProvider provider_;
+  std::optional<RebalancePolicy> default_rebalance_policy_;
 };
 
 using LoadBalanceAuthorityFactory = std::function<PreparedLoadBalanceAuthority(
@@ -541,6 +626,13 @@ inline LoadBalanceProviderRegistry& load_balance_provider_registry() {
       return PreparedLoadBalanceAuthority(
           std::move(identity), PreparedLoadBalanceProvider(detail::KnapsackLoadBalance{}));
     });
+    registry.add(
+        "measured_knapsack", [](std::string identity, const PreparedProviderOptions& options) {
+          const RebalancePolicy policy = detail::measured_rebalance_policy(options);
+          return PreparedLoadBalanceAuthority(
+              std::move(identity),
+              PreparedLoadBalanceProvider(detail::MeasuredKnapsackLoadBalance{policy}), policy);
+        });
     registry.add("round_robin", [](std::string identity, const PreparedProviderOptions& options) {
       detail::require_empty_load_balance_options(options, "pops.amr.load-balance.round-robin@1");
       return PreparedLoadBalanceAuthority(
