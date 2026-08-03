@@ -7,6 +7,7 @@
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/runtime/context/grid_context.hpp>
 
+#include <cmath>
 #include <limits>
 #include <type_traits>
 #include <vector>
@@ -86,7 +87,97 @@ PreparedBoundaryComponentSpec linearization_spec(bool jvp, std::string target, s
   return spec;
 }
 
+RecoveryReport recover_positive_scalar(const double* conserved, double* primitive) {
+  RecoveryReport report;
+  if (std::isfinite(conserved[0]) && conserved[0] > 0.0) {
+    primitive[0] = conserved[0];
+    report.status = RecoveryStatus::kRecovered;
+    report.cause = RecoveryCause::kNone;
+  } else {
+    report.status = RecoveryStatus::kRejected;
+    report.cause = RecoveryCause::kInadmissibleCandidate;
+    report.failing_component = 0;
+  }
+  return report;
+}
+
 }  // namespace
+
+TEST(PreparedBoundaryTraceRecovery,
+     accepts_admissible_physical_traces_without_hot_path_allocation) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  const Geometry geometry(domain, Real(0), Real(1), Real(0), Real(1));
+  MultiFab state = scalar_field(domain, 1, 1);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(1); });
+  }
+  device_fence();
+
+  auto plan = std::make_shared<PreparedBoundaryPlan>("case::boundary::recoverable-traces", 1,
+                                                     physical_boundary({4.0}, {"Scalar"}));
+  plan->prepare_trace_recovery(recover_positive_scalar);
+  GridContext context;
+  context.dom = domain;
+  context.geom = geometry;
+  context.boundary_plan = plan;
+  const auto lane = ExecutionLane::world("case::boundary::recoverable-traces-lane");
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.boundary",    0,   0,  0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession session(context, lane, state, point);
+
+  session.fill(state, point);
+  const AllocationEventStats before = allocation_event_stats();
+  session.fill(state, point);
+  const AllocationEventStats after = allocation_event_stats();
+
+  EXPECT_EQ(after, before);
+  if (state.local_size() > 0) {
+    state.sync_host();
+    EXPECT_EQ(state.fab(0)(domain.hi[0] + 1, 2, 0), Real(7));
+  }
+}
+
+TEST(PreparedBoundaryTraceRecovery,
+     rejects_inadmissible_traces_and_restores_complete_ghost_transaction) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  const Geometry geometry(domain, Real(0), Real(1), Real(0), Real(1));
+  MultiFab state = scalar_field(domain, 1, 1);
+  state.set_val(Real(-99));
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Array4 values = state.fab(local).array();
+    for_each_cell(state.box(local), [=](int i, int j) { values(i, j, 0) = Real(1); });
+  }
+  device_fence();
+  const MultiFab before = state;
+
+  auto plan = std::make_shared<PreparedBoundaryPlan>("case::boundary::rejected-traces", 1,
+                                                     physical_boundary({0.0}, {"Scalar"}));
+  plan->prepare_trace_recovery(recover_positive_scalar);
+  GridContext context;
+  context.dom = domain;
+  context.geom = geometry;
+  context.boundary_plan = plan;
+  const auto lane = ExecutionLane::world("case::boundary::rejected-traces-lane");
+  const runtime::multiblock::BoundaryEvaluationPoint point{"clock.boundary",    0,   0,  0, 0,
+                                                           amr::Rational(0, 1), 0.1, 0.0};
+  PreparedGridBoundarySession session(context, lane, state, point);
+
+  EXPECT_THROW(session.fill(state, point), std::runtime_error);
+  state.sync_host();
+  before.sync_host();
+  ASSERT_EQ(state.local_size(), before.local_size());
+  for (int local = 0; local < state.local_size(); ++local) {
+    const Fab2D& observed = state.fab(local);
+    const Fab2D& expected = before.fab(local);
+    const Box2D grown = observed.grown_box();
+    for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+      for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+        EXPECT_EQ(observed(i, j, 0), expected(i, j, 0))
+            << "rejected trace mutated local fab " << local << " at (" << i << ", " << j << ")";
+  }
+}
 
 TEST(test_prepared_boundary_plan, explicit_read_dependencies_are_exact_and_strict) {
   PreparedBoundaryPlan plan(

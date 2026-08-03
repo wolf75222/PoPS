@@ -20,6 +20,7 @@
 #include <pops/mesh/boundary/boundary_component_executor.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 
 #include <algorithm>
 #include <array>
@@ -190,6 +191,14 @@ inline std::string canonical_prepared_boundary_plan_request(
 /// Native boundary plan captured by every block closure. The built-in physical-face authority is
 /// one model-aware hyperbolic plan; field/elliptic BCRec data is not a transport semantic here.
 class PreparedBoundaryPlan {
+ private:
+  struct BoundaryRecoveryWorkspace {
+    std::vector<Real> snapshot;
+    std::vector<double> conserved;
+    std::vector<double> primitive;
+    bool prepared = false;
+  };
+
  public:
   /// Move-only, lane-bound executable state for this immutable plan.
   ///
@@ -210,7 +219,8 @@ class PreparedBoundaryPlan {
           ghost_workspaces_(std::move(other.ghost_workspaces_)),
           flux_workspaces_(std::move(other.flux_workspaces_)),
           residual_workspaces_(std::move(other.residual_workspaces_)),
-          jvp_workspaces_(std::move(other.jvp_workspaces_)) {}
+          jvp_workspaces_(std::move(other.jvp_workspaces_)),
+          recovery_workspace_(std::move(other.recovery_workspace_)) {}
     Session& operator=(Session&& other) noexcept {
       if (this != &other) {
         plan_ = std::exchange(other.plan_, nullptr);
@@ -224,6 +234,7 @@ class PreparedBoundaryPlan {
         flux_workspaces_ = std::move(other.flux_workspaces_);
         residual_workspaces_ = std::move(other.residual_workspaces_);
         jvp_workspaces_ = std::move(other.jvp_workspaces_);
+        recovery_workspace_ = std::move(other.recovery_workspace_);
       }
       return *this;
     }
@@ -261,6 +272,10 @@ class PreparedBoundaryPlan {
                                    const Geometry& geometry);
     void prepare_jvp_executor(const detail::BoundaryFieldRegistry& fields,
                               const Geometry& geometry);
+    /// Allocate the exact lane-private transaction storage used to validate physical ghost traces.
+    /// Production GridContext sessions call this once while binding their prototype, never lazily
+    /// from a numerical fill.
+    void prepare_trace_recovery_workspace(const MultiFab& prototype);
 
    private:
     friend class PreparedBoundaryPlan;
@@ -294,6 +309,7 @@ class PreparedBoundaryPlan {
     mutable std::vector<detail::PreparedBoundaryFluxWorkspace> flux_workspaces_;
     mutable std::vector<detail::PreparedFieldBoundaryWorkspace> residual_workspaces_;
     mutable std::vector<detail::PreparedFieldBoundaryWorkspace> jvp_workspaces_;
+    mutable BoundaryRecoveryWorkspace recovery_workspace_;
   };
 
   PreparedBoundaryPlan() = default;
@@ -338,6 +354,19 @@ class PreparedBoundaryPlan {
         hyperbolic_boundary_.with_converted_fixed_states(primitive_to_conservative);
     ++component_revision_;
   }
+  /// Attach the exact block-model conservative-to-primitive recovery used to authenticate every
+  /// produced physical ghost trace before it becomes visible to a reconstruction kernel.
+  void prepare_trace_recovery(
+      std::function<RecoveryReport(const double*, double*)> conservative_to_primitive) {
+    if (!conservative_to_primitive)
+      throw std::invalid_argument(
+          "PreparedBoundaryPlan trace recovery requires a prepared block-model authority");
+    if (trace_recovery_)
+      throw std::logic_error("PreparedBoundaryPlan trace recovery authority is already finalized");
+    trace_recovery_ = std::move(conservative_to_primitive);
+    ++component_revision_;
+  }
+  bool has_trace_recovery() const noexcept { return static_cast<bool>(trace_recovery_); }
   const std::vector<PeriodicIdentification2D>& periodic_identifications() const noexcept {
     return periodic_identifications_;
   }
@@ -551,8 +580,12 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
     auto physical_preflight = hyperbolic_boundary_.preflight_physical(state, domain);
-    fill_native_halos_(state, domain);
-    hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+    BoundaryRecoveryWorkspace workspace;
+    fill_with_trace_recovery_transaction_(
+        state, domain, world_communicator_view(), workspace, false, [&] {
+          fill_native_halos_(state, domain);
+          hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+        });
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Box2D& domain,
@@ -562,8 +595,12 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
     auto physical_preflight = hyperbolic_boundary_.preflight_physical(state, domain);
-    fill_native_halos_(state, domain, lane);
-    hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+    BoundaryRecoveryWorkspace workspace;
+    fill_with_trace_recovery_transaction_(
+        state, domain, lane.communicator(), workspace, false, [&] {
+          fill_native_halos_(state, domain, lane);
+          hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+        });
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry) const {
@@ -572,8 +609,12 @@ class PreparedBoundaryPlan {
           "PreparedBoundaryPlan native components require an exact BoundaryEvaluationPoint");
     validate_for(state);
     auto physical_preflight = hyperbolic_boundary_.preflight_physical(state, geometry);
-    fill_native_halos_(state, geometry.domain);
-    hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+    BoundaryRecoveryWorkspace workspace;
+    fill_with_trace_recovery_transaction_(
+        state, geometry.domain, world_communicator_view(), workspace, false, [&] {
+          fill_native_halos_(state, geometry.domain);
+          hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+        });
   }
 
   void fill_same_level_and_physical(MultiFab& state, const Geometry& geometry,
@@ -584,8 +625,12 @@ class PreparedBoundaryPlan {
     validate_for(state);
     auto physical_preflight =
         hyperbolic_boundary_.preflight_physical(state, geometry, lane.communicator());
-    fill_native_halos_(state, geometry.domain, lane);
-    hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+    BoundaryRecoveryWorkspace workspace;
+    fill_with_trace_recovery_transaction_(
+        state, geometry.domain, lane.communicator(), workspace, false, [&] {
+          fill_native_halos_(state, geometry.domain, lane);
+          hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+        });
   }
 
   /// One-shot control/diagnostic adapter. It materializes a fresh component session and workspace;
@@ -595,6 +640,7 @@ class PreparedBoundaryPlan {
       const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     const auto lane = ExecutionLane::world(identity_, "::boundary-control");
     auto session = make_session(lane);
+    session.prepare_trace_recovery_workspace(state);
     session.fill_same_level_and_physical_control(state, auxiliary, geometry, point);
   }
 
@@ -604,6 +650,7 @@ class PreparedBoundaryPlan {
     // Honest control-path convenience: callers that execute repeatedly retain make_session(lane)
     // and invoke it directly, avoiding preparation and allocation in the numerical hot path.
     auto session = make_session(lane);
+    session.prepare_trace_recovery_workspace(state);
     session.fill_same_level_and_physical_control(state, auxiliary, geometry, point);
   }
 
@@ -614,6 +661,7 @@ class PreparedBoundaryPlan {
       const runtime::multiblock::BoundaryEvaluationPoint& point) const {
     const auto lane = ExecutionLane::world(identity_, "::boundary-control");
     auto session = make_session(lane);
+    session.prepare_trace_recovery_workspace(state);
     session.prepare_ghost_executor(state, fields, geometry);
     session.fill_same_level_and_physical(state, fields, geometry, point);
   }
@@ -622,6 +670,7 @@ class PreparedBoundaryPlan {
       MultiFab& state, const detail::BoundaryFieldRegistry& fields, const Geometry& geometry,
       const runtime::multiblock::BoundaryEvaluationPoint& point, const ExecutionLane& lane) const {
     auto session = make_session(lane);
+    session.prepare_trace_recovery_workspace(state);
     session.prepare_ghost_executor(state, fields, geometry);
     session.fill_same_level_and_physical(state, fields, geometry, point);
   }
@@ -719,6 +768,7 @@ class PreparedBoundaryPlan {
   std::vector<std::shared_ptr<PreparedBoundaryFluxComponent>> flux_components_;
   std::vector<std::shared_ptr<PreparedFieldBoundaryResidualComponent>> residual_components_;
   std::vector<std::shared_ptr<PreparedFieldBoundaryJvpComponent>> jvp_components_;
+  std::function<RecoveryReport(const double*, double*)> trace_recovery_;
   std::size_t component_revision_ = 0;
 
   template <class Component>
@@ -823,6 +873,189 @@ class PreparedBoundaryPlan {
     else
       fill_boundary(state, domain, lane, periodicity());
   }
+
+  static std::size_t ghost_snapshot_value_count_(const MultiFab& state) {
+    std::size_t cells = 0;
+    for (int local = 0; local < state.local_size(); ++local) {
+      const std::int64_t ghost_cells =
+          state.fab(local).grown_box().num_cells() - state.box(local).num_cells();
+      if (ghost_cells < 0)
+        throw std::logic_error("PreparedBoundaryPlan observed an invalid grown state box");
+      const auto count = static_cast<std::size_t>(ghost_cells);
+      if (count > std::numeric_limits<std::size_t>::max() - cells)
+        throw std::length_error("PreparedBoundaryPlan ghost transaction exceeds size_t");
+      cells += count;
+    }
+    const auto components = static_cast<std::size_t>(state.ncomp());
+    if (components != 0 && cells > std::numeric_limits<std::size_t>::max() / components)
+      throw std::length_error("PreparedBoundaryPlan ghost transaction exceeds size_t");
+    return cells * components;
+  }
+
+  void prepare_boundary_recovery_workspace_(const MultiFab& prototype,
+                                            BoundaryRecoveryWorkspace& workspace) const {
+    validate_for(prototype);
+    if (!trace_recovery_ || !has_physical_trace_faces_()) {
+      workspace = {};
+      return;
+    }
+    workspace.snapshot.resize(ghost_snapshot_value_count_(prototype));
+    workspace.conserved.resize(static_cast<std::size_t>(prototype.ncomp()));
+    workspace.primitive.resize(static_cast<std::size_t>(prototype.ncomp()));
+    workspace.prepared = true;
+  }
+
+  bool has_physical_trace_faces_() const {
+    for (int face = 0; face < 4; ++face)
+      if (detail::is_physical_hyperbolic_law(
+              hyperbolic_boundary_.face(face / 2, face % 2 == 0 ? -1 : 1).law))
+        return true;
+    return false;
+  }
+
+  static void snapshot_ghost_values_(MultiFab& state, std::vector<Real>& snapshot) {
+    state.sync_host();
+    std::size_t cursor = 0;
+    for (int local = 0; local < state.local_size(); ++local) {
+      const Fab2D& fab = state.fab(local);
+      const Box2D valid = fab.box();
+      const Box2D grown = fab.grown_box();
+      for (int component = 0; component < state.ncomp(); ++component)
+        for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+          for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+            if (!valid.contains(i, j))
+              snapshot[cursor++] = fab(i, j, component);
+    }
+    if (cursor != snapshot.size())
+      throw std::logic_error("PreparedBoundaryPlan ghost snapshot size changed after preparation");
+    state.sync_device();
+  }
+
+  static void restore_ghost_values_(MultiFab& state, const std::vector<Real>& snapshot) {
+    state.sync_host();
+    std::size_t cursor = 0;
+    for (int local = 0; local < state.local_size(); ++local) {
+      Fab2D& fab = state.fab(local);
+      const Box2D valid = fab.box();
+      const Box2D grown = fab.grown_box();
+      for (int component = 0; component < state.ncomp(); ++component)
+        for (int j = grown.lo[1]; j <= grown.hi[1]; ++j)
+          for (int i = grown.lo[0]; i <= grown.hi[0]; ++i)
+            if (!valid.contains(i, j))
+              fab(i, j, component) = snapshot[cursor++];
+    }
+    if (cursor != snapshot.size())
+      throw std::logic_error("PreparedBoundaryPlan ghost restore size changed after preparation");
+    state.sync_device();
+  }
+
+  template <class Visitor>
+  void for_each_physical_trace_cell_(const MultiFab& state, const Box2D& domain,
+                                     Visitor&& visitor) const {
+    const int depth = state.n_grow();
+    const auto physical = [this](int face) {
+      return detail::is_physical_hyperbolic_law(
+          hyperbolic_boundary_.face(face / 2, face % 2 == 0 ? -1 : 1).law);
+    };
+    const auto visit = [&visitor](const Fab2D& fab, const Box2D& region) {
+      for (int j = region.lo[1]; j <= region.hi[1]; ++j)
+        for (int i = region.lo[0]; i <= region.hi[0]; ++i)
+          visitor(fab, i, j);
+    };
+
+    for (int local = 0; local < state.local_size(); ++local) {
+      const Fab2D& fab = state.fab(local);
+      const Box2D valid = fab.box();
+      int tangential_lo = valid.lo[1] - depth;
+      int tangential_hi = valid.hi[1] + depth;
+      if (hyperbolic_boundary_.face(1, -1).law != HyperbolicBoundaryLaw::Periodic)
+        tangential_lo = std::max(tangential_lo, domain.lo[1]);
+      if (hyperbolic_boundary_.face(1, 1).law != HyperbolicBoundaryLaw::Periodic)
+        tangential_hi = std::min(tangential_hi, domain.hi[1]);
+      if (physical(0) && valid.lo[0] == domain.lo[0])
+        visit(fab, Box2D{{domain.lo[0] - depth, tangential_lo}, {domain.lo[0] - 1, tangential_hi}});
+      if (physical(1) && valid.hi[0] == domain.hi[0])
+        visit(fab, Box2D{{domain.hi[0] + 1, tangential_lo}, {domain.hi[0] + depth, tangential_hi}});
+
+      tangential_lo = valid.lo[0] - depth;
+      tangential_hi = valid.hi[0] + depth;
+      if (hyperbolic_boundary_.face(0, -1).law != HyperbolicBoundaryLaw::Periodic)
+        tangential_lo = std::max(tangential_lo, domain.lo[0]);
+      if (hyperbolic_boundary_.face(0, 1).law != HyperbolicBoundaryLaw::Periodic)
+        tangential_hi = std::min(tangential_hi, domain.hi[0]);
+      if (physical(2) && valid.lo[1] == domain.lo[1])
+        visit(fab, Box2D{{tangential_lo, domain.lo[1] - depth}, {tangential_hi, domain.lo[1] - 1}});
+      if (physical(3) && valid.hi[1] == domain.hi[1])
+        visit(fab, Box2D{{tangential_lo, domain.hi[1] + 1}, {tangential_hi, domain.hi[1] + depth}});
+    }
+  }
+
+  void require_recoverable_physical_traces_(const MultiFab& state, const Box2D& domain,
+                                            CommunicatorView communicator,
+                                            BoundaryRecoveryWorkspace& workspace) const {
+    state.sync_host();
+    long local_failures = 0;
+    for_each_physical_trace_cell_(state, domain, [&](const Fab2D& fab, int i, int j) {
+      for (int component = 0; component < state.ncomp(); ++component)
+        workspace.conserved[static_cast<std::size_t>(component)] = fab(i, j, component);
+      std::fill(workspace.primitive.begin(), workspace.primitive.end(),
+                std::numeric_limits<double>::quiet_NaN());
+      try {
+        const RecoveryReport report =
+            trace_recovery_(workspace.conserved.data(), workspace.primitive.data());
+        const bool finite = std::all_of(workspace.conserved.begin(), workspace.conserved.end(),
+                                        [](double value) { return std::isfinite(value); }) &&
+                            std::all_of(workspace.primitive.begin(), workspace.primitive.end(),
+                                        [](double value) { return std::isfinite(value); });
+        if (!report.publication_permitted() || !finite)
+          ++local_failures;
+      } catch (...) {
+        // A rank-local provider exception is data, not control flow: every peer still reaches the
+        // one collective verdict before the transaction either commits or restores its snapshot.
+        ++local_failures;
+      }
+    });
+    const long failures = all_reduce_sum(local_failures, communicator);
+    if (failures != 0)
+      throw std::runtime_error(
+          "PreparedBoundaryPlan prepared variable recovery rejected physical boundary traces "
+          "before publication (failed cells=" +
+          std::to_string(failures) + ")");
+    state.sync_device();
+  }
+
+  template <class Fill>
+  void fill_with_trace_recovery_transaction_(MultiFab& state, const Box2D& domain,
+                                             CommunicatorView communicator,
+                                             BoundaryRecoveryWorkspace& workspace,
+                                             bool require_prepared_workspace, Fill&& fill) const {
+    if (!trace_recovery_ || !has_physical_trace_faces_()) {
+      std::forward<Fill>(fill)();
+      return;
+    }
+    if (!workspace.prepared) {
+      if (require_prepared_workspace)
+        throw std::logic_error(
+            "PreparedBoundaryPlan trace recovery workspace was not materialized before execution");
+      prepare_boundary_recovery_workspace_(state, workspace);
+    }
+    if (workspace.snapshot.size() != ghost_snapshot_value_count_(state) ||
+        workspace.conserved.size() != static_cast<std::size_t>(state.ncomp()) ||
+        workspace.primitive.size() != static_cast<std::size_t>(state.ncomp()))
+      throw std::logic_error(
+          "PreparedBoundaryPlan trace recovery workspace does not match the execution layout");
+
+    snapshot_ghost_values_(state, workspace.snapshot);
+    try {
+      std::forward<Fill>(fill)();
+      require_recoverable_physical_traces_(state, domain, communicator, workspace);
+    } catch (...) {
+      device_fence();
+      restore_ghost_values_(state, workspace.snapshot);
+      throw;
+    }
+  }
+
   void validate_base() const {
     if (identity_.empty())
       throw std::runtime_error("PreparedBoundaryPlan requires a canonical identity");
@@ -931,6 +1164,12 @@ inline void PreparedBoundaryPlan::Session::validate_current_() const {
         "PreparedBoundaryPlan was modified after its execution session was materialized");
 }
 
+inline void PreparedBoundaryPlan::Session::prepare_trace_recovery_workspace(
+    const MultiFab& prototype) {
+  validate_current_();
+  plan_->prepare_boundary_recovery_workspace_(prototype, recovery_workspace_);
+}
+
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(MultiFab& state,
                                                                         const Box2D& domain) const {
   validate_current_();
@@ -939,8 +1178,11 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(MultiFab
         "PreparedBoundaryPlan component session requires an exact BoundaryEvaluationPoint");
   plan_->validate_for(state);
   auto physical_preflight = plan_->hyperbolic_boundary_.preflight_physical(state, domain);
-  plan_->fill_native_halos_(state, domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+  plan_->fill_with_trace_recovery_transaction_(
+      state, domain, lane_->communicator(), recovery_workspace_, true, [&] {
+        plan_->fill_native_halos_(state, domain, *lane_);
+        plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+      });
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
@@ -952,8 +1194,11 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
   plan_->validate_for(state);
   auto physical_preflight =
       plan_->hyperbolic_boundary_.preflight_physical(state, geometry, lane_->communicator());
-  plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+  plan_->fill_with_trace_recovery_transaction_(
+      state, geometry.domain, lane_->communicator(), recovery_workspace_, true, [&] {
+        plan_->fill_native_halos_(state, geometry.domain, *lane_);
+        plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+      });
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
@@ -966,8 +1211,11 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
   plan_->validate_for(state);
   auto physical_preflight = plan_->hyperbolic_boundary_.preflight_physical(
       state, geometry, static_cast<Real>(point.physical_time), point.clock, lane_->communicator());
-  plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+  plan_->fill_with_trace_recovery_transaction_(
+      state, geometry.domain, lane_->communicator(), recovery_workspace_, true, [&] {
+        plan_->fill_native_halos_(state, geometry.domain, *lane_);
+        plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+      });
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
@@ -977,30 +1225,33 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical_control(
   plan_->validate_for(state);
   auto physical_preflight = plan_->hyperbolic_boundary_.preflight_physical(
       state, geometry, static_cast<Real>(point.physical_time), point.clock, lane_->communicator());
-  plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
-  detail::BoundaryFieldRegistry fields;
-  fields.configure_states(plan_->required_state_identities());
-  fields.configure_fields(plan_->required_field_identities());
-  fields.begin_binding();
-  const auto states = plan_->required_state_identities();
-  if (states.size() != 1 || states.front() != plan_->state_identity())
-    throw std::runtime_error(
-        "component boundary with multiple states requires the N-ary prepared registry seam");
-  fields.bind_state(states.front(), state);
-  const auto dependencies = plan_->required_field_identities();
-  if (!dependencies.empty()) {
-    if (dependencies.size() != 1 || auxiliary == nullptr)
-      throw std::runtime_error(
-          "component boundary fields require the N-ary prepared registry seam");
-    fields.bind_field(dependencies.front(), *auxiliary);
-  }
-  for (std::size_t index = 0; index < ghost_components_.size(); ++index) {
-    auto workspace = detail::prepare_ghost_workspace(ghost_components_[index], state, fields,
-                                                     geometry, plan_->required_depth_);
-    detail::apply_ghost_component(ghost_components_[index], workspace, state, fields, geometry,
-                                  point);
-  }
+  plan_->fill_with_trace_recovery_transaction_(
+      state, geometry.domain, lane_->communicator(), recovery_workspace_, true, [&] {
+        plan_->fill_native_halos_(state, geometry.domain, *lane_);
+        plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+        detail::BoundaryFieldRegistry fields;
+        fields.configure_states(plan_->required_state_identities());
+        fields.configure_fields(plan_->required_field_identities());
+        fields.begin_binding();
+        const auto states = plan_->required_state_identities();
+        if (states.size() != 1 || states.front() != plan_->state_identity())
+          throw std::runtime_error(
+              "component boundary with multiple states requires the N-ary prepared registry seam");
+        fields.bind_state(states.front(), state);
+        const auto dependencies = plan_->required_field_identities();
+        if (!dependencies.empty()) {
+          if (dependencies.size() != 1 || auxiliary == nullptr)
+            throw std::runtime_error(
+                "component boundary fields require the N-ary prepared registry seam");
+          fields.bind_field(dependencies.front(), *auxiliary);
+        }
+        for (std::size_t index = 0; index < ghost_components_.size(); ++index) {
+          auto workspace = detail::prepare_ghost_workspace(ghost_components_[index], state, fields,
+                                                           geometry, plan_->required_depth_);
+          detail::apply_ghost_component(ghost_components_[index], workspace, state, fields,
+                                        geometry, point);
+        }
+      });
 }
 
 inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
@@ -1010,14 +1261,18 @@ inline void PreparedBoundaryPlan::Session::fill_same_level_and_physical(
   plan_->validate_for(state);
   auto physical_preflight = plan_->hyperbolic_boundary_.preflight_physical(
       state, geometry, static_cast<Real>(point.physical_time), point.clock, lane_->communicator());
-  plan_->fill_native_halos_(state, geometry.domain, *lane_);
-  plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
-  if (ghost_workspaces_.size() != ghost_components_.size())
-    throw std::logic_error(
-        "PreparedBoundaryPlan ghost executor was not materialized before numerical execution");
-  for (std::size_t index = 0; index < ghost_components_.size(); ++index)
-    detail::apply_ghost_component(ghost_components_[index], ghost_workspaces_[index], state, fields,
-                                  geometry, point);
+  plan_->fill_with_trace_recovery_transaction_(
+      state, geometry.domain, lane_->communicator(), recovery_workspace_, true, [&] {
+        plan_->fill_native_halos_(state, geometry.domain, *lane_);
+        plan_->hyperbolic_boundary_.fill_physical_preflighted(state, std::move(physical_preflight));
+        if (ghost_workspaces_.size() != ghost_components_.size())
+          throw std::logic_error(
+              "PreparedBoundaryPlan ghost executor was not materialized before numerical "
+              "execution");
+        for (std::size_t index = 0; index < ghost_components_.size(); ++index)
+          detail::apply_ghost_component(ghost_components_[index], ghost_workspaces_[index], state,
+                                        fields, geometry, point);
+      });
 }
 
 inline void PreparedBoundaryPlan::Session::transform_fluxes_control(
