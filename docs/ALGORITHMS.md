@@ -650,6 +650,11 @@ central runtime policy (`abs_tol=1e-12`, `rel_tol=1e-10`, 25 iterations) into th
 controls. Singular pivots, exhausted budgets, NaN/Inf, inadmissible candidates, safeguard failures
 and unsupported Jacobian capabilities remain distinct outcomes. Collective priority is independent
 of status numbering, so a fatal cell or MPI-rank failure cannot be hidden by a recoverable rejection.
+Once that priority is known, the first failing location is selected by exact staged integer
+collectives (`min(j)`, then `min(i)`, then `min(component)` at that cell). Coordinates are never
+packed into a floating-point mantissa, so negative and large global `Box2D` indices keep the same
+diagnostic and MPI ordering on double- and single-precision builds. These extra collectives execute
+only on the failure path.
 There is no warning-only or unchecked publication policy.
 Limits: `imex_euler_step` is first order in time (forward-backward Euler); the AP covers the relaxation
 limit, not the condensation of the potential-velocity-Lorentz couplings at high `omega_c`, which is the
@@ -662,7 +667,9 @@ runtime does not infer that split. Validation:
 `test_imex_ap` (AP property on a stiff linear relaxation source),
 `test_ap_limit` (quantified AP limit, stiffness sweep over 8 decades at fixed `dt`),
 `test_imex_partial` (a 2-variable model, only one implicit),
-`test_imex_transport` (the transport of an IMEX block is indeed advanced explicitly).
+`test_imex_transport` (the transport of an IMEX block is indeed advanced explicitly), and
+`test_newton_robustness` plus `test_mpi_field_plan_consensus` (exact first-failure selection across
+large signed indices, including fatal-over-recoverable precedence between ranks).
 
 
 ---
