@@ -116,6 +116,7 @@ set(POPS_CPP_TEST_SOURCE_test_krylov_collective_contract "tests/cpp/unit/ellipti
 set(POPS_CPP_TEST_SOURCE_test_scaled_scalar "tests/cpp/unit/elliptic/test_scaled_scalar.cpp")
 set(POPS_CPP_TEST_SOURCE_test_geometric_mg "tests/cpp/unit/elliptic/test_geometric_mg.cpp")
 set(POPS_CPP_TEST_SOURCE_test_geometry "tests/cpp/unit/mesh/test_geometry.cpp")
+set(POPS_CPP_TEST_SOURCE_test_nd_metric_provider "tests/cpp/unit/mesh/test_nd_metric_provider.cpp")
 set(POPS_CPP_TEST_SOURCE_test_imex_ap "tests/cpp/unit/numerics/test_imex_ap.cpp")
 set(POPS_CPP_TEST_SOURCE_test_imex_partial "tests/cpp/unit/numerics/test_imex_partial.cpp")
 set(POPS_CPP_TEST_SOURCE_test_imex_transport "tests/cpp/unit/numerics/test_imex_transport.cpp")

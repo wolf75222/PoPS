@@ -20,7 +20,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 191,
+    "target_count": 192,
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor"
   },
   "test_adaptive_multirate": 2.0,
@@ -133,6 +133,7 @@
   "test_scaled_scalar": 2.0,
   "test_geometric_mg": 2.0,
   "test_geometry": 2.0,
+  "test_nd_metric_provider": 2.0,
   "test_imex_ap": 2.0,
   "test_imex_partial": 2.0,
   "test_imex_transport": 2.0,
