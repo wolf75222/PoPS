@@ -62,6 +62,7 @@ EXPECTED_REQUIREMENTS = {
     "measured_load_balance_decision",
     "prepared_boundary_plan_only_transport_authority",
     "polar_persistent_prepared_boundary_plan",
+    "prepared_batch_recovery_only_runtime_authority",
     *EXPECTED_HARDWARE_REQUIREMENTS,
 }
 EXPECTED_DEFERRED = (

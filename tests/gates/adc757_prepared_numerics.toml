@@ -544,3 +544,23 @@ requirement = "polar_persistent_prepared_boundary_plan"
 polarity = "refusal"
 target = "test_polar_transport_mms"
 test_regex = "^test_polar_transport_mms\\.RejectsSharedInterfaceFaceOmission$"
+
+[[check]]
+requirement = "prepared_batch_recovery_only_runtime_authority"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/architecture/test_variable_recovery_consumer_cutover.py"
+test = "test_runtime_materialization_consumes_only_prepared_batch_before_publication"
+
+[[check]]
+requirement = "prepared_batch_recovery_only_runtime_authority"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/architecture/test_variable_recovery_consumer_cutover.py"
+test = "test_runtime_materialization_has_no_pointwise_compatibility_authority"
+
+[[check]]
+requirement = "prepared_batch_recovery_only_runtime_authority"
+polarity = "refusal"
+target = "test_facade_routing"
+test_regex = "^FacadeRouting\\.PrimitiveMaterializationRefusesMissingPreparedBatchAuthority$"
