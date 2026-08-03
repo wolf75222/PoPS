@@ -950,13 +950,20 @@ class PreparedBoundaryPlan {
   void prepare_boundary_recovery_workspace_(const MultiFab& prototype,
                                             BoundaryRecoveryWorkspace& workspace) const {
     validate_for(prototype);
-    if (!trace_recovery_ || !has_physical_trace_faces_()) {
+    const bool recover_traces = trace_recovery_ && has_physical_trace_faces_();
+    const bool rollback_characteristics = requires_characteristic_no_inflow();
+    if (!recover_traces && !rollback_characteristics) {
       workspace = {};
       return;
     }
     workspace.snapshot.resize(ghost_snapshot_value_count_(prototype));
-    workspace.conserved.resize(static_cast<std::size_t>(prototype.ncomp()));
-    workspace.primitive.resize(static_cast<std::size_t>(prototype.ncomp()));
+    if (recover_traces) {
+      workspace.conserved.resize(static_cast<std::size_t>(prototype.ncomp()));
+      workspace.primitive.resize(static_cast<std::size_t>(prototype.ncomp()));
+    } else {
+      workspace.conserved.clear();
+      workspace.primitive.clear();
+    }
     workspace.prepared = true;
   }
 
@@ -1086,7 +1093,9 @@ class PreparedBoundaryPlan {
                                              CommunicatorView communicator,
                                              BoundaryRecoveryWorkspace& workspace,
                                              bool require_prepared_workspace, Fill&& fill) const {
-    if (!trace_recovery_ || !has_physical_trace_faces_()) {
+    const bool recover_traces = trace_recovery_ && has_physical_trace_faces_();
+    const bool rollback_characteristics = requires_characteristic_no_inflow();
+    if (!recover_traces && !rollback_characteristics) {
       std::forward<Fill>(fill)();
       return;
     }
@@ -1097,15 +1106,16 @@ class PreparedBoundaryPlan {
       prepare_boundary_recovery_workspace_(state, workspace);
     }
     if (workspace.snapshot.size() != ghost_snapshot_value_count_(state) ||
-        workspace.conserved.size() != static_cast<std::size_t>(state.ncomp()) ||
-        workspace.primitive.size() != static_cast<std::size_t>(state.ncomp()))
+        (recover_traces && (workspace.conserved.size() != static_cast<std::size_t>(state.ncomp()) ||
+                            workspace.primitive.size() != static_cast<std::size_t>(state.ncomp()))))
       throw std::logic_error(
           "PreparedBoundaryPlan trace recovery workspace does not match the execution layout");
 
     snapshot_ghost_values_(state, workspace.snapshot);
     try {
       std::forward<Fill>(fill)();
-      require_recoverable_physical_traces_(state, domain, communicator, workspace);
+      if (recover_traces)
+        require_recoverable_physical_traces_(state, domain, communicator, workspace);
     } catch (...) {
       device_fence();
       restore_ghost_values_(state, workspace.snapshot);
