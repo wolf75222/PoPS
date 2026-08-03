@@ -23,7 +23,7 @@
 //       test_polar_transport_mms). Confirme que le transport RADIAL + AZIMUTAL des 3 variables,
 //       metrique 1/r ET terme geometrique compris, converge proprement.
 //
-//   (C) CONSERVATION DE LA MASSE : sur une avance SSPRK3 avec PAROI radiale (wall_radial), la masse
+//   (C) CONSERVATION DE LA MASSE : sur une avance SSPRK3 avec des faces radiales NoFlux, la masse
 //       Sum_ij rho_ij r_i dr dtheta est conservee a ~machine (le terme geometrique n'agit QUE sur
 //       la quantite de mouvement, sa composante 0 est nulle -> il ne cree ni ne detruit de masse).
 //
@@ -45,6 +45,8 @@
 #include <pops/numerics/spatial/operators/polar_operator.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 #include <pops/physics/bricks/hyperbolic.hpp>
+
+#include "polar_boundary_plan.hpp"
 
 #include <cmath>
 #include <vector>
@@ -104,11 +106,13 @@ static double equilibrium_residual_radial(int nr, int nth, const Model& model) {
   U.set_val(0.0);
   aux.set_val(0.0);
   fill_equilibrium(U, g);
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(Model::n_vars, false, Weno5::n_ghost);
 
-  // recon_prim=true : reconstruction en (rho, v_r, v_theta) (positivite). wall_radial=false : on veut
-  // le residu interieur PUR (pas de paroi qui annulerait le flux de bord et masquerait la troncature).
-  assemble_rhs_polar<Weno5, RusanovFlux>(model, U, aux, g, R, /*recon_prim=*/true,
-                                         /*wall_radial=*/false);
+  // recon_prim=true : reconstruction en (rho, v_r, v_theta) (positivite). Les faces radiales
+  // extrapolees conservent le flux de Riemann : on mesure le residu interieur pur.
+  assemble_rhs_polar<Weno5, RusanovFlux>(model, U, aux, g, R, *boundary_plan,
+                                         /*recon_prim=*/true);
   sync_host();
   const ConstArray4 r = R.fab(0).const_array();
   double linf = 0.0;
@@ -315,13 +319,16 @@ static double run_mms_fluid(int nr, int nth) {
   const double dt = 0.25 * ds_min / vmax;
   const int nsteps = static_cast<int>(std::ceil(kTfinal / dt));
   const double dt_eff = kTfinal / nsteps;
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(MmsFluidPolar::n_vars, false, Limiter::n_ghost);
 
   for (int s = 0; s < nsteps; ++s) {
     SSPRK3Step{}.take_step(
         [&](MultiFab& stage, MultiFab& R) {
           fill_ghosts(stage, dom, bc);
           fill_mms_radial_ghosts(stage, g, dom);
-          assemble_rhs_polar<Limiter, RusanovFlux>(model, stage, aux, g, R, /*recon_prim=*/true);
+          assemble_rhs_polar<Limiter, RusanovFlux>(model, stage, aux, g, R, *boundary_plan,
+                                                   /*recon_prim=*/true);
         },
         U, static_cast<Real>(dt_eff));
   }
@@ -360,7 +367,7 @@ static double run_mass_conservation() {
   aux.set_val(0.0);
 
   // Etat non trivial : densite modulee en r et theta, v_r != 0 (poussee vers les parois -> teste que
-  // wall_radial annule le flux radial de bord et conserve la masse), v_theta != 0.
+  // le plan NoFlux annule le flux radial de bord et conserve la masse), v_theta != 0.
   {
     Array4 u = U.fab(0).array();
     const Box2D gb = U.fab(0).box();
@@ -384,14 +391,16 @@ static double run_mass_conservation() {
   const double vmax = (0.3 * kRmax + 0.2) + std::sqrt(kCs2);
   const double dt = 0.2 * ds_min / vmax;
   const int nsteps = 30;
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(IsothermalFluxPolar::n_vars, true, Weno5::n_ghost);
 
   for (int s = 0; s < nsteps; ++s) {
     SSPRK3Step{}.take_step(
         [&](MultiFab& stage, MultiFab& R) {
           fill_ghosts(stage, dom, bc);
-          // wall_radial=true : paroi solide aux 2 bords -> flux radial nul -> masse conservee a la machine.
-          assemble_rhs_polar<Weno5, RusanovFlux>(model, stage, aux, g, R, /*recon_prim=*/true,
-                                                 /*wall_radial=*/true);
+          // Les lois NoFlux preparees ferment les deux bords radiaux et conservent la masse.
+          assemble_rhs_polar<Weno5, RusanovFlux>(model, stage, aux, g, R, *boundary_plan,
+                                                 /*recon_prim=*/true);
         },
         U, dt);
   }

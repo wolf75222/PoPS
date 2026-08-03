@@ -156,8 +156,11 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
           "' (IMEX / IMEX-RK ARS(2,2,2)) unsupported "
           "(ring : coupling by explicit local source, no stiff source to handle implicitly "
           "at this stage). Use 'explicit'/'ssprk3'.");
-    const PolarGridContext pctx = P->grid_ctx_polar();
-    bb = detail::build_block_polar(model, limiter, riemann, pctx, recon_prim,
+    const PolarGridContext pctx = P->grid_ctx_polar(name);
+    const auto state_route = P->block_state_identities_.find(name);
+    const std::string state_identity =
+        state_route == P->block_state_identities_.end() ? std::string{} : state_route->second;
+    bb = detail::build_block_polar(model, name, state_identity, limiter, riemann, pctx, recon_prim,
                                    static_cast<Real>(positivity_floor), &P->aux);
     // ADC-291: widen the shared aux to the polar block's read width (canonical extras AND model-named
     // extra[k]), mirroring the Cartesian branch below. ensure_aux_width keeps the aux ADDRESS captured
@@ -269,11 +272,25 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   prim_to_cons = std::move(bb.prim_to_cons);
   cons_to_prim = std::move(bb.cons_to_prim);
   batch_cons_to_prim = std::move(bb.batch_cons_to_prim);
+  auto synthesized_boundary_plan = std::move(bb.synthesized_boundary_plan);
   // Common installation (same path as add_compiled_model for a DSL-generated model):
   // the closures run on the REAL System MultiFabs (MPI halos via fill_boundary, device
   // via Kokkos), without copy.
-  install_block(name, ncomp, cons_vs, prim_vs, model.gamma, std::move(clo), std::move(max_speed),
-                std::move(add_poisson_rhs), substeps, evolve, stride);
+  bool published_synthesized_boundary = false;
+  if (synthesized_boundary_plan) {
+    if (!P->boundary_plans_.emplace(name, synthesized_boundary_plan).second)
+      throw std::logic_error(
+          "System::add_block cannot publish a synthesized plan over a prepared boundary plan");
+    published_synthesized_boundary = true;
+  }
+  try {
+    install_block(name, ncomp, cons_vs, prim_vs, model.gamma, std::move(clo), std::move(max_speed),
+                  std::move(add_poisson_rhs), substeps, evolve, stride);
+  } catch (...) {
+    if (published_synthesized_boundary)
+      P->boundary_plans_.erase(name);
+    throw;
+  }
   EffectiveBlockOptions block_options = make_system_block_options(
       name, model, "native_model", limiter, riemann, recon, time, method, substeps, evolve, stride,
       implicit_vars, implicit_roles, newton, newton_diagnostics, positivity_floor, wave_speed_cache,
@@ -422,6 +439,10 @@ POPS_EXPORT void System::install_ghost_boundary_component(
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_ghost_boundary_component");
+  if (P->polar_)
+    throw std::runtime_error(
+        "System::install_ghost_boundary_component: polar transport has no native boundary "
+        "component provider");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
         "System::install_ghost_boundary_component: embedded-boundary transport has no "
@@ -438,6 +459,10 @@ POPS_EXPORT void System::install_boundary_flux_component(
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_boundary_flux_component");
+  if (P->polar_)
+    throw std::runtime_error(
+        "System::install_boundary_flux_component: polar transport has no post-Riemann boundary "
+        "flux provider");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
         "System::install_boundary_flux_component: embedded-boundary transport has no "
@@ -453,6 +478,10 @@ POPS_EXPORT void System::install_field_boundary_residual_component(
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_field_boundary_residual_component");
+  if (P->polar_)
+    throw std::runtime_error(
+        "System::install_field_boundary_residual_component: polar transport has no native field "
+        "boundary provider");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
         "System::install_field_boundary_residual_component: embedded-boundary transport has no "
@@ -469,6 +498,10 @@ POPS_EXPORT void System::install_field_boundary_jvp_component(
     std::shared_ptr<component::LoadedComponent> component) {
   Impl* P = p_.get();
   require_assembling(P->lifecycle_, "install_field_boundary_jvp_component");
+  if (P->polar_)
+    throw std::runtime_error(
+        "System::install_field_boundary_jvp_component: polar transport has no native field "
+        "boundary provider");
   if (P->eb_set_ && P->geometry_mode_ != GeometryMode::None)
     throw std::runtime_error(
         "System::install_field_boundary_jvp_component: embedded-boundary transport has no "

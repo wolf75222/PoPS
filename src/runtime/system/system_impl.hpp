@@ -408,9 +408,11 @@ struct System::Impl {
       if (found != boundary_plans_.end())
         boundary_plan = found->second;
     }
+    const Geometry boundary_geometry =
+        polar_ ? Geometry{dom, pgeom_.r_min, pgeom_.r_max, Real(0), PolarGeometry::kTwoPi} : geom;
     GridContext context{dom,
                         bc_,
-                        geom,
+                        boundary_geometry,
                         &aux,
                         &domain_mask_,
                         &eb_inverse_volume_fraction_,
@@ -512,7 +514,15 @@ struct System::Impl {
 
   // POLAR grid context (ring pgeom_ + r/theta BC + aux) for the polar block closures
   // (block_builder_polar.hpp). Counterpart of grid_ctx(); never called in Cartesian.
-  PolarGridContext grid_ctx_polar() { return PolarGridContext{dom, bc_, pgeom_, &aux}; }
+  PolarGridContext grid_ctx_polar(const std::string& block_name = {}) {
+    std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
+    if (!block_name.empty()) {
+      const auto found = boundary_plans_.find(block_name);
+      if (found != boundary_plans_.end())
+        boundary_plan = found->second;
+    }
+    return PolarGridContext{dom, bc_, pgeom_, &aux, std::move(boundary_plan)};
+  }
 
   // ensure_elliptic_polar / solve_fields_polar / solve_fields (body) EXTRACTED into fields_
   // (SystemFieldSolver, Batch B). Pure delegation: the Cartesian/polar dispatch, the device_fence and

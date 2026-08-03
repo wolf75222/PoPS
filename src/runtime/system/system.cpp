@@ -131,6 +131,11 @@ void System::mark_bound() {
       throw std::runtime_error(
           "System::mark_bound: materialized block lacks its exact state route");
   for (const auto& [name, plan] : p_->boundary_plans_) {
+    if (p_->polar_ && (plan->has_component_boundaries() || plan->has_omitted_faces()))
+      throw std::runtime_error(
+          "System::mark_bound: polar block '" + name +
+          "' requests a native boundary component or shared-interface face omission without a "
+          "polar numerical provider");
     if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None && plan->has_component_boundaries())
       throw std::runtime_error(
           "System::mark_bound: embedded-boundary block '" + name +

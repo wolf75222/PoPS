@@ -126,9 +126,8 @@ struct SystemDomain {
     return b;
   }
 
-  /// The exact historical System::Impl init-list, verbatim in order: cfg, geom, polar_, pgeom_, ba,
-  /// dm (sizes from ba), bc_, dom, per_, aux (allocates on ba/dm). The remaining members
-  /// (eb_* / domain_mask_ / ws_cache_block_ / geometry_mode_) default-construct exactly as before.
+  /// System::Impl layout initialization in ownership order. Cartesian periodicity comes from the
+  /// configuration; a polar ring always publishes physical-radial/periodic-azimuthal topology.
   explicit SystemDomain(const SystemConfig& c)
       : cfg(c),
         geom{Box2D::from_extents(c.n, c.n), c.xlo, c.xlo + c.L, c.ylo, c.ylo + c.L},
@@ -138,7 +137,7 @@ struct SystemDomain {
         dm(ba.size(), n_ranks()),
         bc_(make_bc(c)),
         dom(index_domain(c)),
-        per_{!polar_ && c.periodicity.x, !polar_ && c.periodicity.y},
+        per_{polar_ ? false : c.periodicity.x, polar_ ? true : c.periodicity.y},
         aux(ba, dm, kAuxBaseComps, 1) {}
 
   /// Structured report (ADC-578 acceptance): the layout facts a runtime report enumerates.

@@ -68,6 +68,8 @@
 #include <pops/numerics/spatial/operators/polar_operator.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
 
+#include "polar_boundary_plan.hpp"
+
 #include <cmath>
 #include <vector>
 
@@ -254,6 +256,8 @@ static double run_mms(int nr, int nth) {
   const double dt = 0.3 * ds_min / v_max;
   const int nsteps = static_cast<int>(std::ceil(kTfinal / dt));
   const double dt_eff = kTfinal / nsteps;
+  const auto boundary_plan =
+      test_support::polar_boundary_plan(MmsTransportPolar::n_vars, false, Limiter::n_ghost);
 
   for (int s = 0; s < nsteps; ++s) {
     SSPRK3Step{}.take_step(
@@ -261,7 +265,7 @@ static double run_mms(int nr, int nth) {
           fill_ghosts(stage, dom, bc);  // ghosts azimutaux periodiques
           fill_radial_ghosts_exact(stage, g,
                                    dom);  // ghosts radiaux Dirichlet-MMS (exact, stationnaire)
-          assemble_rhs_polar<Limiter, RusanovFlux>(model, stage, aux, g, R);
+          assemble_rhs_polar<Limiter, RusanovFlux>(model, stage, aux, g, R, *boundary_plan);
         },
         U, static_cast<Real>(dt_eff));
   }
