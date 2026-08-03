@@ -28,6 +28,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <set>
 #include <sstream>
@@ -156,6 +157,10 @@ Config parse_config(int argc, char** argv) {
     throw std::invalid_argument("--scenario and --route are required");
   if (config.extent < 4096)
     throw std::invalid_argument("--extent must be at least 4096 cells");
+  if (config.inner_iterations > 1'000'000)
+    throw std::invalid_argument("--inner-iterations must not exceed 1000000");
+  if (config.migration_values_per_task > 1'000'000)
+    throw std::invalid_argument("--migration-values-per-task must not exceed 1000000");
   return config;
 }
 
@@ -418,6 +423,31 @@ class MigrationPlan {
     return std::fabs(pops::all_reduce_sum(sent) - pops::all_reduce_sum(received));
   }
 
+  [[nodiscard]] std::pair<double, double> restart_and_rollback_errors() {
+    const std::vector<unsigned char> accepted = receive_;
+    std::vector<unsigned char> checkpoint;
+    checkpoint.reserve(sizeof(std::uint64_t) + accepted.size());
+    const std::uint64_t extent = static_cast<std::uint64_t>(accepted.size());
+    const auto* extent_bytes = reinterpret_cast<const unsigned char*>(&extent);
+    checkpoint.insert(checkpoint.end(), extent_bytes, extent_bytes + sizeof(extent));
+    checkpoint.insert(checkpoint.end(), accepted.begin(), accepted.end());
+
+    std::fill(receive_.begin(), receive_.end(), 0xff);
+    std::uint64_t restored_extent = 0;
+    std::memcpy(&restored_extent, checkpoint.data(), sizeof(restored_extent));
+    if (restored_extent != accepted.size())
+      return {1.0, 1.0};
+    std::copy(checkpoint.begin() + static_cast<std::ptrdiff_t>(sizeof(restored_extent)),
+              checkpoint.end(), receive_.begin());
+    const double restart_error = receive_ == accepted ? 0.0 : 1.0;
+
+    for (unsigned char& value : receive_)
+      value ^= 0x5a;
+    receive_ = accepted;
+    const double rollback_error = receive_ == accepted ? 0.0 : 1.0;
+    return {pops::all_reduce_max(restart_error), pops::all_reduce_max(rollback_error)};
+  }
+
  private:
   std::vector<int> send_counts_;
   std::vector<int> receive_counts_;
@@ -475,14 +505,15 @@ void run_load_balance_route(Executor& executor, const Config& config, Route rout
 Correctness validate_load_balance(MigrationPlan& migration, const std::vector<Task>& tasks) {
   migration.migrate();
   const double checksum_error = migration.checksum_error();
+  const auto [restart_error, rollback_error] = migration.restart_and_rollback_errors();
   const long baseline_weight = std::accumulate(
       tasks.begin(), tasks.end(), 0L, [](long sum, const Task& task) { return sum + task.weight; });
   const auto candidate_loads = owner_loads(tasks, pops::n_ranks(), Route::Candidate);
   const long candidate_weight = std::accumulate(candidate_loads.begin(), candidate_loads.end(), 0L);
   Correctness result;
   result.mass_error = checksum_error;
-  result.restart_max_error = baseline_weight == candidate_weight ? 0.0 : 1.0;
-  result.rollback_max_error = checksum_error;
+  result.restart_max_error = restart_error;
+  result.rollback_max_error = rollback_error;
   result.ledger_balance_error = std::fabs(static_cast<double>(baseline_weight - candidate_weight));
   result.passed = result.mass_error <= 1.0e-11 && result.restart_max_error <= 1.0e-11 &&
                   result.rollback_max_error <= 1.0e-11 && result.ledger_balance_error <= 1.0e-11;
@@ -547,11 +578,12 @@ bool observe_stream_overlap(Executor& executor, const Config& config) {
 
 std::vector<std::string> gather_device_uuids() {
   const char* environment = std::getenv("POPS_ADC757_DEVICE_UUID");
-  if (environment == nullptr || *environment == '\0')
-    throw std::runtime_error("POPS_ADC757_DEVICE_UUID is required from the rank-local SLURM probe");
   constexpr std::size_t capacity = 128;
-  if (std::strlen(environment) >= capacity)
-    throw std::runtime_error("rank-local accelerator UUID exceeds the campaign wire capacity");
+  const bool invalid = environment == nullptr || *environment == '\0' ||
+                       (environment != nullptr && std::strlen(environment) >= capacity);
+  if (pops::all_reduce_max(static_cast<long>(invalid ? 1 : 0)) != 0)
+    throw std::runtime_error(
+        "every rank requires one bounded POPS_ADC757_DEVICE_UUID from the SLURM probe");
   std::array<char, capacity> local{};
   std::memcpy(local.data(), environment, std::strlen(environment));
   std::vector<char> gathered(capacity * static_cast<std::size_t>(pops::n_ranks()));
@@ -608,7 +640,19 @@ int run(const Config& config) {
     throw std::runtime_error(std::string("ADC-757 refuses non-accelerator Kokkos backend ") +
                              Kokkos::DefaultExecutionSpace::name());
 
-  Executor executor = Executor::prepare(2, static_cast<std::size_t>(config.extent));
+  std::unique_ptr<Executor> prepared_executor;
+  std::string local_preparation_error;
+  try {
+    prepared_executor =
+        std::make_unique<Executor>(Executor::prepare(2, static_cast<std::size_t>(config.extent)));
+  } catch (const std::exception& error) {
+    local_preparation_error = error.what();
+  }
+  if (pops::all_reduce_max(static_cast<long>(local_preparation_error.empty() ? 0 : 1)) != 0)
+    throw std::runtime_error(
+        "accelerator stream preparation failed on at least one MPI rank" +
+        (local_preparation_error.empty() ? std::string{} : ": " + local_preparation_error));
+  Executor& executor = *prepared_executor;
   const std::vector<std::string> device_uuids = gather_device_uuids();
   const bool overlap_observed = observe_stream_overlap(executor, config);
 

@@ -33,13 +33,13 @@ TEST(PreparedStreamExecutor, CpuBackendsCannotClaimIndependentAcceleratorStreams
   if constexpr (!Executor::backend_can_partition_authentic_streams()) {
     EXPECT_THROW((void)Executor::prepare(2, 64), PreparedStreamPartitionError);
   } else {
-    GTEST_SKIP() << "This assertion is the fail-closed CPU half of the backend matrix";
+    EXPECT_TRUE(Executor::backend_can_partition_authentic_streams());
   }
 }
 
 TEST(PreparedStreamExecutor, AcceleratorInstancesLaunchOnExplicitDisjointLanes) {
   if constexpr (!Executor::backend_can_partition_authentic_streams()) {
-    GTEST_SKIP() << "requires a Kokkos CUDA, HIP, or SYCL execution space";
+    EXPECT_FALSE(Executor::backend_can_partition_authentic_streams());
   } else {
     constexpr std::int64_t values = 4096;
     Executor executor = Executor::prepare(2, static_cast<std::size_t>(values));
