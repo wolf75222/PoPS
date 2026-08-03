@@ -729,8 +729,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "9"
-    assert outputs["python_mpi_entrypoint_count"] == "8"
+    assert outputs["python_mpi_count"] == "10"
+    assert outputs["python_mpi_entrypoint_count"] == "9"
     assert outputs["python_mpi_orchestrator_count"] == "1"
 
 
