@@ -477,30 +477,35 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             status="partial",
             limitation=(
                 "Rusanov, HLL, HLLC, and Roe return one device-copyable FluxEvaluation with "
-                "typed status, stability bound, and reason code; face failures are reduced and "
-                "reject the owning transaction, but no fallback solver can be selected"
+                "typed status, stability bound, reason code, requested/used/last solver identity, "
+                "and attempt metadata; single-solver routes remain explicit and face failures are "
+                "reduced into the owning transaction, while fallback counters and restart "
+                "publication metadata are not yet wired"
             ),
             source=source,
         ),
         _row(
             "riemann:prepared_recovery_policy",
             layout="uniform|amr",
-            backend="none",
+            backend="production",
             platform="host",
             mpi=mpi,
             gpu=gpu,
-            status="unavailable",
+            status="partial",
             limitation=(
-                "there is no prepared ordered Riemann recovery chain, requested-versus-used "
-                "solver outcome, block counter, or restart metadata; a typed candidate failure "
-                "rejects the step and never substitutes another solver"
+                "a fixed device-copyable C++ PreparedRiemannRecoveryPolicy executes a validated "
+                "ordered candidate chain in the ordinary face hot loop and records requested, "
+                "used, last-attempted, first-cause, and attempt-count provenance; only typed "
+                "candidate rejection advances, but no public Python/component preparation route, "
+                "block/team counter, MPI fallback reduction, restart metadata, or benchmark gate "
+                "exists yet"
             ),
             requested=(
                 "prepared Riemann recovery chain with requested/used solver diagnostics"
             ),
             available_route=(
-                "one explicitly selected Riemann solver with typed rejection and transactional "
-                "rollback"
+                "PreparedRiemannRecoveryPolicy<RoeFlux, HLLFlux, RusanovFlux, "
+                "RejectRiemannRecovery> in a statically instantiated C++ spatial route"
             ),
             alternative=(
                 "select one supported Riemann route explicitly and consume rejection through "

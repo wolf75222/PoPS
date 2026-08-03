@@ -45,6 +45,52 @@ struct NonFiniteRoeFluxAdvect : Advect {
   }
 };
 
+enum class RiemannPolicyCase : std::uint8_t { kRequestedSucceeds, kFallbackSucceeds, kRejects };
+
+struct RiemannPolicyAdvect : Advect {
+  RiemannPolicyCase policy_case = RiemannPolicyCase::kRequestedSucceeds;
+
+  RiemannPolicyAdvect() = default;
+  POPS_HD explicit RiemannPolicyAdvect(RiemannPolicyCase selected) : policy_case(selected) {}
+
+  POPS_HD pops::Real max_wave_speed(const State&, const auto&, int) const {
+    return policy_case == RiemannPolicyCase::kRejects ? std::numeric_limits<pops::Real>::quiet_NaN()
+                                                      : pops::Real(2);
+  }
+  POPS_HD void wave_speeds(const State&, const auto&, int, pops::Real& lower,
+                           pops::Real& upper) const {
+    if (policy_case == RiemannPolicyCase::kRejects) {
+      lower = upper = std::numeric_limits<pops::Real>::quiet_NaN();
+      return;
+    }
+    lower = pops::Real(-1);
+    upper = pops::Real(3);
+  }
+  POPS_HD State roe_dissipation(const State& left, const auto&, const State& right, const auto&,
+                                int) const {
+    if (policy_case == RiemannPolicyCase::kFallbackSucceeds)
+      return State{std::numeric_limits<pops::Real>::quiet_NaN()};
+    return State{pops::Real(2) * (right[0] - left[0])};
+  }
+};
+
+using PreparedRoeRecovery =
+    pops::PreparedRiemannRecoveryPolicy<pops::RoeFlux, pops::HLLFlux, pops::RusanovFlux,
+                                        pops::RejectRiemannRecovery>;
+
+struct DeviceRiemannRecoveryProbe {
+  POPS_HD void operator()(int, int, std::uint64_t& encoded) const {
+    pops::FluxProviderValues<RiemannPolicyAdvect> values{};
+    const auto bound = pops::bind_flux_providers<RiemannPolicyAdvect>(values);
+    const auto evaluation = pops::evaluate_numerical_flux(
+        PreparedRoeRecovery{}, RiemannPolicyAdvect{RiemannPolicyCase::kFallbackSucceeds},
+        RiemannPolicyAdvect::State{pops::Real(1)}, bound, RiemannPolicyAdvect::State{pops::Real(2)},
+        bound, pops::FaceContext::axis_aligned(0));
+    encoded = (static_cast<std::uint64_t>(evaluation.used_solver) << 8) |
+              static_cast<std::uint64_t>(evaluation.attempt_count);
+  }
+};
+
 enum class HllcFailureSite { kPhysicalFlux, kPressure, kContact, kStarState, kFinalFlux };
 
 struct SelectiveInvalidHllc {
@@ -245,6 +291,67 @@ TEST(test_flux_interfaces, equal_state_consistency_and_declared_stability) {
   EXPECT_DOUBLE_EQ(evaluation.stability.value, physical.speed);
   EXPECT_EQ(evaluation.stability.unit, pops::StabilityUnit::kLengthPerTime);
   EXPECT_EQ(evaluation.stability.convention, pops::StabilityConvention::kNormalSpectralRadius);
+  EXPECT_EQ(evaluation.requested_solver, pops::RiemannSolverId::kRusanov);
+  EXPECT_EQ(evaluation.used_solver, pops::RiemannSolverId::kRusanov);
+  EXPECT_EQ(evaluation.last_attempted_solver, pops::RiemannSolverId::kRusanov);
+  EXPECT_EQ(evaluation.attempt_count, 1);
+  EXPECT_FALSE(evaluation.used_fallback());
+}
+
+TEST(test_flux_interfaces, prepared_riemann_recovery_is_ordered_typed_and_device_copyable) {
+  static_assert(std::is_trivially_copyable_v<PreparedRoeRecovery>);
+  static_assert(std::is_empty_v<PreparedRoeRecovery>);
+  static_assert(PreparedRoeRecovery::candidate_count == 3);
+  static_assert(PreparedRoeRecovery::ordered_solver_ids[0] == pops::RiemannSolverId::kRoe);
+  static_assert(PreparedRoeRecovery::ordered_solver_ids[1] == pops::RiemannSolverId::kHll);
+  static_assert(PreparedRoeRecovery::ordered_solver_ids[2] == pops::RiemannSolverId::kRusanov);
+  static_assert(PreparedRoeRecovery::ordered_solver_ids[3] == pops::RiemannSolverId::kReject);
+
+  const auto evaluate = [](RiemannPolicyCase policy_case) {
+    const RiemannPolicyAdvect physical{policy_case};
+    const auto bound = providers<RiemannPolicyAdvect>();
+    return pops::evaluate_numerical_flux(
+        pops::prepare_riemann_recovery_policy<pops::RoeFlux, pops::HLLFlux, pops::RusanovFlux,
+                                              pops::RejectRiemannRecovery>(),
+        physical, RiemannPolicyAdvect::State{pops::Real(1)}, bound,
+        RiemannPolicyAdvect::State{pops::Real(2)}, bound, pops::FaceContext::axis_aligned(0));
+  };
+
+  const auto requested = evaluate(RiemannPolicyCase::kRequestedSucceeds);
+  ASSERT_TRUE(requested.succeeded());
+  EXPECT_EQ(requested.requested_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(requested.used_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(requested.last_attempted_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(requested.attempt_count, 1);
+  EXPECT_EQ(requested.recovery_reason_code, 0u);
+  EXPECT_FALSE(requested.used_fallback());
+
+  const auto recovered = evaluate(RiemannPolicyCase::kFallbackSucceeds);
+  ASSERT_TRUE(recovered.succeeded());
+  EXPECT_EQ(recovered.requested_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(recovered.used_solver, pops::RiemannSolverId::kHll);
+  EXPECT_EQ(recovered.last_attempted_solver, pops::RiemannSolverId::kHll);
+  EXPECT_EQ(recovered.attempt_count, 2);
+  EXPECT_EQ(recovered.recovery_reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteDissipation));
+  EXPECT_TRUE(recovered.used_fallback());
+
+  const auto rejected = evaluate(RiemannPolicyCase::kRejects);
+  EXPECT_EQ(rejected.status, pops::EvaluationStatus::kReject);
+  EXPECT_EQ(rejected.requested_solver, pops::RiemannSolverId::kRoe);
+  EXPECT_EQ(rejected.used_solver, pops::RiemannSolverId::kReject);
+  EXPECT_EQ(rejected.last_attempted_solver, pops::RiemannSolverId::kRusanov);
+  EXPECT_EQ(rejected.attempt_count, 3);
+  EXPECT_EQ(rejected.recovery_reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRoeInvalidStability));
+  EXPECT_EQ(rejected.reason_code,
+            pops::riemann_reason_code(pops::RiemannFailureCause::kRusanovInvalidStability));
+  EXPECT_TRUE(std::isnan(rejected.checked_density().value[0]));
+
+  const std::uint64_t device_encoded =
+      pops::reduce_max_uint64_cell(pops::Box2D{{0, 0}, {0, 0}}, DeviceRiemannRecoveryProbe{});
+  EXPECT_EQ(device_encoded >> 8, static_cast<std::uint64_t>(pops::RiemannSolverId::kHll));
+  EXPECT_EQ(device_encoded & UINT64_C(0xff), UINT64_C(2));
 }
 
 TEST(test_flux_interfaces, orientation_reversal_swaps_traces_and_negates_flux) {
@@ -409,6 +516,10 @@ TEST(test_flux_interfaces, failed_evaluation_never_publishes_a_density) {
   EXPECT_EQ(evaluation.status, pops::EvaluationStatus::kReject);
   EXPECT_EQ(evaluation.failure_action(), pops::TransactionFailureAction::kRejectStep);
   EXPECT_EQ(evaluation.reason_code, 0x682u);
+  EXPECT_EQ(evaluation.requested_solver, pops::RiemannSolverId::kExternal);
+  EXPECT_EQ(evaluation.used_solver, pops::RiemannSolverId::kReject);
+  EXPECT_EQ(evaluation.last_attempted_solver, pops::RiemannSolverId::kExternal);
+  EXPECT_EQ(evaluation.attempt_count, 1);
   EXPECT_TRUE(std::isnan(evaluation.checked_density().value[0]));
 }
 
