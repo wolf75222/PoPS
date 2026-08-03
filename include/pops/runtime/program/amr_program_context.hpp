@@ -30,6 +30,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>           // saxpy / lincomb
 #include <pops/mesh/storage/multifab.hpp>           // MultiFab
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/world_communicator.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/vector_distribution.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
@@ -320,7 +321,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     std::optional<std::vector<std::uint8_t>> rematerialized_program_state;
     if (decision.accepted) {
       const std::vector<std::string> gathered_payloads =
-          ExecutionLane::world().allgather_bytes(local_program_payload);
+          WorldCommunicator::world().allgather_bytes(local_program_payload);
       local_failure = nullptr;
       try {
         std::vector<std::vector<std::uint8_t>> source_payloads;
