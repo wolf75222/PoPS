@@ -159,6 +159,7 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_system_io_gather "tests/cpp/integration/mpi/te
 set(POPS_CPP_TEST_SOURCE_test_mpi_system_layout_transfer "tests/cpp/integration/mpi/test_mpi_system_layout_transfer.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_system_solve_fields "tests/cpp/integration/mpi/test_mpi_system_solve_fields.cpp")
 set(POPS_CPP_TEST_SOURCE_test_multifab "tests/cpp/unit/mesh/test_multifab.cpp")
+set(POPS_CPP_TEST_SOURCE_test_nd_boundary_schedule "tests/cpp/unit/mesh/test_nd_boundary_schedule.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_distribution "tests/cpp/unit/mesh/test_nd_distribution.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_layout "tests/cpp/unit/mesh/test_nd_layout.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_topology "tests/cpp/unit/mesh/test_nd_topology.cpp")

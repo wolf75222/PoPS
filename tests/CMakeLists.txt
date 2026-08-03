@@ -435,6 +435,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_fab2d
   test_box_array
   test_multifab
+  test_nd_boundary_schedule
   test_nd_distribution
   test_nd_layout
   test_nd_topology
