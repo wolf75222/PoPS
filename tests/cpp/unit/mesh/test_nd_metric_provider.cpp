@@ -229,9 +229,10 @@ TEST(test_nd_metric_provider, integrated_face_vectors_close_for_cartesian_and_po
 }
 
 TEST(test_nd_metric_provider, invalid_maps_domains_and_polar_inverse_fail_closed) {
-  EXPECT_THROW((void)CartesianCoordinateMap<2, 3>::make(
-                   RealVector<3>{0.0, 0.0, 0.0}, RealVector<2>{1.0, 2.0}, std::array<int, 2>{1, 1}),
-               std::invalid_argument);
+  EXPECT_THROW(
+      (void)(CartesianCoordinateMap<2, 3>::make(RealVector<3>{0.0, 0.0, 0.0},
+                                                RealVector<2>{1.0, 2.0}, std::array<int, 2>{1, 1})),
+      std::invalid_argument);
   EXPECT_THROW((void)CartesianCoordinateMap<1>::make(RealVector<1>{0.0}, RealVector<1>{0.0}),
                std::invalid_argument);
   EXPECT_THROW((void)CartesianCoordinateMap<1>::make(
