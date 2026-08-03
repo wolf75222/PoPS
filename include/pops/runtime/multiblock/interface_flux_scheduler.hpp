@@ -370,6 +370,8 @@ class InterfaceFluxScheduler {
                                    communicator_rank,
                                    communicator_size,
                                    communicator_identity,
+                                   execution.memory_space,
+                                   execution.device_identity,
                                    collective_identity,
                                    InterfaceFluxEvaluator{},
                                    0};
@@ -552,20 +554,28 @@ class InterfaceFluxScheduler {
     if (level < 0 || first_block == second_block)
       throw std::invalid_argument("multi-block implicit JVP pair is invalid");
     std::size_t level_routes = 0;
-    bool matched = false;
+    const PreparedInterface* matched = nullptr;
     for (const PreparedInterface& prepared : interfaces_) {
       if (prepared.route.level != level)
         continue;
       ++level_routes;
-      matched = matched ||
-                ((prepared.route.left_block == first_block &&
-                  prepared.route.right_block == second_block) ||
-                 (prepared.route.left_block == second_block &&
-                  prepared.route.right_block == first_block));
+      if ((prepared.route.left_block == first_block &&
+           prepared.route.right_block == second_block) ||
+          (prepared.route.left_block == second_block &&
+           prepared.route.right_block == first_block))
+        matched = &prepared;
     }
-    if (level_routes != 1 || !matched)
+    if (level_routes != 1 || matched == nullptr)
       throw std::runtime_error(
           "multi-block implicit JVP requires one exact prepared two-block interface route");
+    if (matched->distributed || matched->communicator_size != 1 ||
+        matched->communicator_identity != "serial")
+      throw std::runtime_error(
+          "multi-block implicit JVP requires serial rank-one execution");
+    if (matched->memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
+        (matched->device_identity != "host" && matched->device_identity != "cpu"))
+      throw std::runtime_error(
+          "multi-block implicit JVP requires host-memory execution");
   }
 
   /// Rebuild every layout-bound trace plan against a replacement AMR hierarchy.  The numerical
@@ -741,6 +751,8 @@ class InterfaceFluxScheduler {
     int communicator_rank = 0;
     int communicator_size = 1;
     std::string communicator_identity;
+    PopsMemorySpaceV1 memory_space = POPS_MEMORY_SPACE_HOST_V1;
+    std::string device_identity;
     std::string collective_identity;
     InterfaceFluxEvaluator evaluator;
     std::size_t evaluation_count = 0;

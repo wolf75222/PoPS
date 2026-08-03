@@ -486,6 +486,14 @@ int run_mpi_multiblock_interface_scheduler(int argc, char** argv) {
                 batch.shared_flux[offset] = shared_flux(face, component);
               }
           });
+      bool implicit_mpi_rejected = false;
+      try {
+        scheduler.require_exact_jacvec_pair(0, 0, 1);
+      } catch (const std::runtime_error& error) {
+        implicit_mpi_rejected =
+            std::string(error.what()).find("serial rank-one") != std::string::npos;
+      }
+      require(implicit_mpi_rejected);
       std::vector<MultiFab*> states{&left_state, &right_state};
       std::vector<MultiFab*> rhs{&left_rhs, &right_rhs};
       scheduler.apply(point, states, rhs);

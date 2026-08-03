@@ -478,6 +478,41 @@ def _requires_shared_interface_implicit_jacvec_pair(install_plan: Any) -> bool:
     return required
 
 
+def _validate_shared_interface_implicit_execution_envelope(
+    execution_data: dict[str, Any], rank_count: int
+) -> None:
+    """Authenticate the narrow native pair envelope without mutating runtime state."""
+    if type(rank_count) is not int or rank_count < 1:
+        raise RuntimeError("native shared-interface rank count must be a positive integer")
+    device = execution_data.get("device_identity")
+    memory_space = execution_data.get("memory_space")
+    if device not in ("host", "cpu") or memory_space != 1:
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP is currently host-memory-only; device or "
+            "managed-memory execution is refused until its paired packing and residual "
+            "evaluation have a native portability proof")
+    communicator = execution_data.get("communicator_identity")
+    if communicator != "serial" or rank_count != 1:
+        raise NotImplementedError(
+            "shared NumericalFlux implicit JVP is currently serial-only; MPI execution is "
+            "refused until its pair admission and local packing have a collective deadlock proof")
+
+
+def _validate_shared_interface_implicit_execution_before_install(
+    install_plan: Any,
+) -> None:
+    """Refuse an unsupported compiled pair before Program or interface installation mutates AMR."""
+    if not _requires_shared_interface_implicit_jacvec_pair(install_plan):
+        return
+    from pops.runtime._component_execution_context import component_execution_data
+    from pops import _pops
+
+    _validate_shared_interface_implicit_execution_envelope(
+        component_execution_data(install_plan.execution_context),
+        _pops.n_ranks(),
+    )
+
+
 def _validate_refined_shared_interface_execution(
     levels: tuple[int, ...],
     execution_data: dict[str, Any],
@@ -502,24 +537,15 @@ def _validate_refined_shared_interface_execution(
     if type(implicit_jacvec_pair) is not bool or type(complete_bind) is not bool:
         raise TypeError(
             "shared-interface implicit-JVP and complete-bind contracts must be exact bools")
-    device = execution_data.get("device_identity")
-    memory_space = execution_data.get("memory_space")
-    if implicit_jacvec_pair and (
-        device not in ("host", "cpu") or memory_space != 1
-    ):
-        raise NotImplementedError(
-            "shared NumericalFlux implicit JVP is currently host-memory-only; device or "
-            "managed-memory execution is refused until its paired packing and residual "
-            "evaluation have a native portability proof")
+    if implicit_jacvec_pair:
+        _validate_shared_interface_implicit_execution_envelope(
+            execution_data, rank_count
+        )
     if implicit_jacvec_pair and complete_bind and levels != (0, 1):
         raise NotImplementedError(
             "shared NumericalFlux implicit JVP requires exactly materialized levels (L0, L1) "
             "at bind")
     communicator = execution_data.get("communicator_identity")
-    if implicit_jacvec_pair and (communicator != "serial" or rank_count != 1):
-        raise NotImplementedError(
-            "shared NumericalFlux implicit JVP is currently serial-only; MPI execution is "
-            "refused until its pair admission and local packing have a collective deadlock proof")
     if communicator == "serial":
         if rank_count != 1:
             raise RuntimeError(

@@ -1321,6 +1321,8 @@ TEST(test_multiblock_interface_scheduler,
                         batch.shared_flux[face] =
                             Real(0.5) * (batch.left_state[face] + batch.right_state[face]);
                     });
+  EXPECT_THROW(scheduler.require_exact_jacvec_pair(0, 0, 1), std::runtime_error)
+      << "MPI_COMM_WORLD remains an MPI execution identity even with one rank";
   const BoundaryEvaluationPoint point{"clock.mpi-one-rank", 1,   0,  0, 0,
                                       amr::Rational(0, 1),  0.1, 0.0};
   std::vector<MultiFab*> states{&left_state, &right_state};
@@ -1333,6 +1335,39 @@ TEST(test_multiblock_interface_scheduler,
     EXPECT_EQ(get_cell(left_rhs, left_box.hi[0], j, 0) + get_cell(right_rhs, right_box.lo[0], j, 0),
               Real(0));
 #endif
+}
+
+TEST(test_multiblock_interface_scheduler,
+     NativeImplicitPairAdmissionRejectsDeviceAndManagedMemory) {
+  ensure_runtime();
+  const Box2D left_box{{0, 0}, {1, 2}};
+  const Box2D right_box{{2, 0}, {3, 2}};
+  const Geometry left_geometry{left_box, Real(0), Real(1), Real(0), Real(3)};
+  const Geometry right_geometry{right_box, Real(1), Real(2), Real(0), Real(3)};
+
+  const auto require_host_refusal = [&](PopsMemorySpaceV1 memory_space,
+                                        const char* device_identity,
+                                        const char* route_identity) {
+    MultiFab left_state = make_field(left_box, 1);
+    MultiFab right_state = make_field(right_box, 1);
+    AxisAlignedInterface route = aligned_x_route(route_identity);
+    PopsExecutionContextV1 execution = serial_interface_execution();
+    execution.memory_space = memory_space;
+    execution.device_identity = device_identity;
+    InterfaceFluxScheduler scheduler;
+    scheduler.install(
+        route, left_state, left_geometry, right_state, right_geometry, execution,
+        [](const BoundaryEvaluationPoint&, const InterfaceFluxBatch& batch) {
+          for (int face = 0; face < batch.face_count; ++face)
+            batch.shared_flux[face] = Real(0);
+        });
+    EXPECT_THROW(scheduler.require_exact_jacvec_pair(0, 0, 1), std::runtime_error);
+  };
+
+  require_host_refusal(
+      POPS_MEMORY_SPACE_DEVICE_V1, "gpu", "device-memory-explicit-interface");
+  require_host_refusal(
+      POPS_MEMORY_SPACE_MANAGED_V1, "cpu", "managed-memory-explicit-interface");
 }
 
 TEST(test_multiblock_interface_scheduler, UnsupportedOrUnauthenticatedMappingsFailAtInstall) {
