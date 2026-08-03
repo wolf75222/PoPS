@@ -523,6 +523,12 @@ class AmrSystem {
   /// Adds one native AMR field solver provider before binding. Builtins and extensions are resolved
   /// through the same per-system registry and must expose exact collective contracts.
   void register_field_solver_provider(std::shared_ptr<const AmrFieldSolverProvider> provider);
+  /// Installs one authenticated external FieldTopology@2 + FieldSolver@2 pair as an AMR provider.
+  /// The returned route is exactly ``provider_slot`` and is suitable for set_field_solver_plan.
+  POPS_EXPORT std::string register_field_solver_provider(
+      const std::string& provider_slot, runtime::field::PreparedFieldSolverSpec spec,
+      std::shared_ptr<component::LoadedComponent> topology,
+      std::shared_ptr<component::LoadedComponent> solver);
   /// Adds one native field-nullspace provider before binding. The selected route is resolved only
   /// after operator, boundary, topology and distribution facts have materialized.
   void register_field_nullspace_provider(std::shared_ptr<const FieldNullspaceProvider> provider);

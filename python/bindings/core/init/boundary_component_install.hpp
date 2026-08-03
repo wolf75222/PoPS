@@ -58,6 +58,15 @@ inline runtime::field::PreparedFieldSolverSpec field_solver_spec_from_python(
   spec.relative_tolerance = relative_tolerance;
   spec.absolute_tolerance = absolute_tolerance;
   spec.max_iterations = max_iterations;
+  const auto declares_mpi = [](const py::dict& binding) {
+    if (!binding.contains("declared_execution"))
+      throw std::invalid_argument("field component binding has no execution declaration");
+    const py::dict execution = py::cast<py::dict>(binding["declared_execution"]);
+    if (!execution.contains("host") || !execution.contains("mpi") || !execution.contains("gpu"))
+      throw std::invalid_argument("field component execution declaration is incomplete");
+    return py::cast<bool>(execution["mpi"]);
+  };
+  spec.component_pair_declares_mpi = declares_mpi(topology) && declares_mpi(solver);
   spec.execution = make_component_execution_context(execution_data);
   return spec;
 }

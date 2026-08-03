@@ -37,6 +37,7 @@ set(POPS_RUNTIME_SYSTEM_SOURCES
 
 set(POPS_RUNTIME_AMR_SOURCES
     runtime/amr/amr_field_solver_builtin.cpp
+    runtime/amr/amr_field_solver_component.cpp
     runtime/amr/amr_system.cpp
     runtime/builders/amr/block/compressible/amr_block_compressible.cpp
     ${POPS_RUNTIME_AMR_GENERATED_SEAMS})

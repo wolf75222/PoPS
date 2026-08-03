@@ -2265,6 +2265,26 @@ void AmrSystem::register_field_solver_provider(
   p_->field_plan_consensus_verified_ = false;
 }
 
+POPS_EXPORT std::string AmrSystem::register_field_solver_provider(
+    const std::string& provider_slot, runtime::field::PreparedFieldSolverSpec spec,
+    std::shared_ptr<component::LoadedComponent> topology,
+    std::shared_ptr<component::LoadedComponent> solver) {
+  require_assembling_amr(p_->bound_, "register_field_solver_provider");
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::register_field_solver_provider: system already built");
+  if (provider_slot.empty() || spec.provider_slot != provider_slot)
+    throw std::invalid_argument(
+        "AmrSystem::register_field_solver_provider requires one exact provider slot");
+  auto provider = make_external_amr_field_solver_provider(std::move(spec), std::move(topology),
+                                                          std::move(solver));
+  if (!provider || provider->identity() != provider_slot)
+    throw std::runtime_error(
+        "AmrSystem::register_field_solver_provider changed the authenticated provider route");
+  p_->field_solver_registry_->add(std::move(provider));
+  p_->field_plan_consensus_verified_ = false;
+  return provider_slot;
+}
+
 void AmrSystem::register_field_nullspace_provider(
     std::shared_ptr<const FieldNullspaceProvider> provider) {
   require_assembling_amr(p_->bound_, "register_field_nullspace_provider");
