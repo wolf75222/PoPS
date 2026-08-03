@@ -15,7 +15,8 @@
 #include <pops/physics/composition/composite.hpp>        // CompositeModel
 #include <pops/physics/fluids/euler.hpp>                 // Euler
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
-#include <pops/runtime/program/program_context.hpp>      // ProgramContext (the seam under test)
+#include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/program/program_context.hpp>  // ProgramContext (the seam under test)
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/system.hpp>
@@ -1500,6 +1501,56 @@ TEST(ProgramRuntime, EmbeddedBoundaryRejectsUnqualifiedBoundaryLinearizationEntr
   };
   expect_metric_rejection([&] { context.boundary_residual_into_at(point, 0, state, output); });
   expect_metric_rejection([&] { context.boundary_jvp_into_at(point, 0, state, output, output); });
+}
+
+TEST(ProgramRuntime, AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAcceptsEveryCell) {
+#if defined(POPS_HAS_KOKKOS)
+  ensure_kokkos();
+#endif
+  constexpr int n = 8;
+  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
+  ModelSpec scalar;
+  scalar.transport = "exb";
+  scalar.source = "none";
+  scalar.elliptic = "charge";
+  system.add_block("tracer", scalar);
+
+  const std::vector<double> accepted(static_cast<std::size_t>(n) * n, 0.25);
+  system.set_state("tracer", accepted);
+  system.set_block_conversion(
+      "tracer", [](const double* in, double* out) { out[0] = in[0]; },
+      [](const double* in, double* out) {
+        RecoveryReport report;
+        if (!std::isfinite(in[0]) || in[0] > 0.75) {
+          report.status = RecoveryStatus::kRejected;
+          report.cause = RecoveryCause::kInadmissibleCandidate;
+          report.failing_component = 0;
+          return report;
+        }
+        out[0] = in[0];
+        report.status = RecoveryStatus::kRecovered;
+        report.cause = RecoveryCause::kNone;
+        return report;
+      });
+
+  EXPECT_THROW(system.set_analytic_expression_state(
+                   "tracer", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{1.0}}),
+               std::runtime_error);
+  EXPECT_EQ(system.get_state("tracer"), accepted);
+
+  EXPECT_THROW(system.set_analytic_mapped_state("tracer", {{"input", "constant", "add"}},
+                                                {{0.0, 1.0, 0.0}}, {"state:0"}),
+               std::runtime_error);
+  EXPECT_EQ(system.get_state("tracer"), accepted);
+
+  EXPECT_THROW(system.set_analytic_gaussian_state("tracer", 0.5, 0.5, 1.0, 0.0, 16.0),
+               std::runtime_error);
+  EXPECT_EQ(system.get_state("tracer"), accepted);
+
+  EXPECT_EQ(system.set_analytic_expression_state(
+                "tracer", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{0.5}}),
+            static_cast<std::int64_t>(n) * n);
+  EXPECT_EQ(system.get_state("tracer"), std::vector<double>(static_cast<std::size_t>(n) * n, 0.5));
 }
 
 TEST(ProgramRuntime, RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock) {

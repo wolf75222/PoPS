@@ -195,6 +195,20 @@ target = "test_facade_routing"
 test_regex = "^FacadeRouting\\.PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedState$"
 
 [[check]]
+requirement = "analytic_initial_recovery_publication"
+polarity = "positive"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.AnalyticInitialStatePublishesOnlyAfterPreparedRecoveryAcceptsEveryCell$"
+
+[[check]]
+requirement = "analytic_initial_recovery_publication"
+polarity = "refusal"
+kind = "mpi_ctest"
+target = "test_mpi_system_analytic_level_set"
+test_regex = "^test_mpi_system_analytic_level_set_np2$"
+nproc = 2
+
+[[check]]
 requirement = "type_erased_recovery_method_identity"
 polarity = "positive"
 target = "test_variable_recovery_chain"

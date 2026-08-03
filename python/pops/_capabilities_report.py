@@ -518,8 +518,9 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             limitation=(
                 "one block-prepared closed-form method returns a device-copyable "
                 "RecoveryOutcome/RecoveryReport retaining selected and last-attempted method "
-                "kinds across type erasure; System conservative-to-primitive "
-                "materialization and Cartesian, polar, masked, and embedded-boundary face "
+                "kinds across type erasure; System conservative-to-primitive and transactional "
+                "analytic initial-state materialization plus Cartesian, polar, masked, and "
+                "embedded-boundary face "
                 "reconstruction consume publication permission before copying or flux "
                 "evaluation, with no implicit repair, fallback, or mutable cache"
             ),
@@ -534,14 +535,15 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=gpu,
             status="unavailable",
             limitation=(
-                "initial and analytic materialization, model/source conversion, AMR "
-                "transfer/regrid, primitive boundary traces, fallible primitive-to-conservative "
-                "conversion, persistent warm starts, cache restart, and the backend/performance "
-                "matrix do not yet share one prepared recovery authority"
+                "model/source conversion, AMR transfer/regrid, primitive boundary traces, "
+                "fallible primitive-to-conservative conversion, persistent warm starts, cache "
+                "restart, and the backend/performance matrix do not yet share one prepared "
+                "recovery authority"
             ),
             requested="complete prepared variable-recovery consumer cutover",
             available_route=(
-                "prepared closed-form recovery for System materialization and spatial face "
+                "prepared closed-form recovery for System conservative-to-primitive and "
+                "transactional analytic initial-state materialization plus spatial face "
                 "reconstruction"
             ),
             alternative=(

@@ -150,6 +150,41 @@ int run_analytic_level_set_collective_preflight(int argc, char** argv) {
   require(all_reduce_sum(valid_state_installed ? 1L : 0L) == n_ranks(),
           "a rejected rank mismatch must not poison later System materialization");
 
+  // The materializer owns one patch on rank zero, but recovery is a collective publication gate:
+  // one owner-local inadmissible candidate must preserve the accepted state and reject every rank.
+  expression_system.set_block_conversion(
+      "plasma", [](const double* in, double* out) { out[0] = in[0]; },
+      [](const double* in, double* out) {
+        RecoveryReport report;
+        if (in[0] > 0.8) {
+          report.status = RecoveryStatus::kRejected;
+          report.cause = RecoveryCause::kInadmissibleCandidate;
+          report.failing_component = 0;
+          return report;
+        }
+        out[0] = in[0];
+        report.status = RecoveryStatus::kRecovered;
+        report.cause = RecoveryCause::kNone;
+        return report;
+      });
+  const std::vector<double> before_recovery_rejection = expression_system.get_state("plasma");
+  bool recovery_rejected = false;
+  std::string recovery_message;
+  try {
+    expression_system.set_analytic_expression_state(
+        "plasma", "cell", "cell", "conservative_cell_average", {{"constant"}}, {{1.0}});
+  } catch (const std::runtime_error& error) {
+    recovery_rejected = true;
+    recovery_message = error.what();
+  }
+  require(all_reduce_sum(recovery_rejected ? 1L : 0L) == n_ranks(),
+          "one owner-local recovery failure must reject analytic publication on every rank");
+  require(
+      recovery_rejected && recovery_message.find("prepared variable recovery") != std::string::npos,
+      "collective analytic rejection must identify prepared variable recovery");
+  require(expression_system.get_state("plasma") == before_recovery_rejection,
+          "collective recovery rejection must preserve the accepted analytic state");
+
   // The AMR registration path has no halo yet, but it feeds later collective hierarchy setup. Rank
   // one supplies an unknown opcode while rank zero has a valid program: both ranks must leave the
   // registration without publishing either the provider or its block binding.
