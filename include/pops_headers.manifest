@@ -10,6 +10,11 @@
 # api, abi, sdk-root and sdk-support are all installed and authenticated by POPS_HEADER_SIG.
 
 api pops/amr/hierarchy/amr_hierarchy.hpp
+api pops/amr/hierarchy/nd/berger_rigoutsos.hpp
+api pops/amr/hierarchy/nd/cluster_provider.hpp
+api pops/amr/hierarchy/nd/hierarchy_plan.hpp
+api pops/amr/hierarchy/nd/level_layout.hpp
+api pops/amr/hierarchy/nd/tag_mask.hpp
 api pops/amr/hierarchy/refinement_ratio.hpp
 api pops/amr/regridding/regrid.hpp
 api pops/amr/tagging/cluster.hpp
