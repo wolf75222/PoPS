@@ -43,6 +43,7 @@
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/program_execution_services.hpp>
+#include <pops/runtime/program/same_level_cell_temporal_provider.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
 #include <pops/runtime/program/wire_ids.hpp>       // stable compiled-Program numeric protocol
@@ -160,7 +161,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   template <class Body>
   void advance_hierarchy(double dt, Body&& body) const {
     advance_attempt_(dt, "AmrProgramContext::advance_hierarchy", CouplingSchedule::RecursiveCatchUp,
-                     [&](const amr::ClockWindow& root) { advance_level_(0, root, dt, body); });
+                     {}, [&](const amr::ClockWindow& root) { advance_level_(0, root, dt, body); });
   }
 
   /// Execute one hierarchy-wide Program body inside the same accepted-step transaction as the
@@ -172,7 +173,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   void advance_synchronized_hierarchy(double dt, Body&& body) const {
     advance_attempt_(
         dt, "AmrProgramContext::advance_synchronized_hierarchy", CouplingSchedule::HierarchyBarrier,
-        [&](const amr::ClockWindow& root) {
+        {}, [&](const amr::ClockWindow& root) {
           current_window_ = root;
           current_level_dt_ = dt;
           active_parent_.reset();
@@ -191,6 +192,133 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
             flush_level_flux_(k, dt, accepted);
           }
         });
+  }
+
+  using SameLevelCellTemporalExecutor =
+      PreparedBatchedCellTemporalExecutor<PreparedSameLevelTransportEulerStageFluxProvider>;
+
+  /// Prepare the exact bounded production cell-local route selected by generated Python code.
+  ///
+  /// Preparation is an accepted-boundary operation and is collective when MPI is present.  The
+  /// current provider intentionally refuses MPI, GPU, multiple blocks/levels/boxes, non-default
+  /// cadence and heterogeneous rungs before installing any competing temporal authority.
+  void prepare_same_level_cell_temporal_execution(std::string clock_identity,
+                                                  std::int64_t tick_denominator,
+                                                  int rung = 0) const {
+    if (facade_ == nullptr || eng_ == nullptr)
+      throw std::logic_error(
+          "cell-local AMR Program preparation requires a live facade and runtime");
+    if (attempt_snapshot_active_ || active_parent_ || current_window_)
+      throw std::logic_error(
+          "cell-local AMR Program preparation requires a clean accepted boundary");
+    if (same_level_cell_temporal_executor_ || !same_level_cell_temporal_clock_identity_.empty())
+      throw std::logic_error("cell-local AMR Program execution may be prepared exactly once");
+    if (clock_identity.empty())
+      throw std::invalid_argument(
+          "cell-local AMR Program execution requires a non-empty clock identity");
+    if (facade_->program_substeps() != 1 || facade_->program_stride() != 1)
+      throw std::invalid_argument(
+          "cell-local AMR Program execution requires default substeps=1 and stride=1 cadence");
+
+    if (n_ranks() > 1) {
+      const long participants = all_reduce_sum(1L);
+      if (participants != static_cast<long>(n_ranks()))
+        throw std::runtime_error("cell-local AMR Program MPI preparation did not reach every rank");
+      throw std::runtime_error(
+          "cell-local AMR Program execution has no MPI-safe multi-box stage/flux provider");
+    }
+    if (!PreparedSameLevelTransportEulerStageFluxProvider::supports_default_execution_space())
+      throw std::runtime_error("cell-local AMR Program execution has no device-clean GPU provider");
+
+    ensure_level_clocks_();
+    CellTemporalPartitionAcceptedState partition;
+    const std::vector<std::uint8_t> accepted_bytes = facade_->program_accepted_state();
+    if (accepted_bytes.empty()) {
+      const std::int64_t synchronization_tick = exact_physical_tick_(
+          facade_->time(), tick_denominator, "cell-local AMR Program initial time");
+      partition = prepare_same_level_transport_euler_partition(*eng_, synchronization_tick,
+                                                               tick_denominator, rung);
+    } else {
+      const AmrProgramAcceptedState accepted =
+          deserialize_amr_program_accepted_state(accepted_bytes);
+      validate_program_accepted_state_(accepted);
+      partition = accepted.temporal_partition;
+      if (partition.kind != TemporalPartitionKind::CellLocal ||
+          partition.provider_identity != kSameLevelTransportEulerStageFluxProvider ||
+          partition.tick_denominator != tick_denominator)
+        throw std::runtime_error(
+            "restored AMR Program checkpoint targets another temporal execution provider");
+      if (std::any_of(
+              partition.cells.begin(), partition.cells.end(),
+              [rung](const CellTemporalPartitionRecord& cell) { return cell.rung != rung; }))
+        throw std::runtime_error(
+            "restored AMR Program checkpoint targets another prepared cell rung");
+      const std::int64_t physical_tick = exact_physical_tick_(
+          facade_->time(), tick_denominator, "restored cell-local AMR Program time");
+      if (physical_tick != partition.synchronization_tick)
+        throw std::runtime_error(
+            "restored cell-local AMR Program clock differs from its physical time");
+    }
+
+    auto ledger = std::make_shared<SameLevelCellIntegratedFluxLedger>(
+        eng_->topology_epoch(), eng_->topology_materialization_generation(), 0, 0,
+        partition.cells.size(), eng_->level_state(0, 0).ncomp());
+    ledger->invalidate_accepted_publication(partition.synchronization_tick,
+                                            partition.tick_denominator);
+    PreparedSameLevelTransportEulerStageFluxProvider provider(*eng_, partition, ledger,
+                                                              clock_identity);
+    auto executor = std::make_unique<SameLevelCellTemporalExecutor>(partition, std::move(provider));
+
+    // Publish the selected route only after every allocation and exact provider check succeeded.
+    same_level_cell_temporal_clock_identity_ = std::move(clock_identity);
+    same_level_cell_temporal_tick_denominator_ = tick_denominator;
+    same_level_cell_temporal_rung_ = rung;
+    same_level_cell_temporal_ledger_ = std::move(ledger);
+    same_level_cell_temporal_executor_ = std::move(executor);
+  }
+
+  /// Execute one accepted Program interval through the prepared local-stage/space-time-flux route.
+  void advance_same_level_cell_temporal(double dt) const {
+    if (!same_level_cell_temporal_executor_)
+      throw std::logic_error(
+          "cell-local AMR Program execution was not prepared by the installed artifact");
+    const std::string provider_identity = same_level_cell_temporal_executor_->provider_identity();
+    advance_attempt_(
+        dt, "AmrProgramContext::advance_same_level_cell_temporal",
+        CouplingSchedule::RecursiveCatchUp, provider_identity,
+        [this](const amr::ClockWindow& root) {
+          // Importing an externally restored accepted state may rematerialize the exact provider.
+          // Reacquire it after import instead of retaining a pointer across that boundary.
+          SameLevelCellTemporalExecutor* const executor = same_level_cell_temporal_executor_.get();
+          if (executor == nullptr)
+            throw std::logic_error(
+                "cell-local AMR Program execution lost its prepared provider after restore");
+          const CellTemporalPartitionAcceptedState accepted = executor->checkpoint();
+          const std::int64_t begin_tick =
+              exact_physical_tick_(root.begin.physical_time, accepted.tick_denominator,
+                                   "cell-local AMR Program accepted time");
+          if (begin_tick != accepted.synchronization_tick)
+            throw std::runtime_error(
+                "cell-local AMR Program partition clock differs from its accepted level clock");
+          const std::int64_t delta_tick =
+              exact_duration_tick_(dt, accepted.tick_denominator, "cell-local AMR Program dt");
+          if (accepted.synchronization_tick > std::numeric_limits<std::int64_t>::max() - delta_tick)
+            throw std::overflow_error("cell-local AMR Program target tick overflow");
+          executor->begin_attempt(accepted.synchronization_tick + delta_tick);
+          executor->advance_to_barrier();
+          executor->commit();
+        });
+  }
+
+  /// Last accepted same-level integrated face-flux publication.
+  const SameLevelCellIntegratedFluxLedger& accepted_same_level_cell_flux_ledger() const {
+    if (!same_level_cell_temporal_ledger_ || !same_level_cell_temporal_executor_)
+      throw std::logic_error("AMR Program has no prepared cell-local flux ledger");
+    if (facade_->program_accepted_state_revision() != accepted_state_revision_)
+      throw std::logic_error("cell-local AMR Program flux ledger is stale after an outer rollback");
+    if (same_level_cell_temporal_ledger_->publication_generation() == 0)
+      throw std::logic_error("cell-local AMR Program has no accepted interval-flux publication");
+    return *same_level_cell_temporal_ledger_;
   }
 
   using ProgramExecutionServices<AmrProgramContext>::install;
@@ -252,6 +380,99 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   }
 
  private:
+  static std::int64_t exact_tick_(double value, std::int64_t denominator, bool require_positive,
+                                  const char* operation) {
+    if (!std::isfinite(value) || denominator <= 0 ||
+        (require_positive ? !(value > 0.0) : value < 0.0))
+      throw std::invalid_argument(std::string(operation) +
+                                  " requires a finite representable rational clock");
+    const long double scaled =
+        static_cast<long double>(value) * static_cast<long double>(denominator);
+    const long double nearest = std::round(scaled);
+    const long double tolerance = 32.0L *
+                                  static_cast<long double>(std::numeric_limits<double>::epsilon()) *
+                                  std::max(1.0L, std::abs(scaled));
+    if (!std::isfinite(scaled) || std::abs(scaled - nearest) > tolerance || nearest < 0.0L ||
+        nearest > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+      throw std::invalid_argument(std::string(operation) +
+                                  " is not an integer tick over its declared denominator");
+    const auto tick = static_cast<std::int64_t>(nearest);
+    if (require_positive && tick == 0)
+      throw std::invalid_argument(std::string(operation) + " advances zero declared ticks");
+    return tick;
+  }
+
+  static std::int64_t exact_physical_tick_(double value, std::int64_t denominator,
+                                           const char* operation) {
+    return exact_tick_(value, denominator, false, operation);
+  }
+
+  static std::int64_t exact_duration_tick_(double value, std::int64_t denominator,
+                                           const char* operation) {
+    return exact_tick_(value, denominator, true, operation);
+  }
+
+  [[nodiscard]] CellTemporalPartitionAcceptedState temporal_partition_checkpoint_() const {
+    if (same_level_cell_temporal_executor_)
+      return same_level_cell_temporal_executor_->checkpoint();
+    return temporal_partition_.checkpoint();
+  }
+
+  void require_temporal_execution_route_(std::string_view provider_identity) const {
+    if (same_level_cell_temporal_executor_) {
+      BatchedCellTemporalPartition(same_level_cell_temporal_executor_->checkpoint())
+          .require_prepared_execution_route(provider_identity);
+      return;
+    }
+    temporal_partition_.require_prepared_execution_route(provider_identity);
+  }
+
+  void rollback_temporal_execution_route_() const noexcept {
+    if (same_level_cell_temporal_executor_)
+      same_level_cell_temporal_executor_->rollback();
+    else
+      temporal_partition_.rollback();
+  }
+
+  void rebuild_same_level_cell_temporal_execution_(
+      const CellTemporalPartitionAcceptedState& partition) const {
+    if (same_level_cell_temporal_clock_identity_.empty() ||
+        partition.provider_identity != kSameLevelTransportEulerStageFluxProvider ||
+        partition.tick_denominator != same_level_cell_temporal_tick_denominator_ ||
+        std::any_of(partition.cells.begin(), partition.cells.end(),
+                    [this](const CellTemporalPartitionRecord& cell) {
+                      return cell.rung != same_level_cell_temporal_rung_;
+                    }))
+      throw std::runtime_error(
+          "restored cell-local AMR Program state differs from its installed provider");
+    auto ledger = std::make_shared<SameLevelCellIntegratedFluxLedger>(
+        eng_->topology_epoch(), eng_->topology_materialization_generation(), 0, 0,
+        partition.cells.size(), eng_->level_state(0, 0).ncomp());
+    ledger->invalidate_accepted_publication(partition.synchronization_tick,
+                                            partition.tick_denominator);
+    PreparedSameLevelTransportEulerStageFluxProvider provider(
+        *eng_, partition, ledger, same_level_cell_temporal_clock_identity_);
+    auto executor = std::make_unique<SameLevelCellTemporalExecutor>(partition, std::move(provider));
+    same_level_cell_temporal_ledger_ = std::move(ledger);
+    same_level_cell_temporal_executor_ = std::move(executor);
+  }
+
+  void restore_temporal_execution_route_(
+      const CellTemporalPartitionAcceptedState& partition) const {
+    if (!same_level_cell_temporal_executor_) {
+      temporal_partition_.restore(partition);
+      return;
+    }
+    if (!same_level_cell_temporal_ledger_ ||
+        same_level_cell_temporal_ledger_->topology_epoch() != eng_->topology_epoch() ||
+        same_level_cell_temporal_ledger_->materialization_generation() !=
+            eng_->topology_materialization_generation()) {
+      rebuild_same_level_cell_temporal_execution_(partition);
+      return;
+    }
+    same_level_cell_temporal_executor_->restore_accepted_boundary(partition);
+  }
+
   void regrid_if_due_at_(std::int64_t macro_step, double physical_time) const {
     if (!std::isfinite(physical_time))
       throw std::logic_error("AMR Program regrid requires a finite accepted physical time");
@@ -271,6 +492,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     // tagger/regrid boundary so direct AmrProgramContext and restarted executions cannot inherit
     // stale facade metadata.
     if (regrid_due) {
+      require_regrid_rematerializable_temporal_partition(temporal_partition_checkpoint_());
       eng_->set_component_logical_time(macro_step, physical_time);
       eng_->regrid();
     }
@@ -937,7 +1159,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
 
   template <class Advance>
   void advance_attempt_(double dt, const char* operation, CouplingSchedule coupling_schedule,
-                        Advance&& advance) const {
+                        std::string_view prepared_provider_identity, Advance&& advance) const {
     if (!(dt > 0.0))
       throw std::invalid_argument(std::string(operation) + " requires dt > 0");
     if (attempt_snapshot_active_)
@@ -976,7 +1198,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     // The hierarchy-global Program body has no prepared cell-local stage/space-time-flux provider.
     // Authenticate that absence explicitly: a cell-local checkpoint must use the dedicated batched
     // executor and cannot fall through here before the Program body or any published clock mutates.
-    temporal_partition_.require_prepared_execution_route({});
+    require_temporal_execution_route_(prepared_provider_identity);
     capture_program_attempt_snapshot_(saved);
     conservative_ledger_.begin();
     try {
@@ -1101,6 +1323,14 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
         throw std::runtime_error(
             "AMR Program accepted state contains a non-accepted or misqualified level clock");
     }
+    if (state.temporal_partition.kind == TemporalPartitionKind::CellLocal) {
+      const std::int64_t level_tick = exact_physical_tick_(
+          state.level_clocks.front().physical_time, state.temporal_partition.tick_denominator,
+          "AMR Program cell-local accepted level clock");
+      if (level_tick != state.temporal_partition.synchronization_tick)
+        throw std::runtime_error(
+            "AMR Program cell-local partition tick differs from its accepted level clock");
+    }
     const std::int64_t accepted_step =
         state.level_clocks.empty() ? macro_step() : state.level_clocks.front().macro_step;
     if (state.logical_clock_ticks != clock_schedule_.accepted_ticks(accepted_step))
@@ -1216,7 +1446,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     const std::int64_t accepted_step =
         level_clocks_.empty() ? macro_step() : level_clocks_.front().macro_step;
     state.logical_clock_ticks = clock_schedule_.accepted_ticks(accepted_step);
-    state.temporal_partition = temporal_partition_.checkpoint();
+    state.temporal_partition = temporal_partition_checkpoint_();
     state.tagging_hysteresis_state = eng_->checkpoint_tagging_state();
     state.history_owners = history_owners_;
     state.history_states = history_state_ids_;
@@ -1271,7 +1501,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     const std::int64_t accepted_step =
         level_clocks_.empty() ? macro_step() : level_clocks_.front().macro_step;
     clock_schedule_.restore_accepted_ticks(state.logical_clock_ticks, accepted_step);
-    temporal_partition_.restore(std::move(state.temporal_partition));
+    restore_temporal_execution_route_(state.temporal_partition);
     history_owners_ = std::move(state.history_owners);
     history_state_ids_ = std::move(state.history_states);
     history_space_ids_ = std::move(state.history_spaces);
@@ -1286,6 +1516,9 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     accepted_flux_report_ = std::move(state.accepted_flux_ledger);
     accepted_interface_flux_report_ = std::move(state.accepted_interface_flux_ledger);
     accepted_sync_report_ = std::move(state.accepted_sync);
+    if (same_level_cell_temporal_ledger_ && same_level_cell_temporal_executor_)
+      same_level_cell_temporal_ledger_->invalidate_accepted_publication(
+          state.temporal_partition.synchronization_tick, state.temporal_partition.tick_denominator);
     // Commit the already authenticated runtime-owned payload last. No throwing operation follows
     // this point, so a rejected decode/qualification leaves the previously accepted state intact.
     eng_->commit_checkpoint_tagging_state(std::move(tagging_state));
@@ -1312,7 +1545,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     try {
       require_restart_regrid_boundary_();
       import_program_accepted_state_(true);
-      require_regrid_rematerializable_temporal_partition(temporal_partition_.checkpoint());
+      require_regrid_rematerializable_temporal_partition(temporal_partition_checkpoint_());
       const std::int64_t accepted_step = macro_step();
       const double accepted_time = facade_->time();
       if (accepted_step < 0 || accepted_step > std::numeric_limits<int>::max() ||
@@ -1418,6 +1651,8 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     std::vector<std::uint8_t> program_accepted_state;
     std::uint64_t program_accepted_state_revision = 0;
     CellTemporalPartitionAcceptedState temporal_partition;
+    SameLevelCellIntegratedFluxLedgerAcceptedState same_level_cell_temporal_ledger;
+    bool same_level_cell_temporal_ledger_captured = false;
     std::set<FluxKey> active_flux;
     std::map<FluxKey, EdgeFlux> flux;
     std::map<FluxKey, std::vector<FluxContribution>> flux_contributions;
@@ -1639,7 +1874,12 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
       throw std::logic_error(
           "AMR Program accepted state changed while capturing an attempt snapshot");
     snapshot.program_accepted_state_revision = accepted_revision;
-    snapshot.temporal_partition = temporal_partition_.checkpoint();
+    snapshot.temporal_partition = temporal_partition_checkpoint_();
+    snapshot.same_level_cell_temporal_ledger_captured =
+        static_cast<bool>(same_level_cell_temporal_ledger_);
+    if (same_level_cell_temporal_ledger_)
+      same_level_cell_temporal_ledger_->copy_accepted_state_into(
+          snapshot.same_level_cell_temporal_ledger);
 
     copy_set_in_place_(snapshot.active_flux, active_flux_ledger_);
     for (auto entry = snapshot.flux.begin(); entry != snapshot.flux.end();) {
@@ -1755,8 +1995,14 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     current_window_ = snapshot.window;
     current_sync_clock_ = snapshot.sync_clock;
     current_level_dt_ = snapshot.level_dt;
-    temporal_partition_.rollback();
-    temporal_partition_.restore(snapshot.temporal_partition);
+    rollback_temporal_execution_route_();
+    restore_temporal_execution_route_(snapshot.temporal_partition);
+    if (snapshot.same_level_cell_temporal_ledger_captured) {
+      if (!same_level_cell_temporal_ledger_)
+        throw std::logic_error("cell-local AMR Program rollback lost its prepared flux ledger");
+      same_level_cell_temporal_ledger_->restore_accepted_state(
+          snapshot.same_level_cell_temporal_ledger);
+    }
   }
 
   template <class Body>
@@ -3283,7 +3529,15 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
   mutable bool restart_regrid_prepared_ = false;
   mutable int automatic_regrid_macro_step_ = -1;
   mutable std::vector<amr::ClockStamp> level_clocks_;
+  // Exactly one route is authoritative.  The batched partition is the global/fail-closed fallback;
+  // once the installed artifact prepares the scientific provider, every checkpoint/attempt/rollback
+  // access is routed through this executor and the fallback is unreachable.
   mutable BatchedCellTemporalPartition temporal_partition_;
+  mutable std::unique_ptr<SameLevelCellTemporalExecutor> same_level_cell_temporal_executor_;
+  mutable std::shared_ptr<SameLevelCellIntegratedFluxLedger> same_level_cell_temporal_ledger_;
+  mutable std::string same_level_cell_temporal_clock_identity_;
+  mutable std::int64_t same_level_cell_temporal_tick_denominator_ = 1;
+  mutable int same_level_cell_temporal_rung_ = 0;
   mutable std::uint64_t accepted_state_revision_ = 0;
   mutable std::uint64_t operator_topology_revision_counter_ = 0;
   mutable std::uint64_t observed_operator_topology_epoch_ =

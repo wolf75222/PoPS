@@ -103,6 +103,7 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
             'extern "C" void pops_install_program_amr(pops::AmrSystem* sys) {\n'
             '  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);\n'
             '  auto& ctx = *ctx_owner;\n'
+            f'  ctx.configure_primary_clock({clock_identity});\n'
             '  ctx.prepare_same_level_cell_temporal_execution('
             f'{clock_identity}, {cell_local_time.tick_denominator}, '
             f'{cell_local_time.rung});\n'

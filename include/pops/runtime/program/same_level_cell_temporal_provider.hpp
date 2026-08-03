@@ -128,10 +128,8 @@ class SameLevelCellIntegratedFluxLedger {
         state.component_count != component_count_ || state.integrated_flux.size() != accepted_.size())
       throw std::invalid_argument(
           "same-level cell flux ledger rollback image targets another prepared layout");
-    if (state.begin_tick < 0 || state.end_tick < state.begin_tick ||
-        state.tick_denominator <= 0 ||
-        (state.publication_generation == 0 &&
-         (state.begin_tick != 0 || state.end_tick != 0)) ||
+    if (state.begin_tick < 0 || state.end_tick < state.begin_tick || state.tick_denominator <= 0 ||
+        (state.publication_generation == 0 && state.begin_tick != state.end_tick) ||
         (state.publication_generation != 0 && state.end_tick == state.begin_tick))
       throw std::invalid_argument(
           "same-level cell flux ledger rollback image has an invalid accepted clock");
@@ -141,6 +139,21 @@ class SameLevelCellIntegratedFluxLedger {
     end_tick_ = state.end_tick;
     tick_denominator_ = state.tick_denominator;
     publication_generation_ = state.publication_generation;
+  }
+
+  /// Mark that no accepted interval-flux publication belongs to a restored checkpoint boundary.
+  /// Local-time fluxes are diagnostics, not numerical continuation state; until the next accepted
+  /// step, returning a pre-rollback publication would be stale and is therefore made impossible.
+  void invalidate_accepted_publication(std::int64_t synchronization_tick,
+                                       std::int64_t denominator) {
+    if (synchronization_tick < 0 || denominator <= 0)
+      throw std::invalid_argument(
+          "same-level cell flux ledger invalidation requires a valid accepted clock");
+    std::fill(accepted_.begin(), accepted_.end(), Real(0));
+    begin_tick_ = synchronization_tick;
+    end_tick_ = synchronization_tick;
+    tick_denominator_ = denominator;
+    publication_generation_ = 0;
   }
 
   [[nodiscard]] Real integrated_flux(std::size_t cell, SameLevelCellFace face,
@@ -338,6 +351,9 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"pops.amr.same-level-transport-euler-stage-flux", 1};
+  }
+  [[nodiscard]] static constexpr bool supports_default_execution_space() noexcept {
+    return host_execution_();
   }
   [[nodiscard]] static constexpr PreparedCellTemporalStageFluxContractV1
   stage_flux_contract() noexcept {
