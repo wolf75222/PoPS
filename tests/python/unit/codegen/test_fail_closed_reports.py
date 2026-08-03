@@ -111,7 +111,8 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert "distributed coarse level" in external_amr.limitation
     assert external_amr.available_route == (
         "authenticated FieldTopology@2 + FieldSolver@2 composite hierarchy batch with "
-        "metadata.level, binary coarse/fine coverage and one collective solve"
+        "metadata.level, binary coarse/fine coverage, one collective solve, exact "
+        "materialization/report consensus and transactional candidate publication"
     )
     implicit_pair = routes["amr:shared_interface_implicit_jacvec_pair"]
     assert implicit_pair.status == "partial"
