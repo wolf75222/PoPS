@@ -63,3 +63,30 @@ requires_real_device = true
 requires_distinct_device_per_rank = true
 job_script = "benchmarks/romeo/adc700_program_cutover.sbatch"
 submit_script = "benchmarks/romeo/submit_adc700_program_cutover.sh"
+
+[campaigns.adc757_heterogeneous_numerics]
+routine_ci = false
+source = "benchmarks/adc757"
+report_schema = "pops.adc757.heterogeneous-numerics.v1"
+verifier = "benchmarks/adc757/verify.py"
+requires_real_device = true
+requires_distinct_device_per_rank = true
+minimum_mpi_ranks = 2
+minimum_streams = 2
+requires_stream_overlap = true
+requires_restart_rollback_and_ledger_parity = true
+scenarios = ["prepared_local_time", "cost_aware_load_balance"]
+metrics = [
+  "time_to_solution_seconds",
+  "throughput_cell_updates_per_second",
+  "memory_traffic_bytes",
+  "kernel_launches",
+  "task_count",
+  "communication_bytes",
+  "communication_seconds",
+  "fallback_count",
+  "useful_work_cell_updates",
+  "imbalance_ratio",
+  "migration_bytes",
+  "migration_seconds",
+]

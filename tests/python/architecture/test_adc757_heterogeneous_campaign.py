@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -99,6 +100,27 @@ def _report() -> dict:
 def test_adc757_hardware_report_accepts_complete_device_evidence() -> None:
     module = _module()
     assert module.validate(_report(), expected_revision="candidate")["status"] == "passed"
+
+
+def test_adc757_campaign_manifest_requires_the_complete_hardware_contract() -> None:
+    manifest = tomllib.loads((ROOT / "benchmarks" / "manifest.toml").read_text(encoding="utf-8"))
+    campaign = manifest["campaigns"]["adc757_heterogeneous_numerics"]
+    assert campaign == {
+        "routine_ci": False,
+        "source": "benchmarks/adc757",
+        "report_schema": "pops.adc757.heterogeneous-numerics.v1",
+        "verifier": "benchmarks/adc757/verify.py",
+        "requires_real_device": True,
+        "requires_distinct_device_per_rank": True,
+        "minimum_mpi_ranks": 2,
+        "minimum_streams": 2,
+        "requires_stream_overlap": True,
+        "requires_restart_rollback_and_ledger_parity": True,
+        "scenarios": ["prepared_local_time", "cost_aware_load_balance"],
+        "metrics": list(_metrics(
+            time=1.0, throughput=1.0, work=1.0, imbalance=1.0
+        )),
+    }
 
 
 @pytest.mark.parametrize(
