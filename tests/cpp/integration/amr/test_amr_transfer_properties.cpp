@@ -702,6 +702,40 @@ TEST(test_amr_transfer_properties, BootstrapMaterializesPreparedBoundarySessionA
         kPreparedBoundarySentinel);
 }
 
+TEST(test_amr_transfer_properties,
+     BootstrapCommitPublishesOnlyRecoveryAcceptedLevelsAndKeepsRefusalRollbackable) {
+  {
+    AmrRuntime runtime = bootstrap_runtime(8, false, 5.0);
+    test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                           "test::bootstrap-recovery-accepted@1");
+    runtime.begin_bootstrap_plan();
+    ASSERT_TRUE(runtime.bootstrap_next_level(2));
+    EXPECT_GT(runtime.fill_bootstrap_block_constant(0, 1, {2.0}), 0);
+    EXPECT_NO_THROW(runtime.commit_bootstrap_level());
+    EXPECT_EQ(runtime.nlev(), 2);
+  }
+
+  AmrRuntime runtime = bootstrap_runtime(8, false, 5.0);
+  const std::vector<double> coarse_before = runtime.block_level_state(0, 0);
+  const std::uint64_t topology_epoch_before = runtime.topology_epoch();
+  test::install_prepared_threshold_union(runtime, {{0, 0, Real(0.5)}},
+                                         "test::bootstrap-recovery-rejected@1");
+  runtime.begin_bootstrap_plan();
+  ASSERT_TRUE(runtime.bootstrap_next_level(2));
+  EXPECT_GT(runtime.fill_bootstrap_block_constant(0, 1, {7.0}), 0);
+  try {
+    runtime.commit_bootstrap_level();
+    FAIL() << "an inadmissible bootstrap level was committed";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+  runtime.rollback_bootstrap_level();
+  EXPECT_EQ(runtime.nlev(), 1);
+  EXPECT_EQ(runtime.topology_epoch(), topology_epoch_before);
+  EXPECT_EQ(runtime.block_level_state(0, 0), coarse_before);
+}
+
 TEST(test_amr_transfer_properties, RuntimePreparedSlipWallFillsDeepPhysicalGhosts) {
   const Box2D domain = Box2D::from_extents(4, 4);
   const BoxArray boxes(std::vector<Box2D>{domain});

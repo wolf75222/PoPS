@@ -4870,18 +4870,31 @@ class AmrRuntime {
   }
 
   void commit_bootstrap_level() {
-    if (!bootstrap_pending_)
+    const long missing_transaction = all_reduce_sum(bootstrap_pending_ ? 0L : 1L);
+    if (missing_transaction != 0)
       throw std::runtime_error("AmrRuntime::commit_bootstrap_level : no pending transaction");
     // AmrRuntime is a spatial hierarchy service and deliberately owns no accepted clock.  The
     // AmrSystem facade validates its authoritative (time, macro_step) before entering or committing
     // a public bootstrap transaction; direct runtime users are responsible for their own scheduler.
+    std::string stale_cache;
     for (const auto& [subject, cache] : bootstrap_caches_)
-      if (!cache.valid || cache.materialized_level != nlev_ - 1)
-        throw std::runtime_error("AmrRuntime::commit_bootstrap_level has a stale cache '" +
-                                 subject + "'");
-    // Bootstrap already owns a rank-coherent outer transaction; keep this final check local because
-    // the preceding pending/cache refusals are local as well. Introducing a collective only here
-    // would strand peers when one of those earlier conditions differs.
+      if (!cache.valid || cache.materialized_level != nlev_ - 1) {
+        stale_cache = subject;
+        break;
+      }
+    const long stale_caches = all_reduce_sum(stale_cache.empty() ? 0L : 1L);
+    if (stale_caches != 0)
+      throw std::runtime_error(
+          "AmrRuntime::commit_bootstrap_level has a stale cache" +
+          (stale_cache.empty() ? std::string(" on another rank") : " '" + stale_cache + "'"));
+    for (std::size_t block = 0; block < blocks_.size(); ++block)
+      for (int level = 0; level < nlev_; ++level)
+        require_recoverable_block_candidate_(
+            block, (*blocks_[block].levels)[static_cast<std::size_t>(level)].U,
+            "AmrRuntime bootstrap state publication for block '" + blocks_[block].name +
+                "' level " + std::to_string(level));
+    // Bootstrap owns a rank-coherent outer transaction. Pending/cache/recovery preflight above is
+    // collective, so no rank can publish while a peer refuses the same candidate hierarchy.
     require_complete_history_materialization_("AmrRuntime::commit_bootstrap_level");
     bootstrap_interface_registry_size_ = 0;
     bootstrap_pending_ = false;
