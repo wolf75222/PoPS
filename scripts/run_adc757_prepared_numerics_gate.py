@@ -60,6 +60,8 @@ EXPECTED_REQUIREMENTS = {
     "characteristic_boundary_geometry_matrix",
     "polar_metric_spatial_provider_matrix",
     "measured_load_balance_decision",
+    "prepared_boundary_plan_only_transport_authority",
+    "polar_persistent_prepared_boundary_plan",
     *EXPECTED_HARDWARE_REQUIREMENTS,
 }
 EXPECTED_DEFERRED = (

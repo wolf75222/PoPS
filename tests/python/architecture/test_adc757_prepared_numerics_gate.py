@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 80
+    assert len(data["check"]) == 84
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-682",
@@ -202,6 +202,48 @@ def test_adc757_slice_includes_exact_public_measured_load_balance_policy_proofs(
             "kind": "pytest",
             "path": "tests/python/unit/amr/test_public_amr_resolution.py",
             "test": "test_measured_knapsack_rejects_invalid_decision_policy",
+        },
+    ]
+
+
+def test_adc757_slice_authenticates_the_only_prepared_transport_boundary_authority():
+    runner = _load_runner()
+    data, errors = runner.validate_manifest(MANIFEST)
+    assert not errors
+    claimed = {
+        "prepared_boundary_plan_only_transport_authority",
+        "polar_persistent_prepared_boundary_plan",
+    }
+    assert [row for row in data["check"] if row["requirement"] in claimed] == [
+        {
+            "requirement": "prepared_boundary_plan_only_transport_authority",
+            "polarity": "positive",
+            "kind": "pytest",
+            "path": "tests/python/architecture/"
+            "test_hyperbolic_boundary_authority_ratchet.py",
+            "test": "test_prepared_boundary_plan_is_the_only_native_transport_authority",
+        },
+        {
+            "requirement": "prepared_boundary_plan_only_transport_authority",
+            "polarity": "refusal",
+            "kind": "pytest",
+            "path": "tests/python/architecture/"
+            "test_hyperbolic_boundary_authority_ratchet.py",
+            "test": "test_legacy_transport_boundary_authorities_are_deleted",
+        },
+        {
+            "requirement": "polar_persistent_prepared_boundary_plan",
+            "polarity": "positive",
+            "target": "test_polar_system_step",
+            "test_regex": "^PolarSystemStep\\."
+            "BoundProgramUsesPersistentPreparedBoundaryClosures$",
+        },
+        {
+            "requirement": "polar_persistent_prepared_boundary_plan",
+            "polarity": "refusal",
+            "target": "test_polar_transport_mms",
+            "test_regex": "^test_polar_transport_mms\\."
+            "RejectsSharedInterfaceFaceOmission$",
         },
     ]
 

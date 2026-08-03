@@ -518,3 +518,29 @@ polarity = "refusal"
 kind = "pytest"
 path = "tests/python/architecture/test_adc757_heterogeneous_campaign.py"
 test = "test_adc757_hardware_report_refuses_false_closure"
+
+[[check]]
+requirement = "prepared_boundary_plan_only_transport_authority"
+polarity = "positive"
+kind = "pytest"
+path = "tests/python/architecture/test_hyperbolic_boundary_authority_ratchet.py"
+test = "test_prepared_boundary_plan_is_the_only_native_transport_authority"
+
+[[check]]
+requirement = "prepared_boundary_plan_only_transport_authority"
+polarity = "refusal"
+kind = "pytest"
+path = "tests/python/architecture/test_hyperbolic_boundary_authority_ratchet.py"
+test = "test_legacy_transport_boundary_authorities_are_deleted"
+
+[[check]]
+requirement = "polar_persistent_prepared_boundary_plan"
+polarity = "positive"
+target = "test_polar_system_step"
+test_regex = "^PolarSystemStep\\.BoundProgramUsesPersistentPreparedBoundaryClosures$"
+
+[[check]]
+requirement = "polar_persistent_prepared_boundary_plan"
+polarity = "refusal"
+target = "test_polar_transport_mms"
+test_regex = "^test_polar_transport_mms\\.RejectsSharedInterfaceFaceOmission$"
