@@ -75,6 +75,11 @@ minimum_mpi_ranks = 2
 minimum_streams = 2
 requires_stream_overlap = true
 requires_restart_rollback_and_ledger_parity = true
+requires_exact_installed_wheels = true
+requires_pops_doctor = true
+runtime_scenario = "adc757_amr_advection_runtime_v1"
+runtime_modes = ["serial", "threaded", "gpu", "gpu_mpi"]
+required_runtime_authorities = ["cell_local_time", "amr_rebalance_migration"]
 scenarios = ["prepared_local_time", "cost_aware_load_balance"]
 metrics = [
   "time_to_solution_seconds",
