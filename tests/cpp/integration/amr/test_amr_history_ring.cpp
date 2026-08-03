@@ -212,7 +212,9 @@ static void install_history_threshold_union(AmrSystem& sim, double threshold) {
              "test://amr-history/block/b/state/U"}});
 }
 
-static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio = kAmrRefRatio) {
+static AmrRuntime make_two_block(
+    int N, double L, double B0, int manifest_ratio = kAmrRefRatio,
+    double maximum_recoverable_a = std::numeric_limits<double>::infinity()) {
   AmrBuildParams bp;
   bp.mesh.load_balance = test::prepare_test_space_filling_curve_load_balance();
   bp.mesh.periodicity = Periodicity{true, true};
@@ -226,6 +228,21 @@ static AmrRuntime make_two_block(int N, double L, double B0, int manifest_ratio 
                                               blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
                                               /*has_density=*/true, 1.4, 1, false, 1));
   blocks.back().state_identity = "test://amr-history/block/a/state/U";
+  if (std::isfinite(maximum_recoverable_a))
+    blocks.back().cons_to_prim = [maximum_recoverable_a](const double* conserved,
+                                                         double* primitive) {
+      RecoveryReport report;
+      if (!std::isfinite(conserved[0]) || conserved[0] > maximum_recoverable_a) {
+        report.status = RecoveryStatus::kRejected;
+        report.cause = RecoveryCause::kInadmissibleCandidate;
+        report.failing_component = 0;
+        return report;
+      }
+      primitive[0] = conserved[0];
+      report.status = RecoveryStatus::kRecovered;
+      report.cause = RecoveryCause::kNone;
+      return report;
+    };
   blocks.push_back(detail::dispatch_amr_block(exb_model(-1.0, B0), "minmod", "rusanov", S, "b",
                                               blob(N, 0.65, 0.5, 0.8, 1.0, 0.10),
                                               /*has_density=*/true, 1.4, 1, false, 1));
@@ -728,6 +745,44 @@ TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
   EXPECT_TRUE(coarse_identical) << "coarse_ring_slot_untouched_by_regrid";
   // The fine slice is the new fine extent (n<<1 squared * ncomp) and finite.
   EXPECT_EQ(global0.size() - ncoarse, nfine) << "fine_slice_matches_fine_extent";
+}
+
+TEST(test_amr_history_ring, RegridRecoveryRefusalRollsBackRemappedHistoryAndLiveHierarchy) {
+  AmrRuntime rt = make_two_block(32, 1.0, 1.0, kAmrRefRatio, 5.0);
+  detail::AmrHistoryOps::register_history(rt, 0, "R", 1);
+  for (int level = 0; level < rt.nlev(); ++level) {
+    MultiFab inadmissible = rt.level_state(0, level);
+    inadmissible.set_val(Real(10));
+    detail::AmrHistoryOps::store_history(rt, "R", level, inadmissible, Real(0.01));
+  }
+  detail::AmrHistoryOps::rotate_histories(rt);
+
+  const std::vector<double> history_before = detail::AmrHistoryOps::global(rt, "R", 0, false);
+  std::vector<std::vector<double>> states_before;
+  for (int level = 0; level < rt.nlev(); ++level)
+    states_before.push_back(rt.block_level_state(0, level));
+  const std::vector<PatchBox> patches_before = rt.patch_boxes();
+  const int levels_before = rt.nlev();
+  const int regrids_before = rt.regrid_count();
+  const std::uint64_t topology_epoch_before = rt.topology_epoch();
+
+  rt.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
+  test::install_prepared_threshold_union(rt, {{0, 0, Real(1.2)}, {1, 0, Real(1.2)}});
+  try {
+    rt.regrid();
+    FAIL() << "an inadmissible remapped history slot was published";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("prepared variable recovery rejected"),
+              std::string::npos);
+  }
+
+  EXPECT_EQ(rt.nlev(), levels_before);
+  EXPECT_EQ(rt.regrid_count(), regrids_before);
+  EXPECT_EQ(rt.topology_epoch(), topology_epoch_before);
+  EXPECT_TRUE(same_patches(rt.patch_boxes(), patches_before));
+  EXPECT_EQ(detail::AmrHistoryOps::global(rt, "R", 0, false), history_before);
+  for (int level = 0; level < rt.nlev(); ++level)
+    EXPECT_EQ(rt.block_level_state(0, level), states_before[static_cast<std::size_t>(level)]);
 }
 
 TEST(test_amr_history_ring, TransferAuthorityRejectsNonRatioTwoProviderBeforeStep) {
