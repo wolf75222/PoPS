@@ -1382,6 +1382,52 @@ int run_field_plan_consensus(int argc, char** argv) {
   failures += prove_replicated_coarse_composite_jvp();
   failures += prove_distributed_physical_boundary_jvp();
 
+  // ADC-750: priority and first-failure diagnostics are separate integer collectives. Rank zero
+  // owns a large negative-index cell and rank one a large positive-index cell. A fatal rank-one
+  // failure first dominates the earlier recoverable cell; once both are fatal, lexicographic
+  // `(j, i, component)` order selects rank zero exactly. Binary64 packing corrupted both cases.
+  {
+    const BoxArray boxes(
+        std::vector<Box2D>{Box2D{{-1000000000, -700000000}, {-1000000000, -700000000}},
+                           Box2D{{1000000000, 700000000}, {1000000000, 700000000}}});
+    const DistributionMapping mapping(std::vector<int>{0, 1});
+    MultiFab statistics(boxes, mapping, 11, 0);
+    statistics.set_val(Real(0));
+    const int recoverable =
+        local_nonlinear_status_priority(LocalNonlinearStatus::kEvaluationReject);
+    const int fatal = local_nonlinear_status_priority(LocalNonlinearStatus::kInvalidEvaluation);
+    for (int local = 0; local < statistics.local_size(); ++local) {
+      const Box2D box = statistics.box(local);
+      const Array4 values = statistics.fab(local).array();
+      for_each_cell(box, [=] POPS_HD(int i, int j) {
+        const bool negative = i < 0;
+        values(i, j, 8) = negative ? Real(7) : Real(3);
+        values(i, j, 9) = Real(1);
+        values(i, j, 10) = static_cast<Real>(negative ? recoverable : fatal);
+      });
+    }
+
+    int priority = static_cast<int>(reduce_max(statistics, 10));
+    LocalNonlinearFailureLocation location =
+        collective_first_local_nonlinear_failure(statistics, priority, 10, 8);
+    require(priority == fatal);
+    require(location.found && location.priority == fatal);
+    require(location.i == 1000000000 && location.j == 700000000 && location.component == 3);
+
+    for (int local = 0; local < statistics.local_size(); ++local) {
+      const Box2D box = statistics.box(local);
+      const Array4 values = statistics.fab(local).array();
+      for_each_cell(box, [=] POPS_HD(int i, int j) {
+        if (i < 0)
+          values(i, j, 10) = static_cast<Real>(fatal);
+      });
+    }
+    priority = static_cast<int>(reduce_max(statistics, 10));
+    location = collective_first_local_nonlinear_failure(statistics, priority, 10, 8);
+    require(location.found && location.priority == fatal);
+    require(location.i == -1000000000 && location.j == -700000000 && location.component == 7);
+  }
+
   // A hierarchy provider cannot split publication by returning individually valid but different
   // reports. Both outcome divergence and equal-length reason-byte divergence are rejected with one
   // uniform error on every rank; an identical report remains publishable.
