@@ -205,9 +205,14 @@ Supported native routes include:
   publication gate and restore their complete transaction on refusal. Generated Program terminal
   commits also validate every Uniform or AMR live-state candidate before the first multi-block copy,
   including endpoints assembled from model-local and coupled sources. This route adds no implicit
-  repair, fallback, or mutable cache. The separate `recovery:complete_consumer_cutover` capability
-  remains `unavailable`: manual in-place Program writes, persistent warm starts, cache/restart,
-  backend parity, and performance evidence do not yet share that authority.
+  repair or fallback. The host Uniform `get_primitive_state` materializer now owns one per-block,
+  per-local-cell warm-start slot qualified by exact conservative input plus topology and accepted
+  state generations. It stages each slot through `RecoveryPublicationTransaction`, publishes the
+  primitive array only after the complete batch succeeds, and explicitly invalidates every slot when
+  a batch is refused. The separate `recovery:complete_consumer_cutover` capability remains
+  `unavailable`: face-reconstruction kernels and AMR do not yet own persistent recovery warm starts,
+  AMR regrid migration and checkpoint/restart do not persist such slots, and manual in-place Program
+  writes, backend parity, and performance evidence do not yet share that authority.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.

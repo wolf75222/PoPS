@@ -241,7 +241,9 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "physical boundary traces" in prepared.limitation
     assert "generated Program terminal commits" in prepared.limitation
     assert "model-local and coupled sources" in prepared.limitation
-    assert "no implicit repair, fallback, or mutable cache" in prepared.limitation
+    assert "no implicit repair or fallback" in prepared.limitation
+    assert "generation-qualified warm-start slot per local cell" in prepared.limitation
+    assert "invalidates every slot after a refused batch" in prepared.limitation
 
     cutover = routes["recovery:complete_consumer_cutover"]
     assert cutover.status == "unavailable"
@@ -252,7 +254,7 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "fallible primitive-to-conservative conversion" not in cutover.limitation
     assert "AMR bootstrap/history transfer" not in cutover.limitation
     assert "primitive boundary traces" not in cutover.limitation
-    assert "persistent warm starts" in cutover.limitation
+    assert "persistent warm starts outside the host Uniform diagnostic materializer" in cutover.limitation
     assert "transactional analytic initial-state materialization" in cutover.available_route
     assert "spatial face reconstruction" in cutover.available_route
     assert "fallible primitive-to-conservative setup conversion" in cutover.available_route
@@ -260,7 +262,8 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "bootstrap/history" in cutover.available_route
     assert "physical boundary-trace publication" in cutover.available_route
     assert "model-local and coupled-source endpoints" in cutover.available_route
-    assert "missing in-place-write, warm-start, and cache/restart contracts" in cutover.alternative
+    assert "generation-qualified warm starts" in cutover.available_route
+    assert "missing in-place-write, AMR/spatial warm-start" in cutover.alternative
     assert cutover.error_message
 
 

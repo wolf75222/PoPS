@@ -536,7 +536,10 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "same publication gate and roll back exactly on refusal; generated Program "
                 "terminal commits validate every Uniform or AMR live-state candidate before the "
                 "first multi-block copy, including endpoints assembled from model-local and "
-                "coupled sources, with no implicit repair, fallback, or mutable cache"
+                "coupled sources, with no implicit repair or fallback; the host Uniform "
+                "get_primitive_state materializer additionally owns one exact-state and "
+                "generation-qualified warm-start slot per local cell, publishes only complete "
+                "batches, and invalidates every slot after a refused batch"
             ),
             source=source,
         ),
@@ -549,7 +552,8 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=gpu,
             status="unavailable",
             limitation=(
-                "manual in-place Program writes, persistent warm starts, cache restart, and the "
+                "manual in-place Program writes, persistent warm starts outside the host Uniform "
+                "diagnostic materializer (spatial kernels and AMR), cache restart, and the "
                 "backend/performance matrix do not yet share one prepared recovery authority"
             ),
             requested="complete prepared variable-recovery consumer cutover",
@@ -559,11 +563,13 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "reconstruction, fallible primitive-to-conservative setup conversion, and "
                 "transactional AMR regrid prolongation/restriction, bootstrap/history, and "
                 "physical boundary-trace publication, plus generated Program terminal commit "
-                "validation for model-local and coupled-source endpoints"
+                "validation for model-local and coupled-source endpoints, and exact-state "
+                "generation-qualified warm starts for host Uniform primitive materialization"
             ),
             alternative=(
                 "use generated Program candidate commits and the delivered recovery consumers, or "
-                "implement the missing in-place-write, warm-start, and cache/restart contracts"
+                "implement the missing in-place-write, AMR/spatial warm-start, and cache/restart "
+                "contracts"
             ),
             source=source,
         ),
