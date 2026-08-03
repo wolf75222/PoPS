@@ -1,11 +1,4 @@
-"""ADC-749: legacy transport-boundary authorities may only disappear.
-
-The prepared hyperbolic boundary path is already the compiled Uniform/AMR
-route.  A few older native authorities still exist while their replacements
-need metric and characteristic kernels.  Keep their remaining
-lexical surface bounded so adjacent work cannot silently create another
-transport-boundary engine before that cutover is complete.
-"""
+"""ADC-749/757: one prepared native transport-boundary authority remains."""
 
 from __future__ import annotations
 
@@ -18,35 +11,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 PRODUCTION_ROOTS = (ROOT / "include/pops", ROOT / "src/runtime")
 
-# Exact upper bounds on the consolidated ADC-749 branch.  Counts deliberately
-# include comments: closure requires deleting the legacy vocabulary as well as
-# its executable branches.  A deletion passes without editing this ledger;
-# any new file or additional occurrence fails closed.
-LEGACY_AUTHORITY_LIMITS = {
-    "AmrBoundaryFillAuthority": {
-        "include/pops/coupling/amr/amr_coupler_mp.hpp": 2,
-        "include/pops/numerics/time/amr/levels/amr_subcycling.hpp": 6,
-        "include/pops/runtime/amr/amr_runtime.hpp": 1,
-        "include/pops/runtime/builders/compiled/amr_dsl_block.hpp": 1,
-    },
-    "make_amr_boundary_fill_authority": {
-        "include/pops/numerics/time/amr/levels/amr_subcycling.hpp": 1,
-        "include/pops/runtime/builders/compiled/amr_dsl_block.hpp": 1,
-    },
-    "wall_radial": {
-        "include/pops/numerics/spatial/operators/polar_operator.hpp": 9,
-        "include/pops/runtime/builders/block/block_builder_polar.hpp": 13,
-        "src/runtime/system/system_polar.cpp": 2,
-    },
-    "fill_ghosts_polar": {
-        "include/pops/runtime/builders/block/block_builder_polar.hpp": 3,
-    },
-    "transport_bc": {
-        "include/pops/runtime/amr/amr_runtime.hpp": 3,
-        "include/pops/runtime/builders/compiled/amr_dsl_block.hpp": 7,
-        "include/pops/runtime/program/amr_program_context.hpp": 2,
-    },
-}
+# These names denoted executable authorities parallel to PreparedBoundaryPlan.
+# Closure is a zero-occurrence invariant across production, not a count ledger.
+DELETED_LEGACY_AUTHORITIES = (
+    "AmrBoundaryFillAuthority",
+    "make_amr_boundary_fill_authority",
+    "transport_boundary_fill",
+    "transport_bc",
+    "wall_radial",
+    "fill_ghosts_polar",
+)
 
 
 def _production_sources() -> tuple[Path, ...]:
@@ -63,7 +37,7 @@ def _production_sources() -> tuple[Path, ...]:
 def _occurrences() -> dict[str, dict[str, int]]:
     patterns = {
         identifier: re.compile(r"\b%s\b" % re.escape(identifier))
-        for identifier in LEGACY_AUTHORITY_LIMITS
+        for identifier in DELETED_LEGACY_AUTHORITIES
     }
     counts = {identifier: {} for identifier in patterns}
     for path in _production_sources():
@@ -76,21 +50,52 @@ def _occurrences() -> dict[str, dict[str, int]]:
     return counts
 
 
-def test_legacy_transport_boundary_authorities_can_only_shrink() -> None:
+def test_legacy_transport_boundary_authorities_are_deleted() -> None:
     occurrences = _occurrences()
-    violations = []
-    for identifier, limits in LEGACY_AUTHORITY_LIMITS.items():
-        for path, count in occurrences[identifier].items():
-            limit = limits.get(path, 0)
-            if count > limit:
-                violations.append(
-                    "%s: %s has %d occurrence(s), allowed at most %d"
-                    % (identifier, path, count, limit)
-                )
-
+    violations = [
+        "%s: %s has %d occurrence(s)" % (identifier, path, count)
+        for identifier, paths in occurrences.items()
+        for path, count in paths.items()
+    ]
     assert not violations, (
-        "legacy transport-boundary authority expanded; lower the route to "
+        "a deleted transport-boundary authority returned; lower the route to "
         "PreparedBoundaryPlan instead:\n  " + "\n  ".join(violations)
+    )
+
+
+def test_prepared_boundary_plan_is_the_only_native_transport_authority() -> None:
+    polar_builder = (
+        ROOT / "include/pops/runtime/builders/block/block_builder_polar.hpp"
+    ).read_text(encoding="utf-8")
+    polar_operator = (
+        ROOT / "include/pops/numerics/spatial/operators/polar_operator.hpp"
+    ).read_text(encoding="utf-8")
+    amr_runtime = (ROOT / "include/pops/runtime/amr/amr_runtime.hpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert "build_block_polar requires a prepared boundary plan" in polar_builder
+    assert "boundary_plan->fill_same_level_and_physical" in polar_builder
+    assert "boundary_plan.zeroes_face(0, -1)" in polar_operator
+    assert "boundary_plan.zeroes_face(0, 1)" in polar_operator
+    assert "boundary_plan.has_component_boundaries()" in polar_operator
+    assert "boundary_plan.has_omitted_faces()" in polar_operator
+    system_install = (ROOT / "src/runtime/system/system_install.cpp").read_text(
+        encoding="utf-8"
+    )
+    for operation in (
+        "install_ghost_boundary_component",
+        "install_boundary_flux_component",
+        "install_field_boundary_residual_component",
+        "install_field_boundary_jvp_component",
+    ):
+        body = system_install[system_install.index(f"System::{operation}") :]
+        body = body[: body.index("\n}")]
+        assert "if (P->polar_)" in body
+    assert "block.boundary_plan->fills_all_allocated_physical_ghosts()" in amr_runtime
+    assert (
+        "non-periodic AMR regrid requires a prepared boundary authority for every block"
+        in amr_runtime
     )
 
 
