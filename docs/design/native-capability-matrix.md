@@ -192,7 +192,12 @@ Supported native routes include:
   authenticated block state and cannot name an unrelated callback or kernel.
   `primitive_values` follows the model's declared primitive-variable order.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject only to exact model capability
-  requirements. Cartesian, AMR and annular-polar dispatch use the same provider identity; the
+  requirements. HLLC and Roe keep one native route each; the compiled model separately authenticates
+  the model-side provider (`fluid_roles_v1`, `direct_action_v1`, or `flux_jacobian_v1`) and the
+  typed Roe entropy policy (`riemann.Harten(delta)`, `riemann.NoEntropyFix()`, or provider-owned).
+  Missing, unknown, or flag/provider-mismatched evidence fails before native installation, and
+  compiled inspection reports every distinct provider/options record instead of collapsing it to a
+  Boolean. Cartesian, AMR and annular-polar dispatch use the same provider identity; the
   native isothermal provider supplies HLLC/Roe on the polar route while scalar ExB refuses them.
   `riemann:typed_failure_outcome` is deliberately `partial`: every built-in returns the common
   device-copyable `FluxEvaluation` with typed status, stability bound, reason code, requested/used/
