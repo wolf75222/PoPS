@@ -522,7 +522,9 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
                 "analytic initial-state materialization plus Cartesian, polar, masked, and "
                 "embedded-boundary face "
                 "reconstruction consume publication permission before copying or flux "
-                "evaluation, with no implicit repair, fallback, or mutable cache"
+                "evaluation; primitive-to-conservative setup conversion publishes only a finite "
+                "candidate accepted by that same prepared inverse authority, with no implicit "
+                "repair, fallback, or mutable cache"
             ),
             source=source,
         ),
@@ -536,19 +538,18 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             status="unavailable",
             limitation=(
                 "model/source conversion, AMR transfer/regrid, primitive boundary traces, "
-                "fallible primitive-to-conservative conversion, persistent warm starts, cache "
-                "restart, and the backend/performance matrix do not yet share one prepared "
-                "recovery authority"
+                "persistent warm starts, cache restart, and the backend/performance matrix do "
+                "not yet share one prepared recovery authority"
             ),
             requested="complete prepared variable-recovery consumer cutover",
             available_route=(
                 "prepared closed-form recovery for System conservative-to-primitive and "
                 "transactional analytic initial-state materialization plus spatial face "
-                "reconstruction"
+                "reconstruction and fallible primitive-to-conservative setup conversion"
             ),
             alternative=(
                 "use the delivered conservative-to-primitive consumers or implement the missing "
-                "fallible provider and cache/restart contracts"
+                "transfer, trace, and cache/restart contracts"
             ),
             source=source,
         ),

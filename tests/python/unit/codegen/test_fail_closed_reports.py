@@ -206,6 +206,7 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert "selected and last-attempted method kinds" in prepared.limitation
     assert "consume publication permission" in prepared.limitation
     assert "transactional analytic initial-state materialization" in prepared.limitation
+    assert "primitive-to-conservative setup conversion" in prepared.limitation
     assert "no implicit repair, fallback, or mutable cache" in prepared.limitation
 
     cutover = routes["recovery:complete_consumer_cutover"]
@@ -214,11 +215,13 @@ def test_variable_recovery_routes_separate_delivered_consumers_from_complete_cut
     assert cutover.backend == "none"
     assert "model/source conversion" in cutover.limitation
     assert "initial and analytic materialization" not in cutover.limitation
+    assert "fallible primitive-to-conservative conversion" not in cutover.limitation
     assert "AMR transfer/regrid" in cutover.limitation
     assert "persistent warm starts" in cutover.limitation
     assert "transactional analytic initial-state materialization" in cutover.available_route
     assert "spatial face reconstruction" in cutover.available_route
-    assert "missing fallible provider and cache/restart contracts" in cutover.alternative
+    assert "fallible primitive-to-conservative setup conversion" in cutover.available_route
+    assert "missing transfer, trace, and cache/restart contracts" in cutover.alternative
     assert cutover.error_message
 
 

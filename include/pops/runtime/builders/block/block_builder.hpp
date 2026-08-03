@@ -19,6 +19,7 @@
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (shared lightweight header)
 #include <pops/runtime/numerical_defaults.hpp>
 
+#include <cmath>
 #include <functional>
 #include <memory>  // std::shared_ptr (shared scratch of the HLL wave speed cache, opt-in)
 #include <stdexcept>
@@ -907,6 +908,29 @@ std::function<void(const MultiFab&, MultiFab&)> make_poisson_rhs(const Model& m)
   return detail::PoissonRhs<Model>{m};
 }
 
+namespace detail {
+template <int N, class Forward, class Recovery>
+auto make_recovery_validated_forward_conversion(Forward forward, Recovery recovery) {
+  return [forward = std::move(forward), recovery = std::move(recovery)](const double* in,
+                                                                        double* out) {
+    double candidate[N] = {};
+    double recovered[N] = {};
+    forward(in, candidate);
+    for (int component = 0; component < N; ++component)
+      if (!std::isfinite(candidate[component]))
+        throw std::runtime_error(
+            "primitive-to-conservative conversion produced a non-finite candidate");
+    const RecoveryReport report = recovery(candidate, recovered);
+    if (!report.publication_permitted())
+      throw std::runtime_error(
+          "primitive-to-conservative conversion produced a candidate rejected by prepared "
+          "variable recovery");
+    for (int component = 0; component < N; ++component)
+      out[component] = candidate[component];
+  };
+}
+}  // namespace detail
+
 /// PER-CELL (one cell) cons <-> prim conversions of the MODEL, type-erased over arrays of
 /// Model::n_vars doubles. First = primitive -> conservative (M.to_conservative, init from the
 /// primitives), second = conservative -> primitive through one PreparedVariableRecovery method.
@@ -954,7 +978,8 @@ make_cell_convert(const Model& m) {
         out[c] = static_cast<double>(outcome.value[c]);
       return recovery_report(outcome);
     };
-    return {std::function<void(const double*, double*)>(p2c),
+    auto validated_p2c = detail::make_recovery_validated_forward_conversion<NV>(p2c, c2p);
+    return {std::function<void(const double*, double*)>(std::move(validated_p2c)),
             std::function<RecoveryReport(const double*, double*)>(c2p)};
   } else {
     auto p2c = [](const double* in, double* out) {
@@ -975,7 +1000,8 @@ make_cell_convert(const Model& m) {
         out[c] = static_cast<double>(outcome.value[c]);
       return recovery_report(outcome);
     };
-    return {std::function<void(const double*, double*)>(p2c),
+    auto validated_p2c = detail::make_recovery_validated_forward_conversion<NV>(p2c, c2p);
+    return {std::function<void(const double*, double*)>(std::move(validated_p2c)),
             std::function<RecoveryReport(const double*, double*)>(c2p)};
   }
 }

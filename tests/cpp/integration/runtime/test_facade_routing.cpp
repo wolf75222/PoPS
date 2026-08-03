@@ -385,3 +385,40 @@ TEST(FacadeRouting, PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedSt
   EXPECT_EQ(system.get_state("gas"), accepted)
       << "failed diagnostic recovery must not mutate the accepted conservative state";
 }
+
+TEST(FacadeRouting, PrimitiveInputRequiresPreparedRecoveryBeforeConservativePublication) {
+#if defined(POPS_HAS_KOKKOS)
+  (void)kokkos_scope();
+#endif
+  constexpr int n = 4;
+  const std::size_t cells = static_cast<std::size_t>(n) * n;
+  System system(SystemConfig{n, 1.0, Periodicity{true, true}});
+  system.add_block("gas", compressible_model(), "none", "rusanov", "conservative");
+
+  std::vector<double> accepted(4 * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    accepted[cell] = 1.0;
+    accepted[3 * cells + cell] = 2.5;
+  }
+  system.set_state("gas", accepted);
+
+  std::vector<double> inadmissible_primitive(4 * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    inadmissible_primitive[3 * cells + cell] = 1.0;
+  EXPECT_THROW(system.set_primitive_state("gas", inadmissible_primitive), std::runtime_error);
+  EXPECT_EQ(system.get_state("gas"), accepted)
+      << "failed forward conversion validation must not publish a partial conservative state";
+
+  std::vector<double> admissible_primitive(4 * cells, 0.0);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    admissible_primitive[cell] = 1.0;
+    admissible_primitive[cells + cell] = 0.2;
+    admissible_primitive[2 * cells + cell] = -0.1;
+    admissible_primitive[3 * cells + cell] = 1.0;
+  }
+  EXPECT_NO_THROW(system.set_primitive_state("gas", admissible_primitive));
+  const std::vector<double> recovered = system.get_primitive_state("gas");
+  ASSERT_EQ(recovered.size(), admissible_primitive.size());
+  for (std::size_t value = 0; value < recovered.size(); ++value)
+    EXPECT_NEAR(recovered[value], admissible_primitive[value], 1e-12);
+}

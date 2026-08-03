@@ -157,6 +157,21 @@ TEST(test_block_builder, cell_primitive_conversion_consumes_prepared_recovery_ou
 
   // rho=1, (u,v)=(0.2,-0.1), p=1 -> E=p/(gamma-1)+rho*(u^2+v^2)/2=2.525.
   const std::array<double, 4> conservative{1.0, 0.2, -0.1, 2.525};
+  const std::array<double, 4> authored_primitive{1.0, 0.2, -0.1, 1.0};
+  std::array<double, 4> forward_candidate{-9.0, -9.0, -9.0, -9.0};
+  EXPECT_NO_THROW(conversion.first(authored_primitive.data(), forward_candidate.data()));
+  for (std::size_t component = 0; component < conservative.size(); ++component)
+    EXPECT_NEAR(forward_candidate[component], conservative[component], 1e-14);
+
+  // Forward conversion is also a candidate transaction: the conservative result must survive the
+  // same prepared inverse authority before any output component is published.
+  const std::array<double, 4> invalid_primitive{0.0, 0.0, 0.0, 1.0};
+  const std::array<double, 4> forward_sentinel{1.25, -2.5, 3.75, -5.0};
+  forward_candidate = forward_sentinel;
+  EXPECT_THROW(conversion.first(invalid_primitive.data(), forward_candidate.data()),
+               std::runtime_error);
+  EXPECT_EQ(forward_candidate, forward_sentinel);
+
   std::array<double, 4> primitive{-9.0, -9.0, -9.0, -9.0};
   const RecoveryReport success = conversion.second(conservative.data(), primitive.data());
   EXPECT_TRUE(success.recovered());

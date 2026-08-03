@@ -209,6 +209,18 @@ test_regex = "^test_mpi_system_analytic_level_set_np2$"
 nproc = 2
 
 [[check]]
+requirement = "fallible_primitive_to_conservative_publication"
+polarity = "positive"
+target = "test_block_builder"
+test_regex = "^test_block_builder\\.cell_primitive_conversion_consumes_prepared_recovery_outcome$"
+
+[[check]]
+requirement = "fallible_primitive_to_conservative_publication"
+polarity = "refusal"
+target = "test_facade_routing"
+test_regex = "^FacadeRouting\\.PrimitiveInputRequiresPreparedRecoveryBeforeConservativePublication$"
+
+[[check]]
 requirement = "type_erased_recovery_method_identity"
 polarity = "positive"
 target = "test_variable_recovery_chain"

@@ -10,6 +10,7 @@
 #include <pops/runtime/analytic/collective_preflight.hpp>
 #include <pops/runtime/output_piece_collective.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <tuple>
@@ -150,7 +151,19 @@ POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConve
     if (!prim_to_cons)
       throw std::runtime_error(
           "System primitive fixed-state boundary requires the block-model conversion");
-    boundary->second->prepare_fixed_state_conversion(prim_to_cons);
+    if (!cons_to_prim)
+      throw std::runtime_error(
+          "System primitive fixed-state boundary requires prepared variable-recovery validation");
+    const int ncomp = s.ncomp;
+    boundary->second->prepare_fixed_state_conversion(
+        [prim_to_cons, cons_to_prim, ncomp](const double* primitive, double* conservative) {
+          prim_to_cons(primitive, conservative);
+          std::vector<double> recovered(static_cast<std::size_t>(ncomp));
+          const RecoveryReport report = cons_to_prim(conservative, recovered.data());
+          if (!report.publication_permitted())
+            throw std::runtime_error(
+                "primitive fixed-state boundary conversion failed prepared variable recovery");
+        });
   }
   s.prim_to_cons = std::move(prim_to_cons);
   s.cons_to_prim = std::move(cons_to_prim);
@@ -173,19 +186,48 @@ void System::set_primitive_state(const std::string& name, const std::vector<doub
         "System::set_primitive_state : the model of block '" + name +
         "' does not expose a primitive -> conservative conversion (.so generated before "
         "this project ?) ; use set_state (direct conservative state)");
+  if (!s.cons_to_prim)
+    throw std::runtime_error(
+        "System::set_primitive_state : the model of block '" + name +
+        "' has no prepared variable-recovery authority for validating conservative publication");
   // CELL-BY-CELL conversion via the block model: we read the nc primitives component-major
   // (prim[c*nn + k]) into a small contiguous buffer, convert, and write the conservatives at the
   // same place in an output buffer. Then write_state pushes everything to the MultiFab (set_state
   // path, identical marshaling). Reuses therefore the existing marshaling (copy/write_state).
   std::vector<double> cons(prim.size());
-  std::vector<double> cell_in(static_cast<std::size_t>(nc)), cell_out(static_cast<std::size_t>(nc));
+  std::vector<double> cell_in(static_cast<std::size_t>(nc));
+  std::vector<double> cell_out(static_cast<std::size_t>(nc));
+  std::vector<double> recovered(static_cast<std::size_t>(nc));
+  long local_failures = 0;
   for (std::size_t k = 0; k < nn; ++k) {
     for (int c = 0; c < nc; ++c)
       cell_in[c] = prim[static_cast<std::size_t>(c) * nn + k];
-    s.prim_to_cons(cell_in.data(), cell_out.data());
+    std::fill(cell_out.begin(), cell_out.end(), std::numeric_limits<double>::quiet_NaN());
+    bool accepted = false;
+    try {
+      s.prim_to_cons(cell_in.data(), cell_out.data());
+      const bool finite = std::all_of(cell_out.begin(), cell_out.end(),
+                                      [](double value) { return std::isfinite(value); });
+      if (finite) {
+        const RecoveryReport report = s.cons_to_prim(cell_out.data(), recovered.data());
+        accepted = report.publication_permitted();
+      }
+    } catch (...) {
+      accepted = false;
+    }
+    if (!accepted) {
+      ++local_failures;
+      continue;
+    }
     for (int c = 0; c < nc; ++c)
       cons[static_cast<std::size_t>(c) * nn + k] = cell_out[c];
   }
+  const long failures = all_reduce_sum(local_failures);
+  if (failures != 0)
+    throw std::runtime_error(
+        "System::set_primitive_state : prepared variable recovery rejected conservative "
+        "publication (failed cells=" +
+        std::to_string(failures) + ")");
   p_->write_state(s.U, nc, cons);
 }
 
