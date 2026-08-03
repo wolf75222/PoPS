@@ -162,6 +162,12 @@ class _AmrSystemInstall(_AmrSystem):
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
         validate_install_arguments(
             self, compiled, instances, params, aux, field_plans=field_plans)
+        if install_plan is not None:
+            from pops.runtime._runtime_authorities import (
+                _validate_shared_interface_implicit_execution_before_install,
+            )
+
+            _validate_shared_interface_implicit_execution_before_install(install_plan)
         if amr_transfer is not None:
             self._install_bootstrap_routes(amr_transfer)
 

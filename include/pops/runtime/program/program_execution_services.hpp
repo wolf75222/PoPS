@@ -46,6 +46,23 @@
 
 namespace pops::runtime::program {
 
+namespace detail {
+struct ProgramComponentSpanCopyKernel {
+  Array4 destination;
+  ConstArray4 source;
+  int destination_component = 0;
+  int source_component = 0;
+  int component_count = 0;
+
+  POPS_HD void operator()(int i, int j) const {
+    for (int component = 0; component < component_count; ++component)
+      destination(i, j, destination_component + component) =
+          source(i, j, source_component + component);
+  }
+};
+static_assert(std::is_trivially_copyable_v<ProgramComponentSpanCopyKernel>);
+}  // namespace detail
+
 /// Backend-independent Program operations shared by every execution topology.
 ///
 /// The provider owns topology, storage and explicitly qualified non-Cartesian stencil capabilities
@@ -450,6 +467,46 @@ class ProgramExecutionServices {
     count_kernel();
     provider_().program_execution_rhs_core_into_at_(point, sys_block(block), state, rhs, flux_only,
                                                     &boundary);
+  }
+
+  /// Copy one valid-cell component span between fields with the same distributed layout.
+  /// Generated packed multi-block operators use this allocation-free primitive to gather/scatter
+  /// endpoint vectors without exposing native storage or MPI ownership to Python.
+  void copy_component_span(MultiFab& destination, int destination_component,
+                           const MultiFab& source, int source_component,
+                           int component_count) const {
+    if (component_count <= 0 || destination_component < 0 || source_component < 0 ||
+        destination_component > destination.ncomp() - component_count ||
+        source_component > source.ncomp() - component_count)
+      throw std::invalid_argument("Program component-span copy has an invalid component range");
+    if (destination.box_array().boxes() != source.box_array().boxes() ||
+        destination.dmap().ranks() != source.dmap().ranks() ||
+        destination.local_size() != source.local_size())
+      throw std::invalid_argument(
+          "Program component-span copy requires identical distributed field layouts");
+    for (int local = 0; local < destination.local_size(); ++local) {
+      if (destination.global_index(local) != source.global_index(local))
+        throw std::logic_error("Program component-span copy found inconsistent local ownership");
+      for_each_cell(
+          destination.box(local),
+          detail::ProgramComponentSpanCopyKernel{
+              destination.fab(local).array(), source.fab(local).const_array(),
+              destination_component, source_component, component_count});
+    }
+  }
+
+  /// Execute the two perturbed endpoint residuals in one shared-interface scheduler call.
+  void rhs_jacvec_pair_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int first_block, MultiFab& first_state, MultiFab& first_rhs, bool first_flux_only,
+      int second_block, MultiFab& second_state, MultiFab& second_rhs,
+      bool second_flux_only) const {
+    if (first_block == second_block)
+      throw std::invalid_argument("Program implicit interface JVP requires two distinct blocks");
+    count_kernel(2);
+    provider_().program_execution_rhs_jacvec_pair_into_at_(
+        point, sys_block(first_block), first_state, first_rhs, first_flux_only,
+        sys_block(second_block), second_state, second_rhs, second_flux_only);
   }
 
   void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point,

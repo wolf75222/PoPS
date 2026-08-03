@@ -594,6 +594,29 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             source=source,
         ),
         _row(
+            "amr:shared_interface_implicit_jacvec_pair",
+            layout="amr",
+            backend="none",
+            platform="host",
+            mpi=False,
+            gpu=False,
+            status="unavailable",
+            limitation=(
+                "the host/serial level_rhs_jacvec_pair primitive and resolve-evidence-gated "
+                "compile route exist, but no generated Program executes the implicit "
+                "solve/matvec end to end"
+            ),
+            requested="generated shared-interface implicit JVP solve",
+            available_route=(
+                "native host/serial pair primitive plus compile-only generated route"
+            ),
+            alternative=(
+                "keep ADC-758 open and add an end-to-end generated bind/solve/matvec proof "
+                "before advertising a production route"
+            ),
+            source=source,
+        ),
+        _row(
             "amr:source_implicit_program",
             layout="amr",
             backend="none",

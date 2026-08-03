@@ -2709,7 +2709,7 @@ class AmrRuntime {
               "AmrRuntime core RHS disagrees with the active grouped stage-state registry");
       } else {
         boundary_stage_states_.emplace(
-            BoundaryStageStateView{point, nullptr, static_cast<int>(b), &U});
+            BoundaryStageStateView{point, {}, static_cast<int>(b), &U});
         stage_reset.slot = &boundary_stage_states_;
       }
     }
@@ -3046,10 +3046,20 @@ class AmrRuntime {
   /// Real AMR multi-block residual executor.  All per-block residuals on the level are complete
   /// before the shared pair flux is evaluated once and scattered, so neither side can consume an
   /// interface-incomplete residual.
+  void level_rhs_with_interfaces(
+      int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::vector<MultiFab*>& states, const std::vector<MultiFab*>& rhs,
+      const std::vector<int>& flux_only = {}) {
+    level_rhs_with_interfaces(
+        k, point, std::span<MultiFab* const>(states.data(), states.size()),
+        std::span<MultiFab* const>(rhs.data(), rhs.size()),
+        std::span<const int>(flux_only.data(), flux_only.size()));
+  }
+
   void level_rhs_with_interfaces(int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
-                                 const std::vector<MultiFab*>& states,
-                                 const std::vector<MultiFab*>& rhs,
-                                 const std::vector<int>& flux_only = {}) {
+                                 std::span<MultiFab* const> states,
+                                 std::span<MultiFab* const> rhs,
+                                 std::span<const int> flux_only = {}) {
     if (k < 0 || k >= nlev_ || point.level != k || states.size() != blocks_.size() ||
         rhs.size() != blocks_.size() || (!flux_only.empty() && flux_only.size() != blocks_.size()))
       throw std::invalid_argument("AmrRuntime multi-block interface RHS axis mismatch");
@@ -3072,7 +3082,7 @@ class AmrRuntime {
           throw std::runtime_error(
               "AmrRuntime materialized block has no exact qualified state identity");
       }
-      boundary_stage_states_.emplace(BoundaryStageStateView{point, &states, -1, nullptr});
+      boundary_stage_states_.emplace(BoundaryStageStateView{point, states, -1, nullptr});
       stage_reset.slot = &boundary_stage_states_;
     }
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
@@ -3146,7 +3156,8 @@ class AmrRuntime {
       staged[static_cast<std::size_t>(block)] = requested_states[slot];
     }
 
-    boundary_stage_states_.emplace(BoundaryStageStateView{point, &staged, -1, nullptr});
+    boundary_stage_states_.emplace(BoundaryStageStateView{
+        point, std::span<MultiFab* const>(staged.data(), staged.size()), -1, nullptr});
     struct StageStateReset {
       std::optional<BoundaryStageStateView>* slot;
       ~StageStateReset() { slot->reset(); }
@@ -3181,6 +3192,40 @@ class AmrRuntime {
       flux_only[block] = requested_flux_only[request];
     }
     level_rhs_with_interfaces(k, point, states, rhs, flux_only);
+  }
+
+  /// Evaluate both perturbed endpoint residuals as one exact shared-interface transaction.
+  ///
+  /// This fixed-arity route is intentionally narrow: packed matrix-free JVP code may use it only
+  /// for a frozen, fully materialized two-level hierarchy with exactly two runtime blocks and one
+  /// prepared interface on the requested level.  Stack arrays avoid allocating in a Krylov matvec.
+  void level_rhs_jacvec_pair(
+      int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      std::size_t first_block, MultiFab& first_state, MultiFab& first_rhs, bool first_flux_only,
+      std::size_t second_block, MultiFab& second_state, MultiFab& second_rhs,
+      bool second_flux_only) {
+    if (nlev_ != 2 || max_levels() != 2 || regrid_every_ != 0)
+      throw std::runtime_error(
+          "AmrRuntime implicit interface JVP requires one frozen materialized two-level hierarchy");
+    if (k < 0 || k >= nlev_ || point.level != k || blocks_.size() != 2 ||
+        first_block >= blocks_.size() || second_block >= blocks_.size() ||
+        first_block == second_block)
+      throw std::invalid_argument("AmrRuntime implicit interface JVP pair is invalid");
+    interface_scheduler_.require_exact_jacvec_pair(k, first_block, second_block);
+
+    std::array<MultiFab*, 2> states{nullptr, nullptr};
+    std::array<MultiFab*, 2> rhs{nullptr, nullptr};
+    std::array<int, 2> modes{0, 0};
+    states[first_block] = &first_state;
+    states[second_block] = &second_state;
+    rhs[first_block] = &first_rhs;
+    rhs[second_block] = &second_rhs;
+    modes[first_block] = first_flux_only ? 1 : 0;
+    modes[second_block] = second_flux_only ? 1 : 0;
+    level_rhs_with_interfaces(
+        k, point, std::span<MultiFab* const>(states.data(), states.size()),
+        std::span<MultiFab* const>(rhs.data(), rhs.size()),
+        std::span<const int>(modes.data(), modes.size()));
   }
 
   /// Complete a Program-owned grouped capture with the ordinary canonical shared-interface
@@ -4490,7 +4535,8 @@ class AmrRuntime {
         throw std::runtime_error("AMR Tagger requires unique qualified state storage routes");
       staged[block] = &(*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
     }
-    boundary_stage_states_.emplace(BoundaryStageStateView{point, &staged, -1, nullptr});
+    boundary_stage_states_.emplace(BoundaryStageStateView{
+        point, std::span<MultiFab* const>(staged.data(), staged.size()), -1, nullptr});
     struct StageStateReset {
       std::optional<BoundaryStageStateView>* slot;
       ~StageStateReset() { slot->reset(); }
@@ -6405,13 +6451,13 @@ class AmrRuntime {
   std::vector<AmrRuntimeBlock> blocks_;
   struct BoundaryStageStateView {
     runtime::multiblock::BoundaryEvaluationPoint point;
-    const std::vector<MultiFab*>* states = nullptr;
+    std::span<MultiFab* const> states{};
     int single_block = -1;
     MultiFab* single_state = nullptr;
 
     MultiFab* state(std::size_t block) const {
-      if (states != nullptr)
-        return block < states->size() ? (*states)[block] : nullptr;
+      if (!states.empty())
+        return block < states.size() ? states[block] : nullptr;
       return single_block >= 0 && block == static_cast<std::size_t>(single_block) ? single_state
                                                                                   : nullptr;
     }

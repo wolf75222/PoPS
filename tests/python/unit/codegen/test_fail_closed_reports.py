@@ -91,6 +91,17 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert external_amr.available_route == (
         "external FieldSolver@2 on one uniform host/serial level"
     )
+    implicit_pair = routes["amr:shared_interface_implicit_jacvec_pair"]
+    assert implicit_pair.status == "unavailable"
+    assert implicit_pair.layout == "amr"
+    assert implicit_pair.backend == "none"
+    assert implicit_pair.mpi is False
+    assert implicit_pair.gpu is False
+    assert "no generated Program executes" in implicit_pair.limitation
+    assert implicit_pair.available_route == (
+        "native host/serial pair primitive plus compile-only generated route"
+    )
+    assert "ADC-758 open" in implicit_pair.alternative
 
 
 def test_transport_boundary_routes_report_exact_supported_envelope_and_missing_kernels():

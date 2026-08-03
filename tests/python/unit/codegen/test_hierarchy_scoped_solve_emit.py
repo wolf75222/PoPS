@@ -11,6 +11,7 @@ import pytest
 
 from pops.identity.scalar import scalar_cpp, scalar_data
 from pops.linalg import LinearProblem
+from pops.numerics.terms import Flux
 from pops.params import ConstParam
 from pops.solvers import CompositeTensorFAC, Hierarchy
 from pops.time import FailRun, Program
@@ -69,6 +70,7 @@ def _build(
     properties=None,
     _return_model=False,
     _nested_hierarchy_solve=False,
+    _with_interface_pair=False,
 ):
     model = _coupled_model("hierarchy_tensor_model")
     program = Program("hierarchy_tensor_step")._bind_operators(model)
@@ -85,6 +87,44 @@ def _build(
     block, state = state_refs(program, "blk", model=model)
     temporal = program.state(block[state])
     current = temporal.n
+    if _with_interface_pair:
+        dummy_r0 = program.rhs(
+            "dummy_interface_r0", state=dummy_temporal.n, terms=(Flux(),)
+        )
+        block_r0 = program.rhs(
+            "block_interface_r0", state=current, terms=(Flux(),)
+        )
+        packed_width = (
+            len(dummy_temporal.n.space.components) + len(current.space.components)
+        )
+        interface_operator = program.matrix_free_operator(
+            "coupled_interface_jacobian",
+            domain="state",
+            range_="state",
+            ncomp=packed_width,
+        )
+
+        def apply_interface(builder, out, direction):
+            builder.rhs_jacvec(
+                out,
+                direction,
+                iterate=dummy_temporal.n,
+                r0=dummy_r0,
+                c_dt=1,
+                sources=(),
+                field_coupled=False,
+            )
+            return builder.rhs_jacvec(
+                out,
+                direction,
+                iterate=current,
+                r0=block_r0,
+                c_dt=1,
+                sources=(),
+                field_coupled=False,
+            )
+
+        program.set_apply(interface_operator, apply_interface)
     linear = _linear_handle(model)
 
     coefficients = program.condensed_coeffs(
@@ -151,7 +191,17 @@ def _build(
     )
     next_state = program.value("next", 1 * reconstructed, at=temporal.next.point)
     program.commit(temporal.next, next_state)
-    source = emit_cpp_program(program, model=model, target="amr_system")
+    if _with_interface_pair:
+        from pops.codegen.program_codegen import _emit_cpp_program_impl
+
+        source = _emit_cpp_program_impl(
+            program,
+            model=model,
+            target="amr_system",
+            has_shared_interface_implicit_jacvec=True,
+        )
+    else:
+        source = emit_cpp_program(program, model=model, target="amr_system")
     if _return_model:
         return program, source, model
     return program, source
@@ -233,6 +283,20 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     )
     assert dict(solve.attrs["hierarchy_solver_options"]) == expected_identity["options"]
     assert "hierarchy_solver" not in solve.attrs
+
+
+def test_resolved_interface_pair_proof_reaches_every_hierarchy_phase():
+    _, source = _build(
+        CompositeTensorFAC(),
+        _with_interface_pair=True,
+    )
+
+    amr = source.split('extern "C" void pops_install_program_amr', 1)[1]
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    gather = amr.index(".gather(hierarchy_dt)")
+    solve = amr.index("_level_programs->front().solve(hierarchy_dt)", gather)
+    publish = amr.index(".publish(hierarchy_dt)", solve)
+    assert gather < solve < publish
 
 
 def test_hierarchy_solve_nested_under_control_flow_is_rejected_before_lowering():

@@ -316,6 +316,15 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("program_context:amr", status_from_bool(caps.supports_amr),
                        "AMR program install requires target='amr_system'", "amr", "production",
                        "host", mpi, gpu),
+      capability_route(
+          "amr:shared_interface_implicit_jacvec_pair", "unavailable",
+          "the host/serial level_rhs_jacvec_pair primitive and resolve-evidence-gated compile "
+          "route exist, but no generated Program executes the implicit solve/matvec end to end",
+          "amr", "none", "host", false, false,
+          "generated shared-interface implicit JVP solve",
+          "native host/serial pair primitive plus compile-only generated route",
+          "keep ADC-758 open and add an end-to-end generated bind/solve/matvec proof before "
+          "advertising a production route"),
       capability_route("output:scientific_v1", "available",
                        "typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format advertises "
                        "its exact supported modes",

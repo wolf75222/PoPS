@@ -220,7 +220,8 @@ def _append_local_nonlinear_report(
 
 def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
              prelude: Any = None, block_idx: Any = None, target: Any = "system",
-             field_plans: Any = None) -> None:
+             field_plans: Any = None,
+             has_shared_interface_implicit_jacvec: bool = False) -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the
@@ -776,7 +777,10 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # rhs_jacvec apply (ADC-431) also captures persistent jac_uk / jac_r0 scratch the lambda
         # dereferences; the step body refreshes them from the live iterate / rhs(U^k) here (@p lines).
         _emit_matrix_free_operator(
-            program, v, var, prelude, lines, field_plans=field_plans)
+            program, v, var, prelude, lines, field_plans=field_plans, target=target,
+            has_shared_interface_implicit_jacvec=(
+                has_shared_interface_implicit_jacvec
+            ))
     elif v.op in ("apply_in", "apply_out", "apply_laplacian_coeff"):
         # The lambda in/out placeholders and the coefficiented apply matvec only appear INSIDE a
         # matrix_free_operator apply sub-block (lowered by _emit_matrix_free_operator); they never
