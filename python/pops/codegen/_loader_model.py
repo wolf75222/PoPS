@@ -32,12 +32,34 @@ class CompiledModel:
                  bind_schema: Any = None, definition_identity: Any = None,
                  state_spaces: Any = ("U",), wave_speed_provider: Any = None,
                  module_manifest: Any = None,
-                 characteristic_no_inflow: Any = False) -> None:
-        self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
-        self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
+                 characteristic_no_inflow: Any = False,
+                 hllc_provider: Any = None, roe_provider: Any = None,
+                 roe_entropy_policy: Any = None, roe_entropy_delta: Any = None) -> None:
+        from pops.numerics.riemann.providers import RiemannProviderEvidence
+
+        riemann_evidence = RiemannProviderEvidence(
+            hllc_provider,
+            roe_provider,
+            roe_entropy_policy,
+            roe_entropy_delta,
+        )
+        if bool(hllc) != (riemann_evidence.hllc_provider is not None):
+            raise ValueError(
+                "CompiledModel hllc flag disagrees with exact HLLC provider evidence"
+            )
+        if bool(roe) != (riemann_evidence.roe_provider is not None):
+            raise ValueError(
+                "CompiledModel roe flag disagrees with exact Roe provider evidence"
+            )
+        self.has_hllc = bool(hllc)
+        self.hllc_provider = riemann_evidence.hllc_provider
+        self.has_roe = bool(roe)
+        self.roe_provider = riemann_evidence.roe_provider
+        self.roe_entropy_policy = riemann_evidence.roe_entropy_policy
+        self.roe_entropy_delta = riemann_evidence.roe_entropy_delta
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
         self.has_characteristic_no_inflow = bool(characteristic_no_inflow)
-        if self.has_characteristic_no_inflow and not self.has_roe:
+        if self.has_characteristic_no_inflow and self.roe_provider != "flux_jacobian_v1":
             raise ValueError(
                 "characteristic no-inflow requires the compiled flux-Jacobian Roe provider"
             )
@@ -277,7 +299,9 @@ class CompiledModel:
 
     def __repr__(self) -> str:
         return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
-                "wave_speed_provider=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
+                "wave_speed_provider=%r, hllc_provider=%r, roe_provider=%r, "
+                "roe_entropy_policy=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
                 % (self.backend, self.target, self.so_path, self.n_vars, self.gamma, self.n_aux,
-                   self.wave_speed_provider, self.runtime_param_names,
+                   self.wave_speed_provider, self.hllc_provider, self.roe_provider,
+                   self.roe_entropy_policy, self.runtime_param_names,
                    self.abi_key or "", self.model_hash or ""))

@@ -53,6 +53,7 @@ class _HyperbolicModel:
     _roe: Any
     _roe_rows: Any
     _roe_jacobian: Any
+    _roe_entropy_policy: Any
     _riemann_hook_forms: Any
     _hllc: Any
     _src_freq: Any

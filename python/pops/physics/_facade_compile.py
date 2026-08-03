@@ -120,12 +120,14 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen.loader import CompiledModel
         from pops.codegen._compiled_model_identity import model_compile_identity
         from pops.codegen._backends import lower_backend
+        from pops.numerics.riemann.providers import authoring_provider_evidence
         from pops.numerics.riemann.waves import provider_of
         backend = lower_backend(backend)
         if target not in ("system", "amr_system"):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
 
         m = self._m
+        riemann_evidence = authoring_provider_evidence(self)
         wave_speed_provider = provider_of(self)
         eff_std = std if std is not None else loader_cxx_std()
         eff_cxx = _native_kokkos_compiler(cxx)
@@ -159,6 +161,10 @@ class _FacadeCompileMixin(_FacadeModel):
                 "wave_speed_provider": (
                     "none" if wave_speed_provider is None else wave_speed_provider.kind
                 ),
+                "hllc_provider": riemann_evidence.hllc_provider or "none",
+                "roe_provider": riemann_evidence.roe_provider or "none",
+                "roe_entropy_policy": riemann_evidence.roe_entropy_policy or "none",
+                "roe_entropy_delta": riemann_evidence.roe_entropy_delta or "none",
             },
             flags=[_platform_cache_key(), *_dsl_optflags(),
                    "hoist_reciprocals=%d" % bool(hoist_reciprocals)],
@@ -192,9 +198,13 @@ class _FacadeCompileMixin(_FacadeModel):
             params=self.params, caps=compiled_capability_flags(backend),
             abi_key=abi_key, model_hash=model_hash,
             definition_identity=model_compile_identity(self),
-            cxx=eff_cxx, std=eff_std, hllc=m._hllc,
-            roe=(m._roe or getattr(m, '_roe_rows', None) is not None
-                 or getattr(m, '_roe_jacobian', None) is not None),
+            cxx=eff_cxx, std=eff_std,
+            hllc=riemann_evidence.hllc_provider is not None,
+            roe=riemann_evidence.roe_provider is not None,
+            hllc_provider=riemann_evidence.hllc_provider,
+            roe_provider=riemann_evidence.roe_provider,
+            roe_entropy_policy=riemann_evidence.roe_entropy_policy,
+            roe_entropy_delta=riemann_evidence.roe_entropy_delta,
             characteristic_no_inflow=has_characteristic_no_inflow_provider(m),
             aux_extra_names=m.aux_extra_names,
             wave_speeds=wave_speed_provider is not None,
