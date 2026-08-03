@@ -366,6 +366,15 @@ nodeid = "tests/python/integration/native_loader/test_external_field_solver_runt
 
 [[check]]
 issue = "ADC-687"
+requirement = "external_solver"
+polarity = "positive"
+kind = "mpi_python"
+target = "external_solver"
+nodeid = "tests/python/integration/mpi/test_external_amr_field_solver_mpi.py::test_external_amr_field_bridge_executes_and_refuses_collectively"
+nproc = 2
+
+[[check]]
+issue = "ADC-687"
 requirement = "tamper_capability_abi"
 polarity = "refusal"
 kind = "ctest"

@@ -658,6 +658,11 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
+            "nproc": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_scientific_output_mpi.py",
             "nproc": 2,
         },
