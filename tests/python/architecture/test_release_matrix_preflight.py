@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 CONTRACT = ROOT / "scripts" / "final_release_contract.py"
 PROOF_SOURCES = (
     Path("CMakeLists.txt"),
-    Path("schemas/release_contract.v1.json"),
+    Path("schemas/release_contract.v2.json"),
     Path(".github/actions/setup-kokkos/action.yml"),
     Path(".github/workflows/ci.yml"),
     Path(".github/workflows/wheels.yml"),
@@ -84,7 +84,7 @@ def test_release_matrix_preflight_refuses_workflow_drift(tmp_path, relative, old
 
 def test_release_matrix_preflight_refuses_an_unimplemented_declared_lane(tmp_path):
     _copy_proof_sources(tmp_path)
-    path = tmp_path / "schemas" / "release_contract.v1.json"
+    path = tmp_path / "schemas" / "release_contract.v2.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["supported_matrix"]["wheels"].append(
         {

@@ -87,7 +87,7 @@ def _static_contract(contract: Any) -> list[str]:
             provider["regex"], (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")):
         raise PreflightError("wheel version provider does not resolve the CMake version")
 
-    source = json.loads((ROOT / "schemas" / "release_contract.v1.json").read_text())
+    source = json.loads((ROOT / "schemas" / "release_contract.v2.json").read_text())
     catalog = json.loads((ROOT / "schemas" / "component_catalog.v2.json").read_text())
     exact = {
         "component_catalog_schema_version": catalog["catalog_schema_version"],
@@ -98,6 +98,23 @@ def _static_contract(contract: Any) -> list[str]:
     }
     for name, value in exact.items():
         if source[name] != value:
+            raise PreflightError("release contract %s drifted from component catalog" % name)
+    component_generated = ROOT / "python" / "pops" / "model" / "_generated_component_schema.py"
+    component_spec = importlib.util.spec_from_file_location(
+        "_release_component_schema", component_generated
+    )
+    if component_spec is None or component_spec.loader is None:
+        raise PreflightError("cannot load generated component schema")
+    component_contract = importlib.util.module_from_spec(component_spec)
+    component_spec.loader.exec_module(component_contract)
+    component_digests = {
+        "component_catalog_sha256": component_contract.COMPONENT_CATALOG_SHA256,
+        "component_catalog_semantic_sha256": (
+            component_contract.COMPONENT_CATALOG_SEMANTIC_SHA256
+        ),
+    }
+    for name, value in component_digests.items():
+        if source[name] != value or getattr(contract, name.upper()) != value:
             raise PreflightError("release contract %s drifted from component catalog" % name)
     native = (ROOT / "include" / "pops" / "runtime" / "module_capabilities.hpp").read_text()
     match = re.search(r"kAbiVersion\s*=\s*(\d+)", native)

@@ -1650,7 +1650,8 @@ extension installée. Une exigence de la lane obligatoire ne peut pas être couv
 - `docs/design/consumer_graph_transaction_contract.md` : effets acceptés et rollback ;
 - `docs/design/temporal-execution-contract.md` : clocks, sous-cycles et restart temporel v2 ;
 - `docs/design/external-component-packages.md` : extension C++ externe ;
-- `schemas/release_contract.v1.json` : versions de schémas, ABI et matrice supportée ;
+- `schemas/release_contract.v2.json` : versions de schémas, ABI, digests exacts du catalogue de
+  composants et matrice supportée ;
 - `schemas/component_catalog.v2.json` : composants builtin et routes natives ;
 - `scripts/final_release_contract.py` : spécification et ensemble exact des quatre exemples ;
 - `scripts/run_final_gate.py` : producteur unique de l'evidence groupée ;

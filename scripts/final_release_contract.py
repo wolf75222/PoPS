@@ -184,7 +184,7 @@ def release_matrix_source_errors(root: Path) -> list[str]:
     """
 
     errors: list[str] = []
-    contract_path = root / "schemas" / "release_contract.v1.json"
+    contract_path = root / "schemas" / "release_contract.v2.json"
     try:
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
         matrix = contract["supported_matrix"]

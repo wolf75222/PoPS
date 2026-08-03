@@ -19,7 +19,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "schemas" / "release_contract.v1.json"
+SOURCE = ROOT / "schemas" / "release_contract.v2.json"
+COMPONENT_SOURCE = ROOT / "schemas" / "component_catalog.v2.json"
 CMAKE = ROOT / "CMakeLists.txt"
 PYTHON = ROOT / "python" / "pops" / "_generated_release_contract.py"
 CPP = ROOT / "include" / "pops" / "runtime" / "config" / "generated_release_contract.hpp"
@@ -40,6 +41,10 @@ _VERSION_FIELDS = (
     "uniform_checkpoint_payload_version",
     "amr_checkpoint_payload_version",
 )
+_DIGEST_FIELDS = (
+    "component_catalog_sha256",
+    "component_catalog_semantic_sha256",
+)
 
 
 class ContractError(ValueError):
@@ -58,15 +63,38 @@ def _canonical(data: Any) -> bytes:
                       ensure_ascii=True).encode("utf-8")
 
 
+def _component_catalog_digests() -> tuple[str, str]:
+    data = json.loads(COMPONENT_SOURCE.read_text(encoding="utf-8"))
+    full = hashlib.sha256(json.dumps(
+        data, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    semantic = json.loads(json.dumps(data))
+    for family in semantic["route_families"]:
+        for route in family["routes"]:
+            route.pop("limitations", None)
+            route["metadata"].pop("summary", None)
+    semantic_digest = hashlib.sha256(json.dumps(
+        semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    return full, semantic_digest
+
+
 def _load() -> tuple[dict[str, Any], str, str]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
-    expected = set(_VERSION_FIELDS) | {"supported_matrix"}
+    expected = set(_VERSION_FIELDS) | set(_DIGEST_FIELDS) | {"supported_matrix"}
     if not isinstance(data, dict) or set(data) != expected:
         raise ContractError("release contract fields must be exactly %s" % sorted(expected))
     for name in _VERSION_FIELDS:
         value = data[name]
         if type(value) is not int or value < 1:
             raise ContractError("%s must be an integer >= 1" % name)
+    expected_digests = dict(zip(_DIGEST_FIELDS, _component_catalog_digests(), strict=True))
+    for name, expected_digest in expected_digests.items():
+        value = data[name]
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ContractError("%s must be one lowercase SHA-256 digest" % name)
+        if value != expected_digest:
+            raise ContractError("%s drifted from component_catalog.v2.json" % name)
     matrix = data["supported_matrix"]
     if not isinstance(matrix, dict) or set(matrix) != {
         "language", "kokkos", "distributed", "source_builds", "wheels", "not_promised",
@@ -92,6 +120,8 @@ def _python_text(data: dict[str, Any], package_version: str, digest: str) -> str
     ]
     for name in _VERSION_FIELDS:
         constants.append("%s = %d" % (name.upper(), data[name]))
+    for name in _DIGEST_FIELDS:
+        constants.append("%s = %r" % (name.upper(), data[name]))
     constants.extend([
         "RELEASE_CONTRACT_SHA256 = %r" % digest,
         "_SUPPORTED_MATRIX_DATA = %s" % pprint.pformat(
@@ -136,6 +166,12 @@ def _cpp_text(data: dict[str, Any], package_version: str, digest: str) -> str:
     ]
     lines.extend("inline constexpr int %s = %d;" % (names[name], data[name])
                  for name in _VERSION_FIELDS)
+    lines.extend([
+        'inline constexpr const char* kComponentCatalogSha256 = "%s";'
+        % data["component_catalog_sha256"],
+        'inline constexpr const char* kComponentCatalogSemanticSha256 = "%s";'
+        % data["component_catalog_semantic_sha256"],
+    ])
     lines.extend([
         'inline constexpr const char* kContractSha256 = "%s";' % digest,
         "}  // namespace pops::release_contract",
