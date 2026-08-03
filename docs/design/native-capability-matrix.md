@@ -283,20 +283,20 @@ Explicit unsupported rows include:
   nonlinear/JVP context. A partially refined FAC hierarchy refuses the same request because its
   interface correction does not yet own the required homogeneous/JVP boundary operator per level;
   it never reuses the inhomogeneous primal closure as a correction boundary.
-- `amr:external_field_solver_v2`: the generated ABI already carries a `level` in every global patch
-  metadata row, but the installed external-component adapter materializes one uniform `System`
-  `MultiFab`. There is no authenticated bridge from the component pair to
-  `AmrFieldSolverProvider`, no complete coarse/fine topology materialization, and no collective
-  hierarchy solve ownership. The provider authority therefore advertises `max_levels=1`,
-  `hierarchy_materialization=false` and `amr_provider_bridge=false`; any AMR target or non-level-local
-  hierarchy policy is rejected during field-plan resolution rather than dispatched to a builtin.
-  Closing this row does not start by flipping that capability: it requires an AMR component installer
-  in `_PreparedAmrFieldSolverInstall`, a native `AmrFieldSolverProvider`/`AmrPreparedFieldSolver`
-  adapter over the component pair, one regrid-aware all-level topology/request lifetime replacing the
-  single-`MultiFab` cache in `PreparedFieldSolverComponent`, and communicator-wide
-  declaration/materialization/solve consensus. The existing v2 patch metadata may remain the data
-  carrier for the restricted full-material case, but that bridge must prove coarse/fine coverage and
-  ownership before the public capability can become available.
+- `amr:external_field_solver_v2`: an authenticated `InstallPlan` now installs the exact
+  `FieldTopology@2` + `FieldSolver@2` pair as one `AmrFieldSolverProvider`. One prepared request
+  carries every hierarchy level, qualified by `metadata.level`, and binary material masks exclude
+  fine-covered coarse cells. The serial integration oracle requires both a masked coarse cell and an
+  active fine cell, then advances through repeated field solves and a layout-changing regrid. The
+  provider performs one collective solve, validates every active candidate value before
+  `SolveOutcome` publication, restricts solved fine values into covered coarse cells, materializes
+  same-level/physical/coarse-fine potential halos before centered gradients, and
+  destroys/rematerializes both component states when regridding invalidates the prepared solver.
+  The current transfer proof is ratio-2. Host serial is available; MPI is available
+  only when both component manifests declare the host/MPI variant, the installed execution
+  authority is exact `MPI_COMM_WORLD`/`MPI_DOUBLE`, and the coarse level is distributed (the v2 ABI
+  has no replicated-coarse ownership marker). GPU/device memory, embedded or cut-cell topology,
+  dynamic/dependent boundaries, reaction coefficients and nonlinear/JVP solves remain fail-closed.
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and
 future validators:

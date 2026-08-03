@@ -424,15 +424,19 @@ vérifier `residual_norm <= max(relative_tolerance * reference_residual_norm, ab
 uniquement un échec de transport ABI et ne fabrique jamais de statut scientifique.
 
 La représentation matière est typée (`full`, couverture binaire, fraction cut-cell, ids matériau ou
-leur combinaison), jamais simulée par un tableau de `1`. La route actuellement prouvée de bout en bout
-est plus étroite que cette ABI : `Uniform(CartesianGrid)`, cell-centered, plein matériau, float64,
-host, communicateur série et politique `pops.field-hierarchy.level-local`. Le champ `level` des
-métadonnées ABI ne constitue pas à lui seul une implémentation AMR : aucun bridge ne matérialise la
-paire externe comme `AmrFieldSolverProvider`. L'autorité expose donc explicitement `max_levels=1`,
-`hierarchy_materialization=false` et `amr_provider_bridge=false`. AMR, une autre politique de
-hiérarchie, embedded boundary, multimatériau, GPU, MPI sans consensus global,
-conditions de bord dépendantes d'un état/champ/temps et outer solve non linéaire sont refusés à
-`resolve`; les accepter dans un manifest ne suffit pas à rendre l'adapter capable.
+leur combinaison), jamais simulée par un tableau de `1`. Deux routes sont prouvées : le `System`
+uniforme cell-centered utilise un batch plein matériau, et `AmrSystem` matérialise tous les niveaux
+en un unique batch composite. Chaque patch AMR porte son `level`; une couverture binaire masque sur
+le niveau parent les cellules couvertes par le niveau enfant. Le couple authentifié est enregistré
+comme un `AmrFieldSolverProvider`, appelé une fois collectivement, puis détruit et rematérialisé avec
+le nouveau layout après regrid. Après publication et jauge, le runtime restreint les valeurs fines
+sur les cellules grossières couvertes, puis matérialise les halos same-level, physiques et
+coarse/fine avant tout gradient centré. Les preuves de déclaration, contrat préparé, digest et provenance
+sont consensuelles sur le communicateur. La route reste ratio-2, float64/host : MPI exige que les deux
+manifests déclarent leur variant CPU+MPI, que le contexte installe exactement
+`MPI_COMM_WORLD`/`MPI_DOUBLE` et que le niveau grossier soit distribué. Embedded/cut-cell,
+multimatériau, GPU, conditions de bord dépendantes d'un état/champ/temps, réaction et outer solve non
+linéaire/JVP restent refusés ; les accepter dans un manifest ne suffit pas à rendre l'adapter capable.
 
 Cette route sélectionne, pour chacun des deux composants, exactement un variant cible
 `{dimension: 2, scalar: "float64", device: "cpu"}`. Un variant uniquement 3D, ou plusieurs variants

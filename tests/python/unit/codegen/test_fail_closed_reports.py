@@ -84,12 +84,16 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert "no temporal fallback" in amr_implicit.limitation
     assert amr_implicit.layout == "amr"
     external_amr = routes["amr:external_field_solver_v2"]
-    assert external_amr.status == "unavailable"
+    assert external_amr.status == "available"
     assert external_amr.layout == "amr"
-    assert external_amr.mpi is False
-    assert "no AmrFieldSolverProvider" in external_amr.limitation
+    assert external_amr.mpi is supports_mpi
+    assert external_amr.gpu is False
+    assert "ratio-2 AMR" in external_amr.limitation
+    assert "both components to declare MPI_COMM_WORLD" in external_amr.limitation
+    assert "distributed coarse level" in external_amr.limitation
     assert external_amr.available_route == (
-        "external FieldSolver@2 on one uniform host/serial level"
+        "authenticated FieldTopology@2 + FieldSolver@2 composite hierarchy batch with "
+        "metadata.level, binary coarse/fine coverage and one collective solve"
     )
     field_jacvec = routes["amr:field_coupled_rhs_jacvec"]
     assert field_jacvec.status == "available"
