@@ -440,6 +440,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_nd_execution
   test_nd_layout
   test_nd_topology
+  test_nd_transfer
   test_nd_translation_schedule
   test_multiblock_interface_scheduler
   test_sync_residence

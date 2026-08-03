@@ -168,6 +168,7 @@ set(POPS_CPP_TEST_SOURCE_test_nd_distribution "tests/cpp/unit/mesh/test_nd_distr
 set(POPS_CPP_TEST_SOURCE_test_nd_execution "tests/cpp/unit/mesh/test_nd_execution.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_layout "tests/cpp/unit/mesh/test_nd_layout.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_topology "tests/cpp/unit/mesh/test_nd_topology.cpp")
+set(POPS_CPP_TEST_SOURCE_test_nd_transfer "tests/cpp/unit/amr/test_nd_transfer.cpp")
 set(POPS_CPP_TEST_SOURCE_test_nd_translation_schedule "tests/cpp/unit/mesh/test_nd_translation_schedule.cpp")
 set(POPS_CPP_TEST_SOURCE_test_multirate_stride "tests/cpp/unit/physics/test_multirate_stride.cpp")
 set(POPS_CPP_TEST_SOURCE_test_native_aux_named "tests/cpp/integration/native_loader/test_native_aux_named.cpp")
