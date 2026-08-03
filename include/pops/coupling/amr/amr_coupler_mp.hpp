@@ -617,7 +617,8 @@ class AmrCouplerMP {
   // the single rank 0 and compute_aux would read a phi absent elsewhere). In serial, both coincide.
   template <class FactoryT = DefaultEllipticFactory<Elliptic>>
     requires pops::EllipticFactory<FactoryT, Elliptic>
-  AmrCouplerMP(const Model& model, const Geometry& geom, const BoxArray& ba_coarse, const BCRec& bc,
+  AmrCouplerMP(const Model& model, const Geometry& geom, const BoxArray& ba_coarse,
+               const BCRec& elliptic_bc, Periodicity transport_periodicity,
                std::vector<AmrLevelMP> levels, ActiveRegionProvider2D active,
                bool replicated_coarse,
                std::shared_ptr<const PreparedLoadBalanceAuthority> load_balance,
@@ -626,19 +627,18 @@ class AmrCouplerMP {
         geom_(detail::coupler_validated_geometry(geom)),
         coarse_boxes_(ba_coarse),
         coarse_mapping_(detail::coupler_authoritative_coarse_mapping(ba_coarse, levels)),
-        elliptic_bc_(bc),
+        elliptic_bc_(elliptic_bc),
         mg_(make_elliptic_solver<Elliptic>(
             {geom_, coarse_boxes_, coarse_mapping_, elliptic_bc_, std::move(active),
              replicated_coarse ? FieldDistribution::Replicated : FieldDistribution::Distributed},
             std::move(elliptic_factory))),
         stack_(geom_.domain, std::move(levels), aux_comps<Model>()),
         replicated_coarse_(replicated_coarse),
-        load_balance_authority_(std::move(load_balance)) {
+        load_balance_authority_(std::move(load_balance)),
+        transport_periodicity_(transport_periodicity) {
     if (!load_balance_authority_)
       throw std::invalid_argument("AmrCouplerMP requires a prepared load-balance authority");
-    detail::validate_periodic_pairs(bc);
-    transport_periodicity_ =
-        Periodicity{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
+    detail::validate_periodic_pairs(elliptic_bc);
     for (const AmrLevelMP& level : stack_.levels())
       detail::require_positive_finite_amr_spacing(level.dx, level.dy);
     prepare_aux_transfer_workspaces_();
@@ -846,6 +846,10 @@ class AmrCouplerMP {
   // rely only on the IMPOSED LAYOUT. SINGLE-RANK, 2-level mono-block hierarchy (so we impose
   // ONLY level 1). Clear rejection if the hierarchy has no fine level or if no box was saved.
   void set_hierarchy(const std::vector<Box2D>& fine_boxes) {
+    if (!transport_periodicity_.x || !transport_periodicity_.y)
+      throw std::logic_error(
+          "AmrCouplerMP::set_hierarchy refuses non-periodic transport without a prepared "
+          "boundary plan providing physical ghost support");
     std::vector<AmrLevelMP>& L = stack_.L();
     if (L.size() < 2)
       throw std::runtime_error(
@@ -981,6 +985,10 @@ class AmrCouplerMP {
   // margin = nesting. The coupler only orders the call.
   template <class Crit>
   void regrid(Crit crit, int grow = 2, int margin = 2) {
+    if (!transport_periodicity_.x || !transport_periodicity_.y)
+      throw std::logic_error(
+          "AmrCouplerMP::regrid refuses non-periodic transport without a prepared boundary plan "
+          "providing physical ghost support");
     const RegridProlongation prolong = [base_domain = stack_.domain(),
                                         periodicity = transport_periodicity_](
                                            const MultiFab& parent, MultiFab& fine, int parent_level,
