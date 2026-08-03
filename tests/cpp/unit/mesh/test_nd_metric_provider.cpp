@@ -120,6 +120,7 @@ TEST(test_nd_metric_provider, cartesian_1d_centers_faces_measure_and_ghosts) {
   expect_vector_close(metric.template face_center<0, MetricFaceSide::Upper>(Index<1>{-2}),
                       RealVector<1>{3.0});
   EXPECT_TRUE(close(metric.cell_measure(Index<1>{-2}), Real(2)));
+  EXPECT_TRUE(close(metric.jacobian(Index<1>{-2})[0][0], Real(-8)));
   expect_vector_close(
       metric.template oriented_face_area_vector<0, MetricFaceSide::Lower>(Index<1>{-2}),
       RealVector<1>{1.0});
@@ -129,6 +130,37 @@ TEST(test_nd_metric_provider, cartesian_1d_centers_faces_measure_and_ghosts) {
 
   // Coordinate queries are deliberately defined outside the accepted domain for ghost kernels.
   expect_vector_close(metric.cell_center(Index<1>{-3}), RealVector<1>{6.0});
+  const auto inverse = metric.inverse_map(RealVector<1>{4.0});
+  ASSERT_TRUE(inverse.succeeded());
+  expect_vector_close(inverse.reference, RealVector<1>{0.125});
+}
+
+TEST(test_nd_metric_provider, cartesian_2d_exposes_the_same_complete_contract) {
+  const auto map =
+      CartesianCoordinateMap<2>::make(RealVector<2>{-2.0, 10.0}, RealVector<2>{6.0, 4.0},
+                                      std::array<int, 2>{1, 0}, std::array<int, 2>{1, -1});
+  const auto metric = prepare_metric_provider(Box<2>{Index<2>{3, -4}, Index<2>{5, -3}}, map);
+  const Index<2> index{3, -4};
+
+  expect_vector_close(metric.cell_center(index), RealVector<2>{-3.0, 11.0});
+  expect_vector_close(metric.template face_center<0, MetricFaceSide::Upper>(index),
+                      RealVector<2>{-3.0, 12.0});
+  expect_vector_close(metric.template face_center<1, MetricFaceSide::Lower>(index),
+                      RealVector<2>{-2.0, 11.0});
+  EXPECT_TRUE(close(metric.cell_measure(index), Real(4)));
+
+  const auto jacobian = metric.jacobian(index);
+  EXPECT_TRUE(close(jacobian[1][0], Real(6)));
+  EXPECT_TRUE(close(jacobian[0][1], Real(-4)));
+  expect_vector_close(metric.template oriented_face_area_vector<0, MetricFaceSide::Upper>(index),
+                      RealVector<2>{0.0, 2.0});
+  expect_vector_close(metric.template oriented_face_area_vector<1, MetricFaceSide::Upper>(index),
+                      RealVector<2>{-2.0, 0.0});
+
+  const RealVector<2> reference{Real(1) / Real(6), Real(0.25)};
+  const auto inverse = metric.inverse_map(map.map(reference));
+  ASSERT_TRUE(inverse.succeeded());
+  expect_vector_close(inverse.reference, reference);
 }
 
 TEST(test_nd_metric_provider, cartesian_axis_permutation_is_reflected_in_every_metric) {
