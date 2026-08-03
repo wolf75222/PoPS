@@ -131,15 +131,27 @@ void System::mark_bound() {
       throw std::runtime_error(
           "System::mark_bound: materialized block lacks its exact state route");
   for (const auto& [name, plan] : p_->boundary_plans_) {
-    if (p_->eb_set_ && p_->geometry_mode_ != GeometryMode::None && plan->has_component_boundaries())
-      throw std::runtime_error(
-          "System::mark_bound: embedded-boundary block '" + name +
-          "' has a native boundary component without a geometry-aware provider");
     auto found = std::find_if(p_->sp.begin(), p_->sp.end(),
                               [&name](const Impl::Species& block) { return block.name == name; });
     if (found == p_->sp.end())
       throw std::runtime_error(
           "System::mark_bound: prepared boundary plan references unknown block '" + name + "'");
+    const SpatialProviderGeometry geometry = p_->geometry_mode_ == GeometryMode::None
+                                                 ? found->base_spatial_geometry
+                                                 : spatial_provider_geometry(p_->geometry_mode_);
+    const auto supports = [&](SpatialProviderOperation operation) {
+      return found->spatial_provider.supports({kNativeDimension, geometry, operation});
+    };
+    if (plan->requires_characteristic_no_inflow() &&
+        !supports(SpatialProviderOperation::CharacteristicNoInflow))
+      throw std::runtime_error(
+          "System::mark_bound: block '" + name +
+          "' has characteristic no-inflow without a qualified spatial provider");
+    if (plan->has_component_boundaries() &&
+        !supports(SpatialProviderOperation::BoundaryLinearization))
+      throw std::runtime_error(
+          "System::mark_bound: block '" + name +
+          "' has a native boundary component without a geometry-aware provider");
     if (plan->ncomp() != found->ncomp)
       throw std::runtime_error(
           "System::mark_bound: prepared boundary component count differs from block '" + name +

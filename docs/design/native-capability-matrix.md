@@ -174,8 +174,11 @@ Supported native routes include:
   complete ghost transaction and never selects scalar, Rusanov, or Euler-specific logic. This
   qualification is currently 2D Cartesian host serial; primitive/analytic reference states,
   state/field-dependent auxiliary eigenstructure, sonic-error policy, MPI/GPU qualification, 3D,
-  polar and embedded/cut-cell geometry remain unavailable. Post-Riemann transformation is instead
-  an explicit `partial` route: a typed
+  polar and embedded/cut-cell geometry remain unavailable. The native selector now authenticates
+  these limits with one `dimension x geometry x operation` spatial-provider matrix: a 2D
+  staircase/cut-cell residual cannot be mistaken for a metric-aware characteristic or boundary
+  linearization provider, and the polar residual cannot be selected as Cartesian. Post-Riemann
+  transformation is instead an explicit `partial` route: a typed
   `BoundaryFlux` component receives the already evaluated outward-normal flux and executes between
   the Riemann solve and divergence/reflux through the same prepared Uniform/AMR plan. The runtime
   converts lower and upper faces to outward orientation before the call and converts the result
@@ -367,7 +370,11 @@ future validators:
 - `elliptic:mg_fac_defaults`: MG/FAC defaults and debug diagnostics still need a shared
   `SolverDefaults`/logger route.
 - `mesh:2d_storage_arithmetic`: the native mesh/storage/arithmetic core is `Box2D`/`Fab2D`
-  2D-only, and `validate_dimension()` rejects `Dim != 2` requests.
+  2D-only, and `validate_dimension()` rejects `Dim != 2` requests. Separately, the prepared local
+  periodic Cartesian finite-volume provider executes compile-time `Dim=1..3` contiguous patches
+  through the same metric, reconstruction, typed Riemann and conservative-divergence pipeline.
+  Its 1D/3D qualification does not claim 1D/3D `MultiFab`, AMR hierarchy, physical boundaries or
+  runtime binding.
 - `amr:refinement_ratio`: native AMR hierarchy, patch ranges, spatial transfers and reflux geometry
   are `ratio=2` only, and `validate_amr_refinement_ratio()` rejects other spatial ratios. Temporal
   parent/child ratios are explicit `ProgramGraph` data; `AmrRuntime` never infers or executes

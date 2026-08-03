@@ -208,12 +208,20 @@ POPS_EXPORT void System::set_block_conversion(const std::string& name, CellConve
 
 POPS_EXPORT void System::set_block_characteristic_no_inflow(const std::string& name,
                                                             CharacteristicNoInflowFill fill) {
-  (void)p_->find(name);
+  Impl::Species& block = p_->find(name);
   const auto boundary = p_->boundary_plans_.find(name);
   if (boundary == p_->boundary_plans_.end() ||
       !boundary->second->requires_characteristic_no_inflow())
     throw std::runtime_error(
         "System characteristic no-inflow was not requested by the exact block boundary plan");
+  const SpatialProviderGeometry geometry = p_->geometry_mode_ == GeometryMode::None
+                                               ? block.base_spatial_geometry
+                                               : spatial_provider_geometry(p_->geometry_mode_);
+  if (!block.spatial_provider.supports(
+          {kNativeDimension, geometry, SpatialProviderOperation::CharacteristicNoInflow}))
+    throw std::runtime_error(
+        "System characteristic no-inflow has no qualified provider for the active spatial "
+        "geometry");
   boundary->second->prepare_characteristic_no_inflow(std::move(fill));
 }
 

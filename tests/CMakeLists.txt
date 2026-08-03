@@ -506,6 +506,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_scheme_dispatch
   test_model_registry
   test_spatial_discretisation
+  test_spatial_provider_matrix
   test_primitive_recon
   test_system_abstraction
   test_system_coupler
@@ -557,6 +558,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_riemann_capabilities
   test_newton_robustness
   test_variable_recovery_chain
+  test_prepared_cartesian_nd
   test_prepared_numerics_gate
   test_elliptic_interface
   test_field_nullspace

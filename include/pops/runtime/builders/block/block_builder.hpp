@@ -52,6 +52,13 @@ namespace pops {
 // included by system.hpp to expose grid_context() / install_block() without pulling in the numerics).
 
 namespace detail {
+template <class Model>
+concept HasCharacteristicNoInflow = requires(
+    const Model model, const typename Model::State interior, const typename Model::State reference,
+    int axis, int side, typename Model::State& ghost) {
+  { model.characteristic_no_inflow(interior, reference, axis, side, ghost) } -> std::same_as<bool>;
+};
+
 inline bool embedded_boundary_active(const GridContext& context) {
   return context.embedded_boundary_set != nullptr && *context.embedded_boundary_set &&
          context.geometry_mode != nullptr && *context.geometry_mode != GeometryMode::None;
@@ -573,11 +580,14 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   // The current EB operators own only first-order hyperbolic transport. Higher-order
   // reconstructions can cross the inactive set, and DiffusiveModel needs a conservative embedded
   // diffusive flux that is not implemented here. Advertise only capabilities that are physically
-  // executable; System validates this bitset before publishing a geometry.
+  // executable; System validates this matrix before publishing a geometry.
   constexpr bool supports_embedded_boundary =
       supports_embedded_boundary_reconstruction_v<Limiter> && !DiffusiveModel<Model>;
+  bc.spatial_provider =
+      make_cartesian_spatial_provider(kNativeDimension, detail::HasCharacteristicNoInflow<Model>,
+                                      /*boundary_linearization=*/true);
   if constexpr (supports_embedded_boundary)
-    bc.supported_geometry_modes = kAllGeometrySupport;
+    bc.spatial_provider = with_embedded_boundary_residuals(bc.spatial_provider);
   // SHARED scratch of the HLL wave speed cache (opt-in): a single MultiFab for the residual family
   // (never called concurrently by one Program stage). nullptr when the option is OFF -> BlockRhsEval
   // keeps the per-face path (bit-identical). Allocated at the real layout on the first call
@@ -973,13 +983,6 @@ auto make_recovery_validated_forward_conversion(Forward forward, Recovery recove
 }  // namespace detail
 
 namespace detail {
-
-template <class Model>
-concept HasCharacteristicNoInflow = requires(
-    const Model model, const typename Model::State interior, const typename Model::State reference,
-    int axis, int side, typename Model::State& ghost) {
-  { model.characteristic_no_inflow(interior, reference, axis, side, ghost) } -> std::same_as<bool>;
-};
 
 template <class Model>
 struct CharacteristicNoInflowPreflightKernel {

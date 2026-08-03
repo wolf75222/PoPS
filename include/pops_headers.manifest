@@ -19,6 +19,7 @@ api pops/amr/tagging/tagging_truth.hpp
 api pops/core/foundation/allocator.hpp
 api pops/core/foundation/cold.hpp
 api pops/core/foundation/kokkos_env.hpp
+api pops/core/foundation/native_dimension.hpp
 api pops/core/foundation/types.hpp
 api pops/core/foundation/validation.hpp
 api pops/core/identity/canonical_value.hpp
@@ -107,6 +108,7 @@ api pops/numerics/fv/reconstruction.hpp
 api pops/numerics/fv/spatial_discretisation.hpp
 api pops/numerics/linalg/block_inverse.hpp
 api pops/numerics/linalg/dense_eig.hpp
+api pops/numerics/nonlinear/local_nonlinear_collective.hpp
 api pops/numerics/nonlinear/prepared_local_nonlinear.hpp
 api pops/numerics/nonlinear/prepared_variable_recovery.hpp
 api pops/numerics/spatial/embedded_boundary/domain.hpp
@@ -114,11 +116,13 @@ api pops/numerics/spatial/embedded_boundary/operator.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
 api pops/numerics/spatial/operators/masked_operator.hpp
 api pops/numerics/spatial/operators/polar_operator.hpp
+api pops/numerics/spatial/operators/prepared_cartesian_nd.hpp
 api pops/numerics/spatial/primitives/face_flux.hpp
 api pops/numerics/spatial/primitives/finite.hpp
 api pops/numerics/spatial/primitives/positivity.hpp
 api pops/numerics/spatial/primitives/state_access.hpp
 api pops/numerics/spatial/primitives/wave_speed.hpp
+api pops/numerics/spatial/provider_matrix.hpp
 api pops/numerics/spatial_operator.hpp
 api pops/numerics/time/amr/levels/amr_clock.hpp
 api pops/numerics/time/amr/levels/amr_patch_range.hpp

@@ -889,6 +889,11 @@ sources = ["tests/cpp/unit/numerics/test_positivity_floor.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_prepared_cartesian_nd"
+sources = ["tests/cpp/unit/numerics/test_prepared_cartesian_nd.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
 name = "test_prepared_numerics_gate"
 sources = ["tests/cpp/unit/numerics/test_prepared_numerics_gate.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -906,6 +911,11 @@ labels = ["unit", "numerics", "fast"]
 [[cpp.suite]]
 name = "test_roe_flux"
 sources = ["tests/cpp/unit/numerics/test_roe_flux.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_spatial_provider_matrix"
+sources = ["tests/cpp/unit/numerics/test_spatial_provider_matrix.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]

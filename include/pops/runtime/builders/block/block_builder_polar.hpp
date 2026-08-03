@@ -252,6 +252,8 @@ template <class Limiter, class Flux, class Model>
 BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, bool recon_prim,
                                 bool wall_radial, Real pos_floor = Real(0)) {
   BlockClosures bc;
+  bc.base_spatial_geometry = SpatialProviderGeometry::Polar;
+  bc.spatial_provider = make_polar_spatial_provider(kNativeDimension);
   bc.rhs_into =
       detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
   // A polar Program owns the same exact stage/clock identity as a Cartesian Program even though

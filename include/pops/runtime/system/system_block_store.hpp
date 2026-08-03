@@ -194,9 +194,11 @@ class SystemBlockStore {
         boundary_jvp_at_point_prepared;
     PointQualifiedResidualClosures staircase_residuals;
     PointQualifiedResidualClosures cutcell_residuals;
-    // Frozen numerical-provider capability. Kept at the aggregate tail so the positional head used
-    // by install_block remains ABI/source compatible.
-    std::uint8_t supported_geometry_modes = kCartesianGeometrySupport;
+    SpatialProviderGeometry base_spatial_geometry = SpatialProviderGeometry::Cartesian;
+    // Frozen numerical-provider matrix. Kept at the aggregate tail so the positional head used by
+    // install_block remains ABI/source compatible.
+    SpatialProviderCapabilities spatial_provider =
+        make_cartesian_spatial_provider(kNativeDimension);
     /// Sequential runtime session materialized once at bind, after block layouts and qualified
     /// storage routes are frozen. Prepared Krylov workspaces own distinct lane-private sessions.
     std::shared_ptr<ExecutionLane> boundary_lane;
@@ -503,18 +505,29 @@ class SystemBlockStore {
 
  private:
   static void require_geometry_provider(const BlockState& block, GeometryMode mode) {
-    if (!supports_geometry_mode(block.supported_geometry_modes, mode))
+    const SpatialProviderGeometry geometry =
+        mode == GeometryMode::None ? block.base_spatial_geometry : spatial_provider_geometry(mode);
+    const auto supports = [&](SpatialProviderOperation operation) {
+      return block.spatial_provider.supports({kNativeDimension, geometry, operation});
+    };
+    if (!supports(SpatialProviderOperation::Residual))
       throw std::runtime_error("SystemBlockStore block '" + block.name +
                                "' has no numerical provider for geometry policy '" +
                                geometry_token(mode) + "'");
-    if (mode == GeometryMode::None || !block.boundary_session)
+    if (!block.boundary_session)
       return;
     const PreparedBoundaryPlan* plan = block.boundary_session->resolved_plan();
-    if (plan != nullptr && plan->has_component_boundaries())
+    if (plan != nullptr && plan->requires_characteristic_no_inflow() &&
+        !supports(SpatialProviderOperation::CharacteristicNoInflow))
+      throw std::runtime_error("SystemBlockStore block '" + block.name +
+                               "' cannot execute characteristic no-inflow for geometry policy '" +
+                               geometry_token(mode) + "': no qualified spatial provider");
+    if (plan != nullptr && plan->has_component_boundaries() &&
+        !supports(SpatialProviderOperation::BoundaryLinearization))
       throw std::runtime_error(
-          "SystemBlockStore embedded-boundary block '" + block.name +
-          "' cannot execute a native boundary component without an active-cell or cut-cell "
-          "metric provider");
+          "SystemBlockStore block '" + block.name +
+          "' cannot execute a native boundary component for geometry policy '" +
+          geometry_token(mode) + "' without a signed-mask or cut-cell metric contract");
   }
 
   static PointQualifiedResidualClosures& embedded_residuals(BlockState& block, GeometryMode mode) {
