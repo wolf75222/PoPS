@@ -186,8 +186,75 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
                     backend: Any = "production", target: Any = "system", force: Any = False,
                     cxx: Any = None, include: Any = None, std: Any = None, debug: Any = False,
                     libraries: Any = None, problem_snapshot: Any = None,
-                    field_plans: Any = None, balance_due_contract: Any = None,
-                    has_shared_interface_implicit_jacvec: Any = False) -> Any:
+                    field_plans: Any = None, balance_due_contract: Any = None) -> Any:
+    """Compile the public low-level Program route without privileged resolve evidence."""
+    return _compile_problem_impl(
+        so_path,
+        model=model,
+        model_graph=model_graph,
+        time=time,
+        backend=backend,
+        target=target,
+        force=force,
+        cxx=cxx,
+        include=include,
+        std=std,
+        debug=debug,
+        libraries=libraries,
+        problem_snapshot=problem_snapshot,
+        field_plans=field_plans,
+        balance_due_contract=balance_due_contract,
+        shared_interface_codegen_evidence=None,
+    )
+
+
+def _compile_resolved_problem(
+    plan: Any, so_path: Any = None, *, model: Any = None, model_graph: Any = None,
+    time: Any = None, backend: Any = "production", target: Any = "system",
+    force: Any = False, cxx: Any = None, include: Any = None, std: Any = None,
+    debug: Any = False, libraries: Any = None, problem_snapshot: Any = None,
+    field_plans: Any = None, balance_due_contract: Any = None,
+) -> Any:
+    """Compile only the route authenticated by one exact resolved plan."""
+    from pops.codegen._plans import ResolvedSimulationPlan
+
+    if type(plan) is not ResolvedSimulationPlan:
+        raise TypeError("resolved Program compilation requires an exact simulation plan")
+    from pops.codegen._shared_interface_evidence import (
+        _issue_shared_interface_codegen_evidence,
+    )
+
+    evidence = _issue_shared_interface_codegen_evidence(plan)
+    if time is not plan.time or target != plan.target:
+        raise ValueError("resolved Program compilation changed its plan Program or target")
+    return _compile_problem_impl(
+        so_path,
+        model=model,
+        model_graph=model_graph,
+        time=time,
+        backend=backend,
+        target=target,
+        force=force,
+        cxx=cxx,
+        include=include,
+        std=std,
+        debug=debug,
+        libraries=libraries,
+        problem_snapshot=problem_snapshot,
+        field_plans=field_plans,
+        balance_due_contract=balance_due_contract,
+        shared_interface_codegen_evidence=evidence,
+    )
+
+
+def _compile_problem_impl(
+    so_path: Any = None, *, model: Any = None, model_graph: Any = None,
+    time: Any = None, backend: Any = "production", target: Any = "system",
+    force: Any = False, cxx: Any = None, include: Any = None, std: Any = None,
+    debug: Any = False, libraries: Any = None, problem_snapshot: Any = None,
+    field_plans: Any = None, balance_due_contract: Any = None,
+    shared_interface_codegen_evidence: Any,
+) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
 
     Only the production backend is supported; ``target`` selects system or AMR entrypoints. An
@@ -213,11 +280,6 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     if target not in ("system", "amr_system"):
         raise ValueError("compiled time programs support target='system' | 'amr_system' "
                          "(received %r)" % (target,))
-    if type(has_shared_interface_implicit_jacvec) is not bool:
-        raise TypeError(
-            "compile_problem shared-interface implicit-JVP evidence must be an exact bool"
-        )
-
     if libraries:
         raise TypeError(
             "compile_problem(libraries=) was removed; compile authenticated source components "
@@ -248,13 +310,23 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
         )
     from pops.codegen.program_emit_kernels import _prepared_native_components
     native_components = _prepared_native_components(time)
-    from pops.codegen.program_graph_lowering import emit_program_graph
-    src = emit_program_graph(
-        program_graph, lowering_program=time, model=model,
-        model_graph=model_graph, target=target, field_plans=field_plans,
-        balance_due_contract=balance_due_contract,
-        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
-    )
+    if shared_interface_codegen_evidence is None:
+        from pops.codegen.program_graph_lowering import emit_program_graph
+
+        src = emit_program_graph(
+            program_graph, lowering_program=time, model=model,
+            model_graph=model_graph, target=target, field_plans=field_plans,
+            balance_due_contract=balance_due_contract,
+        )
+    else:
+        from pops.codegen.program_graph_lowering import _emit_resolved_program_graph
+
+        src = _emit_resolved_program_graph(
+            program_graph, lowering_program=time, model=model,
+            model_graph=model_graph, target=target, field_plans=field_plans,
+            balance_due_contract=balance_due_contract,
+            shared_interface_codegen_evidence=shared_interface_codegen_evidence,
+        )
 
     include = include or pops_include()
     sig = pops_header_signature(include)

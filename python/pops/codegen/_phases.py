@@ -350,7 +350,7 @@ def compile(plan: Any) -> Any:
     )
 
     models = compile_install_models(plan, plan.compile_options)
-    from pops.codegen._compile_drivers import compile_problem
+    from pops.codegen._compile_drivers import _compile_resolved_problem, compile_problem
     from pops.codegen._compiled_artifact import CompiledLayoutProgram
     from pops.codegen.program_models import ProgramModelGraph
     from pops.codegen.program_balance_due import validate_balance_due_contract
@@ -361,32 +361,13 @@ def compile(plan: Any) -> Any:
     options["libraries"] = plan.libraries
     balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
     validate_balance_due_contract(plan.time, balance_due_contract)
-    shared_interface_capabilities = plan.capabilities["shared_interfaces"]
-    if (
-        not isinstance(shared_interface_capabilities, Mapping)
-        or set(shared_interface_capabilities) != {"implicit_jacvec_pair"}
-    ):
-        raise TypeError(
-            "resolved shared-interface codegen evidence is not canonical"
-        )
-    has_shared_interface_implicit_jacvec = shared_interface_capabilities[
-        "implicit_jacvec_pair"
-    ]
-    if type(has_shared_interface_implicit_jacvec) is not bool:
-        raise TypeError(
-            "resolved shared-interface implicit-JVP evidence must be an exact bool"
-        )
-    if has_shared_interface_implicit_jacvec and len(plan.layout_plan.layouts) != 1:
-        raise RuntimeError(
-            "resolved shared-interface implicit-JVP evidence requires one runtime layout"
-        )
     if len(plan.layout_plan.layouts) == 1:
         model_graph = build_program_model_graph(plan)
-        program = compile_problem(
+        program = _compile_resolved_problem(
+            plan,
             time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
             problem_snapshot=plan.snapshot, field_plans=plan.field_plans,
             balance_due_contract=balance_due_contract,
-            has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
             **options,
         )
         program._discard_authoring()

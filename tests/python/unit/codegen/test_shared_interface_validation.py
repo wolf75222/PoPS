@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from pops.codegen._compile_drivers import compile_problem
 from pops.codegen._interface_validation import validate_shared_interface_program
 from pops.codegen.program_emit_control import _emit_contiguous_rhs_group
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.codegen.program_emit_solve import _rhs_evaluation_identity
 from pops.numerics.terms import Flux
 from pops.time import EventHandle, Program, TimePoint, every
 from typed_program_support import typed_state
@@ -165,26 +165,37 @@ def test_amr_shared_interface_accepts_two_frozen_levels() -> None:
     )
 
 
-def test_amr_shared_interface_accepts_and_emits_one_packed_two_sided_jacvec() -> None:
+def test_amr_shared_interface_accepts_but_public_emitter_cannot_forge_proof() -> None:
     program = _implicit_interface_program()
     hierarchy = _resolved_amr_hierarchy(levels=2, program=program)
     _, has_shared_interface_implicit_jacvec = _validate(
         program, target="amr_system", resolved_hierarchy=hierarchy
     )
+    assert has_shared_interface_implicit_jacvec is True
 
-    source = emit_cpp_program(
-        program,
-        target="amr_system",
-        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
-    )
-    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
-    assert source.count("ctx.copy_component_span(") >= 7
-    assert "ctx.rhs_core_into_at(" not in source
-    assert "PreparedOperatorConcurrency::Exclusive" in source
-    group_identity = re.search(r"ctx\.rhs_group\((\d+),", source)
-    assert group_identity is not None
-    left_r0 = next(value for value in program._values if value.name == "left_r0")
-    assert str(_rhs_evaluation_identity(program, left_r0)) == group_identity.group(1)
+    with pytest.raises(
+        NotImplementedError,
+        match="authenticated shared-interface implicit-JVP evidence from resolve",
+    ):
+        emit_cpp_program(program, target="amr_system")
+
+
+def test_public_emitter_rejects_removed_implicit_pair_boolean_backdoor() -> None:
+    program = _implicit_interface_program()
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        emit_cpp_program(
+            program,
+            target="amr_system",
+            has_shared_interface_implicit_jacvec=True,  # type: ignore[call-arg]
+        )
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        compile_problem(
+            time=program,
+            target="amr_system",
+            has_shared_interface_implicit_jacvec=True,  # type: ignore[call-arg]
+        )
 
 
 def test_two_block_jacvec_shape_without_resolved_interface_evidence_fails_closed() -> None:

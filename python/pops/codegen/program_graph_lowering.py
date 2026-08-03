@@ -8,9 +8,43 @@ def emit_program_graph(
     graph: Any, *, lowering_program: Any, model: Any = None,
     model_graph: Any = None, target: str = "system", field_plans: Any = None,
     balance_due_contract: Any = None,
-    has_shared_interface_implicit_jacvec: bool = False,
 ) -> str:
     """Lower exactly ``graph`` through its frozen, graph-equivalent Program adapter."""
+    return _emit_program_graph(
+        graph,
+        lowering_program=lowering_program,
+        model=model,
+        model_graph=model_graph,
+        target=target,
+        field_plans=field_plans,
+        balance_due_contract=balance_due_contract,
+        shared_interface_codegen_evidence=None,
+    )
+
+
+def _emit_resolved_program_graph(
+    graph: Any, *, lowering_program: Any, model: Any = None,
+    model_graph: Any = None, target: str = "system", field_plans: Any = None,
+    balance_due_contract: Any = None, shared_interface_codegen_evidence: Any,
+) -> str:
+    """Lower one graph through the private resolve-authenticated route."""
+    return _emit_program_graph(
+        graph,
+        lowering_program=lowering_program,
+        model=model,
+        model_graph=model_graph,
+        target=target,
+        field_plans=field_plans,
+        balance_due_contract=balance_due_contract,
+        shared_interface_codegen_evidence=shared_interface_codegen_evidence,
+    )
+
+
+def _emit_program_graph(
+    graph: Any, *, lowering_program: Any, model: Any = None,
+    model_graph: Any = None, target: str = "system", field_plans: Any = None,
+    balance_due_contract: Any = None, shared_interface_codegen_evidence: Any,
+) -> str:
     from pops.time import ProgramGraph
 
     if type(graph) is not ProgramGraph:
@@ -19,13 +53,21 @@ def emit_program_graph(
         raise TypeError("ProgramGraph lowering adapter must be a detached compiled Program")
     if lowering_program.to_graph().graph_hash != graph.graph_hash:
         raise ValueError("ProgramGraph lowering adapter does not match the compiler input graph")
-    from pops.codegen.program_codegen import emit_cpp_program
+    if shared_interface_codegen_evidence is None:
+        from pops.codegen.program_codegen import emit_cpp_program
 
-    source = emit_cpp_program(
-        lowering_program, model=model, model_graph=model_graph, target=target,
-        field_plans=field_plans, balance_due_contract=balance_due_contract,
-        has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
-    )
+        source = emit_cpp_program(
+            lowering_program, model=model, model_graph=model_graph, target=target,
+            field_plans=field_plans, balance_due_contract=balance_due_contract,
+        )
+    else:
+        from pops.codegen.program_codegen import _emit_resolved_cpp_program
+
+        source = _emit_resolved_cpp_program(
+            lowering_program, model=model, model_graph=model_graph, target=target,
+            field_plans=field_plans, balance_due_contract=balance_due_contract,
+            shared_interface_codegen_evidence=shared_interface_codegen_evidence,
+        )
     if lowering_program.to_graph().graph_hash != graph.graph_hash:
         raise RuntimeError("ProgramGraph lowering mutated or diverged from its compiler input")
     return source

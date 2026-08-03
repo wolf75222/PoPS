@@ -118,7 +118,59 @@ def emit_cpp_program(
     model_graph: Any = None,
     field_plans: Any = None,
     balance_due_contract: Any = None,
-    has_shared_interface_implicit_jacvec: bool = False,
+) -> str:
+    """Lower the public low-level Program route without privileged resolve evidence."""
+    return _emit_cpp_program_impl(
+        program,
+        model=model,
+        target=target,
+        model_graph=model_graph,
+        field_plans=field_plans,
+        balance_due_contract=balance_due_contract,
+        has_shared_interface_implicit_jacvec=False,
+    )
+
+
+def _emit_resolved_cpp_program(
+    program: Any,
+    model: Any = None,
+    target: str = "system",
+    *,
+    model_graph: Any = None,
+    field_plans: Any = None,
+    balance_due_contract: Any = None,
+    shared_interface_codegen_evidence: Any,
+) -> str:
+    """Lower the private resolve-authenticated shared-interface route."""
+    from pops.codegen._shared_interface_evidence import (
+        _ResolvedSharedInterfaceCodegenEvidence,
+    )
+
+    if type(shared_interface_codegen_evidence) is not _ResolvedSharedInterfaceCodegenEvidence:
+        raise TypeError(
+            "resolved shared-interface lowering requires exact nominal codegen evidence"
+        )
+    shared_interface_codegen_evidence.require(program, target=target)
+    return _emit_cpp_program_impl(
+        program,
+        model=model,
+        target=target,
+        model_graph=model_graph,
+        field_plans=field_plans,
+        balance_due_contract=balance_due_contract,
+        has_shared_interface_implicit_jacvec=True,
+    )
+
+
+def _emit_cpp_program_impl(
+    program: Any,
+    model: Any = None,
+    target: str = "system",
+    *,
+    model_graph: Any = None,
+    field_plans: Any = None,
+    balance_due_contract: Any = None,
+    has_shared_interface_implicit_jacvec: bool,
 ) -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 

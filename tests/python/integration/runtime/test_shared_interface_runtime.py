@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 from types import SimpleNamespace
 
@@ -571,9 +572,38 @@ def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(t
     assert resolved.capabilities["shared_interfaces"] == {
         "implicit_jacvec_pair": True,
     }
+    from pops.codegen._shared_interface_evidence import (
+        _ResolvedSharedInterfaceCodegenEvidence,
+        _issue_shared_interface_codegen_evidence,
+    )
+
+    with pytest.raises(
+        TypeError, match="issued only from an exact resolved plan"
+    ):
+        _ResolvedSharedInterfaceCodegenEvidence()
+    evidence = _issue_shared_interface_codegen_evidence(resolved)
+    assert type(evidence) is _ResolvedSharedInterfaceCodegenEvidence
+    with pytest.raises(ValueError, match="belongs to another Program graph"):
+        evidence.require(pops.Program("foreign_program"), target="amr_system")
+
     artifact = pops.compile(resolved)
 
     assert artifact.target == "amr_system"
+    assert artifact.program is not None
+    generated_path = artifact.program.dump_cpp(tmp_path / "implicit_pair.cpp")
+    source = Path(generated_path).read_text(encoding="utf-8")
+    assert source.count("ctx.rhs_jacvec_pair_into_at(") == 1
+    assert source.count("ctx.copy_component_span(") >= 7
+    assert "ctx.rhs_core_into_at(" not in source
+    assert "PreparedOperatorConcurrency::Exclusive" in source
+    group_identity = re.search(r"ctx\.rhs_group\((\d+),", source)
+    assert group_identity is not None
+    left_r0 = next(
+        value for value in resolved.time._values if value.name == "left_r0"
+    )
+    from pops.codegen.program_emit_solve import _rhs_evaluation_identity
+
+    assert str(_rhs_evaluation_identity(resolved.time, left_r0)) == group_identity.group(1)
 
 
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
