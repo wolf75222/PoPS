@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "tests/gates/adc757_prepared_numerics.toml"
 TEST_MANIFEST = ROOT / "tests/test_manifest.toml"
 HARDWARE_VERIFIER = ROOT / "benchmarks/adc757/verify.py"
+EXPECTED_HARDWARE_REQUIREMENTS = (
+    "gpu_backend_execution",
+    "accelerator_stream_partitioning",
+    "performance_baselines_and_regression_thresholds",
+)
 EXPECTED_REQUIREMENTS = {
     "prepared_local_nonlinear",
     "typed_fallible_evaluation",
@@ -55,17 +60,23 @@ EXPECTED_REQUIREMENTS = {
     "characteristic_boundary_geometry_matrix",
     "polar_metric_spatial_provider_matrix",
     "measured_load_balance_decision",
+    *EXPECTED_HARDWARE_REQUIREMENTS,
 }
 EXPECTED_DEFERRED = (
     "remaining_runtime_nd_metric_eb_characteristic_execution",
     "remaining_legacy_recovery_and_boundary_authority_deletion",
     "amr_regrid_migration_and_restart_coherence",
-    "gpu_backend_execution",
-    "accelerator_stream_partitioning",
-    "performance_baselines_and_end_to_end_benchmarks",
     "remaining_local_time_migration_and_load_balance_runtime_integration",
 )
 GTEST_PATTERN = re.compile(r"\bTEST(?:_F)?\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)")
+FULL_GIT_REVISION = re.compile(r"[0-9a-f]{40}")
+EXPECTED_HARDWARE_EVIDENCE = {
+    "kind": "authenticated_hardware_report",
+    "polarity": "positive",
+    "report_schema": "pops.adc757.heterogeneous-numerics.v1",
+    "verifier": "benchmarks/adc757/verify.py",
+    "requirements": list(EXPECTED_HARDWARE_REQUIREMENTS),
+}
 
 
 def _cpp_suites() -> dict[str, dict]:
@@ -150,6 +161,32 @@ def _pytest_is_skipped(test: ast.FunctionDef) -> bool:
     )
 
 
+def _validate_hardware_evidence(data: dict, errors: list[str]) -> tuple[str, ...]:
+    """Validate the one external report route and return its positive requirements."""
+    evidence = data.get("hardware_evidence")
+    if not isinstance(evidence, dict):
+        errors.append("hardware_evidence must be one authenticated report table")
+        return ()
+    if evidence != EXPECTED_HARDWARE_EVIDENCE:
+        errors.append(
+            "hardware_evidence must bind exactly one authenticated report to %s"
+            % list(EXPECTED_HARDWARE_REQUIREMENTS)
+        )
+    requirements = evidence.get("requirements")
+    if not isinstance(requirements, list):
+        return ()
+    if any(not isinstance(requirement, str) for requirement in requirements):
+        errors.append("hardware_evidence requirements must be strings")
+        return ()
+    if len(set(requirements)) != len(requirements):
+        errors.append("hardware_evidence requirements must be unique")
+    return tuple(
+        requirement
+        for requirement in requirements
+        if requirement in EXPECTED_HARDWARE_REQUIREMENTS
+    )
+
+
 def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     """Return the manifest and deterministic source-only validation errors."""
     try:
@@ -164,12 +201,13 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         "issue",
         "evidence_from",
         "deferred",
+        "hardware_evidence",
         "check",
     }
     if set(data) != expected_fields:
         errors.append("manifest fields must be exactly %s" % sorted(expected_fields))
-    if data.get("schema_version") != 2:
-        errors.append("schema_version must be exactly 2")
+    if data.get("schema_version") != 3:
+        errors.append("schema_version must be exactly 3")
     if data.get("gate") != "adc757-prepared-numerics-slice":
         errors.append("gate must be exactly 'adc757-prepared-numerics-slice'")
     if data.get("issue") != "ADC-757":
@@ -192,6 +230,7 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
         errors.append("evidence_from must be exactly %s" % expected_evidence)
     if data.get("deferred") != list(EXPECTED_DEFERRED):
         errors.append("deferred must enumerate every deliberately unproved family exactly")
+    hardware_requirements = _validate_hardware_evidence(data, errors)
 
     checks = data.get("check")
     if not isinstance(checks, list) or not checks:
@@ -200,6 +239,8 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
     suites = _cpp_suites()
     python_files = _python_files()
     coverage: dict[str, set[str]] = defaultdict(set)
+    for requirement in hardware_requirements:
+        coverage[requirement].add("positive")
     identities = Counter()
     mpi_checks = 0
     for index, row in enumerate(checks, 1):
@@ -224,6 +265,10 @@ def validate_manifest(path: Path = DEFAULT_MANIFEST) -> tuple[dict, list[str]]:
             errors.append("%s polarity must be positive or refusal" % where)
         else:
             coverage[str(requirement)].add(str(polarity))
+        if requirement in EXPECTED_HARDWARE_REQUIREMENTS and polarity == "positive":
+            errors.append(
+                "%s hardware positive evidence must come only from hardware_evidence" % where
+            )
         if kind == "pytest":
             relative = row.get("path")
             test_name = row.get("test")
@@ -383,12 +428,19 @@ def _run_pytest(relative: str, test_name: str) -> None:
             raise subprocess.CalledProcessError(completed.returncode, command)
 
 
-def _run_hardware_evidence(report: Path, expected_revision: str) -> None:
-    if not expected_revision:
-        raise RuntimeError("ADC-757 closure requires a non-empty expected revision")
+def _run_hardware_evidence(
+    evidence: dict, report: Path, expected_revision: str
+) -> tuple[str, ...]:
+    if FULL_GIT_REVISION.fullmatch(expected_revision) is None:
+        raise RuntimeError("ADC-757 closure requires one full lowercase 40-hex Git revision")
+    if not report.is_file():
+        raise RuntimeError("ADC-757 hardware report does not exist")
+    verifier = ROOT / evidence["verifier"]
+    if verifier.resolve() != HARDWARE_VERIFIER.resolve():
+        raise RuntimeError("ADC-757 hardware evidence selected an unauthenticated verifier")
     command = [
         sys.executable,
-        str(HARDWARE_VERIFIER),
+        str(verifier),
         "--input",
         str(report),
         "--expected-revision",
@@ -396,6 +448,10 @@ def _run_hardware_evidence(report: Path, expected_revision: str) -> None:
     ]
     print("+", " ".join(command), flush=True)
     subprocess.run(command, cwd=ROOT, check=True)
+    requirements = tuple(evidence["requirements"])
+    if requirements != EXPECTED_HARDWARE_REQUIREMENTS:
+        raise RuntimeError("ADC-757 hardware report is not bound to the exact requirements")
+    return requirements
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -427,8 +483,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(
         "ADC-757 prepared-numerics slice: OK "
-        "(%d executable proofs, %d explicitly deferred families)"
-        % (len(data["check"]), len(data["deferred"]))
+        "(%d executable proofs, %d authenticated hardware positives required, "
+        "%d explicitly deferred families)"
+        % (
+            len(data["check"]),
+            len(data["hardware_evidence"]["requirements"]),
+            len(data["deferred"]),
+        )
     )
     if args.closure:
         if data["deferred"]:
@@ -445,10 +506,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 4
         try:
-            _run_hardware_evidence(args.hardware_report, args.expected_revision)
+            proved = _run_hardware_evidence(
+                data["hardware_evidence"], args.hardware_report, args.expected_revision
+            )
         except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
             print("ADC-757 closure refused: %s" % error, file=sys.stderr)
             return 4
+        print(
+            "ADC-757 authenticated hardware report proves: %s"
+            % ", ".join(proved),
+            flush=True,
+        )
     if args.check_only:
         return 0
     checks = sorted(

@@ -26,7 +26,7 @@ def test_adc757_slice_references_exact_real_mandatory_native_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors, "ADC-757 slice matrix is invalid:\n  " + "\n  ".join(errors)
-    assert len(data["check"]) == 75
+    assert len(data["check"]) == 78
     assert {row["requirement"] for row in data["check"]} == runner.EXPECTED_REQUIREMENTS
     assert data["evidence_from"] == [
         "ADC-682",
@@ -130,14 +130,15 @@ def test_adc757_slice_executes_post_riemann_boundary_flux_proofs():
     ]
 
 
-def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
+def test_adc757_slice_separates_mpi_executables_from_authenticated_hardware_proofs():
     runner = _load_runner()
     data, errors = runner.validate_manifest(MANIFEST)
     assert not errors
     assert data["deferred"] == list(runner.EXPECTED_DEFERRED)
     assert "mpi_collective_execution" not in data["deferred"]
-    assert "gpu_backend_execution" in data["deferred"]
-    assert "accelerator_stream_partitioning" in data["deferred"]
+    assert "gpu_backend_execution" not in data["deferred"]
+    assert "accelerator_stream_partitioning" not in data["deferred"]
+    assert "performance_baselines_and_end_to_end_benchmarks" not in data["deferred"]
     assert "workspace_reentrancy_and_stream_partitioning" not in data["deferred"]
     assert "remaining_legacy_recovery_and_boundary_authority_deletion" in data["deferred"]
     assert all("riemann_authority" not in family for family in data["deferred"])
@@ -163,10 +164,17 @@ def test_adc757_slice_claims_only_the_exact_delivered_mpi_collective_proof():
             "nproc": 2,
         },
     ]
-    assert all(
-        "gpu" not in row.get("target", row.get("path", "")).lower()
+    assert data["hardware_evidence"] == runner.EXPECTED_HARDWARE_EVIDENCE
+    hardware_rows = [
+        row
         for row in data["check"]
-    )
+        if row["requirement"] in runner.EXPECTED_HARDWARE_REQUIREMENTS
+    ]
+    assert {(row["requirement"], row["polarity"]) for row in hardware_rows} == {
+        (requirement, "refusal")
+        for requirement in runner.EXPECTED_HARDWARE_REQUIREMENTS
+    }
+    assert all(row["polarity"] != "positive" for row in hardware_rows)
     assert runner.main(["--check-only", "--closure"]) == 3
 
 
@@ -241,7 +249,14 @@ def test_adc757_closure_requires_revision_matched_hardware_evidence(monkeypatch,
     monkeypatch.setattr(
         runner,
         "validate_manifest",
-        lambda _manifest: ({"check": [], "deferred": []}, []),
+        lambda _manifest: (
+            {
+                "check": [],
+                "deferred": [],
+                "hardware_evidence": runner.EXPECTED_HARDWARE_EVIDENCE,
+            },
+            [],
+        ),
     )
     assert runner.main(["--check-only", "--closure"]) == 4
 
@@ -251,7 +266,10 @@ def test_adc757_closure_requires_revision_matched_hardware_evidence(monkeypatch,
     monkeypatch.setattr(
         runner,
         "_run_hardware_evidence",
-        lambda path, revision: observed.append((path, revision)),
+        lambda evidence, path, revision: (
+            observed.append((evidence, path, revision))
+            or runner.EXPECTED_HARDWARE_REQUIREMENTS
+        ),
     )
     assert (
         runner.main(
@@ -261,12 +279,26 @@ def test_adc757_closure_requires_revision_matched_hardware_evidence(monkeypatch,
                 "--hardware-report",
                 str(report),
                 "--expected-revision",
-                "candidate-sha",
+                "a" * 40,
             ]
         )
         == 0
     )
-    assert observed == [(report, "candidate-sha")]
+    assert observed == [
+        (runner.EXPECTED_HARDWARE_EVIDENCE, report, "a" * 40)
+    ]
+
+
+def test_adc757_hardware_evidence_requires_a_full_exact_candidate_revision(tmp_path):
+    runner = _load_runner()
+    report = tmp_path / "hardware.json"
+    report.write_text("{}", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="full lowercase 40-hex"):
+        runner._run_hardware_evidence(
+            runner.EXPECTED_HARDWARE_EVIDENCE,
+            report,
+            "short-revision",
+        )
 
 
 def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
@@ -343,6 +375,35 @@ def test_adc757_manifest_refuses_missing_polarity_and_unknown_target(tmp_path):
     )
     _, errors = runner.validate_manifest(skipped_ctest)
     assert any("selected CTest" in error and "skipped or disabled" in error for error in errors)
+
+    duplicate_hardware = tmp_path / "duplicate_hardware.toml"
+    duplicate_hardware.write_text(
+        source.replace(
+            '  "accelerator_stream_partitioning",\n'
+            '  "performance_baselines_and_regression_thresholds",',
+            '  "gpu_backend_execution",\n'
+            '  "performance_baselines_and_regression_thresholds",',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _, errors = runner.validate_manifest(duplicate_hardware)
+    assert any("hardware_evidence requirements must be unique" in error for error in errors)
+
+    fake_cpu_positive = tmp_path / "fake_cpu_positive.toml"
+    fake_cpu_positive.write_text(
+        source.replace(
+            'requirement = "gpu_backend_execution"\npolarity = "refusal"',
+            'requirement = "gpu_backend_execution"\npolarity = "positive"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _, errors = runner.validate_manifest(fake_cpu_positive)
+    assert any(
+        "hardware positive evidence must come only from hardware_evidence" in error
+        for error in errors
+    )
 
 
 def test_adc757_runner_refuses_a_declared_but_unbuilt_proof(monkeypatch, tmp_path):
