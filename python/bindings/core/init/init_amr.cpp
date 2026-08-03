@@ -482,6 +482,30 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("hierarchy_policy_interface_version"), py::arg("hierarchy_policy_option_schema"),
           py::arg("hierarchy_policy_options"), py::arg("schema_identity"), py::arg("options"))
       .def(
+          "register_field_solver_provider",
+          [](AmrSystem& system, const std::string& provider_slot,
+             std::shared_ptr<pops::component::LoadedComponent> topology,
+             std::shared_ptr<pops::component::LoadedComponent> solver,
+             const py::dict& topology_binding, const py::dict& solver_binding,
+             const std::string& topology_parameters_json, const std::string& solver_parameters_json,
+             const std::string& source_layout_identity, const std::string& topology_recipe_identity,
+             const std::string& boundary_contract_json, double relative_tolerance,
+             double absolute_tolerance, std::int32_t max_iterations, const py::dict& execution) {
+            auto spec = pops::python::detail::field_solver_spec_from_python(
+                provider_slot, topology_binding, solver_binding, topology_parameters_json,
+                solver_parameters_json, source_layout_identity, topology_recipe_identity,
+                boundary_contract_json, relative_tolerance, absolute_tolerance, max_iterations,
+                execution);
+            return system.register_field_solver_provider(provider_slot, std::move(spec),
+                                                         std::move(topology), std::move(solver));
+          },
+          py::arg("provider_slot"), py::arg("topology_component"), py::arg("solver_component"),
+          py::arg("topology_binding"), py::arg("solver_binding"),
+          py::arg("topology_parameters_json"), py::arg("solver_parameters_json"),
+          py::arg("source_layout_identity"), py::arg("topology_recipe_identity"),
+          py::arg("boundary_contract_json"), py::arg("relative_tolerance"),
+          py::arg("absolute_tolerance"), py::arg("max_iterations"), py::arg("execution_context"))
+      .def(
           "field_solver_configuration",
           [](const AmrSystem& system, const std::string& provider_slot) {
             const AmrFieldSolverConfiguration config =

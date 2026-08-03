@@ -576,22 +576,24 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
         _row(
             "amr:external_field_solver_v2",
             layout="amr",
-            backend="none",
+            backend="component",
             platform="host",
-            mpi=False,
+            mpi=mpi,
             gpu=False,
-            status="unavailable",
+            status="available",
             limitation=(
-                "FieldSolver@2 carries a level on patch metadata, but the installed external "
-                "component adapter owns one uniform System MultiFab and no AmrFieldSolverProvider "
-                "hierarchy materialization"
+                "host float64 and ratio-2 AMR only; MPI requires both components to declare "
+                "MPI_COMM_WORLD and "
+                "a distributed coarse level; "
+                "embedded/cut-cell topology, dynamic boundaries, reaction terms, nonlinear/JVP "
+                "solves and GPU execution remain explicit refusals"
             ),
             requested="external FieldSolver@2 on an AMR hierarchy",
-            available_route="external FieldSolver@2 on one uniform host/serial level",
-            alternative=(
-                "implement an authenticated AMR component bridge that materializes all levels, "
-                "coarse-fine topology and collective solve ownership"
+            available_route=(
+                "authenticated FieldTopology@2 + FieldSolver@2 composite hierarchy batch with "
+                "metadata.level, binary coarse/fine coverage and one collective solve"
             ),
+            alternative="",
             source=source,
         ),
         _row(

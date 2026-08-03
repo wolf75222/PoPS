@@ -242,6 +242,16 @@ class AmrPreparedFieldSolver {
   virtual ~AmrPreparedFieldSolver() = default;
   [[nodiscard]] virtual std::string_view provider_identity() const noexcept = 0;
   [[nodiscard]] virtual std::string_view exact_prepared_contract() const noexcept = 0;
+  /// Rank-local evidence produced while materializing this exact hierarchy.  The runtime compares
+  /// these bytes only after every rank has completed construction, so a local component failure can
+  /// reach the outer fail-closed build consensus instead of stranding peers in a provider-owned
+  /// collective. Builtin providers without component-produced evidence retain the empty default.
+  [[nodiscard]] virtual std::string_view exact_materialization_evidence() const noexcept {
+    return {};
+  }
+  /// True when the provider publishes valid-cell values only and delegates same-level, physical,
+  /// and coarse/fine potential halos to the runtime before centered-gradient postprocessing.
+  [[nodiscard]] virtual bool requires_runtime_solution_halos() const noexcept { return false; }
   [[nodiscard]] virtual bool couples_hierarchy_levels() const noexcept = 0;
   [[nodiscard]] virtual int level_count() const noexcept = 0;
   [[nodiscard]] virtual FieldDistribution level_distribution(int level) const = 0;
@@ -435,6 +445,21 @@ class AmrFieldSolverProvider {
   [[nodiscard]] virtual std::unique_ptr<AmrPreparedFieldSolver> build(
       const AmrFieldSolverBuildRequest& request) const = 0;
 };
+
+namespace runtime::field {
+struct PreparedFieldSolverSpec;
+}
+namespace component {
+class LoadedComponent;
+}
+
+/// Build the authenticated AMR adapter for one external FieldTopology@2 + FieldSolver@2 pair.
+/// The provider materializes every hierarchy level in one topology/request batch and owns fresh
+/// component states for exactly one regrid generation.
+POPS_EXPORT std::shared_ptr<const AmrFieldSolverProvider> make_external_amr_field_solver_provider(
+    runtime::field::PreparedFieldSolverSpec spec,
+    std::shared_ptr<component::LoadedComponent> topology,
+    std::shared_ptr<component::LoadedComponent> solver);
 
 inline std::string exact_amr_field_solver_provider_declaration(
     const AmrFieldSolverProvider& provider) {
@@ -4499,6 +4524,8 @@ class AmrRuntime {
       MultiFab& phi_mf = nf.solver->phi_level(0);
       if (!nf.level_nullspace.empty())
         nf.level_nullspace_workspaces[0]->apply_gauge(phi_mf);
+      const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
+      materialize_named_phi_halos_(nf, boundary);
       device_fence();
       const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
       const Real gradient_scale = static_cast<Real>(nf.gradient_sign);
@@ -4525,10 +4552,14 @@ class AmrRuntime {
       const bool grad = nf.gx_comp >= 0 && nf.gy_comp >= 0;
       if (nf.solver->couples_hierarchy_levels())
         nf.nullspace_workspace->apply_gauge(nf.nullspace_phi_levels);
+      if (!nf.solver->couples_hierarchy_levels() && !nf.level_nullspace.empty())
+        for (int k = 0; k < nf.solver->level_count(); ++k)
+          nf.level_nullspace_workspaces[static_cast<std::size_t>(k)]->apply_gauge(
+              nf.solver->phi_level(k));
+      const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
+      materialize_named_phi_halos_(nf, boundary);
       for (int k = 0; k < nf.solver->level_count(); ++k) {
         MultiFab& phi = nf.solver->phi_level(k);
-        if (!nf.solver->couples_hierarchy_levels() && !nf.level_nullspace.empty())
-          nf.level_nullspace_workspaces[static_cast<std::size_t>(k)]->apply_gauge(phi);
         const Real refinement = static_cast<Real>(level_refinement(k));
         const Real level_dx = geom_.dx() / refinement;
         const Real level_dy = geom_.dy() / refinement;
@@ -5964,6 +5995,9 @@ class AmrRuntime {
     std::vector<MultiFab*> nullspace_phi_levels;
     std::vector<MultiFab> rhs_contribution_scratch;
     std::uint64_t rhs_scratch_generation = 0;
+    std::vector<PreparedAverageDownWorkspace> phi_average_down_transfers;
+    std::vector<detail::PreparedConservativeLinearTransferWorkspace> phi_coarse_transfers;
+    std::uint64_t phi_halo_generation = 0;
     std::vector<BoundaryLevelContext> boundary_level_contexts;
     bool nullspace_ready = false;
   };
@@ -6147,6 +6181,9 @@ class AmrRuntime {
     field.nullspace_phi_levels.clear();
     field.rhs_contribution_scratch.clear();
     field.rhs_scratch_generation = 0;
+    field.phi_average_down_transfers.clear();
+    field.phi_coarse_transfers.clear();
+    field.phi_halo_generation = 0;
     field.boundary_level_contexts.clear();
     field.solver.reset();
     field.nullspace = {};
@@ -6216,6 +6253,84 @@ class AmrRuntime {
     field.rhs_scratch_generation = topology_materialization_generation_;
   }
 
+  std::vector<detail::PreparedConservativeLinearTransferWorkspace>
+  prepare_named_phi_halo_transfers_(AmrPreparedFieldSolver& solver, const BCRec& boundary) const {
+    if (solver.level_count() != nlev_)
+      throw std::invalid_argument(
+          "named-field halo preparation requires the exact materialized hierarchy");
+    if (!solver.requires_runtime_solution_halos())
+      return {};
+    const Periodicity periodicity{boundary.xlo == BCType::Periodic,
+                                  boundary.ylo == BCType::Periodic};
+    std::vector<detail::PreparedConservativeLinearTransferWorkspace> transfers;
+    transfers.reserve(nlev_ > 0 ? static_cast<std::size_t>(nlev_ - 1) : 0u);
+    for (int level = 1; level < nlev_; ++level) {
+      MultiFab& coarse = solver.phi_level(level - 1);
+      MultiFab& fine = solver.phi_level(level);
+      if (coarse.n_grow() < 1 || fine.n_grow() < 1)
+        throw std::invalid_argument(
+            "named-field centered gradients require one potential ghost cell on every level");
+      const bool replicated_parent = level == 1 && replicated_coarse_;
+      const CommunicatorView communicator =
+          replicated_parent ? CommunicatorView{} : world_communicator_view();
+      transfers.push_back(detail::PreparedConservativeLinearTransferWorkspace::prepare(
+          coarse, fine, amr_level_index_domain(dom_, level - 1),
+          amr_level_index_domain(dom_, level), replicated_parent,
+          detail::ConservativeCellFillRegion::Ghost, periodicity,
+          topology_materialization_generation_, communicator));
+    }
+    return transfers;
+  }
+
+  std::vector<PreparedAverageDownWorkspace> prepare_named_phi_average_down_transfers_(
+      AmrPreparedFieldSolver& solver) const {
+    if (solver.level_count() != nlev_)
+      throw std::invalid_argument(
+          "named-field restriction preparation requires the exact materialized hierarchy");
+    if (!solver.requires_runtime_solution_halos())
+      return {};
+    std::vector<PreparedAverageDownWorkspace> transfers;
+    transfers.reserve(nlev_ > 0 ? static_cast<std::size_t>(nlev_ - 1) : 0u);
+    for (int level = 1; level < nlev_; ++level)
+      transfers.push_back(PreparedAverageDownWorkspace::prepare(
+          solver.phi_level(level), solver.phi_level(level - 1),
+          topology_materialization_generation_));
+    return transfers;
+  }
+
+  void materialize_named_phi_halos_(NamedField& field, const BCRec& boundary) {
+    if (field.solver && !field.solver->requires_runtime_solution_halos())
+      return;
+    if (!field.solver || field.solver->level_count() != nlev_ ||
+        field.phi_halo_generation != topology_materialization_generation_ ||
+        field.phi_average_down_transfers.size() !=
+            (nlev_ > 0 ? static_cast<std::size_t>(nlev_ - 1) : 0u) ||
+        field.phi_coarse_transfers.size() != (nlev_ > 0 ? static_cast<std::size_t>(nlev_ - 1) : 0u))
+      throw std::logic_error(
+          "named-field potential halo workspace differs from the materialized hierarchy");
+    if (nlev_ > 1) {
+      for (int level = nlev_ - 1; level >= 1; --level)
+        mf_average_down_mb(field.solver->phi_level(level), field.solver->phi_level(level - 1),
+                           field.phi_average_down_transfers[static_cast<std::size_t>(level - 1)],
+                           topology_materialization_generation_, world_communicator_view());
+    }
+    BCRec level_boundary = boundary;
+    Box2D level_domain = dom_;
+    fill_ghosts_profiled(field.solver->phi_level(0), level_domain, level_boundary);
+    for (int level = 1; level < nlev_; ++level) {
+      level_domain = amr_level_index_domain(dom_, level);
+      level_boundary.dx /= Real(kAmrRefRatio);
+      level_boundary.dy /= Real(kAmrRefRatio);
+      const bool replicated_parent = level == 1 && replicated_coarse_;
+      const CommunicatorView communicator =
+          replicated_parent ? CommunicatorView{} : world_communicator_view();
+      field.phi_coarse_transfers[static_cast<std::size_t>(level - 1)].apply(
+          field.solver->phi_level(level - 1), field.solver->phi_level(level),
+          topology_materialization_generation_, communicator);
+      fill_ghosts_profiled(field.solver->phi_level(level), level_domain, level_boundary);
+    }
+  }
+
   // Materializes one resolved named-field provider lazily.  Provider declaration, exact request,
   // construction failure and post-build storage are communicator-wide contracts; no rank may escape
   // around a collective because its local extension failed first.
@@ -6257,20 +6372,31 @@ class AmrRuntime {
 
     std::unique_ptr<AmrPreparedFieldSolver> prepared;
     bool build_failed = false;
+    std::string build_failure_reason;
     try {
       prepared = provider->build(request);
+    } catch (const std::exception& error) {
+      build_failed = true;
+      build_failure_reason = error.what();
     } catch (...) {
       build_failed = true;
+      build_failure_reason = "non-standard exception";
     }
-    if (all_reduce_max(build_failed || !prepared ? 1L : 0L) != 0)
-      throw std::runtime_error(
-          "AmrRuntime: field solver provider construction failed on at least one rank");
+    if (all_reduce_max(build_failed || !prepared ? 1L : 0L) != 0) {
+      std::string message =
+          "AmrRuntime: field solver provider construction failed on at least one rank";
+      if (n_ranks() == 1 && !build_failure_reason.empty())
+        message += ": " + build_failure_reason;
+      throw std::runtime_error(message);
+    }
 
     bool inspection_failed = false;
     bool materialization_mismatch = false;
     std::string actual_contract;
+    std::string materialization_evidence;
     try {
       actual_contract = prepared->exact_prepared_contract();
+      materialization_evidence = prepared->exact_materialization_evidence();
       materialization_mismatch = prepared->provider_identity() != provider->identity() ||
                                  actual_contract != expected_contract ||
                                  prepared->level_count() != nlev_;
@@ -6300,9 +6426,16 @@ class AmrRuntime {
     if (all_reduce_max(materialization_mismatch ? 1L : 0L) != 0)
       throw std::runtime_error(
           "AmrRuntime: field solver provider did not materialize the exact hierarchy contract");
-    if (!all_ranks_agree_exact_ordered_byte_pairs({{"amr-field-actual-contract", actual_contract}}))
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"amr-field-actual-contract", actual_contract},
+             {"amr-field-materialization-evidence", materialization_evidence}}))
       throw std::runtime_error("AmrRuntime: field solver materialization differs across MPI ranks");
+    auto phi_average_down_transfers = prepare_named_phi_average_down_transfers_(*prepared);
+    auto phi_coarse_transfers = prepare_named_phi_halo_transfers_(*prepared, boundary);
     nf.solver = std::move(prepared);
+    nf.phi_average_down_transfers = std::move(phi_average_down_transfers);
+    nf.phi_coarse_transfers = std::move(phi_coarse_transfers);
+    nf.phi_halo_generation = topology_materialization_generation_;
   }
 
   std::shared_ptr<const MultiFab> composite_valid_mask(AmrPreparedFieldSolver& solver,

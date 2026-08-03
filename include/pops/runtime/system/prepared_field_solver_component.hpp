@@ -45,6 +45,7 @@ struct PreparedFieldSolverSpec {
   double relative_tolerance = 0.0;
   double absolute_tolerance = 0.0;
   std::int32_t max_iterations = 0;
+  bool component_pair_declares_mpi = false;
   std::shared_ptr<const component::PreparedExecutionContextV1> execution;
 };
 
@@ -160,7 +161,7 @@ class PreparedFieldSolverComponent final {
   void prepare_provider_contract_() {
     ExactContractBuilder contract;
     contract.text("pops.runtime.external-field-solver-provider")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
         .text(spec_.provider_slot)
         .text(spec_.topology_component_id)
         .text(spec_.topology_manifest_identity)
@@ -176,6 +177,7 @@ class PreparedFieldSolverComponent final {
         .scalar(spec_.relative_tolerance)
         .scalar(spec_.absolute_tolerance)
         .scalar(spec_.max_iterations)
+        .scalar(spec_.component_pair_declares_mpi)
         .text(spec_.execution->identity());
     collective_contract_ = std::move(contract).release();
     provider_identity_ = hashed_identity_("external-field-solver-provider", collective_contract_);
@@ -577,10 +579,11 @@ class PreparedFieldSolverComponent final {
     }
 #endif
     if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-        (communicator_identity != "serial" && !singleton_mpi))
+        (communicator_identity != "serial" &&
+         (!singleton_mpi || !spec_.component_pair_declares_mpi)))
       throw std::invalid_argument(
-          "external FieldSolver v2 System adapter currently proves host serial or singleton-MPI "
-          "execution only");
+          "external FieldSolver v2 System adapter currently proves host serial or declared "
+          "singleton-MPI execution only");
     const auto& topology_api = topology_component_->api();
     const auto& solver_api = solver_component_->api();
     if (topology_api.component_id == nullptr || topology_api.manifest_identity == nullptr ||
