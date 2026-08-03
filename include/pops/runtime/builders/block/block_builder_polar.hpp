@@ -263,31 +263,31 @@ BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, boo
 }
 
 /// Dispatch of the spatial scheme (frozen limiter, Riemann flux) -> compiled polar closures.
-/// Two fluxes wired in polar, SAME template injection point as the cartesian one (build_block_polar
-/// carries the Flux parameter down to assemble_rhs_polar<Limiter, Flux>):
+/// Four fluxes wired in polar through the SAME template injection point as the Cartesian one
+/// (build_block_polar carries the Flux parameter down to assemble_rhs_polar<Limiter, Flux>):
 ///   - "rusanov": RusanovFlux, requires only max_wave_speed (valid for scalar ExB AND the
 ///                 isothermal fluid) -- DEFAULT, strictly bit-identical to history;
 ///   - "hll": HLLFlux (signed waves), GATE identical to the cartesian one (make_block) on the
 ///                 presence of model.wave_speeds. The polar isothermal fluid (IsothermalFluxPolar:
 ///                 inherits IsothermalFlux::wave_speeds) is eligible -> HLL less diffusive than Rusanov
 ///                 on the ring. The scalar ExB (ExBVelocityPolar, no wave_speeds) -> CLEAR rejection.
-/// HLLC/Roe stay NOT wired in polar because no oriented metric provider supplies their contact/Roe
-/// capability yet -> explicit rejection. "weno5" routes assemble_rhs_polar onto the WENO5-Z reconstruction
-/// (3 ghosts) like the cartesian one. @p wall_radial: solid radial wall (mass conservation to machine
-/// precision; see build_block_polar).
+///   - "hllc" / "roe": exactly the same HasHLLCStructure / HasRoeDissipation gates as Cartesian.
+///     The annular operator supplies the oriented FaceContext and metric measure; the physical
+///     model supplies its contact/star or Roe action. A missing capability is rejected explicitly
+///     and never selects HLL or Rusanov.
+/// "weno5" routes assemble_rhs_polar onto the WENO5-Z reconstruction (3 ghosts) like the
+/// Cartesian one. @p wall_radial: solid radial wall (mass conservation to machine precision; see
+/// build_block_polar).
 template <class Model>
 BlockClosures make_block_polar(const Model& m, const std::string& lim, const std::string& riem,
                                const PolarGridContext& ctx, bool recon_prim, bool wall_radial,
                                Real pos_floor = Real(0)) {
   // CENTRALIZED VALIDATION (registry dispatch_tags.hpp) BEFORE the dispatch: in polar, rusanov AND
-  // hll are wired (hll since the rest of the audit); HLLC/Roe and unknown tags raise the polar
-  // message of the registry. The CAPABILITY GUARD (hll requires model.wave_speeds) stays an
-  // `if constexpr` PER MODEL below, with its dedicated "requires ..." message.
+  // all public providers are wired. Their CAPABILITY GUARDS stay `if constexpr` PER MODEL below,
+  // with dedicated "requires ..." messages and no numerical fallback.
   validate_riemann(riem, /*polar=*/true, "System (polar)");
   validate_limiter(lim, "System (polar)");
-  // Parse the validated tag ONCE (ADC-641): only rusanov / hll are wired in polar, so the switch has two
-  // arms plus a default. The default keeps the "valid tag, not wired in polar" path for HLLC/Roe,
-  // already rejected by validate_riemann(polar=true), and suppresses -Wswitch on the partial switch.
+  // Parse the validated tag ONCE (ADC-641). Every public provider has one capability-gated leaf.
   switch (parse_riemann_route(riem, "System (polar)")) {
     case RiemannRouteId::kRusanov:
       return dispatch_limiter(
@@ -316,6 +316,30 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
             "the scalar ExB transport does not provide them -> 'rusanov'. The polar isothermal "
             "fluid "
             "(transport='isothermal') declares them and accepts 'hll'.");
+      }
+    case RiemannRouteId::kHllc:
+      if constexpr (HasHLLCStructure<Model>) {
+        return dispatch_limiter(
+            parse_limiter_route(lim, "System (polar)"), "System (polar)", [&](auto tag) {
+              using L = typename decltype(tag)::type;
+              return build_block_polar<L, HLLCFlux>(m, ctx, recon_prim, wall_radial, pos_floor);
+            });
+      } else {
+        throw std::runtime_error(
+            "System (polar): flux 'hllc' requires the model's exact HasHLLCStructure "
+            "capability (pressure + wave_speeds + contact_speed + hllc_star_state); no fallback");
+      }
+    case RiemannRouteId::kRoe:
+      if constexpr (HasRoeDissipation<Model>) {
+        return dispatch_limiter(
+            parse_limiter_route(lim, "System (polar)"), "System (polar)", [&](auto tag) {
+              using L = typename decltype(tag)::type;
+              return build_block_polar<L, RoeFlux>(m, ctx, recon_prim, wall_radial, pos_floor);
+            });
+      } else {
+        throw std::runtime_error(
+            "System (polar): flux 'roe' requires the model's exact HasRoeDissipation capability "
+            "(roe_dissipation); no fallback");
       }
     default:
       throw_registry_dispatch_mismatch("System (polar)", "Riemann flux", riem);
