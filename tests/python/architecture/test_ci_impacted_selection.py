@@ -715,9 +715,9 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_amr_history_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_nonlinear_collective_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_regrid_on_restart_mpi.py",
-            "2\ttests/python/integration/mpi/test_async_balance_cadence_mpi.py",
-            "2\ttests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
-            "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
+        "2\ttests/python/integration/mpi/test_async_balance_cadence_mpi.py",
+        "2\ttests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
+        "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
         "2\ttests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py",
     ]
     assert (
