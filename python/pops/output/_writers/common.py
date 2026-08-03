@@ -841,6 +841,7 @@ class _StagedOutputFile:
         expected_owner: tuple[int, int] | None,
         *,
         replaced_message: str,
+        directory_fd: int | None = None,
     ) -> None:
         """Atomically detach one path, then delete only from a private quarantine.
 
@@ -855,7 +856,11 @@ class _StagedOutputFile:
         directory_flags = (
             os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
         )
-        parent_fd = os.open(path.parent, directory_flags)
+        parent_fd = (
+            os.open(path.parent, directory_flags)
+            if directory_fd is None
+            else os.dup(directory_fd)
+        )
         quarantine_name = ""
         quarantine_fd: int | None = None
         retain_quarantine = False

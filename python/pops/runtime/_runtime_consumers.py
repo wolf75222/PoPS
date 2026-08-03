@@ -745,6 +745,11 @@ class _PreparedCheckpoint(PreparedPublication):
         self._published = False
         self._discarded = True
 
+    def finalize(self) -> None:
+        finalize = getattr(self._snapshot, "finalize", None)
+        if callable(finalize):
+            finalize()
+
 
 def _writer_snapshot_data(snapshot: OutputSnapshot, request: OutputRequest) -> dict[str, Any]:
     """Project the complete selected snapshot into the generated Writer POD vocabulary."""
