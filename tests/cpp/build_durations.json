@@ -5,6 +5,7 @@
     "estimated_targets": [
       "test_amr_program_diffusion",
       "test_amr_program_positivity_floor",
+      "test_cell_temporal_partition_executor",
       "test_flux_failure_loader_transaction",
       "test_interface_flux_fragment_ledger",
       "test_prepared_numerics_gate",
@@ -19,7 +20,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 190,
+    "target_count": 191,
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor"
   },
   "test_adaptive_multirate": 2.0,
@@ -75,6 +76,7 @@
   "test_cache_manager": 2.0,
   "test_canonical_identity": 2.0,
   "test_capability_report": 2.0,
+  "test_cell_temporal_partition_executor": 15.0,
   "test_cf_interface": 2.0,
   "test_cfl_dt": 2.0,
   "test_checkpoint_cache": 2.0,
