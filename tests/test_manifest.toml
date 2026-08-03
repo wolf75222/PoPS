@@ -824,6 +824,38 @@ sources = ["tests/cpp/unit/mesh/test_multifab.cpp"]
 labels = ["unit", "mesh", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_distribution"
+sources = ["tests/cpp/unit/mesh/test_nd_distribution.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_layout"
+sources = ["tests/cpp/unit/mesh/test_nd_layout.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_topology"
+sources = ["tests/cpp/unit/mesh/test_nd_topology.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_nd_translation_schedule"
+sources = ["tests/cpp/unit/mesh/test_nd_translation_schedule.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_mpi_nd_translation_completion_failstop"
+sources = ["tests/cpp/integration/mpi/test_mpi_nd_translation_completion_failstop.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1]
+
+[[cpp.suite]]
+name = "test_mpi_nd_translation_exchange"
+sources = ["tests/cpp/integration/mpi/test_mpi_nd_translation_exchange.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
 name = "test_patch_range"
 sources = ["tests/cpp/unit/mesh/test_patch_range.cpp"]
 labels = ["unit", "mesh", "fast"]

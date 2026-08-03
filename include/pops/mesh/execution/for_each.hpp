@@ -21,6 +21,7 @@
 #include <pops/core/foundation/kokkos_env.hpp>  // detail::ensure_kokkos_initialized + device_fence (life cycle)
 #include <pops/core/foundation/types.hpp>
 #include <pops/diagnostics/fallback_diagnostics.hpp>
+#include <pops/mesh/index/box.hpp>
 #include <pops/mesh/index/box2d.hpp>
 
 #include <cstdint>  // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
@@ -93,6 +94,16 @@ inline std::int64_t foreach_serial_threshold() {
   }();
   return thr;
 }
+
+/// True only when the product is strictly below the threshold, without forming a potentially
+/// overflowing product.  Large iterable boxes therefore take the Kokkos path rather than failing
+/// while merely deciding the host fallback.
+inline bool foreach_small_box(std::int64_t nx, std::int64_t ny, std::int64_t threshold) noexcept {
+  if (nx <= 0 || ny <= 0 || threshold <= 0)
+    return false;
+  const std::int64_t remaining = threshold - 1;
+  return nx <= remaining && ny <= remaining / nx;
+}
 }  // namespace detail
 
 // ---------------------------------------------------------------------------
@@ -146,6 +157,164 @@ inline void sync_host() {
 /// deep_copy host->device on a non-unified path.
 inline void sync_device() {}
 
+namespace detail {
+
+template <int Dim>
+inline void require_iterable_box(const Box<Dim>& box) {
+  if (box.empty())
+    return;
+  for (int axis = 0; axis < Dim; ++axis) {
+    if (box.length(axis) > std::numeric_limits<int>::max() ||
+        box.hi[axis] == std::numeric_limits<int>::max())
+      throw std::overflow_error(
+          "PoPS Kokkos iteration requires int-addressable extents and an inclusive high index "
+          "below "
+          "INT_MAX");
+  }
+}
+
+template <int Dim>
+inline bool foreach_small_box(const Box<Dim>& box, std::int64_t threshold) noexcept {
+  if (box.empty() || threshold <= 0)
+    return false;
+  std::int64_t remaining = threshold - 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    const std::int64_t extent = box.length(axis);
+    if (extent <= 0 || extent > remaining)
+      return false;
+    remaining /= extent;
+  }
+  return true;
+}
+
+}  // namespace detail
+
+/// Applies @p f to every index of a compile-time-ranked box.  The functor is passed by value and
+/// receives Index<Dim>; the selected Kokkos policy has the same static rank as the box.
+template <int Dim, class F>
+void for_each_cell(const Box<Dim>& b, F f) {
+  if (b.empty())
+    return;
+  detail::require_iterable_box(b);
+  if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>) {
+    if (detail::foreach_small_box(b, detail::foreach_serial_threshold())) {
+      record_fallback(FallbackCounter::kForeachSerialSmallBox);
+      if constexpr (Dim == 1) {
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+          f(Index<1>{i});
+      } else if constexpr (Dim == 2) {
+        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+            f(Index<2>{i, j});
+      } else {
+        for (int k = b.lo[2]; k <= b.hi[2]; ++k)
+          for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+            for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+              f(Index<3>{i, j, k});
+      }
+      return;
+    }
+  }
+  detail::ensure_kokkos_initialized();
+  if constexpr (Dim == 1) {
+    Kokkos::parallel_for(
+        "pops_for_each_index_1d", Kokkos::RangePolicy<Kokkos::IndexType<int>>(b.lo[0], b.hi[0] + 1),
+        KOKKOS_LAMBDA(const int i) { f(Index<1>{i}); });
+  } else if constexpr (Dim == 2) {
+    Kokkos::parallel_for(
+        "pops_for_each_index_2d",
+        Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>({b.lo[0], b.lo[1]},
+                                                                       {b.hi[0] + 1, b.hi[1] + 1}),
+        KOKKOS_LAMBDA(const int i, const int j) { f(Index<2>{i, j}); });
+  } else {
+    Kokkos::parallel_for(
+        "pops_for_each_index_3d",
+        Kokkos::MDRangePolicy<Kokkos::Rank<3>, Kokkos::IndexType<int>>(
+            {b.lo[0], b.lo[1], b.lo[2]}, {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
+        KOKKOS_LAMBDA(const int i, const int j, const int k) { f(Index<3>{i, j, k}); });
+  }
+}
+
+/// SUM reduction over a compile-time-ranked box.  The functor receives Index<Dim>.
+template <int Dim, class F>
+Real for_each_cell_reduce_sum(const Box<Dim>& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::require_iterable_box(b);
+  detail::ensure_kokkos_initialized();
+  Real result = 0;
+  if constexpr (Dim == 1) {
+    Kokkos::parallel_reduce(
+        "pops_reduce_sum_index_1d",
+        Kokkos::RangePolicy<Kokkos::IndexType<int>>(b.lo[0], b.hi[0] + 1),
+        KOKKOS_LAMBDA(const int i, Real& accumulator) { accumulator += f(Index<1>{i}); },
+        Kokkos::Sum<Real>{result});
+  } else if constexpr (Dim == 2) {
+    Kokkos::parallel_reduce(
+        "pops_reduce_sum_index_2d",
+        Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>({b.lo[0], b.lo[1]},
+                                                                       {b.hi[0] + 1, b.hi[1] + 1}),
+        KOKKOS_LAMBDA(const int i, const int j, Real& accumulator) {
+          accumulator += f(Index<2>{i, j});
+        },
+        Kokkos::Sum<Real>{result});
+  } else {
+    Kokkos::parallel_reduce(
+        "pops_reduce_sum_index_3d",
+        Kokkos::MDRangePolicy<Kokkos::Rank<3>, Kokkos::IndexType<int>>(
+            {b.lo[0], b.lo[1], b.lo[2]}, {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
+        KOKKOS_LAMBDA(const int i, const int j, const int k, Real& accumulator) {
+          accumulator += f(Index<3>{i, j, k});
+        },
+        Kokkos::Sum<Real>{result});
+  }
+  return result;
+}
+
+/// MAX reduction over a compile-time-ranked box.  The functor receives Index<Dim>.
+template <int Dim, class F>
+Real for_each_cell_reduce_max(const Box<Dim>& b, F f) {
+  if (b.empty())
+    return Real(0);
+  detail::require_iterable_box(b);
+  detail::ensure_kokkos_initialized();
+  Real result = std::numeric_limits<Real>::lowest();
+  if constexpr (Dim == 1) {
+    Kokkos::parallel_reduce(
+        "pops_reduce_max_index_1d",
+        Kokkos::RangePolicy<Kokkos::IndexType<int>>(b.lo[0], b.hi[0] + 1),
+        KOKKOS_LAMBDA(const int i, Real& accumulator) {
+          const Real value = f(Index<1>{i});
+          if (value > accumulator)
+            accumulator = value;
+        },
+        Kokkos::Max<Real>{result});
+  } else if constexpr (Dim == 2) {
+    Kokkos::parallel_reduce(
+        "pops_reduce_max_index_2d",
+        Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>({b.lo[0], b.lo[1]},
+                                                                       {b.hi[0] + 1, b.hi[1] + 1}),
+        KOKKOS_LAMBDA(const int i, const int j, Real& accumulator) {
+          const Real value = f(Index<2>{i, j});
+          if (value > accumulator)
+            accumulator = value;
+        },
+        Kokkos::Max<Real>{result});
+  } else {
+    Kokkos::parallel_reduce(
+        "pops_reduce_max_index_3d",
+        Kokkos::MDRangePolicy<Kokkos::Rank<3>, Kokkos::IndexType<int>>(
+            {b.lo[0], b.lo[1], b.lo[2]}, {b.hi[0] + 1, b.hi[1] + 1, b.hi[2] + 1}),
+        KOKKOS_LAMBDA(const int i, const int j, const int k, Real& accumulator) {
+          const Real value = f(Index<3>{i, j, k});
+          if (value > accumulator)
+            accumulator = value;
+        },
+        Kokkos::Max<Real>{result});
+  }
+  return result;
+}
+
 /// Applies @p f to EACH cell (i, j) of box @p b (bounds inclusive), via Kokkos::parallel_for
 /// (Serial / OpenMP / Cuda depending on the Kokkos install). @p f is taken by value and MUST be
 /// device-callable (annotated POPS_HD, captures POD by value). No order guarantee.
@@ -172,8 +341,7 @@ void for_each_cell(const Box2D& b, F f) {
   if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>) {
     const std::int64_t nx = static_cast<std::int64_t>(b.hi[0]) - b.lo[0] + 1;
     const std::int64_t ny = static_cast<std::int64_t>(b.hi[1]) - b.lo[1] + 1;
-    const std::int64_t n_cells = nx * ny;
-    if (n_cells < detail::foreach_serial_threshold()) {
+    if (detail::foreach_small_box(nx, ny, detail::foreach_serial_threshold())) {
       record_fallback(FallbackCounter::kForeachSerialSmallBox);
       for (int j = b.lo[1]; j <= b.hi[1]; ++j)
         for (int i = b.lo[0]; i <= b.hi[0]; ++i)
