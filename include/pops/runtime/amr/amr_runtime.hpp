@@ -832,6 +832,14 @@ struct AmrRuntimeBlock {
   /// Exact owner-qualified state Handle, installed by the block plan independently of whether this
   /// block owns a physical boundary authority.
   std::string state_identity;
+  /// Exact semantic identity and parameter bytes of the compiled transport-flux closure.
+  ///
+  /// They are populated only when the concrete model owns a reviewable spatial-provider contract
+  /// and the limiter/Riemann types have canonical native route tokens. Consumers such as the
+  /// cell-local temporal provider reject an empty pair; they never infer physics from a type-erased
+  /// ``std::function`` or accept an unrelated caller-supplied label.
+  std::string transport_flux_provider_identity;
+  std::string transport_flux_parameter_contract;
   int ncomp = 1;
   double gamma = static_cast<double>(kPhysicalDefaultGamma);
   /// Authored per-block subdivision used by Program cadence and CFL scaling.
@@ -2017,6 +2025,29 @@ class AmrRuntime {
     if (b >= blocks_.size())
       throw std::runtime_error("AmrRuntime::block_cons_vars : block index out of bounds");
     return blocks_[b].cons_vars;
+  }
+  std::string_view block_transport_flux_provider_identity(std::size_t b) const {
+    if (b >= blocks_.size())
+      throw std::runtime_error(
+          "AmrRuntime::block_transport_flux_provider_identity : block index out of bounds");
+    return blocks_[b].transport_flux_provider_identity;
+  }
+  std::string_view block_transport_flux_parameter_contract(std::size_t b) const {
+    if (b >= blocks_.size())
+      throw std::runtime_error(
+          "AmrRuntime::block_transport_flux_parameter_contract : block index out of bounds");
+    return blocks_[b].transport_flux_parameter_contract;
+  }
+  std::string_view block_state_identity(std::size_t b) const {
+    if (b >= blocks_.size())
+      throw std::runtime_error("AmrRuntime::block_state_identity : block index out of bounds");
+    return blocks_[b].state_identity;
+  }
+  bool block_has_prepared_boundary_plan(std::size_t b) const {
+    if (b >= blocks_.size())
+      throw std::runtime_error(
+          "AmrRuntime::block_has_prepared_boundary_plan : block index out of bounds");
+    return static_cast<bool>(blocks_[b].boundary_plan);
   }
   std::size_t n_coupled_sources() const { return coupled_sources_.size(); }
   /// Read-only view of the registered coupling operators (ADC-595, parity with System): label plus the
