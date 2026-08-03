@@ -61,6 +61,7 @@ struct StageFluxProbe {
   std::int64_t fail_end_tick = -1;
   std::uint32_t fail_reason = 0;
   bool reject_begin = false;
+  bool reject_commit = false;
   int begins = 0;
   int commits = 0;
   int rollbacks = 0;
@@ -124,6 +125,11 @@ class ProbeStageFluxProvider {
     if (attempt.topology_epoch != 17 || attempt.begin_tick != 8 || attempt.target_tick <= 8 ||
         attempt.tick_denominator != 32 || attempt.cell_count != probe_->last_begin.size())
       return PreparedProviderSupport::reject(42, "probe received the wrong attempt authority");
+    return PreparedProviderSupport::accept();
+  }
+  [[nodiscard]] PreparedProviderSupport prepare_commit_attempt() noexcept {
+    if (probe_->reject_commit)
+      return PreparedProviderSupport::reject(43, "probe rejected accepted publication");
     return PreparedProviderSupport::accept();
   }
   void commit_attempt() noexcept {
@@ -314,6 +320,25 @@ TEST(test_cell_temporal_partition_executor,
 }
 
 TEST(test_cell_temporal_partition_executor,
+     provider_commit_preflight_rolls_back_clocks_and_attempt_local_ledger) {
+  const CellTemporalPartitionAcceptedState accepted = prepared_state();
+  const auto probe = std::make_shared<StageFluxProbe>(accepted.cells.size());
+  PreparedBatchedCellTemporalExecutor executor{accepted, ProbeStageFluxProvider(probe)};
+
+  executor.begin_attempt(16);
+  executor.advance_to_barrier();
+  probe->reject_commit = true;
+  EXPECT_THROW(executor.commit(), std::runtime_error);
+
+  EXPECT_FALSE(executor.attempt_active());
+  EXPECT_EQ(executor.checkpoint(), accepted);
+  EXPECT_EQ(probe->commits, 0);
+  EXPECT_EQ(probe->rollbacks, 1);
+  EXPECT_TRUE(std::all_of(probe->committed_flux.begin(), probe->committed_flux.end(),
+                          [](std::uint32_t value) { return value == 0; }));
+}
+
+TEST(test_cell_temporal_partition_executor,
      production_same_level_provider_commits_real_state_and_integrated_face_fluxes) {
   auto runtime = make_linear_transport_runtime();
   constexpr Real seconds_per_tick = Real(0.01);
@@ -433,6 +458,43 @@ TEST(test_cell_temporal_partition_executor,
   EXPECT_THROW(stale_executor.begin_attempt(1), std::runtime_error);
   EXPECT_EQ(runtime->density(0), accepted_state);
   EXPECT_EQ(stale_ledger->publication_generation(), 0u);
+}
+
+TEST(test_cell_temporal_partition_executor,
+     production_provider_refuses_restart_rematerialization_between_barrier_and_commit) {
+  auto runtime = make_linear_transport_runtime();
+  const std::vector<double> accepted_state = runtime->density(0);
+  const CellTemporalPartitionAcceptedState partition =
+      prepare_same_level_transport_euler_partition(*runtime, 0, 100, 0);
+  auto stale_ledger = make_scientific_flux_ledger(*runtime, partition);
+  const std::uint64_t accepted_epoch = runtime->topology_epoch();
+  const std::uint64_t accepted_generation = runtime->topology_materialization_generation();
+
+  PreparedSameLevelTransportEulerStageFluxProvider stale_provider(
+      *runtime, partition, stale_ledger, "test.clock.cell-local");
+  PreparedBatchedCellTemporalExecutor stale_executor{partition, std::move(stale_provider)};
+  stale_executor.begin_attempt(1);
+  stale_executor.advance_to_barrier();
+
+  runtime->rebuild_hierarchy({{}}, {{}});
+  runtime->restore_checkpoint_counters(runtime->regrid_count(), accepted_epoch);
+  ASSERT_GT(runtime->topology_materialization_generation(), accepted_generation)
+      << "a same-topology restart still rematerializes address-bound provider storage";
+  EXPECT_THROW(stale_executor.commit(), std::runtime_error);
+  EXPECT_FALSE(stale_executor.attempt_active());
+  EXPECT_EQ(stale_executor.checkpoint(), partition);
+  EXPECT_EQ(stale_ledger->publication_generation(), 0u);
+  EXPECT_EQ(runtime->density(0), accepted_state);
+
+  auto retry_ledger = make_scientific_flux_ledger(*runtime, partition);
+  PreparedSameLevelTransportEulerStageFluxProvider retry_provider(
+      *runtime, partition, retry_ledger, "test.clock.cell-local");
+  PreparedBatchedCellTemporalExecutor retry{partition, std::move(retry_provider)};
+  retry.begin_attempt(1);
+  retry.advance_to_barrier();
+  EXPECT_NO_THROW(retry.commit());
+  EXPECT_EQ(retry_ledger->publication_generation(), 1u);
+  EXPECT_EQ(retry.checkpoint().synchronization_tick, 1);
 }
 
 #undef POPS_TEST_CELL_TEMPORAL_INLINE

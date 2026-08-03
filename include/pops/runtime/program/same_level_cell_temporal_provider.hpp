@@ -355,8 +355,28 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
             tick_denominator_};
   }
 
-  void commit_attempt() noexcept {
+  [[nodiscard]] PreparedProviderSupport prepare_commit_attempt() noexcept {
     device_fence();
+    if (!active_ || batch_active_ || current_tick_ != attempt_target_tick_)
+      return PreparedProviderSupport::reject(
+          0x756106u, "provider did not reach its prepared synchronization barrier");
+    if (runtime_->topology_epoch() != topology_epoch_ ||
+        runtime_->topology_materialization_generation() != materialization_generation_)
+      return PreparedProviderSupport::reject(
+          0x756107u, "provider storage changed before accepted publication");
+    if (!ledger_ || ledger_->topology_epoch() != topology_epoch_ ||
+        ledger_->materialization_generation() != materialization_generation_ ||
+        ledger_->block() != 0 || ledger_->level() != 0 ||
+        ledger_->cell_count() != cell_count_ || ledger_->component_count() != component_count_)
+      return PreparedProviderSupport::reject(
+          0x756108u, "provider flux ledger changed before accepted publication");
+    return PreparedProviderSupport::accept();
+  }
+
+  void commit_attempt() noexcept {
+    const PreparedProviderSupport support = prepare_commit_attempt();
+    if (!support.well_formed() || !support.accepted())
+      std::terminate();
     const ConstArray4 source = current_state_().fab(0).const_array();
     const Array4 destination = live_->fab(0).array();
     for (int j = valid_box_.lo[1]; j <= valid_box_.hi[1]; ++j)

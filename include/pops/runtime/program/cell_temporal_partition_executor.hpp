@@ -138,8 +138,10 @@ using CellTemporalStageFluxDeviceViewType = decltype(std::declval<const Provider
 /// Host/device contract consumed by ``PreparedBatchedCellTemporalExecutor``.
 ///
 /// ``begin_attempt`` binds provider-owned scratch prepared before the hot rung loop.  Device calls
-/// may mutate only that scratch.  ``commit_attempt`` publishes it after every local clock reaches
-/// the barrier; ``rollback_attempt`` discards it after any rejection or exception.
+/// may mutate only that scratch. ``prepare_commit_attempt`` re-authenticates every external
+/// topology/storage authority after the final device fence and before accepted publication.
+/// ``commit_attempt`` publishes only after that support decision and every local clock reaches the
+/// barrier; ``rollback_attempt`` discards scratch after any rejection or exception.
 template <class Provider>
 concept CellTemporalStageFluxProvider = requires(Provider& provider, const Provider& const_provider,
                                                  ExactContractBuilder& contract,
@@ -150,6 +152,7 @@ concept CellTemporalStageFluxProvider = requires(Provider& provider, const Provi
   } noexcept -> std::same_as<PreparedCellTemporalStageFluxContractV1>;
   { const_provider.serialize_exact_parameters(contract) } -> std::same_as<void>;
   { provider.begin_attempt(attempt) } noexcept -> std::same_as<PreparedProviderSupport>;
+  { provider.prepare_commit_attempt() } noexcept -> std::same_as<PreparedProviderSupport>;
   { provider.commit_attempt() } noexcept -> std::same_as<void>;
   { provider.rollback_attempt() } noexcept -> std::same_as<void>;
   { const_provider.device_view() } noexcept;
@@ -343,17 +346,30 @@ class PreparedBatchedCellTemporalExecutor {
     if (!attempt_active_)
       throw std::logic_error("cell-local temporal commit requires an active attempt");
     partition_.require_barrier("cell-local temporal provider commit");
-    CellTemporalPartitionAcceptedState next = partition_.accepted_state();
-    next.synchronization_tick = target_tick_;
-    for (CellTemporalPartitionRecord& cell : next.cells)
-      cell.accepted_tick = target_tick_;
-    std::string next_exact_contract =
-        cell_temporal_detail::exact_execution_contract(next, provider_);
-    provider_.commit_attempt();
-    partition_.commit();
-    exact_contract_ = std::move(next_exact_contract);
-    target_tick_ = 0;
-    attempt_active_ = false;
+    try {
+      CellTemporalPartitionAcceptedState next = partition_.accepted_state();
+      next.synchronization_tick = target_tick_;
+      for (CellTemporalPartitionRecord& cell : next.cells)
+        cell.accepted_tick = target_tick_;
+      std::string next_exact_contract =
+          cell_temporal_detail::exact_execution_contract(next, provider_);
+      const PreparedProviderSupport support = provider_.prepare_commit_attempt();
+      if (!support.well_formed() || !support.accepted()) {
+        const std::string reason = !support.well_formed()
+                                       ? "malformed prepared-provider support decision"
+                                       : std::string(support.reason);
+        throw std::runtime_error("cell-local temporal provider refused accepted publication: " +
+                                 reason);
+      }
+      provider_.commit_attempt();
+      partition_.commit();
+      exact_contract_ = std::move(next_exact_contract);
+      target_tick_ = 0;
+      attempt_active_ = false;
+    } catch (...) {
+      abort_attempt_();
+      throw;
+    }
   }
 
   void rollback() noexcept {
