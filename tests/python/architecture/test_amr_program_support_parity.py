@@ -18,7 +18,12 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SUPPORT_PY = REPO_ROOT / "python" / "pops" / "runtime" / "amr_program_support.py"
 CONTEXT_HPP = REPO_ROOT / "include" / "pops" / "runtime" / "program" / "amr_program_context.hpp"
 SERVICES_HPP = (
-    REPO_ROOT / "include" / "pops" / "runtime" / "program" / "program_execution_services.hpp"
+    REPO_ROOT
+    / "include"
+    / "pops"
+    / "runtime"
+    / "program"
+    / "program_execution_services.hpp"
 )
 PRODUCTION_CODEGEN = (
     REPO_ROOT / "python" / "pops" / "codegen" / "program_codegen.py",
@@ -126,6 +131,7 @@ def test_parser_finds_only_explicit_known_deferrals():
     assert "SolveOutcome solve_fields_from_blocks(const std::string&" not in (
         CONTEXT_HPP.read_text(encoding="utf-8")
     )
+    assert "solve_fields_from_blocks_at" not in CONTEXT_HPP.read_text(encoding="utf-8")
     assert "solve_fields_from_blocks_at" in SERVICES_HPP.read_text(encoding="utf-8")
     assert "program_execution_solve_generated_field_from_blocks_outcome_" in (
         CONTEXT_HPP.read_text(encoding="utf-8")
