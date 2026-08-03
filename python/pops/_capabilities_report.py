@@ -591,21 +591,25 @@ def _python_contract_rows(flags: Any, source: str) -> list[Any]:
             gpu=False,
             status="partial",
             limitation=(
-                "native C++ only: one serial host rank, one 2D block, one level, one owned box, "
-                "one common cell rung, transport-only forward Euler and frozen attempt auxiliary "
-                "fields with built-in periodic/Foextrap boundaries; the provider reuses the exact "
-                "compiled AMR residual/face-flux closure "
+                "Program.cell_local_time and its generated AmrProgramContext route cover one "
+                "serial host rank, one 2D block, one level, one owned box, one common cell rung, "
+                "transport-only forward Euler and frozen attempt auxiliary fields with built-in "
+                "periodic/Foextrap boundaries; the provider reuses the exact compiled AMR "
+                "residual/face-flux closure "
                 "and commits real conservative state plus four time-integrated face records per "
                 "cell as one accepted transaction at the synchronization barrier; its exact "
-                "contract includes "
-                "model-owned transport parameters and the limiter/Riemann route; public "
-                "Program/AmrProgramContext wiring, prepared physical-boundary plans, heterogeneous "
-                "rungs, coarse/fine ledgers, sources, MPI, GPU, restart and performance proof "
-                "remain unavailable"
+                "contract includes model-owned transport parameters and the limiter/Riemann route; "
+                "same-topology restart restores numerical state and exact clocks but intentionally "
+                "invalidates the last-interval diagnostic flux ledger until another accepted step; "
+                "prepared physical-boundary plans, heterogeneous rungs, multi-box/multilevel and "
+                "coarse/fine ledgers, sources, MPI, GPU, regrid/rank-change rematerialization, "
+                "checkpoint persistence of the diagnostic ledger and performance proof remain "
+                "unavailable"
             ),
             requested="prepared cell-local scientific stage and space-time flux transaction",
             available_route=(
-                "native PreparedSameLevelTransportEulerStageFluxProvider in its exact bounded "
+                "Program.cell_local_time plus the generated AmrProgramContext and native "
+                "PreparedSameLevelTransportEulerStageFluxProvider in their exact bounded "
                 "host/serial same-rung envelope"
             ),
             alternative=(

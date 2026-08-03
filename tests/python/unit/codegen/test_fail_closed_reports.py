@@ -99,7 +99,8 @@ def test_mpi_world_route_reports_only_proved_native_availability(supports_mpi, e
     assert cell_local.mpi is False
     assert cell_local.gpu is False
     assert "four time-integrated face records" in cell_local.limitation
-    assert "public Program/AmrProgramContext wiring" in cell_local.limitation
+    assert "Program.cell_local_time" in cell_local.limitation
+    assert "same-topology restart" in cell_local.limitation
     assert "prepared physical-boundary plans" in cell_local.limitation
     external_amr = routes["amr:external_field_solver_v2"]
     assert external_amr.status == "available"
