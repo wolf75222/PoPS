@@ -394,6 +394,21 @@ TEST(test_cell_temporal_partition_executor,
   const CellTemporalPartitionAcceptedState partition =
       prepare_same_level_transport_euler_partition(*runtime, 0, 100, 0);
   auto ledger = make_scientific_flux_ledger(*runtime, partition);
+
+  PreparedSameLevelTransportEulerStageFluxProvider exact_time_provider(*runtime, partition, ledger,
+                                                                       "test.clock.cell-local");
+  const PreparedProviderSupport prepared = exact_time_provider.begin_attempt(
+      {partition.topology_epoch, 0, 1, 100, partition.cells.size()});
+  ASSERT_TRUE(prepared.accepted());
+  exact_time_provider.begin_rung_batch({0, 0, 1, 100, partition.cells.size()});
+  const CellTemporalStageOutcome wrong_time =
+      exact_time_provider.device_view().evaluate_local_stage_and_record_space_time_flux(
+          {0, 0, 0, 0, 0, 1, 99});
+  EXPECT_EQ(wrong_time.disposition, CellTemporalStageDisposition::Failed);
+  EXPECT_EQ(wrong_time.reason_code, 0x756001u);
+  exact_time_provider.rollback_attempt();
+  EXPECT_EQ(ledger->publication_generation(), 0u);
+
   PreparedSameLevelTransportEulerStageFluxProvider provider(*runtime, partition, ledger,
                                                             "test.clock.cell-local");
   PreparedBatchedCellTemporalExecutor executor{partition, std::move(provider)};
@@ -407,7 +422,7 @@ TEST(test_cell_temporal_partition_executor,
   mixed_rungs.cells.back().rung = 1;
   auto mixed_ledger = make_scientific_flux_ledger(*runtime, mixed_rungs);
   EXPECT_THROW((PreparedSameLevelTransportEulerStageFluxProvider(
-                   *runtime, mixed_rungs, mixed_ledger, Real(0.01), "test.clock.cell-local")),
+                   *runtime, mixed_rungs, mixed_ledger, "test.clock.cell-local")),
                std::invalid_argument);
 
   auto stale_ledger = make_scientific_flux_ledger(*runtime, partition);

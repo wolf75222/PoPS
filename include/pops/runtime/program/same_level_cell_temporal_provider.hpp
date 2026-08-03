@@ -190,12 +190,17 @@ struct SameLevelTransportEulerDeviceView {
   int jlo = 0;
   int nx = 0;
   int expected_rung = 0;
+  std::int64_t expected_begin_tick = 0;
+  std::int64_t expected_end_tick = 0;
+  std::int64_t expected_tick_denominator = 1;
 
   [[nodiscard]] POPS_HD CellTemporalStageOutcome
   evaluate_local_stage_and_record_space_time_flux(CellTemporalStagePoint point) const noexcept {
     if (point.level != 0 || point.rung != expected_rung || point.record_index >= cell_count ||
         point.cell != static_cast<std::uint64_t>(point.record_index) || nx <= 0 ||
-        component_count <= 0 || integrated_flux == nullptr || point.end_tick <= point.begin_tick)
+        component_count <= 0 || integrated_flux == nullptr ||
+        point.begin_tick != expected_begin_tick || point.end_tick != expected_end_tick ||
+        point.tick_denominator != expected_tick_denominator || point.end_tick <= point.begin_tick)
       return CellTemporalStageOutcome::failed(0x756001u);
     const std::size_t linear = point.record_index;
     const int i = ilo + static_cast<int>(linear % static_cast<std::size_t>(nx));
@@ -304,7 +309,8 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     if (!active_ || batch_active_ || batch.rung != common_rung_ ||
         batch.begin_tick != current_tick_ ||
         batch.end_tick - batch.begin_tick != (std::int64_t{1} << common_rung_) ||
-        batch.tick_denominator != tick_denominator_ || batch.cell_count != cell_count_)
+        batch.end_tick > attempt_target_tick_ || batch.tick_denominator != tick_denominator_ ||
+        batch.cell_count != cell_count_)
       throw std::logic_error("same-level transport provider received an unprepared rung batch");
     const Real dt = static_cast<Real>(batch.end_tick - batch.begin_tick) * seconds_per_tick_;
     ::pops::runtime::multiblock::BoundaryEvaluationPoint point;
@@ -313,7 +319,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
     point.level = 0;
     point.substep = static_cast<int>((batch.begin_tick - attempt_begin_tick_) >> common_rung_);
     point.stage = 0;
-    point.stage_fraction = amr::Rational(0, 1);
+    point.stage_fraction = ::pops::amr::Rational(0, 1);
     point.dt = static_cast<double>(dt);
     point.physical_time = static_cast<double>(batch.begin_tick) * seconds_per_tick_;
     runtime_->level_neg_div_flux_capture_into(0, 0, point, current_state_(), residual_, flux_x_,
@@ -343,7 +349,10 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
             valid_box_.lo[0],
             valid_box_.lo[1],
             valid_box_.nx(),
-            common_rung_};
+            common_rung_,
+            current_tick_,
+            batch_end_tick_,
+            tick_denominator_};
   }
 
   void commit_attempt() noexcept {
@@ -499,7 +508,7 @@ class PreparedSameLevelTransportEulerStageFluxProvider {
   MultiFab residual_;
   MultiFab flux_x_;
   MultiFab flux_y_;
-  std::vector<Real, fab_allocator<Real>> attempt_flux_;
+  mutable std::vector<Real, fab_allocator<Real>> attempt_flux_;
   bool current_is_a_ = true;
   std::int64_t attempt_begin_tick_ = 0;
   std::int64_t attempt_target_tick_ = 0;
