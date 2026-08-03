@@ -697,6 +697,9 @@ pops_add_gtest_suite(NAME test_program_reflux_ledger SOURCES "${_src}" EXTRA_LIB
 pops_test_source(_src test_temporal_partition_restart)
 pops_add_gtest_suite(NAME test_temporal_partition_restart SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
+pops_test_source(_src test_cell_temporal_partition_executor)
+pops_add_gtest_suite(NAME test_cell_temporal_partition_executor SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
 pops_test_source(_src test_amr_transfer_properties)
 pops_add_gtest_suite(NAME test_amr_transfer_properties SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
