@@ -10,6 +10,8 @@ SHARED = PROGRAM_DIR / "program_execution_services.hpp"
 PROGRAM_RUNTIME_STATE = PROGRAM_DIR / "program_runtime_state.hpp"
 UNIFORM = PROGRAM_DIR / "program_context.hpp"
 AMR = PROGRAM_DIR / "amr_program_context.hpp"
+UNIFORM_DRIVER = ROOT / "include" / "pops" / "runtime" / "system" / "system_program_driver.hpp"
+AMR_RUNTIME = ROOT / "src" / "runtime" / "amr" / "amr_system.cpp"
 BINDINGS = (
     ROOT / "python" / "bindings" / "core" / "init" / "init_system.cpp",
     ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp",
@@ -196,6 +198,31 @@ def test_uniform_and_amr_inherit_the_same_execution_service():
         r"ProgramExecutionServices<AmrProgramContext>",
         amr,
     )
+
+
+def test_uniform_and_amr_enter_one_shared_cadence_dispatcher():
+    state = _read(PROGRAM_RUNTIME_STATE)
+    uniform_driver = _read(UNIFORM_DRIVER)
+    amr_runtime = _read(AMR_RUNTIME)
+
+    assert state.count("void dispatch_cadence_step(") == 1
+    for operation in (
+        "prepare_cadence_step(",
+        "validate_cadence_partition(",
+        "prepare_cadence_substep(",
+        "run_balance_due_window(",
+        "commit_cadence_step(",
+        "complete_balance_step(",
+    ):
+        assert operation in state
+        assert operation not in uniform_driver
+        assert operation not in amr_runtime
+
+    assert (
+        'P->program_.dispatch_cadence_step(P->t, P->macro_step_, dt, "System");'
+        in uniform_driver
+    )
+    assert 'program_.dispatch_cadence_step(t, macro_step_, dt, "AmrSystem");' in amr_runtime
 
 
 def test_balance_attempt_sink_is_not_python_bound():
