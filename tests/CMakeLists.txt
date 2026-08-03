@@ -448,6 +448,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_copy_schedule_cache
   test_physical_bc
   test_prepared_boundary_plan
+  test_prepared_stream_executor
   test_geometry
   test_refinement
   test_ref_ratio
