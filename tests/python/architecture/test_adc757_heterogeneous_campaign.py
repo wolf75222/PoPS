@@ -142,6 +142,8 @@ def test_adc757_campaign_manifest_requires_the_complete_hardware_contract() -> N
         "metrics": list(_metrics(
             time=1.0, throughput=1.0, work=1.0, imbalance=1.0
         )),
+        "job_script": "benchmarks/romeo/adc757_heterogeneous_numerics.sbatch",
+        "submit_script": "benchmarks/romeo/submit_adc757_heterogeneous_numerics.sh",
     }
 
 
