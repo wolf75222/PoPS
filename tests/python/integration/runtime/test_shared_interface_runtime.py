@@ -14,6 +14,7 @@ import pytest
 
 from pops import interfaces
 from pops.external import build_source_package_manifest, compile_component, load
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.mesh import CartesianGrid
 from pops.mesh.boundaries import (
     BlockInterfaceSide,
@@ -24,7 +25,8 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.numerics.terms import Flux
 from pops.output import Checkpoint, ConsumerGraph, RegridOnRestart
-from pops.time import FixedDt, StagePoint, TimePoint, every
+from pops.solvers import GMRES
+from pops.time import FailRun, FixedDt, StagePoint, TimePoint, every
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -202,7 +204,7 @@ def _ssprk2_program(left_state, right_state, rate):
     return program
 
 
-def _implicit_pair_program(left_state, right_state, rate):
+def _implicit_pair_program(left_state, right_state, rate, packed_state=None):
     del rate
     program = pops.Program("shared_interface_implicit_pair")
     left = program.state(left_state)
@@ -218,15 +220,27 @@ def _implicit_pair_program(left_state, right_state, rate):
 
     def apply(builder, out, direction):
         builder.rhs_jacvec(
-            out, direction, iterate=left_iterate, r0=left_r0, c_dt=1,
+            out, direction, iterate=left_iterate, r0=left_r0, c_dt=builder.dt,
             sources=(), field_coupled=False,
         )
         return builder.rhs_jacvec(
-            out, direction, iterate=right_iterate, r0=right_r0, c_dt=1,
+            out, direction, iterate=right_iterate, r0=right_r0, c_dt=builder.dt,
             sources=(), field_coupled=False,
         )
 
     program.set_apply(operator, apply)
+    if packed_state is not None:
+        packed = program.state(packed_state)
+        program.solve(
+            LinearProblem(
+                operator,
+                packed.n,
+                properties=LinearOperatorProperties.general(),
+                nullspace=None,
+            ),
+            solver=GMRES(max_iter=8, restart=4, rel_tol=1.0e-12),
+            name="shared_interface_correction",
+        ).consume(action=FailRun())
     left_next = program.value("left_next", left.n + program.dt * left_r0, at=left.next.point)
     right_next = program.value("right_next", right.n + program.dt * right_r0, at=right.next.point)
     program.commit(left.next, left_next)
@@ -388,6 +402,7 @@ def _shared_interface_amr_authoring(
     component=None,
     program_factory=_ssprk2_program,
     with_checkpoint=True,
+    with_implicit_solve=False,
 ):
     from pops.amr import (
         AMRTagging,
@@ -403,8 +418,10 @@ def _shared_interface_amr_authoring(
     from pops.initial import InitialCondition
     from pops.lib.amr import StateTransfer
     from pops.lib.initial import BindArray
-    from pops.math import ValueExpr
+    from pops.math import ValueExpr, ddt, div
     from pops.projection import ConservativeCellAverage
+    from pops.representations import Conservative
+    from pops.spaces import CellState
 
     example = _load_example()
     core = example.build_authoring(output_root=tmp_path / "unused")
@@ -455,7 +472,67 @@ def _shared_interface_amr_authoring(
         value=BindArray(),
         projection=ConservativeCellAverage(),
     ))
-    program = program_factory(core.tracer_state, right_state, core.rate)
+    packed_state = None
+    packed_initial = None
+    if with_implicit_solve:
+        packed_model = pops.Model("shared_interface_packed_vector", frame=core.frame)
+        packed = packed_model.state(
+            "U",
+            components=("left_direction", "right_direction"),
+            representation=Conservative(),
+            space=CellState(frame=core.frame),
+        )
+        left_direction, right_direction = packed
+        zero_flux = packed_model.flux(
+            "zero_packed_transport",
+            frame=core.frame,
+            state=packed,
+            components={
+                axis: (0.0 * left_direction, 0.0 * right_direction)
+                for axis in core.frame.axes
+            },
+            waves={axis: (0.0, 0.0) for axis in core.frame.axes},
+        )
+        packed_rate = packed_model.rate(
+            "zero_packed_rate", equation=ddt(packed) == -div(zero_flux)
+        )
+        packed_block = core.case.block(
+            "implicit_vector", model=packed_model, states=(packed,)
+        )
+        packed_state = packed_block[packed]
+        packed_numerics = DiscretizationPlan()
+        packed_numerics.rates.add(
+            packed_rate,
+            FiniteVolume(
+                flux=zero_flux,
+                variables=variables.Conservative(packed),
+                reconstruction=reconstruction.FirstOrder(),
+                riemann=riemann.Rusanov(),
+            ),
+        )
+        packed_numerics.boundaries.add(TransportBoundarySet({
+            boundary: Outflow(state=packed_state)
+            for boundary in (
+                boundaries.x_min,
+                boundaries.x_max,
+                boundaries.y_min,
+                boundaries.y_max,
+            )
+        }))
+        core.case.numerics(packed_numerics, block=packed_block)
+        core.case.initials.add(InitialCondition(
+            state=packed_state,
+            value=BindArray(),
+            projection=ConservativeCellAverage(),
+        ))
+        packed_initial = np.empty((2, 8, 8), dtype=np.float64)
+        packed_initial[0, :, :] = 0.25
+        packed_initial[1, :, :] = -0.125
+        program = program_factory(
+            core.tracer_state, right_state, core.rate, packed_state
+        )
+    else:
+        program = program_factory(core.tracer_state, right_state, core.rate)
     core.case.program(program)
     if with_checkpoint:
         core.case.consumers(
@@ -473,6 +550,8 @@ def _shared_interface_amr_authoring(
     transfer = AMRTransfer()
     transfer.state(core.tracer_state, StateTransfer())
     transfer.state(right_state, StateTransfer())
+    if packed_state is not None:
+        transfer.state(packed_state, StateTransfer())
     tagging = AMRTagging(
         rules=(
             Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
@@ -517,6 +596,8 @@ def _shared_interface_amr_authoring(
         tagging=tagging,
         left_initial=left_initial,
         right_initial=right_initial,
+        packed_state=packed_state,
+        packed_initial=packed_initial,
         params=params,
     )
 
@@ -604,6 +685,40 @@ def test_frozen_two_level_shared_interface_implicit_pair_compiles_native_route(t
     from pops.codegen.program_emit_solve import _rhs_evaluation_identity
 
     assert str(_rhs_evaluation_identity(resolved.time, left_r0)) == group_identity.group(1)
+
+
+def test_frozen_two_level_generated_program_executes_shared_interface_implicit_pair(tmp_path):
+    authoring = _shared_interface_amr_authoring(
+        tmp_path,
+        program_factory=_implicit_pair_program,
+        with_checkpoint=False,
+        with_implicit_solve=True,
+    )
+    resolved = _resolve_shared_interface_amr(authoring, max_levels=2, frozen=True)
+    artifact = pops.compile(resolved)
+    interface = resolved.blocks[0].numerics.boundaries[0].interfaces[0]
+    runtime = authoring.example._bind_artifact(
+        artifact,
+        initial_values={
+            authoring.core.tracer_state: authoring.left_initial,
+            authoring.right_state: authoring.right_initial,
+            authoring.packed_state: authoring.packed_initial,
+        },
+        params=authoring.params,
+    )
+
+    assert runtime.n_levels() == 2
+    initial_packed = np.asarray(runtime.get_state("implicit_vector")).copy()
+    report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+
+    assert report.accepted_steps == 1
+    for level in range(2):
+        assert runtime._executor._s._interface_evaluation_count(
+            interface.qualified_id, level
+        ) > 1
+    solved_packed = np.asarray(runtime.get_state("implicit_vector"))
+    assert np.isfinite(solved_packed).all()
+    np.testing.assert_array_equal(solved_packed, initial_packed)
 
 
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path, monkeypatch):
