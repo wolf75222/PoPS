@@ -308,7 +308,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     return prelude_src, body_src, authorities
 
 def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
-                               field_plans: Any = None) -> tuple | None:
+                               field_plans: Any = None, *,
+                               has_shared_interface_implicit_jacvec: bool) -> tuple | None:
     """Emit gather / solve-once / publish regions for one hierarchy-scoped linear solve.
 
     The transform keys only on the generic solve scope.  It does not recognize a physical scheme.
@@ -317,6 +318,10 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     from pops.codegen.program_emit_ops import _emit_op
     from pops.codegen.program_lowerability import all_ops
 
+    if type(has_shared_interface_implicit_jacvec) is not bool:
+        raise TypeError(
+            "AMR hierarchy lowering requires exact shared-interface JVP evidence"
+        )
     solves = [v for v in all_ops(program) if v.op == "solve_linear"]
     scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"]
     if not scoped:
@@ -423,7 +428,10 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             ignored_prelude = []
             _emit_op(program, value, bases.get(value.block), committed_ids, var, model, emitted,
                      ignored_prelude, block_idx, target="amr_system",
-                     field_plans=field_plans or {})
+                     field_plans=field_plans or {},
+                     has_shared_interface_implicit_jacvec=(
+                         has_shared_interface_implicit_jacvec
+                     ))
             if phase == "gather":
                 keep = index < split
             elif phase == "solve":

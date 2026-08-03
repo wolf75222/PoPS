@@ -309,7 +309,14 @@ def _emit_cpp_program_impl(
             target,
             prelude,
             body,
-            _emit_amr_hierarchy_bodies(program, authority, field_plans or {})
+            _emit_amr_hierarchy_bodies(
+                program,
+                authority,
+                field_plans or {},
+                has_shared_interface_implicit_jacvec=(
+                    has_shared_interface_implicit_jacvec
+                ),
+            )
             if target == "amr_system"
             else None,
         ),
