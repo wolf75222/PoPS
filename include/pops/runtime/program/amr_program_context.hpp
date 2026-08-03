@@ -287,7 +287,7 @@ class AmrProgramContext : public ProgramExecutionServices<AmrProgramContext> {
     advance_attempt_(
         dt, "AmrProgramContext::advance_same_level_cell_temporal",
         CouplingSchedule::RecursiveCatchUp, provider_identity,
-        [this](const amr::ClockWindow& root) {
+        [this, dt](const amr::ClockWindow& root) {
           // Importing an externally restored accepted state may rematerialize the exact provider.
           // Reacquire it after import instead of retaining a pointer across that boundary.
           SameLevelCellTemporalExecutor* const executor = same_level_cell_temporal_executor_.get();
