@@ -336,7 +336,21 @@ TEST(test_flux_interfaces, prepared_riemann_recovery_is_ordered_typed_and_device
             pops::riemann_reason_code(pops::RiemannFailureCause::kRoeNonFiniteDissipation));
   EXPECT_TRUE(recovered.used_fallback());
 
-  const auto rejected = evaluate(RiemannPolicyCase::kRejects);
+  const std::uint64_t device_encoded =
+      pops::reduce_max_uint64_cell(pops::Box2D{{0, 0}, {0, 0}}, DeviceRiemannRecoveryProbe{});
+  EXPECT_EQ(device_encoded >> 8, static_cast<std::uint64_t>(pops::RiemannSolverId::kHll));
+  EXPECT_EQ(device_encoded & UINT64_C(0xff), UINT64_C(2));
+}
+
+TEST(test_flux_interfaces, prepared_riemann_recovery_exhaustion_is_typed_and_cannot_publish) {
+  const RiemannPolicyAdvect physical{RiemannPolicyCase::kRejects};
+  const auto bound = providers<RiemannPolicyAdvect>();
+  const auto rejected = pops::evaluate_numerical_flux(
+      pops::prepare_riemann_recovery_policy<pops::RoeFlux, pops::HLLFlux, pops::RusanovFlux,
+                                            pops::RejectRiemannRecovery>(),
+      physical, RiemannPolicyAdvect::State{pops::Real(1)}, bound,
+      RiemannPolicyAdvect::State{pops::Real(2)}, bound, pops::FaceContext::axis_aligned(0));
+
   EXPECT_EQ(rejected.status, pops::EvaluationStatus::kReject);
   EXPECT_EQ(rejected.requested_solver, pops::RiemannSolverId::kRoe);
   EXPECT_EQ(rejected.used_solver, pops::RiemannSolverId::kReject);
@@ -347,11 +361,6 @@ TEST(test_flux_interfaces, prepared_riemann_recovery_is_ordered_typed_and_device
   EXPECT_EQ(rejected.reason_code,
             pops::riemann_reason_code(pops::RiemannFailureCause::kRusanovInvalidStability));
   EXPECT_TRUE(std::isnan(rejected.checked_density().value[0]));
-
-  const std::uint64_t device_encoded =
-      pops::reduce_max_uint64_cell(pops::Box2D{{0, 0}, {0, 0}}, DeviceRiemannRecoveryProbe{});
-  EXPECT_EQ(device_encoded >> 8, static_cast<std::uint64_t>(pops::RiemannSolverId::kHll));
-  EXPECT_EQ(device_encoded & UINT64_C(0xff), UINT64_C(2));
 }
 
 TEST(test_flux_interfaces, orientation_reversal_swaps_traces_and_negates_flux) {

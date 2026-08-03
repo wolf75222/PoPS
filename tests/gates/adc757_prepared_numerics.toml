@@ -183,6 +183,18 @@ target = "test_flux_interfaces"
 test_regex = "^test_flux_interfaces\\.face_recovery_refusal_never_reaches_the_numerical_flux$"
 
 [[check]]
+requirement = "prepared_riemann_recovery_policy"
+polarity = "positive"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.prepared_riemann_recovery_is_ordered_typed_and_device_copyable$"
+
+[[check]]
+requirement = "prepared_riemann_recovery_policy"
+polarity = "refusal"
+target = "test_flux_interfaces"
+test_regex = "^test_flux_interfaces\\.prepared_riemann_recovery_exhaustion_is_typed_and_cannot_publish$"
+
+[[check]]
 requirement = "runtime_recovery_consumer_publication"
 polarity = "positive"
 target = "test_block_builder"
@@ -193,6 +205,18 @@ requirement = "runtime_recovery_consumer_publication"
 polarity = "refusal"
 target = "test_facade_routing"
 test_regex = "^FacadeRouting\\.PrimitiveMaterializationFailsClosedWithoutMutatingAcceptedState$"
+
+[[check]]
+requirement = "uniform_recovery_warm_start"
+polarity = "positive"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.uniform_consumer_reuses_only_exact_generation_qualified_cells$"
+
+[[check]]
+requirement = "uniform_recovery_warm_start"
+polarity = "refusal"
+target = "test_variable_recovery_chain"
+test_regex = "^PreparedVariableRecovery\\.uniform_consumer_failure_keeps_output_and_invalidates_all_slots$"
 
 [[check]]
 requirement = "analytic_initial_recovery_publication"
