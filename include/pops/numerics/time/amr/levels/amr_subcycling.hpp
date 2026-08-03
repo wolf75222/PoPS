@@ -2,7 +2,6 @@
 #include <pops/core/foundation/validation.hpp>
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen, parallel_copy
-#include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>
@@ -49,88 +48,6 @@ inline Box2D amr_level_index_domain(Box2D base_domain, int level) {
   for (int transition = 0; transition < level; ++transition)
     base_domain = base_domain.refine(kAmrRefRatio);
   return base_domain;
-}
-
-struct AmrBoundaryFillContext {
-  Box2D domain;
-  int level = 0;
-  Real dx = Real(1);
-  Real dy = Real(1);
-};
-
-using AmrPhysicalBoundaryFill = std::function<void(MultiFab&, const AmrBoundaryFillContext&)>;
-
-/// Exact host-side authority for physical AMR ghosts.  Same-level and periodic exchange remain
-/// native runtime responsibilities; this callback owns only faces where periodicity is false.
-/// A bounded external provider certifies provided_depth; a provider whose algorithm explicitly
-/// handles arbitrary allocated depth certifies fills_all_allocated_ghosts instead.  Neither value
-/// is inferred from a BC enum or a reconstruction name.
-struct AmrBoundaryFillAuthority {
-  Periodicity periodicity{};
-  int provided_depth = 0;
-  bool fills_all_allocated_ghosts = false;
-  AmrPhysicalBoundaryFill fill_physical{};
-};
-
-inline AmrBoundaryFillAuthority make_amr_boundary_fill_authority(const BCRec& boundary) {
-  detail::validate_periodic_pairs(boundary);
-  BCRec prepared = boundary;
-  return AmrBoundaryFillAuthority{
-      Periodicity{boundary.xlo == BCType::Periodic, boundary.ylo == BCType::Periodic}, 0, true,
-      [prepared](MultiFab& state, const AmrBoundaryFillContext& context) mutable {
-        prepared.dx = context.dx;
-        prepared.dy = context.dy;
-        fill_physical_bc(state, context.domain, prepared);
-      }};
-}
-
-inline void validate_amr_boundary_fill_authority(Periodicity periodicity,
-                                                 const AmrBoundaryFillAuthority* authority) {
-  const bool has_physical_face = !periodicity.x || !periodicity.y;
-  if (authority == nullptr) {
-    if (has_physical_face)
-      throw std::runtime_error(
-          "non-periodic AMR advance requires an explicit physical boundary-fill authority");
-    return;
-  }
-  if (!same_periodicity(periodicity, authority->periodicity))
-    throw std::runtime_error(
-        "AMR boundary-fill authority periodicity disagrees with the hierarchy");
-  if (authority->provided_depth < 0 || (has_physical_face && !authority->fill_physical))
-    throw std::runtime_error("AMR boundary-fill authority is incomplete");
-}
-
-template <class Levels>
-inline void validate_amr_boundary_fill_authority(Periodicity periodicity,
-                                                 const AmrBoundaryFillAuthority* authority,
-                                                 const Levels& levels) {
-  validate_amr_boundary_fill_authority(periodicity, authority);
-  if (authority == nullptr)
-    return;
-  for (const auto& level : levels)
-    if (!authority->fills_all_allocated_ghosts && authority->provided_depth < level.U.n_grow())
-      throw std::runtime_error("AMR boundary-fill authority does not cover all state ghosts");
-}
-
-inline void fill_amr_same_level_and_physical(MultiFab& state, const Box2D& domain, int level,
-                                             Real dx, Real dy, Periodicity periodicity,
-                                             const AmrBoundaryFillAuthority* authority) {
-  fill_boundary(state, domain, periodicity);
-  if ((!periodicity.x || !periodicity.y) && authority != nullptr) {
-    std::string local_error;
-    try {
-      authority->fill_physical(state, AmrBoundaryFillContext{domain, level, dx, dy});
-    } catch (const std::exception& error) {
-      local_error = error.what();
-    } catch (...) {
-      local_error = "physical boundary callback raised a non-standard exception";
-    }
-    if (all_reduce_max(local_error.empty() ? 0L : 1L) != 0) {
-      if (n_ranks() == 1)
-        throw std::runtime_error(local_error);
-      throw std::runtime_error("physical AMR boundary callback failed on at least one MPI rank");
-    }
-  }
 }
 
 // --- MULTI-PATCH (several fine boxes per level) ---

@@ -224,13 +224,11 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
     prepared_boundary_plan->prepare_trace_recovery(conversion.second);
   }
   std::shared_ptr<const PreparedBoundaryPlan> boundary_plan = prepared_boundary_plan;
-  BCRec transport_bc;
+  BCRec boundary_descriptor;
   if (!S.base_per.x)
-    transport_bc.xlo = transport_bc.xhi = BCType::Foextrap;
+    boundary_descriptor.xlo = boundary_descriptor.xhi = BCType::Foextrap;
   if (!S.base_per.y)
-    transport_bc.ylo = transport_bc.yhi = BCType::Foextrap;
-  auto transport_boundary_fill = std::make_shared<const AmrBoundaryFillAuthority>(
-      make_amr_boundary_fill_authority(transport_bc));
+    boundary_descriptor.ylo = boundary_descriptor.yhi = BCType::Foextrap;
   auto boundary_field_registry = std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
   auto levels = std::make_shared<std::vector<AmrLevelMP>>();
   levels->reserve(nlev);
@@ -265,7 +263,6 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
   b.levels = levels;
   b.boundary_plan = boundary_plan;
   b.boundary_field_registry = boundary_field_registry;
-  b.transport_boundary_fill = transport_boundary_fill;
   const bool rprim = recon_prim;
   const Real pf = static_cast<Real>(pos_floor);
   const Real weps = static_cast<Real>(weno_epsilon);
@@ -290,7 +287,7 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
   // lambda), instantiated HERE on the concrete Model/Limiter/Flux, so the kernel stays compiled and runs
   // Serial / OpenMP / CUDA identically. These closures are read only by an installed Program.
   {
-    const BCRec tbc = transport_bc;
+    const BCRec tbc = boundary_descriptor;
     b.level_rhs = [model, rprim, pf, weps, ws_cache, tbc, boundary_plan](
                       MultiFab& U, const MultiFab& aux, const Geometry& geom, MultiFab& R) {
       GridContext gc;

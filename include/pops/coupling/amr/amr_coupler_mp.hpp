@@ -636,6 +636,9 @@ class AmrCouplerMP {
         load_balance_authority_(std::move(load_balance)) {
     if (!load_balance_authority_)
       throw std::invalid_argument("AmrCouplerMP requires a prepared load-balance authority");
+    detail::validate_periodic_pairs(bc);
+    transport_periodicity_ =
+        Periodicity{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
     for (const AmrLevelMP& level : stack_.levels())
       detail::require_positive_finite_amr_spacing(level.dx, level.dy);
     prepare_aux_transfer_workspaces_();
@@ -680,13 +683,6 @@ class AmrCouplerMP {
   }
   const Box2D& domain() const { return stack_.domain(); }
   int nlev() const { return stack_.nlev(); }
-  void set_transport_boundary_fill(AmrBoundaryFillAuthority authority) {
-    validate_amr_boundary_fill_authority(authority.periodicity, &authority, stack_.L());
-    transport_periodicity_ = authority.periodicity;
-    transport_boundary_fill_ = std::move(authority);
-    prepare_aux_transfer_workspaces_(next_transfer_topology_generation_());
-  }
-
   // ----------------------------------------------------------------------------------------------
   // AMR ACCEPTED-STATE CHECKPOINT / RESTART. The mono-block coupler carries the FULL conservative
   // state per level (all components) plus phi (multigrid warm-start), and can impose a saved fine
@@ -997,15 +993,10 @@ class AmrCouplerMP {
           {fine_domain.lo[0], fine_domain.lo[1]}, {ratio, ratio}, parent_replicated, periodicity);
       (void)parent_level;
     };
-    std::optional<RegridPhysicalGhostSupport> physical_support;
-    if (transport_boundary_fill_)
-      physical_support =
-          RegridPhysicalGhostSupport{transport_boundary_fill_->provided_depth,
-                                     transport_boundary_fill_->fills_all_allocated_ghosts};
     amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin, prolong,
                       aux_comps<Model>(), replicated_coarse_, *load_balance_authority_,
                       RegridPeriodicity{transport_periodicity_.x, transport_periodicity_.y},
-                      world_communicator_view(), physical_support ? &*physical_support : nullptr);
+                      world_communicator_view());
     prepare_aux_transfer_workspaces_(next_transfer_topology_generation_());
   }
 
@@ -1161,7 +1152,6 @@ class AmrCouplerMP {
       replicated_coarse_;  // level 0 replicated (true) or distributed multi-box (false, de-replication)
   std::shared_ptr<const PreparedLoadBalanceAuthority> load_balance_authority_;
   Periodicity transport_periodicity_{true, true};
-  std::optional<AmrBoundaryFillAuthority> transport_boundary_fill_;
   // COMPOSITE FAC Poisson path (opt-in, set_composite_poisson). fac_ built lazily on the
   // current fine patch (rebuilt if the patch changes after regrid). Default OFF -> Option A bit-identical.
   bool composite_poisson_ = false;
