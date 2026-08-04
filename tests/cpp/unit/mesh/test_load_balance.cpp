@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -97,6 +98,46 @@ TEST(test_load_balance, morton_key_reference_values) {
   EXPECT_EQ(morton_key(1, 1), 3) << "morton_11";
   EXPECT_EQ(morton_key(2, 0), 4) << "morton_20";
   EXPECT_EQ(morton_key(0, 2), 8) << "morton_02";
+}
+
+TEST(test_load_balance, extreme_signed_coordinates_have_deterministic_morton_order) {
+  constexpr int lower = std::numeric_limits<int>::min();
+  constexpr int upper = std::numeric_limits<int>::max();
+  const BoxArray boxes(std::vector<Box2D>{
+      Box2D{{upper, upper}, {upper, upper}},
+      Box2D{{lower, upper}, {lower, upper}},
+      Box2D{{upper, lower}, {upper, lower}},
+      Box2D{{lower, lower}, {lower, lower}},
+  });
+
+  EXPECT_EQ(morton_order(boxes), (std::vector<int>{3, 2, 1, 0}));
+  EXPECT_EQ(make_sfc_distribution(boxes, 2).ranks(), (std::vector<int>{1, 1, 0, 0}));
+}
+
+TEST(test_load_balance, sfc_v2_seeds_available_ranks_and_authenticates_its_semantics) {
+  const BoxArray boxes(std::vector<Box2D>{
+      Box2D{{0, 0}, {0, 0}},
+      Box2D{{1, 0}, {1, 0}},
+  });
+  EXPECT_EQ(make_sfc_distribution(boxes, 4).ranks(), (std::vector<int>{0, 1}));
+
+  const PreparedLoadBalanceProvider provider(detail::SpaceFillingCurveLoadBalance{});
+  EXPECT_EQ(provider.implementation_version(), 2u);
+  ExactContractBuilder expected_parameters;
+  expected_parameters.text("space-filling-curve").scalar(std::uint32_t{2});
+  EXPECT_EQ(provider.exact_parameters(), std::move(expected_parameters).release());
+}
+
+TEST(test_load_balance, legacy_bridge_rejects_empty_geometry_before_using_supplied_weights) {
+  const BoxArray boxes(std::vector<Box2D>{
+      Box2D{},
+      Box2D{{1, 0}, {1, 0}},
+  });
+  const std::vector<std::int64_t> positive_weights{1, 1};
+
+  EXPECT_THROW(make_sfc_distribution(boxes, 2, positive_weights), std::invalid_argument);
+  EXPECT_THROW(make_knapsack_distribution(boxes, 2, positive_weights), std::invalid_argument);
+  EXPECT_THROW(make_round_robin_distribution(boxes, 2, positive_weights), std::invalid_argument);
 }
 
 TEST(test_load_balance, uniform_case_balances_and_sfc_is_local) {

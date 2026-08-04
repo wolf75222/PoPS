@@ -308,10 +308,10 @@ inline RebalancePolicy measured_rebalance_policy(const PreparedProviderOptions& 
 
 struct SpaceFillingCurveLoadBalance {
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.load_balance.space_filling_curve", 1};
+    return {"pops.load_balance.space_filling_curve", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.text("space-filling-curve").scalar(std::uint32_t{1});
+    contract.text("space-filling-curve").scalar(std::uint32_t{2});
   }
   DistributionMapping operator()(const BoxArray& boxes, int ranks,
                                  LoadBalanceWeights weights) const {

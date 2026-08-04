@@ -2,13 +2,15 @@
 
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
+#include <pops/parallel/nd/load_balance_provider.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <numeric>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 /// @file
@@ -49,21 +51,86 @@ inline std::uint64_t morton_key(std::uint32_t x, std::uint32_t y) {
   return part1by1(x) | (part1by1(y) << 1);
 }
 
+namespace detail {
+
+inline mesh::BoxArray<2> legacy_load_balance_boxes(const BoxArray& boxes) {
+  std::vector<Box<2>> converted;
+  converted.reserve(static_cast<std::size_t>(boxes.size()));
+  for (const Box2D& box : boxes.boxes())
+    converted.emplace_back(Index<2>{box.lo[0], box.lo[1]}, Index<2>{box.hi[0], box.hi[1]});
+  return mesh::BoxArray<2>(std::move(converted));
+}
+
+inline mesh::RankSpace<2> legacy_load_balance_ranks(int nranks) {
+  return mesh::RankSpace<2>(Index<2>{0, 0}, Extent<2>{nranks, 1});
+}
+
+inline parallel::nd::LoadBalancePreparationBudget legacy_load_balance_budget(std::size_t patches,
+                                                                             std::size_t ranks) {
+  return {
+      .patches = std::max(std::size_t{1}, patches),
+      .ranks = ranks,
+      .total_weight = std::numeric_limits<std::int64_t>::max(),
+  };
+}
+
+inline DistributionMapping legacy_distribution_mapping(const mesh::Distribution<2>& distribution) {
+  std::vector<int> ranks;
+  ranks.reserve(distribution.box_count());
+  for (const Index<2>& owner : distribution.owners()) {
+    const std::size_t linear = distribution.rank_space().linear_rank(owner);
+    if (linear > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+      throw std::overflow_error("load-balance owner rank exceeds the legacy signed-int contract");
+    ranks.push_back(static_cast<int>(linear));
+  }
+  return DistributionMapping(std::move(ranks));
+}
+
+inline DistributionMapping legacy_provider_distribution(
+    const BoxArray& boxes, int nranks, std::span<const std::int64_t> supplied_weights,
+    const parallel::nd::LoadBalanceProvider<2>& provider) {
+  if (!supplied_weights.empty() &&
+      supplied_weights.size() != static_cast<std::size_t>(boxes.size()))
+    throw std::invalid_argument("load-balance weight count must equal the BoxArray size");
+  std::int64_t total_weight = 0;
+  for (int index = 0; index < boxes.size(); ++index) {
+    if (boxes[index].empty())
+      throw std::invalid_argument("load-balance layouts cannot contain empty boxes");
+    const std::int64_t weight =
+        supplied_weights.empty() ? boxes[index].num_cells() : supplied_weights[index];
+    if (weight <= 0)
+      throw std::invalid_argument("load-balance weights must be strictly positive");
+    if (weight > std::numeric_limits<std::int64_t>::max() - total_weight)
+      throw std::overflow_error("load-balance total weight exceeds int64_t");
+    total_weight += weight;
+  }
+  const mesh::BoxArray<2> converted = legacy_load_balance_boxes(boxes);
+  const mesh::RankSpace<2> rank_space = legacy_load_balance_ranks(nranks);
+  const auto budget = legacy_load_balance_budget(converted.size(), rank_space.size());
+  return legacy_distribution_mapping(
+      provider.distribute(converted, rank_space, budget, supplied_weights));
+}
+
+}  // namespace detail
+
 // Box indices sorted along the Morton curve (low corner, shifted by the bounding
 // box to stay positive).
 inline std::vector<int> morton_order(const BoxArray& ba) {
   const int n = ba.size();
-  std::vector<int> order(n);
-  std::iota(order.begin(), order.end(), 0);
   if (n == 0)
-    return order;
-  const Box2D bb = ba.bounding_box();
-  std::vector<std::uint64_t> key(n);
-  for (int i = 0; i < n; ++i)
-    key[i] = morton_key(static_cast<std::uint32_t>(ba[i].lo[0] - bb.lo[0]),
-                        static_cast<std::uint32_t>(ba[i].lo[1] - bb.lo[1]));
-  std::sort(order.begin(), order.end(),
-            [&](int a, int b) { return key[a] < key[b] || (key[a] == key[b] && a < b); });
+    return {};
+
+  const mesh::BoxArray<2> boxes = detail::legacy_load_balance_boxes(ba);
+  const mesh::RankSpace<2> rank_space = detail::legacy_load_balance_ranks(1);
+  const std::vector<std::int64_t> unit_weights(static_cast<std::size_t>(n), 1);
+  const auto plan = parallel::nd::LoadBalanceProvider<2>::space_filling_curve().prepare(
+      boxes, rank_space, detail::legacy_load_balance_budget(boxes.size(), rank_space.size()),
+      unit_weights);
+
+  std::vector<int> order;
+  order.reserve(plan.traversal().size());
+  for (const std::size_t patch : plan.traversal())
+    order.push_back(static_cast<int>(patch));
   return order;
 }
 
@@ -87,26 +154,6 @@ inline std::vector<std::int64_t> load_balance_weights(const BoxArray& boxes,
   return weights;
 }
 
-inline std::int64_t load_balance_total(std::span<const std::int64_t> weights) {
-  std::int64_t total = 0;
-  for (const auto value : weights) {
-    if (value > std::numeric_limits<std::int64_t>::max() - total)
-      throw std::overflow_error("load-balance total weight exceeds int64_t");
-    total += value;
-  }
-  return total;
-}
-
-/// Exact ceil(total * partitions / rank_count) without overflowing total * partitions.
-inline std::int64_t cumulative_target(std::int64_t total, int partitions, int rank_count) {
-  const std::int64_t quotient = total / rank_count;
-  const std::int64_t remainder = total % rank_count;
-  const std::int64_t remainder_product = remainder * static_cast<std::int64_t>(partitions);
-  const std::int64_t remainder_share =
-      (remainder_product + static_cast<std::int64_t>(rank_count) - 1) / rank_count;
-  return quotient * partitions + remainder_share;
-}
-
 }  // namespace detail
 
 // Z-order distribution: contiguous segments of ~equal load along the SFC.
@@ -115,30 +162,8 @@ inline DistributionMapping make_sfc_distribution(
     const BoxArray& ba, int nranks, std::span<const std::int64_t> supplied_weights = {}) {
   if (nranks <= 0)
     throw std::invalid_argument("SFC load balance requires a positive rank count");
-  const int n = ba.size();
-  std::vector<int> rank(n, 0);
-  const auto weights = detail::load_balance_weights(ba, supplied_weights);
-  if (n == 0 || nranks == 1)
-    return DistributionMapping(std::move(rank));
-
-  const std::vector<int> order = morton_order(ba);
-  const std::int64_t total = detail::load_balance_total(weights);
-
-  std::int64_t acc = 0;
-  int r = 0;
-  for (int k = 0; k < n; ++k) {
-    const int b = order[k];
-    rank[b] = r;
-    acc += weights[static_cast<std::size_t>(b)];
-    // advance to the next rank if the target share is reached AND enough boxes
-    // remain to give at least one box to each remaining rank.
-    const int boxes_left = n - 1 - k;
-    const int ranks_left = nranks - 1 - r;
-    if (r < nranks - 1 && acc >= detail::cumulative_target(total, r + 1, nranks) &&
-        boxes_left >= ranks_left)
-      ++r;
-  }
-  return DistributionMapping(std::move(rank));
+  return detail::legacy_provider_distribution(
+      ba, nranks, supplied_weights, parallel::nd::LoadBalanceProvider<2>::space_filling_curve());
 }
 
 // Knapsack distribution (LPT): heaviest box -> least loaded rank.
@@ -146,41 +171,16 @@ inline DistributionMapping make_knapsack_distribution(
     const BoxArray& ba, int nranks, std::span<const std::int64_t> supplied_weights = {}) {
   if (nranks <= 0)
     throw std::invalid_argument("knapsack load balance requires a positive rank count");
-  const int n = ba.size();
-  std::vector<int> rank(n, 0);
-  const auto weights = detail::load_balance_weights(ba, supplied_weights);
-  if (n == 0 || nranks == 1)
-    return DistributionMapping(std::move(rank));
-
-  std::vector<int> order(n);
-  std::iota(order.begin(), order.end(), 0);
-  std::sort(order.begin(), order.end(), [&](int a, int b) {
-    const auto lhs = weights[static_cast<std::size_t>(a)];
-    const auto rhs = weights[static_cast<std::size_t>(b)];
-    return lhs > rhs || (lhs == rhs && a < b);
-  });
-
-  std::vector<std::int64_t> load(nranks, 0);
-  for (int b : order) {
-    int r = 0;
-    for (int q = 1; q < nranks; ++q)
-      if (load[q] < load[r])
-        r = q;
-    rank[b] = r;
-    load[r] += weights[static_cast<std::size_t>(b)];
-  }
-  return DistributionMapping(std::move(rank));
+  return detail::legacy_provider_distribution(ba, nranks, supplied_weights,
+                                              parallel::nd::LoadBalanceProvider<2>::weighted_lpt());
 }
 
 inline DistributionMapping make_round_robin_distribution(
     const BoxArray& ba, int nranks, std::span<const std::int64_t> supplied_weights = {}) {
   if (nranks <= 0)
     throw std::invalid_argument("round-robin load balance requires a positive rank count");
-  // This baseline policy is intentionally index based.  Authenticate the same weight contract as
-  // weighted policies so invalid requests never pass silently, then leave ownership independent of
-  // the values.
-  (void)detail::load_balance_weights(ba, supplied_weights);
-  return DistributionMapping(ba.size(), nranks);
+  return detail::legacy_provider_distribution(ba, nranks, supplied_weights,
+                                              parallel::nd::LoadBalanceProvider<2>::round_robin());
 }
 
 // Imbalance = max load / average load (1.0 = perfect).
