@@ -30,7 +30,7 @@ namespace pops {
 
 namespace detail {
 
-inline constexpr std::string_view kOutputPieceWireMagic = "POPSOP01";
+inline constexpr std::string_view kOutputPieceWireMagic = "POPSOP02";
 
 inline void output_wire_append_u64(std::string& payload, std::uint64_t value) {
   for (unsigned shift = 0; shift < 64; shift += 8)
@@ -63,42 +63,43 @@ inline int output_wire_int(std::int64_t value, std::string_view field) {
   return static_cast<int>(value);
 }
 
-inline std::size_t output_piece_value_count(const OutputPiece& piece) {
-  if (piece.box.level < 0 || piece.box.ihi < piece.box.ilo || piece.box.jhi < piece.box.jlo)
+template <int Dim>
+inline std::size_t output_piece_value_count(const OutputPiece<Dim>& piece) {
+  if (piece.level < 0 || piece.box.empty())
     throw std::runtime_error("native output piece has invalid bounds");
   if (piece.global_box_index < 0 || piece.owner_rank < 0 || piece.ncomp < 1)
     throw std::runtime_error("native output piece has invalid ownership/components");
-  const std::uint64_t nx_u64 = static_cast<std::uint64_t>(
-      static_cast<std::int64_t>(piece.box.ihi) - static_cast<std::int64_t>(piece.box.ilo) + 1);
-  const std::uint64_t ny_u64 = static_cast<std::uint64_t>(
-      static_cast<std::int64_t>(piece.box.jhi) - static_cast<std::int64_t>(piece.box.jlo) + 1);
-  if (nx_u64 > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
-      ny_u64 > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
-    throw std::overflow_error("native output piece extent exceeds size_t");
-  const std::size_t nx = static_cast<std::size_t>(nx_u64);
-  const std::size_t ny = static_cast<std::size_t>(ny_u64);
+  std::size_t cells = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    const auto extent = static_cast<std::uint64_t>(piece.box.length(axis));
+    if (extent > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
+        cells > std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(extent))
+      throw std::overflow_error("native output piece compact shape overflows size_t");
+    cells *= static_cast<std::size_t>(extent);
+  }
   const std::size_t ncomp = static_cast<std::size_t>(piece.ncomp);
-  if (ny > std::numeric_limits<std::size_t>::max() / nx ||
-      ncomp > std::numeric_limits<std::size_t>::max() / (ny * nx))
+  if (ncomp > std::numeric_limits<std::size_t>::max() / cells)
     throw std::overflow_error("native output piece compact shape overflows size_t");
-  return ncomp * ny * nx;
+  return ncomp * cells;
 }
 
-inline std::string serialize_output_pieces(const std::vector<OutputPiece>& pieces) {
+template <int Dim>
+inline std::string serialize_output_pieces(const std::vector<OutputPiece<Dim>>& pieces) {
   static_assert(sizeof(double) == sizeof(std::uint64_t));
   static_assert(std::numeric_limits<double>::is_iec559,
                 "output-piece wire requires IEEE-754 binary64");
   std::string payload(kOutputPieceWireMagic);
+  output_wire_append_u64(payload, static_cast<std::uint64_t>(Dim));
   output_wire_append_u64(payload, static_cast<std::uint64_t>(pieces.size()));
-  for (const OutputPiece& piece : pieces) {
+  for (const OutputPiece<Dim>& piece : pieces) {
     const std::size_t expected = output_piece_value_count(piece);
     if (piece.values.size() != expected)
       throw std::runtime_error("native output piece has an inconsistent compact shape");
-    output_wire_append_i64(payload, piece.box.level);
-    output_wire_append_i64(payload, piece.box.ilo);
-    output_wire_append_i64(payload, piece.box.jlo);
-    output_wire_append_i64(payload, piece.box.ihi);
-    output_wire_append_i64(payload, piece.box.jhi);
+    output_wire_append_i64(payload, piece.level);
+    for (int axis = 0; axis < Dim; ++axis)
+      output_wire_append_i64(payload, piece.box.lo[axis]);
+    for (int axis = 0; axis < Dim; ++axis)
+      output_wire_append_i64(payload, piece.box.hi[axis]);
     output_wire_append_i64(payload, piece.global_box_index);
     output_wire_append_i64(payload, piece.owner_rank);
     output_wire_append_u64(payload, piece.replicated ? 1U : 0U);
@@ -110,24 +111,29 @@ inline std::string serialize_output_pieces(const std::vector<OutputPiece>& piece
   return payload;
 }
 
-inline std::vector<OutputPiece> deserialize_output_pieces(std::string_view payload,
-                                                          int source_rank) {
+template <int Dim>
+inline std::vector<OutputPiece<Dim>> deserialize_output_pieces(std::string_view payload,
+                                                               int source_rank) {
   if (!payload.starts_with(kOutputPieceWireMagic))
     throw std::runtime_error("native output-piece payload has an invalid wire identity");
   std::size_t offset = kOutputPieceWireMagic.size();
+  const std::uint64_t dimension = output_wire_read_u64(payload, offset, "dimension");
+  if (dimension != static_cast<std::uint64_t>(Dim))
+    throw std::runtime_error("native output-piece payload dimension differs from its consumer");
   const std::uint64_t count = output_wire_read_u64(payload, offset, "piece_count");
   if (count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
     throw std::overflow_error("native output-piece count exceeds size_t");
-  std::vector<OutputPiece> result;
+  std::vector<OutputPiece<Dim>> result;
   result.reserve(static_cast<std::size_t>(count));
   for (std::uint64_t index = 0; index < count; ++index) {
-    OutputPiece piece;
-    piece.box.level =
-        output_wire_int(output_wire_read_i64(payload, offset, "box.level"), "box.level");
-    piece.box.ilo = output_wire_int(output_wire_read_i64(payload, offset, "box.ilo"), "box.ilo");
-    piece.box.jlo = output_wire_int(output_wire_read_i64(payload, offset, "box.jlo"), "box.jlo");
-    piece.box.ihi = output_wire_int(output_wire_read_i64(payload, offset, "box.ihi"), "box.ihi");
-    piece.box.jhi = output_wire_int(output_wire_read_i64(payload, offset, "box.jhi"), "box.jhi");
+    OutputPiece<Dim> piece;
+    piece.level = output_wire_int(output_wire_read_i64(payload, offset, "box.level"), "box.level");
+    for (int axis = 0; axis < Dim; ++axis)
+      piece.box.lo[axis] =
+          output_wire_int(output_wire_read_i64(payload, offset, "box.lower"), "box.lower");
+    for (int axis = 0; axis < Dim; ++axis)
+      piece.box.hi[axis] =
+          output_wire_int(output_wire_read_i64(payload, offset, "box.upper"), "box.upper");
     piece.global_box_index = output_wire_int(
         output_wire_read_i64(payload, offset, "global_box_index"), "global_box_index");
     piece.owner_rank =
@@ -185,9 +191,13 @@ inline std::string current_exception_text() {
 
 /// Evaluate a local OutputPiece provider and gather its exact result onto MPI rank zero.
 template <typename Provider>
-std::vector<OutputPiece> output_pieces_to_root(const ObserverMpiLane& lane,
-                                               std::string operation_identity,
-                                               Provider&& provider) {
+auto output_pieces_to_root(const ObserverMpiLane& lane, std::string operation_identity,
+                           Provider&& provider) {
+  using Pieces = std::remove_cvref_t<std::invoke_result_t<Provider&&>>;
+  using Piece = typename Pieces::value_type;
+  constexpr int Dim = Piece::dimension;
+  static_assert(std::is_same_v<Piece, OutputPiece<Dim>>,
+                "output_pieces_to_root requires exact ranked OutputPiece values");
 #ifndef POPS_HAS_MPI
   (void)lane;
   (void)operation_identity;
@@ -204,17 +214,16 @@ std::vector<OutputPiece> output_pieces_to_root(const ObserverMpiLane& lane,
                    [&](const std::string& value) { return value == operation_identity; }))
     throw std::invalid_argument("output-piece root gather arguments differ across MPI ranks");
 
-  std::vector<OutputPiece> local;
+  Pieces local;
   std::string packed;
   std::string local_error;
   try {
     local = std::forward<Provider>(provider)();
     // Replicated AMR coarse boxes have one canonical root contributor in ROOT mode.
-    local.erase(
-        std::remove_if(local.begin(), local.end(),
-                       [&](const OutputPiece& piece) { return piece.replicated && rank != 0; }),
-        local.end());
-    for (const OutputPiece& piece : local) {
+    local.erase(std::remove_if(local.begin(), local.end(),
+                               [&](const Piece& piece) { return piece.replicated && rank != 0; }),
+                local.end());
+    for (const Piece& piece : local) {
       if (piece.owner_rank != rank)
         throw std::runtime_error("rank-local output piece is owned by another MPI rank");
     }
@@ -231,24 +240,23 @@ std::vector<OutputPiece> output_pieces_to_root(const ObserverMpiLane& lane,
   }
 
   const std::optional<std::vector<std::string>> gathered = lane.gather_bytes(packed, 0);
-  std::vector<OutputPiece> result;
+  Pieces result;
   std::string root_error;
   if (rank == 0) {
     try {
       if (!gathered || gathered->size() != static_cast<std::size_t>(lane.size()))
         throw std::runtime_error("native output-piece root gather has invalid rank cardinality");
       for (std::size_t source = 0; source < gathered->size(); ++source) {
-        std::vector<OutputPiece> decoded =
-            detail::deserialize_output_pieces((*gathered)[source], static_cast<int>(source));
+        Pieces decoded =
+            detail::deserialize_output_pieces<Dim>((*gathered)[source], static_cast<int>(source));
         result.insert(result.end(), std::make_move_iterator(decoded.begin()),
                       std::make_move_iterator(decoded.end()));
       }
-      std::sort(result.begin(), result.end(),
-                [](const OutputPiece& left, const OutputPiece& right) {
-                  return left.global_box_index < right.global_box_index;
-                });
+      std::sort(result.begin(), result.end(), [](const Piece& left, const Piece& right) {
+        return left.global_box_index < right.global_box_index;
+      });
       if (std::adjacent_find(result.begin(), result.end(),
-                             [](const OutputPiece& left, const OutputPiece& right) {
+                             [](const Piece& left, const Piece& right) {
                                return left.global_box_index == right.global_box_index;
                              }) != result.end())
         throw std::runtime_error("native output-piece root gather contains duplicate boxes");

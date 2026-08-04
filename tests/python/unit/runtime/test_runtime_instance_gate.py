@@ -232,16 +232,19 @@ class _Executor:
         return [(0, 0, self._nx - 1, self._ny - 1)]
 
     def _output_geometry_snapshot(self, origin, spacing, shape, cell_measure):
-        assert tuple(shape) == (self._ny, self._nx)
+        assert tuple(shape) == (self._nx, self._ny)
         assert cell_measure == "pops://cell-measures/cartesian-area@1"
-        valid = np.ones(shape, dtype=np.bool_)
-        coverage = np.zeros(shape, dtype=np.bool_)
-        volumes = np.full(shape, spacing[0] * spacing[1], dtype=np.float64)
+        cell_shape = tuple(reversed(shape))
+        valid = np.ones(cell_shape, dtype=np.bool_)
+        coverage = np.zeros(cell_shape, dtype=np.bool_)
+        volumes = np.full(cell_shape, spacing[0] * spacing[1], dtype=np.float64)
         for value in (valid, coverage, volumes):
             value.setflags(write=False)
         return {
+            "dimension": len(shape),
             "topology_epoch": 0,
-            "boxes": ((0, 0, shape[0], shape[1]),),
+            "cell_shape": cell_shape,
+            "boxes": ((0, 0, cell_shape[0], cell_shape[1]),),
             "valid_cells": valid,
             "coverage": coverage,
             "cell_volumes": volumes,

@@ -149,8 +149,8 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
   {
     const std::vector<double> dG = sys.density_global("gas");
     const std::vector<double> sG = sys.state_global("gas");
-    const std::vector<OutputPiece> local = sys.output_state_local_pieces("gas", 0);
-    const std::vector<OutputPiece> root = sys.output_state_root_pieces(output_lane, "gas", 0);
+    const std::vector<OutputPiece<2>> local = sys.output_state_local_pieces("gas", 0);
+    const std::vector<OutputPiece<2>> root = sys.output_state_root_pieces(output_lane, "gas", 0);
     chk(dG.size() == nn, "T1_density_global_size");
     chk(sG.size() == 4 * nn, "T1_state_global_size");
     chk(dG == rho_ref, "T1_density_global_eq_ref_no_double_count");
@@ -158,16 +158,16 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
     chk(local.size() == (owns ? 1u : 0u), "T1_output_state_local_ownership");
     chk(root.size() == (owns ? 1u : 0u), "T1_output_state_root_ownership");
     if (owns && !local.empty()) {
-      const OutputPiece& piece = local.front();
-      chk(piece.box.level == 0 && piece.box.ilo == 0 && piece.box.jlo == 0 &&
-              piece.box.ihi == n - 1 && piece.box.jhi == n - 1,
+      const OutputPiece<2>& piece = local.front();
+      chk(piece.level == 0 && piece.box.lo[0] == 0 && piece.box.lo[1] == 0 &&
+              piece.box.hi[0] == n - 1 && piece.box.hi[1] == n - 1,
           "T1_output_state_local_box");
       chk(piece.global_box_index == 0 && piece.owner_rank == 0 && !piece.replicated,
           "T1_output_state_local_metadata");
       chk(piece.ncomp == 4 && piece.values == sG, "T1_output_state_local_values");
     }
     if (owns && !root.empty()) {
-      const OutputPiece& piece = root.front();
+      const OutputPiece<2>& piece = root.front();
       chk(piece.global_box_index == 0 && piece.owner_rank == 0 && !piece.replicated,
           "T1_output_state_root_metadata");
       chk(piece.ncomp == 4 && piece.values == sG, "T1_output_state_root_values");

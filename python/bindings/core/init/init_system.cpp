@@ -965,7 +965,7 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "output_state_root_pieces",
           [](const System& s, const ObserverMpiLane& lane, const std::string& block, int level) {
-            std::vector<OutputPiece> pieces;
+            std::vector<OutputPiece<2>> pieces;
             {
               py::gil_scoped_release release;
               pieces = s.output_state_root_pieces(lane, block, level);
@@ -977,7 +977,7 @@ void bind_system_data(py::class_<System>& cls) {
       .def(
           "output_field_root_pieces",
           [](System& s, const ObserverMpiLane& lane, const std::string& provider_slot, int level) {
-            std::vector<OutputPiece> pieces;
+            std::vector<OutputPiece<2>> pieces;
             {
               py::gil_scoped_release release;
               pieces = s.output_field_root_pieces(lane, provider_slot, level);
@@ -991,10 +991,10 @@ void bind_system_data(py::class_<System>& cls) {
           [](const System& s, const std::array<double, 2>& origin,
              const std::array<double, 2>& spacing, const std::array<std::int64_t, 2>& cell_shape,
              const std::string& cell_measure) {
-            if (cell_shape[0] != s.ny() || cell_shape[1] != s.nx())
+            if (cell_shape[0] != s.nx() || cell_shape[1] != s.ny())
               throw std::invalid_argument(
                   "System output geometry shape differs from the native domain");
-            return pops::python::detail::native_output_geometry_snapshot(
+            return pops::python::detail::native_output_geometry_snapshot<2>(
                 0, 0, origin, spacing, cell_shape, cell_measure, {}, 0, false);
           },
           py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"), py::arg("cell_measure"),

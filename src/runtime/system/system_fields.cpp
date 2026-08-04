@@ -1118,8 +1118,8 @@ std::vector<double> System::field_potential_global(const std::string& provider_s
   return gather_global(field, 1, nx(), ny());
 }
 
-std::vector<OutputPiece> System::output_state_local_pieces(const std::string& name,
-                                                           int level) const {
+std::vector<OutputPiece<2>> System::output_state_local_pieces(const std::string& name,
+                                                              int level) const {
   if (level != 0)
     throw std::out_of_range(
         "System::output_state_local_pieces: uniform layout has only level zero");
@@ -1127,8 +1127,8 @@ std::vector<OutputPiece> System::output_state_local_pieces(const std::string& na
   return output_local_pieces(species.U, 0, false);
 }
 
-std::vector<OutputPiece> System::output_field_local_pieces(const std::string& provider_slot,
-                                                           int level) {
+std::vector<OutputPiece<2>> System::output_field_local_pieces(const std::string& provider_slot,
+                                                              int level) {
   if (level != 0)
     throw std::out_of_range(
         "System::output_field_local_pieces: uniform layout has only level zero");
@@ -1136,17 +1136,17 @@ std::vector<OutputPiece> System::output_field_local_pieces(const std::string& pr
   return output_local_pieces(field, 0, false);
 }
 
-std::vector<OutputPiece> System::output_state_root_pieces(const ObserverMpiLane& lane,
-                                                          const std::string& name,
-                                                          int level) const {
+std::vector<OutputPiece<2>> System::output_state_root_pieces(const ObserverMpiLane& lane,
+                                                             const std::string& name,
+                                                             int level) const {
   return output_pieces_to_root(lane,
                                detail::output_collective_identity("System", "state", name, level),
                                [&] { return output_state_local_pieces(name, level); });
 }
 
-std::vector<OutputPiece> System::output_field_root_pieces(const ObserverMpiLane& lane,
-                                                          const std::string& provider_slot,
-                                                          int level) {
+std::vector<OutputPiece<2>> System::output_field_root_pieces(const ObserverMpiLane& lane,
+                                                             const std::string& provider_slot,
+                                                             int level) {
   return output_pieces_to_root(
       lane, detail::output_collective_identity("System", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });

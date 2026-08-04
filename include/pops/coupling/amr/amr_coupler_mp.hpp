@@ -824,7 +824,7 @@ class AmrCouplerMP {
     return result;
   }
 
-  std::vector<OutputPiece> output_state_local_pieces(int k) {
+  std::vector<OutputPiece<2>> output_state_local_pieces(int k) {
     std::vector<AmrLevelMP>& levels = stack_.L();
     if (k < 0 || k >= static_cast<int>(levels.size()))
       throw std::runtime_error("AmrCouplerMP::output_state_local_pieces: level out of bounds");

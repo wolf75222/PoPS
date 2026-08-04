@@ -197,8 +197,8 @@ static std::vector<double> four_bubbles(int n) {
 struct Result {
   std::vector<double> dens;
   std::vector<double> state;
-  std::vector<OutputPiece> output_local_pieces;
-  std::vector<OutputPiece> output_root_pieces;
+  std::vector<OutputPiece<2>> output_local_pieces;
+  std::vector<OutputPiece<2>> output_root_pieces;
   std::vector<double> phi;
   std::vector<double> phi_global;
   double mass, m0;
@@ -211,7 +211,7 @@ struct OutputPieceCheck {
   double value_error = 0.0;
 };
 
-static OutputPieceCheck check_output_pieces(const std::vector<OutputPiece>& pieces,
+static OutputPieceCheck check_output_pieces(const std::vector<OutputPiece<2>>& pieces,
                                             const std::vector<double>& global, int n,
                                             bool replicated, bool require_local_owner = true) {
   OutputPieceCheck check;
@@ -221,12 +221,12 @@ static OutputPieceCheck check_output_pieces(const std::vector<OutputPiece>& piec
     return check;
   }
   const int ncomp = static_cast<int>(global.size() / cells);
-  for (const OutputPiece& piece : pieces) {
-    const int nx = piece.box.ihi - piece.box.ilo + 1;
-    const int ny = piece.box.jhi - piece.box.jlo + 1;
-    check.failures += piece.box.level != 0;
-    check.failures += piece.box.ilo < 0 || piece.box.jlo < 0 || piece.box.ihi >= n ||
-                      piece.box.jhi >= n || nx < 1 || ny < 1;
+  for (const OutputPiece<2>& piece : pieces) {
+    const int nx = static_cast<int>(piece.box.length(0));
+    const int ny = static_cast<int>(piece.box.length(1));
+    check.failures += piece.level != 0;
+    check.failures += piece.box.lo[0] < 0 || piece.box.lo[1] < 0 || piece.box.hi[0] >= n ||
+                      piece.box.hi[1] >= n || nx < 1 || ny < 1;
     check.failures += piece.global_box_index < 0;
     check.failures += require_local_owner ? piece.owner_rank != my_rank()
                                           : (piece.owner_rank < 0 || piece.owner_rank >= n_ranks());
@@ -238,11 +238,11 @@ static OutputPieceCheck check_output_pieces(const std::vector<OutputPiece>& piec
       continue;
     check.cells += static_cast<long>(nx) * ny;
     for (int component = 0; component < ncomp; ++component)
-      for (int j = piece.box.jlo; j <= piece.box.jhi; ++j)
-        for (int i = piece.box.ilo; i <= piece.box.ihi; ++i) {
+      for (int j = piece.box.lo[1]; j <= piece.box.hi[1]; ++j)
+        for (int i = piece.box.lo[0]; i <= piece.box.hi[0]; ++i) {
           const std::size_t local = static_cast<std::size_t>(component) * ny * nx +
-                                    static_cast<std::size_t>(j - piece.box.jlo) * nx +
-                                    static_cast<std::size_t>(i - piece.box.ilo);
+                                    static_cast<std::size_t>(j - piece.box.lo[1]) * nx +
+                                    static_cast<std::size_t>(i - piece.box.lo[0]);
           const std::size_t full =
               static_cast<std::size_t>(component) * cells + static_cast<std::size_t>(j) * n + i;
           check.value_error =

@@ -1765,8 +1765,8 @@ std::vector<double> AmrSystem::field_potential_level_global(const std::string& p
   return result;
 }
 
-std::vector<OutputPiece> AmrSystem::output_field_local_pieces(const std::string& provider_slot,
-                                                              int level) {
+std::vector<OutputPiece<2>> AmrSystem::output_field_local_pieces(const std::string& provider_slot,
+                                                                 int level) {
   p_->ensure_built();
   if (!p_->runtime)
     throw std::runtime_error(
@@ -1774,9 +1774,9 @@ std::vector<OutputPiece> AmrSystem::output_field_local_pieces(const std::string&
   return p_->runtime->output_field_local_pieces(provider_slot, level);
 }
 
-std::vector<OutputPiece> AmrSystem::output_field_root_pieces(const ObserverMpiLane& lane,
-                                                             const std::string& provider_slot,
-                                                             int level) {
+std::vector<OutputPiece<2>> AmrSystem::output_field_root_pieces(const ObserverMpiLane& lane,
+                                                                const std::string& provider_slot,
+                                                                int level) {
   return output_pieces_to_root(
       lane, detail::output_collective_identity("AmrSystem", "field", provider_slot, level),
       [&] { return output_field_local_pieces(provider_slot, level); });
@@ -4490,7 +4490,7 @@ std::vector<double> AmrSystem::block_level_state_global(const std::string& name,
   return p_->runtime->block_level_state_global(p_->block_index_or_throw(name), k);
 }
 
-std::vector<OutputPiece> AmrSystem::output_state_local_pieces(const std::string& name, int k) {
+std::vector<OutputPiece<2>> AmrSystem::output_state_local_pieces(const std::string& name, int k) {
   p_->ensure_built();
   const std::size_t block = p_->block_index_or_throw(name);
   return p_->runtime->output_block_state_local_pieces(block, k);
@@ -4501,8 +4501,8 @@ std::vector<PatchBox> AmrSystem::output_geometry_boxes() {
   return p_->runtime->output_geometry_boxes();
 }
 
-std::vector<OutputPiece> AmrSystem::output_state_root_pieces(const ObserverMpiLane& lane,
-                                                             const std::string& name, int k) {
+std::vector<OutputPiece<2>> AmrSystem::output_state_root_pieces(const ObserverMpiLane& lane,
+                                                                const std::string& name, int k) {
   return output_pieces_to_root(lane,
                                detail::output_collective_identity("AmrSystem", "state", name, k),
                                [&] { return output_state_local_pieces(name, k); });

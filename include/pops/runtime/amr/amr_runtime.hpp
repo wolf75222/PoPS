@@ -5731,7 +5731,7 @@ class AmrRuntime {
 
   /// Exact rank-local valid-cell pieces for one block and level.  The explicit replicated bit on
   /// level zero lets the output planner distinguish rank-local from globally unique ownership.
-  std::vector<OutputPiece> output_block_state_local_pieces(std::size_t b, int k) const {
+  std::vector<OutputPiece<2>> output_block_state_local_pieces(std::size_t b, int k) const {
     if (b >= blocks_.size())
       throw std::runtime_error(
           "AmrRuntime::output_block_state_local_pieces : block index out of bounds");
@@ -5743,7 +5743,7 @@ class AmrRuntime {
   }
 
   /// Exact rank-local valid-cell pieces for a qualified elliptic provider output.
-  std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int k) {
+  std::vector<OutputPiece<2>> output_field_local_pieces(const std::string& provider_slot, int k) {
     if (k < 0 || k >= provider_potential_levels(provider_slot))
       throw std::out_of_range("AmrRuntime::output_field_local_pieces level out of range");
     MultiFab& values = provider_potential_level(provider_slot, k);
