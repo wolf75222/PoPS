@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pops/amr/hierarchy/nd/cluster_provider.hpp>
+#include <pops/amr/tagging/clustering_provider.hpp>
 
 #include <algorithm>
 #include <array>
@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops::amr::hierarchy::nd {
+namespace pops::amr::tagging {
 
 template <int Dim>
 class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
@@ -36,7 +36,7 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     const std::vector<const TagMask<Dim>*> canonical = authenticate_shards_(shards, options);
     Work work{options.budget};
     std::vector<Box<Dim>> raw;
-    const LevelLayoutIdentity<Dim>& source = canonical.front()->level_identity();
+    const hierarchy::LevelLayoutIdentity<Dim>& source = canonical.front()->level_identity();
 
     for (std::size_t global_patch = 0; global_patch < source.patches.size(); ++global_patch) {
       for (int axis = 0; axis < Dim; ++axis)
@@ -173,7 +173,7 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
     if (shards.size() > options.budget.shards)
       throw std::length_error("Berger-Rigoutsos exceeds its tag-shard budget");
 
-    const LevelLayoutIdentity<Dim>& source = shards.front().level_identity();
+    const hierarchy::LevelLayoutIdentity<Dim>& source = shards.front().level_identity();
     if (source.patches.empty() || source.rank_space.empty())
       throw std::invalid_argument("Berger-Rigoutsos source identity is incomplete");
     std::vector<const TagMask<Dim>*> canonical;
@@ -240,7 +240,7 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
   }
 
   static const TagMask<Dim>& owner_for_patch_(const std::vector<const TagMask<Dim>*>& shards,
-                                              const LevelLayoutIdentity<Dim>& source,
+                                              const hierarchy::LevelLayoutIdentity<Dim>& source,
                                               std::size_t global_patch) {
     if (source.distribution_mode == mesh::DistributionMode::replicated)
       return *shards.front();
@@ -444,4 +444,4 @@ class BergerRigoutsosProvider final : public ClusterProvider<Dim> {
   }
 };
 
-}  // namespace pops::amr::hierarchy::nd
+}  // namespace pops::amr::tagging

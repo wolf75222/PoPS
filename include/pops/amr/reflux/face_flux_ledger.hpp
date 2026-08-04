@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops::amr::reflux::nd {
+namespace pops::amr::reflux {
 
 /// Spatial centering is part of the persisted identity.  This ledger accepts only face-centered
 /// numerical fluxes; Cell exists so attempts to route source terms fail explicitly at the boundary.
@@ -376,4 +376,4 @@ class TransactionalFaceFluxLedger {
   FaceFluxLedgerBudget budget_;
 };
 
-}  // namespace pops::amr::reflux::nd
+}  // namespace pops::amr::reflux

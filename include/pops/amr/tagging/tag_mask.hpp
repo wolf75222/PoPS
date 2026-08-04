@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pops/amr/hierarchy/nd/level_layout.hpp>
+#include <pops/amr/hierarchy/level_layout.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace pops::amr::hierarchy::nd {
+namespace pops::amr::tagging {
 
 struct TagMaskBudget {
   std::size_t global_patches = 0;
@@ -46,7 +46,7 @@ struct TagShardIdentity {
 
 template <int Dim>
 struct TagMaskIdentity {
-  LevelLayoutIdentity<Dim> level{};
+  hierarchy::LevelLayoutIdentity<Dim> level{};
   TagShardIdentity<Dim> shard{};
 
   bool operator==(const TagMaskIdentity&) const = default;
@@ -66,7 +66,7 @@ class TagMask {
     bool operator==(const PatchTags&) const = default;
   };
 
-  TagMask(const LevelLayout<Dim>& level, Index<Dim> local_rank, TagMaskBudget budget)
+  TagMask(const hierarchy::LevelLayout<Dim>& level, Index<Dim> local_rank, TagMaskBudget budget)
       : local_rank_(local_rank) {
     const mesh::Distribution<Dim>& distribution = level.distribution();
     if (!distribution.rank_space().contains(local_rank_))
@@ -119,7 +119,9 @@ class TagMask {
     }
   }
 
-  const LevelLayoutIdentity<Dim>& level_identity() const noexcept { return level_identity_; }
+  const hierarchy::LevelLayoutIdentity<Dim>& level_identity() const noexcept {
+    return level_identity_;
+  }
   const Index<Dim>& local_rank() const noexcept { return local_rank_; }
   const std::vector<PatchTags>& patches() const noexcept { return patches_; }
   std::size_t local_patch_count() const noexcept { return patches_.size(); }
@@ -254,9 +256,9 @@ class TagMask {
     throw std::out_of_range("TagMask patch is not visible to this rank");
   }
 
-  LevelLayoutIdentity<Dim> level_identity_{};
+  hierarchy::LevelLayoutIdentity<Dim> level_identity_{};
   Index<Dim> local_rank_{};
   std::vector<PatchTags> patches_{};
 };
 
-}  // namespace pops::amr::hierarchy::nd
+}  // namespace pops::amr::tagging

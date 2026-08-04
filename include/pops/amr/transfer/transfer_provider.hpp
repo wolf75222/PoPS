@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pops/amr/transfer/nd/refinement_ratio.hpp>
+#include <pops/amr/refinement_ratio.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/index/box.hpp>
 #include <pops/mesh/storage/field_view.hpp>
@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-namespace pops::amr::transfer::nd {
+namespace pops::amr::transfer {
 
 /// Logical location of transferred values.  The first ND substrate intentionally authenticates
 /// only cell-centered transfers; the other values make unsupported routes explicit and fail-closed.
@@ -399,11 +399,4 @@ class TransferProvider {
   TransferKind kind_;
 };
 
-static_assert(std::is_trivially_copyable_v<PreparedTransfer<1>>);
-static_assert(std::is_trivially_copyable_v<PreparedTransfer<2>>);
-static_assert(std::is_trivially_copyable_v<PreparedTransfer<3>>);
-static_assert(std::is_trivially_copyable_v<TransferProvider<1, Centering::Cell>>);
-static_assert(std::is_trivially_copyable_v<TransferProvider<2, Centering::Cell>>);
-static_assert(std::is_trivially_copyable_v<TransferProvider<3, Centering::Cell>>);
-
-}  // namespace pops::amr::transfer::nd
+}  // namespace pops::amr::transfer

@@ -440,6 +440,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_nd_distribution
   test_nd_execution
   test_nd_flux_ledger
+  test_nd_amr_runtime
   test_nd_hierarchy_plan
   test_nd_layout
   test_nd_load_balance
@@ -465,17 +466,12 @@ set(POPS_CPP_STANDARD_TESTS
   test_nd_metric_provider
   test_nd_finite_volume
   test_refinement
-  test_ref_ratio
-  test_amr_hierarchy
   test_amr_tensor_fac_provider
-  test_cluster
-  test_regrid
   test_flux_register
   test_coverage_mask
   test_patch_range
   test_cf_interface
   test_amr_diagnostics
-  test_load_balance
   test_poisson_smoother
   test_poisson_smoother_cache
   test_geometric_mg

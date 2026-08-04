@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include <pops/amr/hierarchy/nd/level_layout.hpp>
+#include <pops/amr/hierarchy/level_layout.hpp>
 #include <pops/parallel/load_balance.hpp>
 #include <pops/parallel/prepared_load_balance.hpp>
 
@@ -26,6 +26,7 @@ using pops::mesh::RankSpace;
 using pops::PreparedLoadBalanceAuthority;
 using pops::PreparedLoadBalanceProvider;
 using pops::PreparedLoadBalanceResult;
+using pops::PreparedRebalanceDecision;
 using pops::parallel::LoadBalancePreparationBudget;
 using pops::parallel::LoadBalanceProvider;
 using pops::parallel::LoadBalanceStrategy;
@@ -143,6 +144,8 @@ static_assert(!std::is_aggregate_v<PreparedLoadBalanceResult<1>>);
 static_assert(!std::is_default_constructible_v<PreparedLoadBalanceResult<2>>);
 static_assert(!std::is_copy_assignable_v<PreparedLoadBalanceResult<2>>);
 static_assert(!std::is_move_assignable_v<PreparedLoadBalanceResult<2>>);
+static_assert(!std::is_default_constructible_v<PreparedRebalanceDecision<2>>);
+static_assert(!std::is_copy_assignable_v<PreparedRebalanceDecision<2>>);
 static_assert(std::is_same_v<decltype(std::declval<const PreparedLoadBalanceResult<3>&>().plan()),
                              const pops::parallel::OwnershipPlan<3>&>);
 static_assert(
@@ -321,8 +324,8 @@ TEST(test_nd_load_balance, produced_distribution_constructs_a_level_layout_witho
       LoadBalanceProvider<2>::space_filling_curve().prepare(patches, ranks, budget());
   const auto& distribution = ownership.distribution();
 
-  const pops::amr::hierarchy::nd::LevelLayout<2> level(
-      0, domain, patches, distribution, pops::amr::hierarchy::nd::RefinementRatio<2>{1, 1},
+  const pops::amr::hierarchy::LevelLayout<2> level(
+      0, domain, patches, distribution, pops::amr::RefinementRatio<2>{1, 1},
       pops::mesh::BoxArrayValidationBudget{patches.size(),
                                            patches.size() * (patches.size() - 1) / 2});
   EXPECT_EQ(level.distribution(), distribution);
@@ -497,4 +500,72 @@ TEST(test_nd_load_balance, unregistered_legacy_only_route_fails_closed_for_nd) {
                    "legacy_two_dimensional_only", "test.nd.no-legacy-fallback",
                    pops::PreparedProviderOptions{"pops.test.load-balance.legacy@1", {}}),
                std::invalid_argument);
+}
+
+TEST(test_nd_load_balance, prepared_rebalance_retains_proposal_and_reports_unchanged_mapping) {
+  const BoxArray<3> patches = prepared_point_patches<3>();
+  const RankSpace<3> ranks = one_rank_space<3>();
+  const std::vector<std::int64_t> measured_weights{9, 4, 2};
+  const auto authority = pops::prepare_load_balance_authority<3>(
+      "measured_knapsack", "test.nd.measured-rebalance",
+      pops::PreparedProviderOptions{
+          "pops.amr.load-balance.measured-knapsack@1",
+          {{"minimum_improvement_ppm", std::int64_t{50'000}},
+           {"amortization_steps", std::int64_t{20}},
+           {"migration_bandwidth_bytes_per_second", std::int64_t{1'000'000'000}},
+           {"per_patch_migration_latency_nanoseconds", std::int64_t{0}}}});
+  const auto current_plan =
+      LoadBalanceProvider<3>::weighted_lpt().prepare(patches, ranks, budget(), measured_weights);
+  std::vector<pops::ResourceEstimate> estimates;
+  for (const std::int64_t weight : measured_weights) {
+    estimates.push_back(pops::ResourceEstimate{
+        .topology_epoch = 7,
+        .materialization_generation = 11,
+        .samples = 1,
+        .cell_updates = 1,
+        .compute_nanoseconds = weight,
+        .memory_bytes = 1,
+        .communication_bytes = 0,
+        .communication_nanoseconds = 0,
+        .resident_bytes = 64,
+    });
+  }
+
+  const PreparedRebalanceDecision<3> decision = authority.decide_rebalance(
+      2, patches, current_plan.distribution(), 7, 11, estimates, budget());
+
+  EXPECT_FALSE(decision.accepted);
+  EXPECT_EQ(decision.reason, pops::RebalanceReason::MappingUnchanged);
+  EXPECT_EQ(decision.moved_patches, 0);
+  EXPECT_EQ(decision.proposed.plan().weights(), measured_weights);
+  EXPECT_EQ(decision.proposed.plan().distribution(), current_plan.distribution());
+  EXPECT_FALSE(decision.source_contract.empty());
+  EXPECT_FALSE(decision.exact_contract.empty());
+  EXPECT_EQ(decision.exact_contract, pops::detail::exact_rebalance_decision(decision));
+}
+
+TEST(test_nd_load_balance, prepared_rebalance_rejects_stale_measurements_before_provider_work) {
+  const BoxArray<1> patches = prepared_point_patches<1>();
+  const RankSpace<1> ranks = one_rank_space<1>();
+  const auto current = LoadBalanceProvider<1>::weighted_lpt().prepare(patches, ranks, budget());
+  const auto authority = pops::prepare_load_balance_authority<1>(
+      "measured_knapsack", "test.nd.stale-rebalance",
+      pops::PreparedProviderOptions{
+          "pops.amr.load-balance.measured-knapsack@1",
+          {{"minimum_improvement_ppm", std::int64_t{50'000}},
+           {"amortization_steps", std::int64_t{20}},
+           {"migration_bandwidth_bytes_per_second", std::int64_t{1'000'000'000}},
+           {"per_patch_migration_latency_nanoseconds", std::int64_t{0}}}});
+  const std::vector<pops::ResourceEstimate> stale(
+      patches.size(), pops::ResourceEstimate{.topology_epoch = 4,
+                                             .materialization_generation = 8,
+                                             .samples = 1,
+                                             .cell_updates = 1,
+                                             .compute_nanoseconds = 1,
+                                             .memory_bytes = 1,
+                                             .resident_bytes = 1});
+
+  EXPECT_THROW(
+      (void)authority.decide_rebalance(0, patches, current.distribution(), 5, 8, stale, budget()),
+      std::invalid_argument);
 }

@@ -10,22 +10,16 @@
 # api, abi, sdk-root and sdk-support are all installed and authenticated by POPS_HEADER_SIG.
 
 api pops/amr/hierarchy/amr_hierarchy.hpp
-api pops/amr/hierarchy/nd/berger_rigoutsos.hpp
-api pops/amr/hierarchy/nd/cluster_provider.hpp
-api pops/amr/hierarchy/nd/hierarchy_plan.hpp
-api pops/amr/hierarchy/nd/level_layout.hpp
-api pops/amr/hierarchy/nd/tag_mask.hpp
-api pops/amr/hierarchy/refinement_ratio.hpp
-api pops/amr/nd/refinement_ratio.hpp
+api pops/amr/hierarchy/hierarchy_plan.hpp
+api pops/amr/hierarchy/level_layout.hpp
+api pops/amr/refinement_ratio.hpp
 api pops/amr/regridding/regrid.hpp
-api pops/amr/reflux/nd/face_flux_ledger.hpp
-api pops/amr/reflux/nd/metric_reflux.hpp
-api pops/amr/tagging/cluster.hpp
+api pops/amr/reflux/face_flux_ledger.hpp
+api pops/amr/reflux/metric_reflux.hpp
+api pops/amr/tagging/berger_rigoutsos.hpp
 api pops/amr/tagging/clustering_provider.hpp
-api pops/amr/tagging/tag_box.hpp
-api pops/amr/tagging/tagging_truth.hpp
-api pops/amr/transfer/nd/refinement_ratio.hpp
-api pops/amr/transfer/nd/transfer_provider.hpp
+api pops/amr/tagging/tag_mask.hpp
+api pops/amr/transfer/transfer_provider.hpp
 api pops/core/foundation/allocator.hpp
 api pops/core/foundation/cold.hpp
 api pops/core/foundation/kokkos_env.hpp
@@ -216,6 +210,7 @@ sdk-support pops/runtime/builders/compiled/native_loader.hpp
 test-only pops/runtime/builders/factory/brick_catalog.hpp
 sdk-support pops/runtime/builders/factory/model_factory.hpp
 sdk-support pops/runtime/builders/scheme_dispatch.hpp
+sdk-support pops/runtime/checkpoint/spatial_contract.hpp
 sdk-support pops/runtime/config/component_interfaces.hpp
 sdk-support pops/runtime/config/component_manifest.hpp
 sdk-support pops/runtime/config/dispatch_tags.hpp

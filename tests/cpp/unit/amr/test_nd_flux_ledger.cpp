@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include <pops/amr/reflux/nd/metric_reflux.hpp>
+#include <pops/amr/reflux/metric_reflux.hpp>
 
 #include <array>
 #include <cstddef>
@@ -17,22 +17,22 @@ namespace {
 using pops::Index;
 using pops::amr::ClockStamp;
 using pops::amr::Rational;
-using pops::amr::reflux::nd::CoarseCellFaceSide;
-using pops::amr::reflux::nd::CoarseFaceRefluxKey;
-using pops::amr::reflux::nd::FaceFluxFragmentKey;
-using pops::amr::reflux::nd::FaceFluxFragmentMeasure;
-using pops::amr::reflux::nd::FaceFluxLedgerBudget;
-using pops::amr::reflux::nd::FaceLedgerCentering;
-using pops::amr::reflux::nd::FaceLedgerContribution;
-using pops::amr::reflux::nd::FaceLedgerRole;
-using pops::amr::reflux::nd::FaceRefinementMapping;
-using pops::amr::reflux::nd::LevelTransition;
-using pops::amr::reflux::nd::MetricRefluxBudget;
-using pops::amr::reflux::nd::TransactionalFaceFluxLedger;
-using pops::amr::reflux::nd::coarse_cell_reflux_correction;
-using pops::amr::reflux::nd::fine_faces_for_coarse_face;
-using pops::amr::reflux::nd::metric_reflux;
-using pops::amr::transfer::nd::RefinementRatio;
+using pops::amr::reflux::CoarseCellFaceSide;
+using pops::amr::reflux::CoarseFaceRefluxKey;
+using pops::amr::reflux::FaceFluxFragmentKey;
+using pops::amr::reflux::FaceFluxFragmentMeasure;
+using pops::amr::reflux::FaceFluxLedgerBudget;
+using pops::amr::reflux::FaceLedgerCentering;
+using pops::amr::reflux::FaceLedgerContribution;
+using pops::amr::reflux::FaceLedgerRole;
+using pops::amr::reflux::FaceRefinementMapping;
+using pops::amr::reflux::LevelTransition;
+using pops::amr::reflux::MetricRefluxBudget;
+using pops::amr::reflux::TransactionalFaceFluxLedger;
+using pops::amr::reflux::coarse_cell_reflux_correction;
+using pops::amr::reflux::fine_faces_for_coarse_face;
+using pops::amr::reflux::metric_reflux;
+using pops::amr::RefinementRatio;
 
 constexpr FaceFluxLedgerBudget ledger_budget() {
   return {512, 1024, 4};
@@ -659,7 +659,7 @@ TEST(test_nd_flux_ledger, failed_commit_preserves_accepted_and_pending_transacti
 }
 
 TEST(test_nd_flux_ledger, subnormal_cell_measure_fails_before_non_finite_axpy) {
-  pops::amr::reflux::nd::MetricFaceReflux<double> reflux;
+  pops::amr::reflux::MetricFaceReflux<double> reflux;
   reflux.mismatch = 1.0;
   EXPECT_THROW(
       (void)coarse_cell_reflux_correction(reflux, std::numeric_limits<double>::denorm_min(),

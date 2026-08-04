@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include <pops/amr/hierarchy/nd/level_layout.hpp>
-#include <pops/amr/transfer/nd/transfer_provider.hpp>
+#include <pops/amr/hierarchy/level_layout.hpp>
+#include <pops/amr/transfer/transfer_provider.hpp>
 
 #include <array>
 #include <cstddef>
@@ -15,13 +15,13 @@ using pops::Box;
 using pops::FieldView;
 using pops::Index;
 using pops::Real;
-using pops::amr::transfer::nd::Centering;
-using pops::amr::transfer::nd::ComponentRange;
-using pops::amr::transfer::nd::IndexMapping;
-using pops::amr::transfer::nd::PreparedTransfer;
-using pops::amr::transfer::nd::RefinementRatio;
-using pops::amr::transfer::nd::TransferKind;
-using pops::amr::transfer::nd::TransferProvider;
+using pops::amr::transfer::Centering;
+using pops::amr::transfer::ComponentRange;
+using pops::amr::transfer::IndexMapping;
+using pops::amr::transfer::PreparedTransfer;
+using pops::amr::RefinementRatio;
+using pops::amr::transfer::TransferKind;
+using pops::amr::transfer::TransferProvider;
 
 template <int Dim, class F>
 void visit(const Box<Dim>& box, F&& function) {
@@ -275,17 +275,15 @@ TEST(test_nd_transfer, anisotropic_ratios_validate_once_and_fail_closed) {
 }
 
 TEST(test_nd_transfer, prepared_contract_is_fixed_size_and_reports_exact_capabilities) {
-  static_assert(std::is_same_v<pops::amr::hierarchy::nd::RefinementRatio<3>,
-                               pops::amr::transfer::nd::RefinementRatio<3>>);
   static_assert(std::is_trivially_copyable_v<PreparedTransfer<1>>);
   static_assert(std::is_trivially_copyable_v<PreparedTransfer<2>>);
   static_assert(std::is_trivially_copyable_v<PreparedTransfer<3>>);
   static_assert(std::is_trivially_copyable_v<TransferProvider<3, Centering::Cell>>);
 
   EXPECT_EQ((TransferProvider<2, Centering::Cell>::conservative_restriction().capabilities()),
-            (pops::amr::transfer::nd::TransferCapabilities{1, 0, true, true}));
+            (pops::amr::transfer::TransferCapabilities{1, 0, true, true}));
   EXPECT_EQ((TransferProvider<2, Centering::Cell>::linear_prolongation().capabilities()),
-            (pops::amr::transfer::nd::TransferCapabilities{2, 1, false, true}));
+            (pops::amr::transfer::TransferCapabilities{2, 1, false, true}));
   EXPECT_THROW((void)(TransferProvider<2, Centering::Node>::linear_prolongation().capabilities()),
                std::invalid_argument);
   EXPECT_THROW(

@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pops/amr/nd/refinement_ratio.hpp>
+#include <pops/amr/refinement_ratio.hpp>
 #include <pops/mesh/index/extent.hpp>
 #include <pops/runtime/config/generated_release_contract.hpp>
 
@@ -45,7 +45,7 @@ struct SpatialContract {
   std::array<double, Dim> lower{};
   std::array<double, Dim> upper{};
   std::array<bool, Dim> periodicity{};
-  std::vector<amr::nd::RefinementRatio<Dim>> refinement_ratios;
+  std::vector<amr::RefinementRatio<Dim>> refinement_ratios;
   std::string native_layout_identity;
   std::string spatial_identity;
 
