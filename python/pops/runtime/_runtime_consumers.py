@@ -328,7 +328,9 @@ def _active_output_levels(
 
 _NATIVE_CELL_MEASURES = frozenset(
     {
+        "pops://cell-measures/cartesian-length@1",
         CARTESIAN_CELL_AREA,
+        "pops://cell-measures/cartesian-volume@1",
         POLAR_ANNULUS_CELL_AREA,
     }
 )
@@ -4585,18 +4587,14 @@ class RuntimeOutputSnapshot:
         geometry = layout.geometry
         if type(geometry) is not NormalizedGeometry:
             raise TypeError("runtime output requires an exact normalized layout geometry")
-        if geometry.dimension != 2:
+        dimension = geometry.dimension
+        if dimension not in (1, 2, 3):
             raise NotImplementedError(
-                "the installed scientific-output provider supports rank-2 geometry; "
-                "the normalized geometry has rank %d" % geometry.dimension
+                "scientific output supports spatial ranks 1, 2, and 3; "
+                "the normalized geometry has rank %d" % dimension
             )
-        base_nx, base_ny = geometry.cells
-        if int(engine.nx()) != base_nx:
-            raise ValueError("runtime x cell count does not match normalized layout geometry")
-        if int(engine.ny()) != base_ny:
-            raise ValueError("runtime y cell count does not match normalized layout geometry")
         scale = layout.levels[level].refinement
-        nx, ny = base_nx * scale, base_ny * scale
+        native_shape = tuple(extent * scale for extent in geometry.cells)
         if geometry.cell_measure not in _NATIVE_CELL_MEASURES:
             raise NotImplementedError(
                 "scientific output does not implement normalized cell measure %s"
@@ -4611,7 +4609,10 @@ class RuntimeOutputSnapshot:
         cached = self._geometry_cache.get(cache_key)
         if cached is not None:
             return cached
-        spacing = (geometry.lengths[0] / nx, geometry.lengths[1] / ny)
+        spacing = tuple(
+            length / extent
+            for length, extent in zip(geometry.lengths, native_shape, strict=True)
+        )
         next_ratio = 0
         if layout.adaptive and level + 1 < len(layout.levels):
             next_ratio = layout.levels[level + 1].refinement // layout.levels[level].refinement
@@ -4619,33 +4620,58 @@ class RuntimeOutputSnapshot:
             native = cast(
                 Mapping[str, Any],
                 native_geometry(
-                    level, geometry.lower, spacing, (ny, nx), next_ratio, geometry.cell_measure
+                    level, geometry.lower, spacing, native_shape, next_ratio, geometry.cell_measure
                 ),
             )
         else:
             native = cast(
                 Mapping[str, Any],
-                native_geometry(geometry.lower, spacing, (ny, nx), geometry.cell_measure),
+                native_geometry(geometry.lower, spacing, native_shape, geometry.cell_measure),
+            )
+        native_dimension = native["dimension"]
+        if isinstance(native_dimension, bool) or type(native_dimension) is not int:
+            raise TypeError("native output geometry dimension must be an exact integer")
+        if native_dimension != dimension:
+            raise ValueError(
+                "native output geometry rank differs from normalized layout geometry"
+            )
+        raw_shape = native["cell_shape"]
+        if (
+            not isinstance(raw_shape, (tuple, list))
+            or len(raw_shape) != dimension
+            or any(type(item) is not int or item < 1 for item in raw_shape)
+        ):
+            raise TypeError("native output geometry cell_shape is not an exact ranked shape")
+        cell_shape = tuple(raw_shape)
+        expected_cell_shape = tuple(reversed(native_shape))
+        if cell_shape != expected_cell_shape:
+            raise ValueError(
+                "native output geometry shape differs from normalized layout geometry"
             )
         if int(native["topology_epoch"]) != topology_epoch:
             raise RuntimeError("native output geometry changed during snapshot construction")
-        native_boxes = tuple(
-            cast(tuple[int, int, int, int], tuple(int(item) for item in box))
-            for box in native["boxes"]
-        )
+        raw_boxes = native["boxes"]
+        if not isinstance(raw_boxes, (tuple, list)):
+            raise TypeError("native output geometry boxes must be an ordered sequence")
+        native_boxes = tuple(tuple(box) for box in raw_boxes)
+        if any(
+            len(box) != 2 * dimension or any(type(item) is not int for item in box)
+            for box in native_boxes
+        ):
+            raise TypeError("native output geometry boxes must contain exact ranked bounds")
         result = LevelGeometry(
             layout_identity,
             "amr" if layout.adaptive else "uniform",
             level,
-            cast(tuple[float, float], geometry.lower),
+            geometry.lower,
             spacing,
-            (ny, nx),
+            cell_shape,
             native_boxes,
             native["coverage"],
             native["cell_volumes"],
             coordinate_system=geometry.coordinate_system,
             cell_measure=geometry.cell_measure,
-            axis_names=cast(tuple[str, str], geometry.axis_names),
+            axis_names=geometry.axis_names,
             _native_valid_cells=native["valid_cells"],
             _native_arrays=_NATIVE_GEOMETRY_ARRAYS,
         )
@@ -4665,11 +4691,14 @@ class RuntimeOutputSnapshot:
         *,
         mode: ParallelMode,
         rank: int,
+        dimension: int,
         require_local_owner: bool = True,
     ) -> tuple[ArrayPiece, ...]:
         """Consume the exact native rank-owned output-piece ABI without reconstruction."""
         import numpy as np
 
+        if dimension not in (1, 2, 3):
+            raise ValueError("native output-piece dimension must be 1, 2, or 3")
         method = getattr(native_engine, method_name, None)
         if not callable(method):
             raise RuntimeError(
@@ -4719,13 +4748,16 @@ class RuntimeOutputSnapshot:
                 bound = row[name]
                 if (
                     not isinstance(bound, (tuple, list))
-                    or len(bound) != 2
+                    or len(bound) != dimension
                     or any(type(value) is not int for value in bound)
                 ):
-                    raise TypeError("native output %s must be an exact integer (j, i) pair" % name)
-                native_bounds.append((bound[0], bound[1]))
-            lower: tuple[int, int] = native_bounds[0]
-            upper: tuple[int, int] = native_bounds[1]
+                    raise TypeError(
+                        "native output %s must contain %d exact integer bounds"
+                        % (name, dimension)
+                    )
+                native_bounds.append(tuple(bound))
+            lower = native_bounds[0]
+            upper = native_bounds[1]
             pieces.append(
                 (
                     box_index,
@@ -4745,29 +4777,37 @@ class RuntimeOutputSnapshot:
     @staticmethod
     def _validate_piece_bounds(
         pieces: tuple[ArrayPiece, ...],
-        boxes: tuple[tuple[int, int, int, int], ...],
+        boxes: tuple[tuple[int, ...], ...],
         *,
+        dimension: int,
         complete: bool,
         rank: int | None = None,
     ) -> None:
-        active: list[ArrayPiece] = []
+        if dimension not in (1, 2, 3) or any(
+            len(box) != 2 * dimension for box in boxes
+        ):
+            raise ValueError("geometry boxes do not match the output-piece dimension")
         covered = 0
-        for piece in sorted(pieces, key=lambda value: (value.lower, value.upper)):
-            jlo, ilo = piece.lower
-            jhi, ihi = piece.upper
+        for piece in pieces:
             if piece.global_box_index >= len(boxes):
                 raise ValueError("native output global_box_index lies outside geometry boxes")
-            if (jlo, ilo, jhi, ihi) != boxes[piece.global_box_index]:
+            if piece.lower + piece.upper != boxes[piece.global_box_index]:
                 raise ValueError("native output piece bounds differ from its indexed geometry box")
             if rank is not None and piece.owner_rank != rank:
                 raise ValueError("rank-local native output piece has a different owner_rank")
-            active = [other for other in active if other.upper[0] > jlo]
-            if any(not (ihi <= other.lower[1] or other.upper[1] <= ilo) for other in active):
-                raise ValueError("native output pieces overlap")
-            active.append(piece)
-            covered += (jhi - jlo) * (ihi - ilo)
+            covered += math.prod(
+                high - low for low, high in zip(piece.lower, piece.upper, strict=True)
+            )
         if complete:
-            expected = sum((jhi - jlo) * (ihi - ilo) for jlo, ilo, jhi, ihi in boxes)
+            expected = sum(
+                math.prod(
+                    high - low
+                    for low, high in zip(
+                        box[:dimension], box[dimension:], strict=True
+                    )
+                )
+                for box in boxes
+            )
             if covered != expected:
                 raise ValueError("native output pieces do not exactly cover valid geometry boxes")
             if {piece.global_box_index for piece in pieces} != set(range(len(boxes))):
@@ -4792,8 +4832,13 @@ class RuntimeOutputSnapshot:
         rows: tuple[Mapping[str, Any], ...],
         *,
         mode: ParallelMode,
-        boxes: tuple[tuple[int, int, int, int], ...],
+        boxes: tuple[tuple[int, ...], ...],
+        dimension: int,
     ) -> None:
+        if dimension not in (1, 2, 3) or any(
+            len(box) != 2 * dimension for box in boxes
+        ):
+            raise ValueError("geometry boxes do not match distributed output dimension")
         expected_keys = {"rank", "pieces", "error"}
         if any(not isinstance(row, Mapping) or set(row) != expected_keys for row in rows):
             raise TypeError("distributed output-piece envelope schema is not exact")
@@ -4836,14 +4881,16 @@ class RuntimeOutputSnapshot:
                 if (
                     not isinstance(lower, (tuple, list))
                     or not isinstance(upper, (tuple, list))
-                    or len(lower) != 2
-                    or len(upper) != 2
+                    or len(lower) != dimension
+                    or len(upper) != dimension
                     or any(
                         isinstance(value, bool) or type(value) is not int
                         for value in tuple(lower) + tuple(upper)
                     )
                 ):
-                    raise TypeError("distributed output-piece bounds must be exact integer pairs")
+                    raise TypeError(
+                        "distributed output-piece bounds must match the exact spatial rank"
+                    )
                 if piece["owner_rank"] != rank:
                     raise ValueError(
                         "distributed output-piece owner differs from contributing rank"
@@ -4881,7 +4928,8 @@ class RuntimeOutputSnapshot:
         mode: ParallelMode,
         rank: int,
         communicator: Any,
-        boxes: tuple[tuple[int, int, int, int], ...],
+        boxes: tuple[tuple[int, ...], ...],
+        dimension: int,
         components: int,
     ) -> tuple[ArrayPiece, ...]:
         local: tuple[ArrayPiece, ...] = ()
@@ -4905,10 +4953,13 @@ class RuntimeOutputSnapshot:
                 (native_communicator, *args) if mode is ParallelMode.ROOT else args,
                 mode=mode,
                 rank=rank,
+                dimension=dimension,
                 require_local_owner=mode is not ParallelMode.ROOT,
             )
             if any(
-                piece.values.ndim != 3 or piece.values.shape[0] != components for piece in local
+                piece.values.ndim != dimension + 1
+                or piece.values.shape[0] != components
+                for piece in local
             ):
                 raise ValueError(
                     "native output piece component axis differs from the compiled state"
@@ -4916,6 +4967,7 @@ class RuntimeOutputSnapshot:
             self._validate_piece_bounds(
                 local,
                 boxes,
+                dimension=dimension,
                 complete=mode is ParallelMode.ROOT and rank == 0,
                 rank=rank if mode is not ParallelMode.ROOT else None,
             )
@@ -4966,7 +5018,9 @@ class RuntimeOutputSnapshot:
             raise RuntimeError(
                 "%s output-piece preflight failed: %s" % (mode.name, "; ".join(failures))
             )
-        self._validate_distributed_piece_metadata(rows, mode=mode, boxes=boxes)
+        self._validate_distributed_piece_metadata(
+            rows, mode=mode, boxes=boxes, dimension=dimension
+        )
         return local
 
     def build(
@@ -5140,15 +5194,23 @@ class RuntimeOutputSnapshot:
                     entry["args"],
                     mode=mode,
                     rank=rank,
+                    dimension=geometry.spatial_rank,
                 )
                 if any(
-                    piece.values.ndim != 3 or piece.values.shape[0] != len(entry["components"])
+                    piece.values.ndim != geometry.spatial_rank + 1
+                    or piece.values.shape[0] != len(entry["components"])
                     for piece in pieces
                 ):
                     raise ValueError(
                         "native output piece component axis differs from compiled metadata"
                     )
-                self._validate_piece_bounds(pieces, geometry.boxes, complete=True, rank=rank)
+                self._validate_piece_bounds(
+                    pieces,
+                    geometry.boxes,
+                    dimension=geometry.spatial_rank,
+                    complete=True,
+                    rank=rank,
+                )
             else:
                 pieces = self._distributed_pieces(
                     entry["native_engine"],
@@ -5158,6 +5220,7 @@ class RuntimeOutputSnapshot:
                     rank=rank,
                     communicator=communicator,
                     boxes=geometry.boxes,
+                    dimension=geometry.spatial_rank,
                     components=len(entry["components"]),
                 )
             extracted.append((entry, pieces))

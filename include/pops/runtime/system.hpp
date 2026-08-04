@@ -1376,14 +1376,15 @@ class System {
   std::vector<double> field_potential_global(const std::string& provider_slot);
   /// Unified writer getters. Uniform layouts have exactly level zero; other levels fail loudly.
   /// Local pieces preserve native DistributionMapping ownership and never gather.
-  std::vector<OutputPiece> output_state_local_pieces(const std::string& name, int level) const;
-  std::vector<OutputPiece> output_field_local_pieces(const std::string& provider_slot, int level);
+  std::vector<OutputPiece<2>> output_state_local_pieces(const std::string& name, int level) const;
+  std::vector<OutputPiece<2>> output_field_local_pieces(const std::string& provider_slot,
+                                                        int level);
   /// Collective ROOT views.  Local provider errors are agreed before native MPI_Gatherv; only rank
   /// zero receives complete pieces and every non-root rank receives an empty vector.
-  std::vector<OutputPiece> output_state_root_pieces(const ObserverMpiLane& lane,
-                                                    const std::string& name, int level) const;
-  std::vector<OutputPiece> output_field_root_pieces(const ObserverMpiLane& lane,
-                                                    const std::string& provider_slot, int level);
+  std::vector<OutputPiece<2>> output_state_root_pieces(const ObserverMpiLane& lane,
+                                                       const std::string& name, int level) const;
+  std::vector<OutputPiece<2>> output_field_root_pieces(const ObserverMpiLane& lane,
+                                                       const std::string& provider_slot, int level);
   /// @}
 
   /// @name LOCAL per-fab accessors -- exact native ownership inspection

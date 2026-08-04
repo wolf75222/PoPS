@@ -18,6 +18,39 @@ std::string rank_payload(int rank) {
   return result;
 }
 
+template <int Dim>
+std::string expect_output_piece_wire_roundtrip() {
+  pops::OutputPiece<Dim> piece;
+  piece.level = 2;
+  for (int axis = 0; axis < Dim; ++axis) {
+    piece.box.lo[axis] = axis;
+    piece.box.hi[axis] = axis + 1;
+  }
+  piece.global_box_index = 4;
+  piece.owner_rank = 3;
+  piece.replicated = false;
+  piece.ncomp = 2;
+  piece.values.resize(static_cast<std::size_t>(2U << Dim));
+  for (std::size_t index = 0; index < piece.values.size(); ++index)
+    piece.values[index] = static_cast<double>(index) + 0.25;
+
+  const std::string payload =
+      pops::detail::serialize_output_pieces(std::vector<pops::OutputPiece<Dim>>{piece});
+  const std::vector<pops::OutputPiece<Dim>> decoded =
+      pops::detail::deserialize_output_pieces<Dim>(payload, 3);
+  EXPECT_EQ(decoded.size(), 1U);
+  if (decoded.size() == 1U) {
+    EXPECT_EQ(decoded[0].level, piece.level);
+    EXPECT_EQ(decoded[0].box, piece.box);
+    EXPECT_EQ(decoded[0].global_box_index, piece.global_box_index);
+    EXPECT_EQ(decoded[0].owner_rank, piece.owner_rank);
+    EXPECT_EQ(decoded[0].replicated, piece.replicated);
+    EXPECT_EQ(decoded[0].ncomp, piece.ncomp);
+    EXPECT_EQ(decoded[0].values, piece.values);
+  }
+  return payload;
+}
+
 }  // namespace
 
 TEST(WorldCommunicator, IsAnOpaqueProcessSingletonWithOwnedResources) {
@@ -110,26 +143,34 @@ TEST(WorldCommunicator, TransfersEmptyNullAndVariableSizedBytes) {
   EXPECT_THROW((void)world.broadcast_bytes({}, size), std::out_of_range);
 }
 
+TEST(WorldCommunicator, OutputPieceWirePreservesExactRankedBounds) {
+  (void)expect_output_piece_wire_roundtrip<1>();
+  (void)expect_output_piece_wire_roundtrip<2>();
+  const std::string rank_three = expect_output_piece_wire_roundtrip<3>();
+  EXPECT_THROW((void)pops::detail::deserialize_output_pieces<2>(rank_three, 3), std::runtime_error);
+}
+
 TEST(WorldCommunicator, GathersOutputPiecesOnlyOnRoot) {
   auto lane = pops::ObserverMpiLane::duplicate_world_collectively("test/output-piece/gather");
 #ifdef POPS_HAS_MPI
   const int rank = lane.rank();
   const int size = lane.size();
-  std::vector<pops::OutputPiece> result = pops::output_pieces_to_root(
+  std::vector<pops::OutputPiece<3>> result = pops::output_pieces_to_root(
       lane, pops::detail::output_collective_identity("test", "state", "tracer", 0), [rank] {
-        pops::OutputPiece piece;
-        piece.box = pops::PatchBox{0, rank, 0, rank, 0};
+        pops::OutputPiece<3> piece;
+        piece.level = 0;
+        piece.box = pops::Box<3>{pops::Index<3>{rank, 0, 0}, pops::Index<3>{rank, 0, 0}};
         piece.global_box_index = rank;
         piece.owner_rank = rank;
         piece.ncomp = 2;
         piece.values = {static_cast<double>(rank), static_cast<double>(rank) + 0.5};
-        return std::vector<pops::OutputPiece>{std::move(piece)};
+        return std::vector<pops::OutputPiece<3>>{std::move(piece)};
       });
   if (rank == 0) {
     EXPECT_EQ(result.size(), static_cast<std::size_t>(size));
     if (result.size() == static_cast<std::size_t>(size)) {
       for (int source = 0; source < size; ++source) {
-        const pops::OutputPiece& piece = result[static_cast<std::size_t>(source)];
+        const pops::OutputPiece<3>& piece = result[static_cast<std::size_t>(source)];
         EXPECT_EQ(piece.global_box_index, source);
         EXPECT_EQ(piece.owner_rank, source);
         EXPECT_EQ(piece.values, (std::vector<double>{static_cast<double>(source),
@@ -142,7 +183,7 @@ TEST(WorldCommunicator, GathersOutputPiecesOnlyOnRoot) {
 #else
   EXPECT_THROW((void)pops::output_pieces_to_root(
                    lane, pops::detail::output_collective_identity("test", "state", "tracer", 0),
-                   [] { return std::vector<pops::OutputPiece>{}; }),
+                   [] { return std::vector<pops::OutputPiece<3>>{}; }),
                std::runtime_error);
 #endif
   lane.close_collectively();
@@ -152,16 +193,17 @@ TEST(WorldCommunicator, SelectsOneCanonicalReplicatedOutputContributor) {
   auto lane = pops::ObserverMpiLane::duplicate_world_collectively("test/output-piece/replicated");
 #ifdef POPS_HAS_MPI
   const int rank = lane.rank();
-  std::vector<pops::OutputPiece> result = pops::output_pieces_to_root(
+  std::vector<pops::OutputPiece<1>> result = pops::output_pieces_to_root(
       lane, pops::detail::output_collective_identity("test", "state", "replicated", 0), [rank] {
-        pops::OutputPiece piece;
-        piece.box = pops::PatchBox{0, 0, 0, 0, 0};
+        pops::OutputPiece<1> piece;
+        piece.level = 0;
+        piece.box = pops::Box<1>{pops::Index<1>{0}, pops::Index<1>{0}};
         piece.global_box_index = 0;
         piece.owner_rank = rank;
         piece.replicated = true;
         piece.ncomp = 1;
         piece.values = {42.0};
-        return std::vector<pops::OutputPiece>{std::move(piece)};
+        return std::vector<pops::OutputPiece<1>>{std::move(piece)};
       });
   if (rank == 0) {
     EXPECT_EQ(result.size(), 1U);
@@ -176,7 +218,7 @@ TEST(WorldCommunicator, SelectsOneCanonicalReplicatedOutputContributor) {
 #else
   EXPECT_THROW((void)pops::output_pieces_to_root(
                    lane, pops::detail::output_collective_identity("test", "state", "replicated", 0),
-                   [] { return std::vector<pops::OutputPiece>{}; }),
+                   [] { return std::vector<pops::OutputPiece<1>>{}; }),
                std::runtime_error);
 #endif
   lane.close_collectively();

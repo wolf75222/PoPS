@@ -22,6 +22,8 @@
 #include <pops/runtime/system.hpp>
 
 #include <cstring>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <tuple>  // std::tuple: argument of AmrSystem.set_hierarchy (patch_boxes boxes) (ADC-65)
@@ -71,20 +73,35 @@ inline py::array_t<double> to_3d(const std::vector<double>& v, int ncomp, int ro
   std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
   return a;
 }
-inline py::tuple output_pieces_to_python(const std::vector<OutputPiece>& pieces) {
+template <int Dim>
+inline py::tuple output_pieces_to_python(const std::vector<OutputPiece<Dim>>& pieces) {
   py::tuple result(pieces.size());
   for (std::size_t index = 0; index < pieces.size(); ++index) {
-    const OutputPiece& piece = pieces[index];
-    const int nx = piece.box.ihi - piece.box.ilo + 1;
-    const int ny = piece.box.jhi - piece.box.jlo + 1;
-    if (piece.ncomp < 1 || nx < 1 || ny < 1 ||
-        piece.values.size() != static_cast<std::size_t>(piece.ncomp) *
-                                   static_cast<std::size_t>(ny) * static_cast<std::size_t>(nx))
+    const OutputPiece<Dim>& piece = pieces[index];
+    const std::int64_t cells = piece.box.numPts();
+    if (piece.level < 0 || piece.ncomp < 1 || cells < 1 ||
+        static_cast<std::uint64_t>(cells) >
+            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(piece.ncomp) ||
+        piece.values.size() !=
+            static_cast<std::size_t>(piece.ncomp) * static_cast<std::size_t>(cells))
       throw std::runtime_error("native output piece has an inconsistent compact shape");
+    std::vector<py::ssize_t> value_shape(static_cast<std::size_t>(Dim + 1));
+    value_shape[0] = static_cast<py::ssize_t>(piece.ncomp);
+    py::tuple lower(static_cast<py::ssize_t>(Dim));
+    py::tuple upper(static_cast<py::ssize_t>(Dim));
+    for (int array_axis = 0; array_axis < Dim; ++array_axis) {
+      const int native_axis = Dim - 1 - array_axis;
+      value_shape[static_cast<std::size_t>(array_axis + 1)] =
+          static_cast<py::ssize_t>(piece.box.length(native_axis));
+      lower[static_cast<py::ssize_t>(array_axis)] = piece.box.lo[native_axis];
+      upper[static_cast<py::ssize_t>(array_axis)] = piece.box.hi[native_axis] + 1;
+    }
+    py::array_t<double> values(value_shape);
+    std::memcpy(values.mutable_data(), piece.values.data(), piece.values.size() * sizeof(double));
     py::dict row;
-    row["lower"] = py::make_tuple(piece.box.jlo, piece.box.ilo);
-    row["upper"] = py::make_tuple(piece.box.jhi + 1, piece.box.ihi + 1);
-    row["values"] = to_3d(piece.values, piece.ncomp, ny, nx);
+    row["lower"] = std::move(lower);
+    row["upper"] = std::move(upper);
+    row["values"] = std::move(values);
     row["global_box_index"] = piece.global_box_index;
     row["owner_rank"] = piece.owner_rank;
     row["replicated"] = piece.replicated;

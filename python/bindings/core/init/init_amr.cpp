@@ -1060,7 +1060,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           "output_field_root_pieces",
           [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& provider_slot,
              int level) {
-            std::vector<OutputPiece> pieces;
+            std::vector<OutputPiece<2>> pieces;
             {
               py::gil_scoped_release release;
               pieces = s.output_field_root_pieces(lane, provider_slot, level);
@@ -1076,9 +1076,15 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
              int next_refinement_ratio, const std::string& cell_measure) {
             if (level < 0 || level >= s.n_levels())
               throw std::out_of_range("AmrSystem output geometry level is out of range");
-            return pops::python::detail::native_output_geometry_snapshot(
+            std::vector<pops::python::detail::OutputGeometryPatch<2>> patches;
+            const std::vector<PatchBox> native_boxes = s.output_geometry_boxes();
+            patches.reserve(native_boxes.size());
+            for (const PatchBox& patch : native_boxes)
+              patches.push_back({patch.level, Box<2>{Index<2>{patch.ilo, patch.jlo},
+                                                     Index<2>{patch.ihi, patch.jhi}}});
+            return pops::python::detail::native_output_geometry_snapshot<2>(
                 level, s.checkpoint_topology_epoch(), origin, spacing, cell_shape, cell_measure,
-                s.output_geometry_boxes(), next_refinement_ratio, true);
+                patches, next_refinement_ratio, true);
           },
           py::arg("level"), py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"),
           py::arg("next_refinement_ratio"), py::arg("cell_measure"),
@@ -1111,7 +1117,7 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def(
           "output_state_root_pieces",
           [](AmrSystem& s, const ObserverMpiLane& lane, const std::string& name, int level) {
-            std::vector<OutputPiece> pieces;
+            std::vector<OutputPiece<2>> pieces;
             {
               py::gil_scoped_release release;
               pieces = s.output_state_root_pieces(lane, name, level);
