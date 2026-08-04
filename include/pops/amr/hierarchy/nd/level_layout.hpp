@@ -3,10 +3,10 @@
 
 #pragma once
 
+#include <pops/amr/nd/refinement_ratio.hpp>
 #include <pops/mesh/layout/nd/box_array.hpp>
 #include <pops/mesh/layout/nd/distribution.hpp>
 
-#include <array>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -17,7 +17,7 @@
 namespace pops::amr::hierarchy::nd {
 
 template <int Dim>
-using RefinementRatio = std::array<int, Dim>;
+using RefinementRatio = ::pops::amr::nd::RefinementRatio<Dim>;
 
 namespace detail {
 
@@ -137,17 +137,13 @@ class LevelLayout {
       throw std::invalid_argument(
           "LevelLayout distribution does not authenticate its patch layout");
     detail::validate_ratio<Dim>(ratio_from_parent_);
-    bool refined_axis = false;
-    for (int axis = 0; axis < Dim; ++axis)
-      refined_axis = refined_axis || ratio_from_parent_[axis] > 1;
     if (level_ == 0) {
-      for (int axis = 0; axis < Dim; ++axis)
-        if (ratio_from_parent_[axis] != 1)
-          throw std::invalid_argument("LevelLayout level zero must use the identity ratio");
+      if (!ratio_from_parent_.is_identity())
+        throw std::invalid_argument("LevelLayout level zero must use the identity ratio");
       if (!patches_.tiles_exactly(domain_, budget))
         throw std::invalid_argument("LevelLayout level zero patches must exactly tile the domain");
     } else {
-      if (!refined_axis)
+      if (!ratio_from_parent_.refines_any_axis())
         throw std::invalid_argument("a fine LevelLayout must refine at least one axis");
       if (!patches_.is_disjoint_within(domain_, budget))
         throw std::invalid_argument(

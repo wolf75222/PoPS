@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <pops/amr/hierarchy/nd/level_layout.hpp>
 #include <pops/amr/transfer/nd/transfer_provider.hpp>
 
 #include <array>
@@ -256,12 +257,17 @@ void expect_negative_offset_ghost_interpolation() {
 }  // namespace
 
 TEST(test_nd_transfer, anisotropic_ratios_validate_once_and_fail_closed) {
+  const RefinementRatio<3> identity{};
+  EXPECT_TRUE(identity.is_identity());
+  EXPECT_FALSE(identity.refines_any_axis());
+  EXPECT_EQ(identity.child_count(), 1);
+  EXPECT_EQ((RefinementRatio<3>{1, 1, 1}), identity);
   EXPECT_EQ((RefinementRatio<1>{3}.child_count()), 3);
   EXPECT_EQ((RefinementRatio<2>{2, 3}.child_count()), 6);
   EXPECT_EQ((RefinementRatio<3>{2, 1, 3}.child_count()), 6);
+  EXPECT_TRUE((RefinementRatio<3>{2, 1, 3}.refines_any_axis()));
   EXPECT_THROW((void)(RefinementRatio<1>{0}), std::invalid_argument);
   EXPECT_THROW((void)(RefinementRatio<2>{2, -1}), std::invalid_argument);
-  EXPECT_THROW((void)(RefinementRatio<3>{1, 1, 1}), std::invalid_argument);
   EXPECT_THROW(
       (void)(RefinementRatio<3>{std::numeric_limits<int>::max(), std::numeric_limits<int>::max(),
                                 std::numeric_limits<int>::max()}),
@@ -269,6 +275,8 @@ TEST(test_nd_transfer, anisotropic_ratios_validate_once_and_fail_closed) {
 }
 
 TEST(test_nd_transfer, prepared_contract_is_fixed_size_and_reports_exact_capabilities) {
+  static_assert(std::is_same_v<pops::amr::hierarchy::nd::RefinementRatio<3>,
+                               pops::amr::transfer::nd::RefinementRatio<3>>);
   static_assert(std::is_trivially_copyable_v<PreparedTransfer<1>>);
   static_assert(std::is_trivially_copyable_v<PreparedTransfer<2>>);
   static_assert(std::is_trivially_copyable_v<PreparedTransfer<3>>);
@@ -317,6 +325,9 @@ TEST(test_nd_transfer, preparation_rejects_missing_stencils_components_aliases_a
 
   const Box<2> source_with_halo{Index<2>{-1, -1}, Index<2>{2, 2}};
   HostField<2> valid_source(source_with_halo, 1);
+  EXPECT_THROW((void)linear.prepare(valid_source.const_view(), fine.view(), fine_region,
+                                    RefinementRatio<2>{1, 1}, mapping),
+               std::invalid_argument);
   EXPECT_THROW((void)linear.prepare(valid_source.const_view(), fine.view(), fine_region, ratio,
                                     mapping, ComponentRange{0, 0, 2}),
                std::invalid_argument);

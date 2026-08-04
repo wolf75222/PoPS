@@ -38,7 +38,6 @@ template <int Dim>
 nd::LevelLayout<Dim> replicated_level(const Box<Dim>& domain, const mesh::BoxArray<Dim>& patches,
                                       const mesh::RankSpace<Dim>& ranks) {
   nd::RefinementRatio<Dim> ratio{};
-  ratio.fill(1);
   return nd::LevelLayout<Dim>(0, domain, patches,
                               mesh::Distribution<Dim>::replicated(patches, ranks), ratio,
                               kLayoutBudget);
@@ -184,7 +183,8 @@ TEST(test_nd_cluster, partitioned_shards_are_canonicalized_and_exactly_authentic
   const mesh::RankSpace<2> ranks{Index<2>{10, -2}, Extent<2>{3, 1}};
   const auto distribution =
       mesh::Distribution<2>::partitioned(patches, ranks, {Index<2>{10, -2}, Index<2>{11, -2}});
-  const nd::LevelLayout<2> level(0, domain, patches, distribution, {1, 1}, kLayoutBudget);
+  const nd::LevelLayout<2> level(0, domain, patches, distribution, nd::RefinementRatio<2>{1, 1},
+                                 kLayoutBudget);
   nd::TagMask<2> left(level, Index<2>{10, -2}, tag_budget(2, 1, 16, 16));
   nd::TagMask<2> right(level, Index<2>{11, -2}, tag_budget(2, 1, 16, 16));
   nd::TagMask<2> empty_rank(level, Index<2>{12, -2}, tag_budget(2, 0, 16, 0));
@@ -209,8 +209,8 @@ TEST(test_nd_cluster, partitioned_shards_are_canonicalized_and_exactly_authentic
 
   const auto reversed_distribution =
       mesh::Distribution<2>::partitioned(patches, ranks, {Index<2>{11, -2}, Index<2>{10, -2}});
-  const nd::LevelLayout<2> other_level(0, domain, patches, reversed_distribution, {1, 1},
-                                       kLayoutBudget);
+  const nd::LevelLayout<2> other_level(0, domain, patches, reversed_distribution,
+                                       nd::RefinementRatio<2>{1, 1}, kLayoutBudget);
   nd::TagMask<2> other(other_level, Index<2>{10, -2}, tag_budget(2, 1, 16, 16));
   const std::vector<nd::TagMask<2>> mismatched{left, other, empty_rank};
   EXPECT_THROW((void)provider.cluster(mismatched, options<2>({1, 1}, {4, 4})),

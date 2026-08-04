@@ -38,8 +38,8 @@ TEST(test_nd_hierarchy_plan, one_dimensional_nonzero_origin_and_ratio_are_exact)
   const mesh::BoxArray<1> coarse_patches =
       mesh::BoxArray<1>::from_domain(coarse_domain, std::array<int, 1>{4});
   const mesh::RankSpace<1> ranks{Index<1>{-2}, Extent<1>{2}};
-  const auto coarse =
-      make_level<1>(0, coarse_domain, coarse_patches, ranks, {Index<1>{-2}, Index<1>{-1}}, {1});
+  const auto coarse = make_level<1>(0, coarse_domain, coarse_patches, ranks,
+                                    {Index<1>{-2}, Index<1>{-1}}, nd::RefinementRatio<1>{1});
 
   const nd::RefinementRatio<1> ratio{3};
   const Box<1> fine_domain = nd::refine_box(coarse_domain, ratio);
@@ -62,7 +62,8 @@ TEST(test_nd_hierarchy_plan, anisotropic_two_and_three_dimensional_levels_are_va
   const mesh::RankSpace<2> plane_ranks{Index<2>{5, -2}, Extent<2>{2, 1}};
   const auto plane_coarse =
       make_level<2>(0, plane_domain, plane_patches, plane_ranks,
-                    {Index<2>{5, -2}, Index<2>{6, -2}, Index<2>{5, -2}, Index<2>{6, -2}}, {1, 1});
+                    {Index<2>{5, -2}, Index<2>{6, -2}, Index<2>{5, -2}, Index<2>{6, -2}},
+                    nd::RefinementRatio<2>{1, 1});
   const nd::RefinementRatio<2> plane_ratio{2, 3};
   const Box<2> plane_fine_patch =
       nd::refine_box(Box<2>{Index<2>{-1, 5}, Index<2>{0, 6}}, plane_ratio);
@@ -78,8 +79,9 @@ TEST(test_nd_hierarchy_plan, anisotropic_two_and_three_dimensional_levels_are_va
   const mesh::BoxArray<3> volume_patches =
       mesh::BoxArray<3>::from_domain(volume_domain, std::array<int, 3>{2, 2, 3});
   const mesh::RankSpace<3> volume_ranks{Index<3>{7, -3, 2}, Extent<3>{2, 1, 1}};
-  const auto volume_coarse = make_level<3>(0, volume_domain, volume_patches, volume_ranks,
-                                           {Index<3>{7, -3, 2}, Index<3>{8, -3, 2}}, {1, 1, 1});
+  const auto volume_coarse =
+      make_level<3>(0, volume_domain, volume_patches, volume_ranks,
+                    {Index<3>{7, -3, 2}, Index<3>{8, -3, 2}}, nd::RefinementRatio<3>{1, 1, 1});
   const nd::RefinementRatio<3> volume_ratio{2, 1, 3};
   const Box<3> volume_fine_patch =
       nd::refine_box(Box<3>{Index<3>{-2, 3, 0}, Index<3>{-1, 4, 1}}, volume_ratio);
@@ -99,14 +101,16 @@ TEST(test_nd_hierarchy_plan, layout_and_hierarchy_refuse_invalid_contracts) {
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
   const auto distribution = mesh::Distribution<1>::partitioned(full, ranks, {Index<1>{0}});
 
-  EXPECT_THROW((void)nd::LevelLayout<1>(0, domain, full, distribution, {2}, kLayoutBudget),
+  EXPECT_THROW((void)nd::LevelLayout<1>(0, domain, full, distribution, nd::RefinementRatio<1>{2},
+                                        kLayoutBudget),
                std::invalid_argument);
-  EXPECT_THROW((void)nd::LevelLayout<1>(1, domain, full, distribution, {1}, kLayoutBudget),
+  EXPECT_THROW((void)nd::LevelLayout<1>(1, domain, full, distribution, nd::RefinementRatio<1>{1},
+                                        kLayoutBudget),
                std::invalid_argument);
   EXPECT_THROW(
       (void)nd::LevelLayout<1>(
           0, domain, mesh::BoxArray<1>(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{2}}}),
-          distribution, {1}, kLayoutBudget),
+          distribution, nd::RefinementRatio<1>{1}, kLayoutBudget),
       std::invalid_argument);
   EXPECT_THROW((void)nd::LevelLayout<1>(
                    0, domain, full,
@@ -114,24 +118,26 @@ TEST(test_nd_hierarchy_plan, layout_and_hierarchy_refuse_invalid_contracts) {
                        mesh::BoxArray<1>(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{1}},
                                                              Box<1>{Index<1>{2}, Index<1>{3}}}),
                        ranks, {Index<1>{0}, Index<1>{0}}),
-                   {1}, kLayoutBudget),
+                   nd::RefinementRatio<1>{1}, kLayoutBudget),
                std::invalid_argument);
-  EXPECT_THROW((void)nd::LevelLayout<1>(0, domain, full, distribution, {1},
+  EXPECT_THROW((void)nd::LevelLayout<1>(0, domain, full, distribution, nd::RefinementRatio<1>{1},
                                         mesh::BoxArrayValidationBudget{0, 0}),
                std::length_error);
 
-  const auto coarse = make_level<1>(0, domain, full, ranks, {Index<1>{0}}, {1});
+  const auto coarse =
+      make_level<1>(0, domain, full, ranks, {Index<1>{0}}, nd::RefinementRatio<1>{1});
   const Box<1> fine_domain = nd::refine_box(domain, nd::RefinementRatio<1>{2});
   const mesh::BoxArray<1> unaligned(std::vector<Box<1>>{Box<1>{Index<1>{1}, Index<1>{4}}});
-  const auto unaligned_level = make_level<1>(1, fine_domain, unaligned, ranks, {Index<1>{0}}, {2});
+  const auto unaligned_level =
+      make_level<1>(1, fine_domain, unaligned, ranks, {Index<1>{0}}, nd::RefinementRatio<1>{2});
   EXPECT_THROW((void)nd::HierarchyPlan<1>({coarse, unaligned_level}, kHierarchyBudget),
                std::invalid_argument);
 
   const mesh::RankSpace<1> changed_ranks{Index<1>{1}, Extent<1>{1}};
   const mesh::BoxArray<1> aligned(std::vector<Box<1>>{
       nd::refine_box(Box<1>{Index<1>{0}, Index<1>{1}}, nd::RefinementRatio<1>{2})});
-  const auto changed_space =
-      make_level<1>(1, fine_domain, aligned, changed_ranks, {Index<1>{1}}, {2});
+  const auto changed_space = make_level<1>(1, fine_domain, aligned, changed_ranks, {Index<1>{1}},
+                                           nd::RefinementRatio<1>{2});
   EXPECT_THROW((void)nd::HierarchyPlan<1>({coarse, changed_space}, kHierarchyBudget),
                std::invalid_argument);
   EXPECT_THROW((void)nd::HierarchyPlan<1>({coarse}, nd::HierarchyValidationBudget{0, 0}),
@@ -153,18 +159,22 @@ TEST(test_nd_hierarchy_plan, sparse_parent_coverage_and_nonconsecutive_levels_fa
   const Box<1> coarse_domain{Index<1>{0}, Index<1>{3}};
   const mesh::BoxArray<1> coarse_patches(std::vector<Box<1>>{coarse_domain});
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
-  const auto coarse = make_level<1>(0, coarse_domain, coarse_patches, ranks, {Index<1>{0}}, {1});
+  const auto coarse = make_level<1>(0, coarse_domain, coarse_patches, ranks, {Index<1>{0}},
+                                    nd::RefinementRatio<1>{1});
 
   const Box<1> level_one_domain = nd::refine_box(coarse_domain, nd::RefinementRatio<1>{2});
   const mesh::BoxArray<1> sparse_one(std::vector<Box<1>>{Box<1>{Index<1>{0}, Index<1>{3}}});
-  const auto level_one = make_level<1>(1, level_one_domain, sparse_one, ranks, {Index<1>{0}}, {2});
+  const auto level_one = make_level<1>(1, level_one_domain, sparse_one, ranks, {Index<1>{0}},
+                                       nd::RefinementRatio<1>{2});
   const Box<1> level_two_domain = nd::refine_box(level_one_domain, nd::RefinementRatio<1>{2});
   const mesh::BoxArray<1> uncovered(std::vector<Box<1>>{Box<1>{Index<1>{8}, Index<1>{11}}});
-  const auto level_two = make_level<1>(2, level_two_domain, uncovered, ranks, {Index<1>{0}}, {2});
+  const auto level_two = make_level<1>(2, level_two_domain, uncovered, ranks, {Index<1>{0}},
+                                       nd::RefinementRatio<1>{2});
   EXPECT_THROW((void)nd::HierarchyPlan<1>({coarse, level_one, level_two}, kHierarchyBudget),
                std::invalid_argument);
 
-  const auto mislabeled = make_level<1>(2, level_one_domain, sparse_one, ranks, {Index<1>{0}}, {2});
+  const auto mislabeled = make_level<1>(2, level_one_domain, sparse_one, ranks, {Index<1>{0}},
+                                        nd::RefinementRatio<1>{2});
   EXPECT_THROW((void)nd::HierarchyPlan<1>({coarse, mislabeled}, kHierarchyBudget),
                std::invalid_argument);
   EXPECT_THROW((void)nd::HierarchyPlan<1>({coarse, level_one}, nd::HierarchyValidationBudget{2, 0}),
@@ -175,15 +185,16 @@ TEST(test_nd_hierarchy_plan, exact_identity_tracks_order_ownership_and_replaceme
   const Box<1> domain{Index<1>{-2}, Index<1>{1}};
   const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
   const mesh::RankSpace<1> ranks{Index<1>{4}, Extent<1>{2}};
-  const auto left_owned = make_level<1>(0, domain, patches, ranks, {Index<1>{4}, Index<1>{5}}, {1});
-  const auto right_owned =
-      make_level<1>(0, domain, patches, ranks, {Index<1>{5}, Index<1>{4}}, {1});
+  const auto left_owned = make_level<1>(0, domain, patches, ranks, {Index<1>{4}, Index<1>{5}},
+                                        nd::RefinementRatio<1>{1});
+  const auto right_owned = make_level<1>(0, domain, patches, ranks, {Index<1>{5}, Index<1>{4}},
+                                         nd::RefinementRatio<1>{1});
   const nd::HierarchyPlan<1> left_plan({left_owned}, kHierarchyBudget);
   const nd::HierarchyPlan<1> right_plan({right_owned}, kHierarchyBudget);
   EXPECT_NE(left_plan.exact_identity(), right_plan.exact_identity());
   const mesh::BoxArray<1> reordered_patches(std::vector<Box<1>>{patches[1], patches[0]});
-  const auto reordered =
-      make_level<1>(0, domain, reordered_patches, ranks, {Index<1>{5}, Index<1>{4}}, {1});
+  const auto reordered = make_level<1>(0, domain, reordered_patches, ranks,
+                                       {Index<1>{5}, Index<1>{4}}, nd::RefinementRatio<1>{1});
   const nd::HierarchyPlan<1> reordered_plan({reordered}, kHierarchyBudget);
   EXPECT_NE(left_plan.exact_identity(), reordered_plan.exact_identity());
 
@@ -194,7 +205,8 @@ TEST(test_nd_hierarchy_plan, exact_identity_tracks_order_ownership_and_replaceme
   const Box<1> fine_domain = nd::refine_box(domain, nd::RefinementRatio<1>{2});
   const mesh::BoxArray<1> fine_patches(std::vector<Box<1>>{
       nd::refine_box(Box<1>{Index<1>{-2}, Index<1>{-1}}, nd::RefinementRatio<1>{2})});
-  const auto fine = make_level<1>(1, fine_domain, fine_patches, ranks, {Index<1>{4}}, {2});
+  const auto fine =
+      make_level<1>(1, fine_domain, fine_patches, ranks, {Index<1>{4}}, nd::RefinementRatio<1>{2});
   const nd::HierarchyPlan<1> appended = left_plan.with_level(fine);
   ASSERT_EQ(appended.num_levels(), 2U);
   EXPECT_EQ(appended.level(0).exact_identity(), left_owned.exact_identity());
@@ -205,13 +217,14 @@ TEST(test_nd_hierarchy_plan, exact_identity_tracks_order_ownership_and_replaceme
   const Box<1> finer_domain = nd::refine_box(fine_domain, nd::RefinementRatio<1>{2});
   const mesh::BoxArray<1> finer_patches(
       std::vector<Box<1>>{nd::refine_box(fine_patches[0], nd::RefinementRatio<1>{2})});
-  const auto finer = make_level<1>(2, finer_domain, finer_patches, ranks, {Index<1>{4}}, {2});
+  const auto finer = make_level<1>(2, finer_domain, finer_patches, ranks, {Index<1>{4}},
+                                   nd::RefinementRatio<1>{2});
   const nd::HierarchyPlan<1> three_levels({left_owned, fine, finer}, kHierarchyBudget);
 
   const mesh::BoxArray<1> replacement_patches(std::vector<Box<1>>{
       nd::refine_box(Box<1>{Index<1>{0}, Index<1>{1}}, nd::RefinementRatio<1>{2})});
-  const auto replacement =
-      make_level<1>(1, fine_domain, replacement_patches, ranks, {Index<1>{5}}, {2});
+  const auto replacement = make_level<1>(1, fine_domain, replacement_patches, ranks, {Index<1>{5}},
+                                         nd::RefinementRatio<1>{2});
   const nd::HierarchyPlan<1> truncated = three_levels.with_level(replacement);
   ASSERT_EQ(truncated.num_levels(), 2U);
   EXPECT_EQ(truncated.level(1).exact_identity(), replacement.exact_identity());

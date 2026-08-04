@@ -358,6 +358,9 @@ class TransferProvider {
                                 IndexMapping<Dim> mapping = {},
                                 ComponentRange components = {}) const {
     require_supported_route();
+    if (!ratio.refines_any_axis())
+      throw std::invalid_argument(
+          "prepared ND transfer requires a non-identity inter-level refinement ratio");
     const auto source_view = detail::validate_view(source);
     const auto destination_view = detail::validate_view(destination);
     if (destination_region.empty() || !destination_view.box.contains(destination_region))

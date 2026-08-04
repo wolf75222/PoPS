@@ -42,7 +42,8 @@ TEST(test_nd_tag_mask, partitioned_storage_contains_only_owned_patches) {
   const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
   const mesh::RankSpace<1> ranks{Index<1>{10}, Extent<1>{2}};
   const auto level = make_partitioned_level<1>(
-      0, domain, patches, ranks, {Index<1>{10}, Index<1>{11}, Index<1>{10}, Index<1>{11}}, {1});
+      0, domain, patches, ranks, {Index<1>{10}, Index<1>{11}, Index<1>{10}, Index<1>{11}},
+      nd::RefinementRatio<1>{1});
   nd::TagMask<1> mask(level, Index<1>{10}, tag_budget(4, 2, 2, 4));
 
   ASSERT_EQ(mask.local_patch_count(), 2U);
@@ -63,8 +64,8 @@ TEST(test_nd_tag_mask, all_storage_dimensions_honor_nonzero_origins_and_axis_zer
   const Box<2> plane{Index<2>{-2, 5}, Index<2>{0, 6}};
   const mesh::BoxArray<2> plane_patches(std::vector<Box<2>>{plane});
   const mesh::RankSpace<2> plane_ranks{Index<2>{3, -1}, Extent<2>{1, 1}};
-  const auto plane_level =
-      make_partitioned_level<2>(0, plane, plane_patches, plane_ranks, {Index<2>{3, -1}}, {1, 1});
+  const auto plane_level = make_partitioned_level<2>(
+      0, plane, plane_patches, plane_ranks, {Index<2>{3, -1}}, nd::RefinementRatio<2>{1, 1});
   nd::TagMask<2> plane_mask(plane_level, Index<2>{3, -1}, tag_budget(1, 1, 6, 6));
   plane_mask.set(Index<2>{-2, 5});
   plane_mask.set(Index<2>{0, 5});
@@ -76,8 +77,9 @@ TEST(test_nd_tag_mask, all_storage_dimensions_honor_nonzero_origins_and_axis_zer
   const Box<3> volume{Index<3>{4, -2, 7}, Index<3>{5, 0, 8}};
   const mesh::BoxArray<3> volume_patches(std::vector<Box<3>>{volume});
   const mesh::RankSpace<3> volume_ranks{Index<3>{-3, 2, 1}, Extent<3>{1, 1, 1}};
-  const auto volume_level = make_partitioned_level<3>(0, volume, volume_patches, volume_ranks,
-                                                      {Index<3>{-3, 2, 1}}, {1, 1, 1});
+  const auto volume_level =
+      make_partitioned_level<3>(0, volume, volume_patches, volume_ranks, {Index<3>{-3, 2, 1}},
+                                nd::RefinementRatio<3>{1, 1, 1});
   nd::TagMask<3> volume_mask(volume_level, Index<3>{-3, 2, 1}, tag_budget(1, 1, 12, 12));
   volume_mask.set(Index<3>{5, -1, 8});
   EXPECT_EQ(volume_mask.count(), 1U);
@@ -88,8 +90,8 @@ TEST(test_nd_tag_mask, explicit_metadata_cell_byte_and_identity_budgets_fail_clo
   const Box<1> domain{Index<1>{0}, Index<1>{7}};
   const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, std::array<int, 1>{4});
   const mesh::RankSpace<1> ranks{Index<1>{0}, Extent<1>{1}};
-  const auto level =
-      make_partitioned_level<1>(0, domain, patches, ranks, {Index<1>{0}, Index<1>{0}}, {1});
+  const auto level = make_partitioned_level<1>(
+      0, domain, patches, ranks, {Index<1>{0}, Index<1>{0}}, nd::RefinementRatio<1>{1});
 
   EXPECT_THROW(
       (void)nd::TagMask<1>(level, Index<1>{0}, nd::TagMaskBudget{1, 2, 4, 8, 8, kIdentityBudget}),
@@ -115,8 +117,8 @@ TEST(test_nd_tag_mask, exact_identity_tracks_rank_patch_topology_and_tag_bits) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
   const mesh::BoxArray<1> patches = mesh::BoxArray<1>::from_domain(domain, std::array<int, 1>{2});
   const mesh::RankSpace<1> ranks{Index<1>{4}, Extent<1>{2}};
-  const auto level =
-      make_partitioned_level<1>(0, domain, patches, ranks, {Index<1>{4}, Index<1>{5}}, {1});
+  const auto level = make_partitioned_level<1>(
+      0, domain, patches, ranks, {Index<1>{4}, Index<1>{5}}, nd::RefinementRatio<1>{1});
   nd::TagMask<1> first(level, Index<1>{4}, tag_budget(2, 1, 2, 2));
   nd::TagMask<1> same(level, Index<1>{4}, tag_budget(2, 1, 2, 2));
   EXPECT_EQ(first.exact_identity(), same.exact_identity());
