@@ -181,6 +181,7 @@ api pops/parallel/prepared_provider_consensus.hpp
 sdk-support pops/parallel/solve_report_consensus.hpp
 sdk-support pops/parallel/world_communicator.hpp
 api pops/parallel/load_balance.hpp
+api pops/parallel/ownership_plan.hpp
 api pops/parallel/prepared_load_balance.hpp
 api pops/physics/bricks/bricks.hpp
 api pops/physics/bricks/elliptic.hpp

@@ -5,11 +5,13 @@
 
 #include <pops/core/identity/prepared_provider_options.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/load_balance.hpp>
+#include <pops/parallel/ownership_plan.hpp>
 
-#include <cstdint>
 #include <array>
-#include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <map>
@@ -25,8 +27,57 @@
 namespace pops {
 
 using LoadBalanceWeights = std::span<const std::int64_t>;
-using PreparedLoadBalanceProvider =
-    PreparedProvider<DistributionMapping(const BoxArray&, int, LoadBalanceWeights)>;
+
+/// One compile-time-ranked provider result.  The provider returns the complete OwnershipPlan so
+/// neither prepared authority nor a later consumer reconstructs strategy metadata from owners.
+template <int Dim>
+using PreparedLoadBalanceProvider = PreparedProvider<parallel::OwnershipPlan<Dim>(
+    const mesh::BoxArray<Dim>&, const mesh::RankSpace<Dim>&, parallel::LoadBalancePreparationBudget,
+    LoadBalanceWeights)>;
+
+template <int Dim>
+class PreparedLoadBalanceAuthority;
+
+/// Authenticated result retained by hierarchy planning and later installation transactions.
+template <int Dim>
+class PreparedLoadBalanceResult {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "PreparedLoadBalanceResult only supports dimensions 1, 2, and 3");
+
+ public:
+  PreparedLoadBalanceResult(const PreparedLoadBalanceResult&) = default;
+  PreparedLoadBalanceResult(PreparedLoadBalanceResult&&) noexcept = default;
+  PreparedLoadBalanceResult& operator=(const PreparedLoadBalanceResult&) = delete;
+  PreparedLoadBalanceResult& operator=(PreparedLoadBalanceResult&&) = delete;
+
+  [[nodiscard]] const parallel::OwnershipPlan<Dim>& plan() const noexcept { return plan_; }
+  [[nodiscard]] std::string_view collective_contract() const noexcept {
+    return collective_contract_;
+  }
+  [[nodiscard]] std::string_view collective_context_contract() const noexcept {
+    return collective_context_contract_;
+  }
+  [[nodiscard]] std::string_view source_contract() const noexcept { return source_contract_; }
+  [[nodiscard]] std::string_view exact_contract() const noexcept { return exact_contract_; }
+
+ private:
+  friend class PreparedLoadBalanceAuthority<Dim>;
+
+  PreparedLoadBalanceResult(parallel::OwnershipPlan<Dim> plan, std::string collective_contract,
+                            std::string collective_context_contract, std::string source_contract,
+                            std::string exact_contract)
+      : plan_(std::move(plan)),
+        collective_contract_(std::move(collective_contract)),
+        collective_context_contract_(std::move(collective_context_contract)),
+        source_contract_(std::move(source_contract)),
+        exact_contract_(std::move(exact_contract)) {}
+
+  parallel::OwnershipPlan<Dim> plan_;
+  std::string collective_contract_;
+  std::string collective_context_contract_;
+  std::string source_contract_;
+  std::string exact_contract_;
+};
 
 /// Measured, topology-qualified resource cost for one AMR patch.
 ///
@@ -64,54 +115,76 @@ enum class RebalanceReason : std::uint8_t {
   NetBenefit = 3,
 };
 
-/// Immutable measured decision.  ``proposed_mapping`` is never silently applied; the hierarchy
-/// must consume it through its migration transaction when ``accepted`` is true.
-struct RebalanceDecision {
-  std::uint64_t topology_epoch = 0;
-  std::uint64_t materialization_generation = 0;
-  /// Exact prepared-authority, level, BoxArray and current-owner identity consumed by migration.
-  std::string source_contract;
-  DistributionMapping proposed_mapping;
-  RebalanceReason reason = RebalanceReason::EmptyHierarchy;
-  bool accepted = false;
-  std::int64_t moved_patches = 0;
-  std::int64_t migration_bytes = 0;
-  std::int64_t migration_nanoseconds = 0;
-  std::int64_t current_max_nanoseconds_per_step = 0;
-  std::int64_t proposed_max_nanoseconds_per_step = 0;
-  double current_imbalance = 1.0;
-  double proposed_imbalance = 1.0;
-  double predicted_net_speedup = 1.0;
-  std::string exact_contract;
-};
-
 namespace detail {
 
-inline std::string exact_load_balance_request(const BoxArray& boxes, int rank_count,
-                                              LoadBalanceWeights weights) {
+template <int Dim>
+inline std::string exact_load_balance_collective(
+    std::string_view semantic_identity, std::string_view provider_collective_contract,
+    const std::optional<RebalancePolicy>& default_rebalance_policy) {
   ExactContractBuilder contract;
-  contract.text("pops.load-balance-request")
-      .scalar(std::uint32_t{1})
-      .scalar(static_cast<std::int32_t>(rank_count))
-      .scalar(static_cast<std::int32_t>(boxes.size()))
-      .scalar(static_cast<std::uint8_t>(weights.empty() ? 0 : 1));
-  for (int index = 0; index < boxes.size(); ++index) {
-    const Box2D& box = boxes[index];
-    contract.scalar(static_cast<std::int32_t>(box.lo[0]))
-        .scalar(static_cast<std::int32_t>(box.lo[1]))
-        .scalar(static_cast<std::int32_t>(box.hi[0]))
-        .scalar(static_cast<std::int32_t>(box.hi[1]));
+  contract.text("pops.prepared-load-balance-collective")
+      .scalar(std::uint32_t{2})
+      .scalar(static_cast<std::uint32_t>(Dim))
+      .text(semantic_identity)
+      .bytes(provider_collective_contract)
+      .scalar(static_cast<std::uint8_t>(default_rebalance_policy.has_value() ? 1 : 0));
+  if (default_rebalance_policy) {
+    contract.scalar(default_rebalance_policy->minimum_improvement_ppm)
+        .scalar(default_rebalance_policy->amortization_steps)
+        .scalar(default_rebalance_policy->migration_bandwidth_bytes_per_second)
+        .scalar(default_rebalance_policy->per_patch_migration_latency_nanoseconds);
   }
-  contract.sequence(weights);
   return std::move(contract).release();
 }
 
-inline std::string exact_load_balance_mapping(const DistributionMapping& mapping) {
+inline std::string exact_load_balance_collective_context(const ExecutionLane& lane) {
+  if (lane.identity().empty())
+    throw std::invalid_argument("prepared load-balance execution lane identity is empty");
+#ifdef POPS_HAS_MPI
+  if (!lane.active())
+    throw std::invalid_argument("prepared load-balance execution lane is inactive");
+#endif
+  const int communicator_size = lane.size();
+  if (communicator_size <= 0)
+    throw std::invalid_argument("prepared load-balance execution lane has no ranks");
+
   ExactContractBuilder contract;
-  contract.text("pops.load-balance-mapping").scalar(std::uint32_t{1});
-  contract.scalar(static_cast<std::int32_t>(mapping.size()));
-  for (const int owner : mapping.ranks())
-    contract.scalar(static_cast<std::int32_t>(owner));
+  contract.text("pops.prepared-load-balance-collective-context")
+      .scalar(std::uint32_t{1})
+      .text(lane.identity())
+      .scalar(static_cast<std::uint64_t>(communicator_size))
+      .scalar(static_cast<std::uint8_t>(lane.owns_communicator() ? 1 : 0))
+      .text("process-world-rank-order");
+  return std::move(contract).release();
+}
+
+template <int Dim>
+inline std::string exact_load_balance_source(std::string_view collective_contract,
+                                             std::string_view collective_context_contract,
+                                             const mesh::BoxArray<Dim>& patches,
+                                             const mesh::RankSpace<Dim>& rank_space,
+                                             parallel::LoadBalancePreparationBudget budget,
+                                             LoadBalanceWeights weights) {
+  ExactContractBuilder contract;
+  contract.text("pops.prepared-load-balance-source")
+      .scalar(std::uint32_t{2})
+      .scalar(static_cast<std::uint32_t>(Dim))
+      .bytes(collective_contract)
+      .bytes(collective_context_contract)
+      .scalar(static_cast<std::uint64_t>(budget.patches))
+      .scalar(static_cast<std::uint64_t>(budget.ranks))
+      .scalar(budget.total_weight)
+      .sequence(patches.boxes(), [](ExactContractBuilder& item, const Box<Dim>& patch) {
+        for (int axis = 0; axis < Dim; ++axis)
+          item.scalar(static_cast<std::int32_t>(patch.lo[axis]))
+              .scalar(static_cast<std::int32_t>(patch.hi[axis]));
+      });
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(static_cast<std::int32_t>(rank_space.origin()[axis]))
+        .scalar(static_cast<std::int64_t>(rank_space.extent()[axis]));
+  contract.scalar(static_cast<std::uint64_t>(rank_space.size()))
+      .scalar(static_cast<std::uint8_t>(weights.empty() ? 0 : 1))
+      .sequence(weights);
   return std::move(contract).release();
 }
 
@@ -121,126 +194,131 @@ inline std::int64_t checked_add_cost(std::int64_t lhs, std::int64_t rhs, std::st
   return lhs + rhs;
 }
 
-inline std::int64_t estimate_weight(const ResourceEstimate& estimate, std::uint64_t topology_epoch,
-                                    std::uint64_t materialization_generation) {
-  if (estimate.topology_epoch != topology_epoch ||
-      estimate.materialization_generation != materialization_generation)
-    throw std::invalid_argument("load-balance resource estimate is stale for the live topology");
-  if (estimate.samples <= 0 || estimate.cell_updates <= 0 || estimate.compute_nanoseconds < 0 ||
-      estimate.memory_bytes < 0 || estimate.communication_bytes < 0 ||
-      estimate.communication_nanoseconds < 0 || estimate.resident_bytes <= 0)
-    throw std::invalid_argument("load-balance resource estimate is incomplete or negative");
-  const std::int64_t total =
-      checked_add_cost(estimate.compute_nanoseconds, estimate.communication_nanoseconds,
-                       "load-balance measured time");
-  if (total <= 0)
-    throw std::invalid_argument("load-balance resource estimate has no measured time");
-  const std::int64_t quotient = total / estimate.samples;
-  const std::int64_t remainder = total % estimate.samples;
-  return checked_add_cost(quotient, remainder == 0 ? 0 : 1, "load-balance per-sample weight");
-}
+template <int Dim>
+inline void validate_prepared_load_balance_request(const mesh::BoxArray<Dim>& patches,
+                                                   const mesh::RankSpace<Dim>& rank_space,
+                                                   parallel::LoadBalancePreparationBudget budget,
+                                                   LoadBalanceWeights weights,
+                                                   int communicator_size) {
+  if (communicator_size <= 0 || rank_space.empty() ||
+      rank_space.size() != static_cast<std::size_t>(communicator_size))
+    throw std::invalid_argument(
+        "prepared load-balance rank space must equal the execution communicator");
+  if (budget.patches == 0 || budget.ranks == 0 || budget.total_weight <= 0)
+    throw std::invalid_argument("prepared load-balance budgets must be strictly positive");
+  if (patches.size() > budget.patches)
+    throw std::length_error("prepared load-balance patch count exceeds its budget");
+  if (rank_space.size() > budget.ranks)
+    throw std::length_error("prepared load-balance rank count exceeds its budget");
+  if (!weights.empty() && weights.size() != patches.size())
+    throw std::invalid_argument("prepared load-balance weight count must equal its patch count");
 
-inline std::string exact_rebalance_request(const DistributionMapping& current,
-                                           std::uint64_t topology_epoch,
-                                           std::uint64_t materialization_generation,
-                                           ResourceEstimates estimates,
-                                           const RebalancePolicy& policy) {
-  ExactContractBuilder contract;
-  contract.text("pops.rebalance-request")
-      .scalar(std::uint32_t{1})
-      .scalar(topology_epoch)
-      .scalar(materialization_generation)
-      .scalar(policy.minimum_improvement_ppm)
-      .scalar(policy.amortization_steps)
-      .scalar(policy.migration_bandwidth_bytes_per_second)
-      .scalar(policy.per_patch_migration_latency_nanoseconds)
-      .sequence(current.ranks());
-  contract.scalar(static_cast<std::uint64_t>(estimates.size()));
-  for (const ResourceEstimate& estimate : estimates) {
-    contract.scalar(estimate.topology_epoch)
-        .scalar(estimate.materialization_generation)
-        .scalar(estimate.samples)
-        .scalar(estimate.cell_updates)
-        .scalar(estimate.compute_nanoseconds)
-        .scalar(estimate.memory_bytes)
-        .scalar(estimate.communication_bytes)
-        .scalar(estimate.communication_nanoseconds)
-        .scalar(estimate.resident_bytes);
+  std::int64_t total_weight = 0;
+  for (std::size_t patch = 0; patch < patches.size(); ++patch) {
+    if (patches[patch].empty())
+      throw std::invalid_argument("prepared load-balance layouts cannot contain empty patches");
+    const std::int64_t weight = weights.empty() ? patches[patch].numPts() : weights[patch];
+    if (weight <= 0)
+      throw std::invalid_argument("prepared load-balance weights must be strictly positive");
+    if (weight > std::numeric_limits<std::int64_t>::max() - total_weight)
+      throw std::overflow_error("prepared load-balance total weight exceeds int64_t");
+    if (weight > budget.total_weight - total_weight)
+      throw std::length_error("prepared load-balance total weight exceeds its budget");
+    total_weight += weight;
   }
-  return std::move(contract).release();
 }
 
-inline std::string exact_rebalance_source(std::string_view authority_identity,
-                                          std::string_view authority_collective_contract,
-                                          int source_level, int source_rank_count,
-                                          std::uint64_t topology_epoch,
-                                          std::uint64_t materialization_generation,
-                                          const BoxArray& source_boxes,
-                                          const DistributionMapping& source_mapping) {
-  ExactContractBuilder contract;
-  contract.text("pops.rebalance-source")
-      .scalar(std::uint32_t{1})
-      .text(authority_identity)
-      .text(authority_collective_contract)
-      .scalar(source_level)
-      .scalar(source_rank_count)
-      .scalar(topology_epoch)
-      .scalar(materialization_generation)
-      .scalar(static_cast<std::uint64_t>(source_boxes.size()));
-  for (const Box2D& box : source_boxes.boxes())
-    contract.scalar(box.lo[0]).scalar(box.lo[1]).scalar(box.hi[0]).scalar(box.hi[1]);
-  contract.sequence(source_mapping.ranks());
-  return std::move(contract).release();
-}
+template <int Dim>
+inline void validate_prepared_load_balance_plan(const parallel::OwnershipPlan<Dim>& plan,
+                                                const mesh::BoxArray<Dim>& patches,
+                                                const mesh::RankSpace<Dim>& rank_space,
+                                                LoadBalanceWeights supplied_weights) {
+  const auto& distribution = plan.distribution();
+  if (!distribution.matches_layout(patches) || distribution.rank_space() != rank_space ||
+      distribution.mode() != mesh::DistributionMode::partitioned)
+    throw std::invalid_argument(
+        "prepared load-balance provider returned a distribution for another source");
 
-inline std::int64_t maximum_rank_cost(const DistributionMapping& mapping, int rank_count,
-                                      LoadBalanceWeights weights) {
-  std::vector<std::int64_t> costs(static_cast<std::size_t>(rank_count), 0);
-  for (int index = 0; index < mapping.size(); ++index) {
-    const int owner = mapping[index];
-    if (owner < 0 || owner >= rank_count)
-      throw std::invalid_argument("rebalance mapping contains an invalid owner rank");
-    costs[static_cast<std::size_t>(owner)] = checked_add_cost(
-        costs[static_cast<std::size_t>(owner)], weights[static_cast<std::size_t>(index)],
-        "rebalance per-rank measured cost");
+  const std::size_t patch_count = patches.size();
+  const std::size_t rank_count = rank_space.size();
+  if (distribution.owners().size() != patch_count || plan.weights().size() != patch_count ||
+      plan.linear_owners().size() != patch_count || plan.traversal().size() != patch_count ||
+      plan.linear_rank_loads().size() != rank_count)
+    throw std::invalid_argument(
+        "prepared load-balance provider returned inconsistent plan cardinalities");
+  if (plan.strategy() != parallel::LoadBalanceStrategy::space_filling_curve &&
+      plan.strategy() != parallel::LoadBalanceStrategy::weighted_lpt &&
+      plan.strategy() != parallel::LoadBalanceStrategy::round_robin)
+    throw std::invalid_argument("prepared load-balance provider returned an invalid strategy");
+
+  std::vector<char> traversed(patch_count, 0);
+  for (const std::size_t patch : plan.traversal()) {
+    if (patch >= patch_count || traversed[patch] != 0)
+      throw std::invalid_argument(
+          "prepared load-balance traversal must be one exact patch permutation");
+    traversed[patch] = 1;
   }
-  return costs.empty() ? 0 : *std::max_element(costs.begin(), costs.end());
+
+  std::vector<std::int64_t> rank_loads(rank_count, 0);
+  std::int64_t total_weight = 0;
+  for (std::size_t patch = 0; patch < patch_count; ++patch) {
+    const std::int64_t expected_weight =
+        supplied_weights.empty() ? patches[patch].numPts() : supplied_weights[patch];
+    if (plan.weights()[patch] != expected_weight)
+      throw std::invalid_argument(
+          "prepared load-balance provider changed an authenticated patch weight");
+    const std::size_t linear_owner = plan.linear_owners()[patch];
+    if (linear_owner >= rank_count ||
+        distribution.owners()[patch] != rank_space.coordinate(linear_owner))
+      throw std::invalid_argument(
+          "prepared load-balance spatial and linear owners are inconsistent");
+    rank_loads[linear_owner] = checked_add_cost(rank_loads[linear_owner], expected_weight,
+                                                "prepared load-balance rank load");
+    total_weight =
+        checked_add_cost(total_weight, expected_weight, "prepared load-balance total weight");
+  }
+  if (plan.linear_rank_loads() != rank_loads || plan.total_weight() != total_weight)
+    throw std::invalid_argument(
+        "prepared load-balance provider returned inconsistent retained loads");
 }
 
-inline std::int64_t migration_time_nanoseconds(std::int64_t bytes, std::int64_t moved_patches,
-                                               const RebalancePolicy& policy) {
-  if (bytes < 0 || moved_patches < 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
-      policy.per_patch_migration_latency_nanoseconds < 0)
-    throw std::invalid_argument("rebalance migration cost model is invalid");
-  const long double transfer =
-      std::ceil(static_cast<long double>(bytes) * 1.0e9L /
-                static_cast<long double>(policy.migration_bandwidth_bytes_per_second));
-  const long double latency =
-      static_cast<long double>(moved_patches) * policy.per_patch_migration_latency_nanoseconds;
-  const long double total = transfer + latency;
-  if (total > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
-    throw std::overflow_error("rebalance migration time exceeds int64_t");
-  return static_cast<std::int64_t>(total);
-}
-
-inline std::string exact_rebalance_decision(const RebalanceDecision& decision) {
+template <int Dim>
+inline std::string exact_load_balance_result(std::string_view source_contract,
+                                             const parallel::OwnershipPlan<Dim>& plan) {
+  const auto& distribution = plan.distribution();
   ExactContractBuilder contract;
-  contract.text("pops.rebalance-decision")
+  contract.text("pops.prepared-load-balance-result")
       .scalar(std::uint32_t{2})
-      .scalar(decision.topology_epoch)
-      .scalar(decision.materialization_generation)
-      .text(decision.source_contract)
-      .scalar(static_cast<std::uint8_t>(decision.reason))
-      .scalar(static_cast<std::uint8_t>(decision.accepted ? 1 : 0))
-      .scalar(decision.moved_patches)
-      .scalar(decision.migration_bytes)
-      .scalar(decision.migration_nanoseconds)
-      .scalar(decision.current_max_nanoseconds_per_step)
-      .scalar(decision.proposed_max_nanoseconds_per_step)
-      .scalar(decision.current_imbalance)
-      .scalar(decision.proposed_imbalance)
-      .scalar(decision.predicted_net_speedup)
-      .sequence(decision.proposed_mapping.ranks());
+      .scalar(static_cast<std::uint32_t>(Dim))
+      .bytes(source_contract)
+      .scalar(static_cast<std::uint8_t>(plan.strategy()))
+      .scalar(static_cast<std::uint8_t>(distribution.mode()))
+      .sequence(distribution.layout().boxes(),
+                [](ExactContractBuilder& item, const Box<Dim>& patch) {
+                  for (int axis = 0; axis < Dim; ++axis)
+                    item.scalar(static_cast<std::int32_t>(patch.lo[axis]))
+                        .scalar(static_cast<std::int32_t>(patch.hi[axis]));
+                });
+  for (int axis = 0; axis < Dim; ++axis)
+    contract.scalar(static_cast<std::int32_t>(distribution.rank_space().origin()[axis]))
+        .scalar(static_cast<std::int64_t>(distribution.rank_space().extent()[axis]));
+  contract.scalar(static_cast<std::uint64_t>(distribution.rank_space().size()))
+      .sequence(distribution.owners(),
+                [](ExactContractBuilder& item, const Index<Dim>& owner) {
+                  for (int axis = 0; axis < Dim; ++axis)
+                    item.scalar(static_cast<std::int32_t>(owner[axis]));
+                })
+      .sequence(plan.weights())
+      .sequence(plan.linear_owners(),
+                [](ExactContractBuilder& item, std::size_t owner) {
+                  item.scalar(static_cast<std::uint64_t>(owner));
+                })
+      .sequence(plan.linear_rank_loads())
+      .sequence(plan.traversal(),
+                [](ExactContractBuilder& item, std::size_t patch) {
+                  item.scalar(static_cast<std::uint64_t>(patch));
+                })
+      .scalar(plan.total_weight());
   return std::move(contract).release();
 }
 
@@ -308,27 +386,37 @@ inline RebalancePolicy measured_rebalance_policy(const PreparedProviderOptions& 
 
 struct SpaceFillingCurveLoadBalance {
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.load_balance.space_filling_curve", 1};
+    return {"pops.load_balance.space_filling_curve", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.text("space-filling-curve").scalar(std::uint32_t{1});
+    contract.text("space-filling-curve")
+        .scalar(std::uint32_t{2})
+        .text("compile-time-ranked-ownership-plan");
   }
-  DistributionMapping operator()(const BoxArray& boxes, int ranks,
-                                 LoadBalanceWeights weights) const {
-    return make_sfc_distribution(boxes, ranks, weights);
+  template <int Dim>
+  parallel::OwnershipPlan<Dim> operator()(const mesh::BoxArray<Dim>& patches,
+                                          const mesh::RankSpace<Dim>& rank_space,
+                                          parallel::LoadBalancePreparationBudget budget,
+                                          LoadBalanceWeights weights) const {
+    return parallel::LoadBalanceProvider<Dim>::space_filling_curve().prepare(patches, rank_space,
+                                                                             budget, weights);
   }
 };
 
 struct KnapsackLoadBalance {
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.load_balance.knapsack", 1};
+    return {"pops.load_balance.knapsack", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
-    contract.text("knapsack").scalar(std::uint32_t{1});
+    contract.text("knapsack").scalar(std::uint32_t{2}).text("compile-time-ranked-ownership-plan");
   }
-  DistributionMapping operator()(const BoxArray& boxes, int ranks,
-                                 LoadBalanceWeights weights) const {
-    return make_knapsack_distribution(boxes, ranks, weights);
+  template <int Dim>
+  parallel::OwnershipPlan<Dim> operator()(const mesh::BoxArray<Dim>& patches,
+                                          const mesh::RankSpace<Dim>& rank_space,
+                                          parallel::LoadBalancePreparationBudget budget,
+                                          LoadBalanceWeights weights) const {
+    return parallel::LoadBalanceProvider<Dim>::weighted_lpt().prepare(patches, rank_space, budget,
+                                                                      weights);
   }
 };
 
@@ -336,25 +424,30 @@ struct MeasuredKnapsackLoadBalance {
   RebalancePolicy policy;
 
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.load_balance.measured_knapsack", 1};
+    return {"pops.load_balance.measured_knapsack", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
     contract.text("measured-knapsack")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
+        .text("compile-time-ranked-ownership-plan")
         .scalar(policy.minimum_improvement_ppm)
         .scalar(policy.amortization_steps)
         .scalar(policy.migration_bandwidth_bytes_per_second)
         .scalar(policy.per_patch_migration_latency_nanoseconds);
   }
-  DistributionMapping operator()(const BoxArray& boxes, int ranks,
-                                 LoadBalanceWeights weights) const {
-    return make_knapsack_distribution(boxes, ranks, weights);
+  template <int Dim>
+  parallel::OwnershipPlan<Dim> operator()(const mesh::BoxArray<Dim>& patches,
+                                          const mesh::RankSpace<Dim>& rank_space,
+                                          parallel::LoadBalancePreparationBudget budget,
+                                          LoadBalanceWeights weights) const {
+    return parallel::LoadBalanceProvider<Dim>::weighted_lpt().prepare(patches, rank_space, budget,
+                                                                      weights);
   }
 };
 
 struct RoundRobinLoadBalance {
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
-    return {"pops.load_balance.round_robin", 1};
+    return {"pops.load_balance.round_robin", 2};
   }
   void serialize_exact_parameters(ExactContractBuilder& contract) const {
     // Round-robin is deliberately index based.  Supplied weights are still validated and enter the
@@ -362,100 +455,34 @@ struct RoundRobinLoadBalance {
     // chooses owners.  Keep that capability in the prepared identity so the behavior can neither be
     // mistaken for a weighted policy nor changed silently in a later implementation.
     contract.text("round-robin")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{2})
+        .text("compile-time-ranked-ownership-plan")
         .text("weights-authenticated-index-policy");
   }
-  DistributionMapping operator()(const BoxArray& boxes, int ranks,
-                                 LoadBalanceWeights weights) const {
-    return make_round_robin_distribution(boxes, ranks, weights);
+  template <int Dim>
+  parallel::OwnershipPlan<Dim> operator()(const mesh::BoxArray<Dim>& patches,
+                                          const mesh::RankSpace<Dim>& rank_space,
+                                          parallel::LoadBalancePreparationBudget budget,
+                                          LoadBalanceWeights weights) const {
+    return parallel::LoadBalanceProvider<Dim>::round_robin().prepare(patches, rank_space, budget,
+                                                                     weights);
   }
 };
 
 }  // namespace detail
 
-/// Evaluate one proposed ownership map without mutating hierarchy state.
+/// Immutable compile-time-ranked authority prepared before hierarchy materialization.
 ///
-/// This pure host routine is also the executable specification used by the collective authority and
-/// by migration transactions: every cost is measured, every estimate is tied to the live topology,
-/// and migration must be repaid over the declared horizon before adoption is allowed.
-inline RebalanceDecision make_rebalance_decision(
-    const BoxArray& boxes, const DistributionMapping& current, const DistributionMapping& proposed,
-    int rank_count, std::uint64_t topology_epoch, std::uint64_t materialization_generation,
-    ResourceEstimates estimates, const RebalancePolicy& policy, std::string source_contract) {
-  if (rank_count <= 0 || current.size() != boxes.size() || proposed.size() != boxes.size() ||
-      estimates.size() != static_cast<std::size_t>(boxes.size()) || source_contract.empty())
-    throw std::invalid_argument(
-        "rebalance mappings, estimates and source contract must match a positive-rank BoxArray");
-  if (policy.minimum_improvement_ppm < 0 || policy.minimum_improvement_ppm >= 1'000'000 ||
-      policy.amortization_steps <= 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
-      policy.per_patch_migration_latency_nanoseconds < 0)
-    throw std::invalid_argument("rebalance policy is outside its exact bounded envelope");
-
-  std::vector<std::int64_t> weights;
-  weights.reserve(estimates.size());
-  for (const ResourceEstimate& estimate : estimates)
-    weights.push_back(
-        detail::estimate_weight(estimate, topology_epoch, materialization_generation));
-
-  RebalanceDecision decision;
-  decision.topology_epoch = topology_epoch;
-  decision.materialization_generation = materialization_generation;
-  decision.source_contract = std::move(source_contract);
-  decision.proposed_mapping = proposed;
-  if (boxes.size() == 0) {
-    decision.reason = RebalanceReason::EmptyHierarchy;
-    decision.exact_contract = detail::exact_rebalance_decision(decision);
-    return decision;
-  }
-
-  decision.current_max_nanoseconds_per_step =
-      detail::maximum_rank_cost(current, rank_count, weights);
-  decision.proposed_max_nanoseconds_per_step =
-      detail::maximum_rank_cost(proposed, rank_count, weights);
-  decision.current_imbalance = load_imbalance(boxes, current, rank_count, weights);
-  decision.proposed_imbalance = load_imbalance(boxes, proposed, rank_count, weights);
-  for (int index = 0; index < boxes.size(); ++index) {
-    if (current[index] == proposed[index])
-      continue;
-    ++decision.moved_patches;
-    decision.migration_bytes = detail::checked_add_cost(
-        decision.migration_bytes, estimates[static_cast<std::size_t>(index)].resident_bytes,
-        "rebalance migration bytes");
-  }
-  decision.migration_nanoseconds =
-      detail::migration_time_nanoseconds(decision.migration_bytes, decision.moved_patches, policy);
-
-  const long double current_horizon =
-      static_cast<long double>(decision.current_max_nanoseconds_per_step) *
-      policy.amortization_steps;
-  const long double proposed_horizon =
-      static_cast<long double>(decision.proposed_max_nanoseconds_per_step) *
-          policy.amortization_steps +
-      decision.migration_nanoseconds;
-  if (!(current_horizon > 0.0L) || !(proposed_horizon > 0.0L))
-    throw std::invalid_argument("rebalance measured horizon must be strictly positive");
-  decision.predicted_net_speedup = static_cast<double>(current_horizon / proposed_horizon);
-  const long double required_fraction =
-      1.0L - static_cast<long double>(policy.minimum_improvement_ppm) / 1.0e6L;
-  decision.accepted =
-      decision.moved_patches > 0 && proposed_horizon <= current_horizon * required_fraction;
-  if (decision.moved_patches == 0)
-    decision.reason = RebalanceReason::MappingUnchanged;
-  else if (decision.accepted)
-    decision.reason = RebalanceReason::NetBenefit;
-  else
-    decision.reason = RebalanceReason::InsufficientNetBenefit;
-  decision.exact_contract = detail::exact_rebalance_decision(decision);
-  return decision;
-}
-
-/// Immutable authority prepared before hierarchy materialization.  Every invocation validates the
-/// same provider/request/result contract collectively; regrid consumers call this object directly
-/// and never inspect an implementation name.
+/// The provider is invoked exactly once.  Request provenance and every retained OwnershipPlan
+/// component are then authenticated collectively before the result can escape this method.
+template <int Dim>
 class PreparedLoadBalanceAuthority {
+  static_assert(Dim >= 1 && Dim <= 3,
+                "PreparedLoadBalanceAuthority only supports dimensions 1, 2, and 3");
+
  public:
   PreparedLoadBalanceAuthority(
-      std::string semantic_identity, PreparedLoadBalanceProvider provider,
+      std::string semantic_identity, PreparedLoadBalanceProvider<Dim> provider,
       std::optional<RebalancePolicy> default_rebalance_policy = std::nullopt)
       : semantic_identity_(std::move(semantic_identity)),
         provider_(std::move(provider)),
@@ -469,6 +496,8 @@ class PreparedLoadBalanceAuthority {
           policy.per_patch_migration_latency_nanoseconds < 0)
         throw std::invalid_argument("prepared load-balance default rebalance policy is invalid");
     }
+    collective_contract_ = detail::exact_load_balance_collective<Dim>(
+        semantic_identity_, provider_.collective_contract(), default_rebalance_policy_);
   }
 
   [[nodiscard]] const std::string& semantic_identity() const noexcept { return semantic_identity_; }
@@ -476,6 +505,9 @@ class PreparedLoadBalanceAuthority {
     return provider_.implementation();
   }
   [[nodiscard]] std::string_view collective_contract() const noexcept {
+    return collective_contract_;
+  }
+  [[nodiscard]] std::string_view provider_collective_contract() const noexcept {
     return provider_.collective_contract();
   }
   [[nodiscard]] bool has_default_rebalance_policy() const noexcept {
@@ -487,138 +519,70 @@ class PreparedLoadBalanceAuthority {
     return *default_rebalance_policy_;
   }
 
-  [[nodiscard]] DistributionMapping distribute(
-      const BoxArray& boxes, int rank_count, LoadBalanceWeights weights = {},
-      const CommunicatorView& communicator = world_communicator_view()) const {
-    std::string request_contract;
-    detail::collective_load_balance_preflight("load-balance request", communicator, [&] {
-      if (rank_count <= 0 || rank_count != communicator.size())
-        throw std::invalid_argument(
-            "load-balance rank count must equal the execution communicator size");
-      if (!weights.empty() && weights.size() != static_cast<std::size_t>(boxes.size()))
-        throw std::invalid_argument("load-balance weight count must equal the BoxArray size");
-      for (int index = 0; index < boxes.size(); ++index) {
-        if (boxes[index].empty())
-          throw std::invalid_argument("load-balance BoxArray contains an empty box");
-        if (!weights.empty() && weights[static_cast<std::size_t>(index)] <= 0)
-          throw std::invalid_argument("load-balance weights must be strictly positive");
-      }
-      request_contract = detail::exact_load_balance_request(boxes, rank_count, weights);
-    });
-
-    if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{semantic_identity_, provider_.collective_contract()}, {"request", request_contract}},
-            communicator))
-      throw std::invalid_argument(
-          "load-balance provider identity or request differs across MPI ranks");
-
-    std::optional<DistributionMapping> mapping;
-    detail::collective_load_balance_preflight("load-balance provider", communicator, [&] {
-      mapping.emplace(provider_(boxes, rank_count, weights));
-    });
-
-    std::string mapping_contract;
-    detail::collective_load_balance_preflight("load-balance mapping", communicator, [&] {
-      if (!mapping || mapping->size() != boxes.size())
-        throw std::invalid_argument("load-balance provider returned a mapping of the wrong size");
-      for (const int owner : mapping->ranks())
-        if (owner < 0 || owner >= rank_count)
-          throw std::invalid_argument("load-balance provider returned an invalid owner rank");
-      mapping_contract = detail::exact_load_balance_mapping(*mapping);
-    });
-    if (!all_ranks_agree_exact_ordered_byte_pairs({{semantic_identity_, mapping_contract}},
-                                                  communicator))
-      throw std::invalid_argument("load-balance provider returned different mappings across ranks");
-    return std::move(*mapping);
-  }
-
-  /// Produce one collective, topology-qualified migration decision from measured patch costs.
-  ///
-  /// The method does not mutate hierarchy ownership.  It authenticates the observations, prepares
-  /// a policy candidate through the same immutable authority, accounts for migration over the
-  /// configured horizon, and returns a decision that a hierarchy migration transaction may consume.
-  [[nodiscard]] RebalanceDecision decide_rebalance(
-      int source_level, const BoxArray& boxes, const DistributionMapping& current, int rank_count,
-      std::uint64_t topology_epoch, std::uint64_t materialization_generation,
-      ResourceEstimates estimates, const RebalancePolicy& policy,
-      const CommunicatorView& communicator = world_communicator_view()) const {
-    std::vector<std::int64_t> weights;
-    std::string request_contract;
+  [[nodiscard]] PreparedLoadBalanceResult<Dim> prepare(
+      const mesh::BoxArray<Dim>& patches, const mesh::RankSpace<Dim>& rank_space,
+      parallel::LoadBalancePreparationBudget budget, LoadBalanceWeights weights = {},
+      const ExecutionLane& lane = ExecutionLane::world()) const {
+    const CommunicatorView communicator = lane.communicator();
+    std::string collective_context_contract;
     std::string source_contract;
-    detail::collective_load_balance_preflight("rebalance request", communicator, [&] {
-      if (source_level < 0 || rank_count <= 0 || rank_count != communicator.size())
-        throw std::invalid_argument(
-            "rebalance source level must be nonnegative and rank count must equal the execution "
-            "communicator size");
-      if (current.size() != boxes.size() ||
-          estimates.size() != static_cast<std::size_t>(boxes.size()))
-        throw std::invalid_argument(
-            "rebalance current mapping and resource estimates must match the BoxArray");
-      if (policy.minimum_improvement_ppm < 0 || policy.minimum_improvement_ppm >= 1'000'000 ||
-          policy.amortization_steps <= 0 || policy.migration_bandwidth_bytes_per_second <= 0 ||
-          policy.per_patch_migration_latency_nanoseconds < 0)
-        throw std::invalid_argument("rebalance policy is outside its exact bounded envelope");
-      for (const int owner : current.ranks())
-        if (owner < 0 || owner >= rank_count)
-          throw std::invalid_argument("rebalance current mapping contains an invalid owner rank");
-      weights.reserve(estimates.size());
-      for (const ResourceEstimate& estimate : estimates)
-        weights.push_back(
-            detail::estimate_weight(estimate, topology_epoch, materialization_generation));
-      request_contract = detail::exact_rebalance_request(
-          current, topology_epoch, materialization_generation, estimates, policy);
-      source_contract = detail::exact_rebalance_source(
-          semantic_identity_, provider_.collective_contract(), source_level, rank_count,
-          topology_epoch, materialization_generation, boxes, current);
+    detail::collective_load_balance_preflight("prepared load-balance source", communicator, [&] {
+      detail::validate_prepared_load_balance_request(patches, rank_space, budget, weights,
+                                                     communicator.size());
+      collective_context_contract = detail::exact_load_balance_collective_context(lane);
+      source_contract = detail::exact_load_balance_source<Dim>(
+          collective_contract_, collective_context_contract, patches, rank_space, budget, weights);
     });
 
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{semantic_identity_, provider_.collective_contract()},
-             {"rebalance-source", source_contract},
-             {"rebalance-request", request_contract}},
+            {{"collective", collective_contract_},
+             {"collective-context", collective_context_contract},
+             {"source", source_contract}},
             communicator))
       throw std::invalid_argument(
-          "rebalance provider identity or measured request differs across MPI ranks");
+          "prepared load-balance authority or source differs across MPI ranks");
 
-    DistributionMapping proposed = distribute(boxes, rank_count, weights, communicator);
-    std::optional<RebalanceDecision> result;
-    detail::collective_load_balance_preflight("rebalance decision", communicator, [&] {
-      result.emplace(make_rebalance_decision(boxes, current, proposed, rank_count, topology_epoch,
-                                             materialization_generation, estimates, policy,
-                                             source_contract));
+    std::optional<parallel::OwnershipPlan<Dim>> plan;
+    detail::collective_load_balance_preflight("prepared load-balance provider", communicator, [&] {
+      plan.emplace(provider_(patches, rank_space, budget, weights));
     });
-    if (!result)
-      throw std::logic_error("rebalance decision was not materialized");
-    if (!all_ranks_agree_exact_ordered_byte_pairs({{semantic_identity_, result->exact_contract}},
-                                                  communicator))
-      throw std::invalid_argument("rebalance decision differs across MPI ranks");
-    return std::move(*result);
-  }
 
-  [[nodiscard]] RebalanceDecision decide_rebalance(
-      int source_level, const BoxArray& boxes, const DistributionMapping& current, int rank_count,
-      std::uint64_t topology_epoch, std::uint64_t materialization_generation,
-      ResourceEstimates estimates,
-      const CommunicatorView& communicator = world_communicator_view()) const {
-    return decide_rebalance(source_level, boxes, current, rank_count, topology_epoch,
-                            materialization_generation, estimates, default_rebalance_policy(),
-                            communicator);
+    std::string exact_contract;
+    detail::collective_load_balance_preflight("prepared load-balance result", communicator, [&] {
+      if (!plan)
+        throw std::logic_error("prepared load-balance provider produced no ownership plan");
+      detail::validate_prepared_load_balance_plan(*plan, patches, rank_space, weights);
+      exact_contract = detail::exact_load_balance_result<Dim>(source_contract, *plan);
+    });
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{"collective", collective_contract_},
+             {"collective-context", collective_context_contract},
+             {"result", exact_contract}},
+            communicator))
+      throw std::invalid_argument(
+          "prepared load-balance provider returned different plans across MPI ranks");
+    return PreparedLoadBalanceResult<Dim>(std::move(*plan), collective_contract_,
+                                          std::move(collective_context_contract),
+                                          std::move(source_contract), std::move(exact_contract));
   }
 
  private:
   std::string semantic_identity_;
-  PreparedLoadBalanceProvider provider_;
+  PreparedLoadBalanceProvider<Dim> provider_;
   std::optional<RebalancePolicy> default_rebalance_policy_;
+  std::string collective_contract_;
 };
 
-using LoadBalanceAuthorityFactory = std::function<PreparedLoadBalanceAuthority(
+template <int Dim>
+using LoadBalanceAuthorityFactory = std::function<PreparedLoadBalanceAuthority<Dim>(
     std::string semantic_identity, const PreparedProviderOptions& options)>;
 
 /// Open preparation registry.  Route lookup occurs once during bind; hierarchy/regrid code keeps
-/// only PreparedLoadBalanceAuthority and cannot branch on route or concrete provider type.
+/// only one PreparedLoadBalanceAuthority<Dim> and cannot branch on route or concrete provider type.
+template <int Dim>
 class LoadBalanceProviderRegistry {
  public:
-  void add(std::string route, LoadBalanceAuthorityFactory factory) {
+  void add(std::string route, LoadBalanceAuthorityFactory<Dim> factory) {
     if (route.empty() || !factory)
       throw std::invalid_argument("load-balance provider registration is incomplete");
     std::lock_guard<std::mutex> guard(mutex_);
@@ -626,10 +590,10 @@ class LoadBalanceProviderRegistry {
       throw std::invalid_argument("load-balance provider route is already registered");
   }
 
-  [[nodiscard]] PreparedLoadBalanceAuthority prepare(std::string_view route,
-                                                     std::string semantic_identity,
-                                                     const PreparedProviderOptions& options) const {
-    LoadBalanceAuthorityFactory factory;
+  [[nodiscard]] PreparedLoadBalanceAuthority<Dim> prepare(
+      std::string_view route, std::string semantic_identity,
+      const PreparedProviderOptions& options) const {
+    LoadBalanceAuthorityFactory<Dim> factory;
     {
       std::lock_guard<std::mutex> guard(mutex_);
       const auto found = factories_.find(std::string(route));
@@ -642,48 +606,54 @@ class LoadBalanceProviderRegistry {
 
  private:
   mutable std::mutex mutex_;
-  std::map<std::string, LoadBalanceAuthorityFactory, std::less<>> factories_;
+  std::map<std::string, LoadBalanceAuthorityFactory<Dim>, std::less<>> factories_;
 };
 
-inline LoadBalanceProviderRegistry& load_balance_provider_registry() {
-  static LoadBalanceProviderRegistry registry;
+template <int Dim>
+inline LoadBalanceProviderRegistry<Dim>& load_balance_provider_registry() {
+  static LoadBalanceProviderRegistry<Dim> registry;
   static std::once_flag builtins;
   std::call_once(builtins, [&] {
-    registry.add("space_filling_curve", [](std::string identity,
-                                           const PreparedProviderOptions& options) {
-      detail::require_empty_load_balance_options(options,
-                                                 "pops.amr.load-balance.space-filling-curve@1");
-      return PreparedLoadBalanceAuthority(
-          std::move(identity), PreparedLoadBalanceProvider(detail::SpaceFillingCurveLoadBalance{}));
-    });
+    registry.add("space_filling_curve",
+                 [](std::string identity, const PreparedProviderOptions& options) {
+                   detail::require_empty_load_balance_options(
+                       options, "pops.amr.load-balance.space-filling-curve@1");
+                   return PreparedLoadBalanceAuthority<Dim>(
+                       std::move(identity),
+                       PreparedLoadBalanceProvider<Dim>(detail::SpaceFillingCurveLoadBalance{}));
+                 });
     registry.add("knapsack", [](std::string identity, const PreparedProviderOptions& options) {
       detail::require_empty_load_balance_options(options, "pops.amr.load-balance.knapsack@1");
-      return PreparedLoadBalanceAuthority(
-          std::move(identity), PreparedLoadBalanceProvider(detail::KnapsackLoadBalance{}));
+      return PreparedLoadBalanceAuthority<Dim>(
+          std::move(identity), PreparedLoadBalanceProvider<Dim>(detail::KnapsackLoadBalance{}));
     });
-    registry.add(
-        "measured_knapsack", [](std::string identity, const PreparedProviderOptions& options) {
-          const RebalancePolicy policy = detail::measured_rebalance_policy(options);
-          return PreparedLoadBalanceAuthority(
-              std::move(identity),
-              PreparedLoadBalanceProvider(detail::MeasuredKnapsackLoadBalance{policy}), policy);
-        });
+    registry.add("measured_knapsack", [](std::string identity,
+                                         const PreparedProviderOptions& options) {
+      const RebalancePolicy policy = detail::measured_rebalance_policy(options);
+      return PreparedLoadBalanceAuthority<Dim>(
+          std::move(identity),
+          PreparedLoadBalanceProvider<Dim>(detail::MeasuredKnapsackLoadBalance{policy}), policy);
+    });
     registry.add("round_robin", [](std::string identity, const PreparedProviderOptions& options) {
       detail::require_empty_load_balance_options(options, "pops.amr.load-balance.round-robin@1");
-      return PreparedLoadBalanceAuthority(
-          std::move(identity), PreparedLoadBalanceProvider(detail::RoundRobinLoadBalance{}));
+      return PreparedLoadBalanceAuthority<Dim>(
+          std::move(identity), PreparedLoadBalanceProvider<Dim>(detail::RoundRobinLoadBalance{}));
     });
   });
   return registry;
 }
 
-inline void register_load_balance_provider(std::string route, LoadBalanceAuthorityFactory factory) {
-  load_balance_provider_registry().add(std::move(route), std::move(factory));
+template <int Dim>
+inline void register_load_balance_provider(std::string route,
+                                           LoadBalanceAuthorityFactory<Dim> factory) {
+  load_balance_provider_registry<Dim>().add(std::move(route), std::move(factory));
 }
 
-inline PreparedLoadBalanceAuthority prepare_load_balance_authority(
+template <int Dim>
+inline PreparedLoadBalanceAuthority<Dim> prepare_load_balance_authority(
     std::string_view route, std::string semantic_identity, const PreparedProviderOptions& options) {
-  return load_balance_provider_registry().prepare(route, std::move(semantic_identity), options);
+  return load_balance_provider_registry<Dim>().prepare(route, std::move(semantic_identity),
+                                                       options);
 }
 
 }  // namespace pops
