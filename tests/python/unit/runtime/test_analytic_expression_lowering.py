@@ -10,7 +10,11 @@ from pops.model import BindSchema
 from pops.model.resolved_bindings import ResolvedBindings
 from pops.params import ConstParam, RuntimeParam
 from pops.runtime._analytic_expression_lowering import lower_analytic_components
-from pops.runtime._initial_source_lowering import native_binary64, validate_initial_source
+from pops.runtime._initial_source_lowering import (
+    native_binary64,
+    ranked_gaussian_center,
+    validate_initial_source,
+)
 
 
 def _profile():
@@ -198,3 +202,27 @@ def test_native_initial_routes_uniformly_reject_additional_schema_keys(source):
     forged = {**canonical, "unexpected": "must-not-be-ignored"}
     with pytest.raises(TypeError, match="requires exactly keys"):
         validate_initial_source(forged, where="test initial source")
+
+
+@pytest.mark.parametrize("names", (("x",), ("x", "y"), ("x", "y", "z")))
+def test_gaussian_center_preserves_exact_inferred_rank(names):
+    source = {
+        "center": {
+            name: {"binary64": (0.125 * (index + 1)).hex()}
+            for index, name in enumerate(names)
+        }
+    }
+    assert ranked_gaussian_center(source, where="ranked Gaussian") == tuple(
+        0.125 * (index + 1) for index in range(len(names))
+    )
+
+
+def test_gaussian_center_rejects_non_cartesian_axis_gaps():
+    source = {
+        "center": {
+            "x": {"binary64": (0.25).hex()},
+            "z": {"binary64": (0.75).hex()},
+        }
+    }
+    with pytest.raises(TypeError, match="exact Cartesian axis prefix"):
+        ranked_gaussian_center(source, where="ranked Gaussian")

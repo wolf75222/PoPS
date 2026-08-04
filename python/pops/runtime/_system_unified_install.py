@@ -175,6 +175,7 @@ class _SystemUnifiedInstall(_System):
         source = row.get("source")
         from pops.runtime._initial_source_lowering import (
             native_binary64,
+            ranked_gaussian_center,
             validate_initial_source,
         )
 
@@ -206,13 +207,9 @@ class _SystemUnifiedInstall(_System):
                 name, "cell", "cell", "conservative_cell_average", opcodes, literals)
             return
         if route == "gaussian_field":
-            center = source.get("center", {})
-            if not isinstance(center, Mapping) or set(center) != {"x", "y"}:
-                raise ValueError("uniform Gaussian initial source requires x/y center")
             self._s._set_analytic_gaussian_state(
                 name,
-                native_binary64(center["x"], where="uniform Gaussian center.x"),
-                native_binary64(center["y"], where="uniform Gaussian center.y"),
+                ranked_gaussian_center(source, where="uniform Gaussian"),
                 native_binary64(source["background"], where="uniform Gaussian background"),
                 native_binary64(source["amplitude"], where="uniform Gaussian amplitude"),
                 native_binary64(

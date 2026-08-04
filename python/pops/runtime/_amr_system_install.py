@@ -323,6 +323,7 @@ class _AmrSystemInstall(_AmrSystem):
             if method == "analytic":
                 from pops.runtime._initial_source_lowering import (
                     native_binary64,
+                    ranked_gaussian_center,
                     validate_initial_source,
                 )
 
@@ -338,15 +339,13 @@ class _AmrSystemInstall(_AmrSystem):
                         subject_id, name or "", space, centering, components
                     )
                 elif route == "gaussian_field":
-                    center = source.get("center", {})
-                    if space != "cell" or set(center) != {"x", "y"}:
+                    if space != "cell":
                         raise ValueError(
-                            "pops.bind: gaussian_field requires one cell state and x/y center"
+                            "pops.bind: gaussian_field requires one cell state"
                         )
                     self._s._register_analytic_gaussian(
                         subject_id, name or "",
-                        native_binary64(center["x"], where="AMR Gaussian center.x"),
-                        native_binary64(center["y"], where="AMR Gaussian center.y"),
+                        ranked_gaussian_center(source, where="AMR Gaussian"),
                         native_binary64(
                             source["background"], where="AMR Gaussian background"),
                         native_binary64(

@@ -23,6 +23,7 @@ _SOURCE_KEYS = {
         "native_route", "frame_id", "seed_components", "components", "inputs", "projection",
     },
 }
+_CARTESIAN_AXIS_NAMES = ("x", "y", "z")
 
 
 def native_binary64(value: Any, *, where: str) -> float:
@@ -42,6 +43,22 @@ def native_binary64(value: Any, *, where: str) -> float:
             % (where, result.hex())
         )
     return result
+
+
+def ranked_gaussian_center(source: Mapping[str, Any], *, where: str) -> tuple[float, ...]:
+    """Return the exact 1D/2D/3D Cartesian center carried by one Gaussian source."""
+    center = source.get("center")
+    if not isinstance(center, Mapping):
+        raise TypeError("%s Gaussian center must be a canonical mapping" % where)
+    names = tuple(center)
+    if names != _CARTESIAN_AXIS_NAMES[:len(names)] or len(names) not in (1, 2, 3):
+        raise TypeError(
+            "%s Gaussian center must contain the exact Cartesian axis prefix x[/y/z]" % where
+        )
+    return tuple(
+        native_binary64(center[name], where="%s.center.%s" % (where, name))
+        for name in names
+    )
 
 
 def validate_initial_source(source: Any, *, where: str) -> str:
@@ -75,13 +92,10 @@ def validate_initial_source(source: Any, *, where: str) -> str:
             native_binary64(value, where="%s.components[%d]" % (where, index))
     elif route == "gaussian_field":
         frame_id = source["frame_id"]
-        center = source["center"]
         if not isinstance(frame_id, str) or not frame_id:
             raise TypeError("%s Gaussian frame_id must be non-empty" % where)
-        if not isinstance(center, Mapping) or set(center) != {"x", "y"}:
-            raise TypeError("%s Gaussian center must contain exactly x/y" % where)
+        ranked_gaussian_center(source, where=where)
         for name, value in (
-            ("center.x", center["x"]), ("center.y", center["y"]),
             ("background", source["background"]), ("amplitude", source["amplitude"]),
             ("inverse_width", source["inverse_width"]),
         ):
@@ -127,4 +141,4 @@ def validate_initial_source(source: Any, *, where: str) -> str:
     return route
 
 
-__all__ = ["native_binary64", "validate_initial_source"]
+__all__ = ["native_binary64", "ranked_gaussian_center", "validate_initial_source"]
