@@ -63,7 +63,8 @@ def test_paraview_launcher_uses_one_neutral_python_and_the_active_mpich_stack():
     assert "POPS_PARAVIEW_PMPI_LIBRARY" not in host
     assert "MPICH_CC=/usr/bin/clang" in setup
     assert 'export MPICH_CC="${MPICH_CC:-${CC:-/usr/bin/clang}}"' in build
-    assert bootstrap.index("from pops import _pops") < bootstrap.index(
+    assert 'native_dimension = os.environ.get("POPS_NATIVE_DIM")' in bootstrap
+    assert bootstrap.index("select_native_dimension(int(native_dimension))") < bootstrap.index(
         '__import__("catalyst")')
     assert "sys.path[0] = str(script.parent)" in bootstrap
     assert "sys.path[:] = previous_path" in bootstrap

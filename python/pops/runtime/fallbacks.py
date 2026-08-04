@@ -1,7 +1,6 @@
 """Structured fallback/degraded-route diagnostics."""
 from __future__ import annotations
 
-from importlib.util import find_spec
 from typing import Any
 
 
@@ -42,9 +41,11 @@ def _static_report() -> dict:
 
 
 def _native_report() -> dict:
-    if find_spec("pops._pops") is None:
+    from pops._native_selector import selected_native_module
+
+    _pops = selected_native_module(required=False)
+    if _pops is None:
         return _static_report()
-    from pops import _pops  # noqa: PLC0415
 
     fn: Any = getattr(_pops, "fallback_diagnostics_report", None)
     if callable(fn):
@@ -82,9 +83,11 @@ def fallback_diagnostics_report(options: Any = None) -> Any:
 
 def reset_fallback_diagnostics() -> None:
     """Reset process-local fallback/degraded-route counters when the native module supports it."""
-    if find_spec("pops._pops") is None:
+    from pops._native_selector import selected_native_module
+
+    _pops = selected_native_module(required=False)
+    if _pops is None:
         return
-    from pops import _pops  # noqa: PLC0415
 
     fn = getattr(_pops, "reset_fallback_diagnostics", None)
     if callable(fn):

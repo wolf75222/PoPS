@@ -69,7 +69,9 @@ def native_runtime_backend_for_route(backend, target, communicator):
                         ("communicator", communicator)):
         if not isinstance(value, str) or not value:
             raise TypeError("native runtime %s must be non-empty text" % name)
-    from pops import _pops
+    from pops._native_selector import selected_native_module
+
+    _pops = selected_native_module(required=True)
     fn = getattr(_pops, "runtime_backend_manifest", None)
     if not callable(fn):
         raise RuntimeError(
@@ -125,8 +127,9 @@ def native_device_resource(runtime):
     """Materialize and authenticate the installed Kokkos device/SharedSpace/stream authority."""
     if type(runtime) is not RuntimeBackendManifest:
         raise TypeError("native_device_resource requires an exact RuntimeBackendManifest")
-    from pops import _pops
+    from pops._native_selector import selected_native_module
 
+    _pops = selected_native_module(required=True)
     factory = getattr(_pops, "native_execution_resource", None)
     resource_type = getattr(_pops, "_NativeExecutionResource", None)
     if not callable(factory) or resource_type is None:

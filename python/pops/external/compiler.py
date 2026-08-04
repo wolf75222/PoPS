@@ -74,11 +74,12 @@ def compile_component(
     compiler, cflags, lflags = pops_loader_build_flags(cxx)
     cflags = [*cflags, '-DPOPS_HEADER_SIG="%s"' % signature]
     standard = _probe_cxx_std(compiler, loader_cxx_std())
-    from pops import _pops
+    from pops._native_selector import selected_native_module
     from pops.codegen._native_mpi import native_mpi_communicator
     from pops._platform_contracts import artifact_platform_manifest
     from pops.runtime._platform_manifest import native_runtime_backend_for_route
 
+    _pops = selected_native_module(required=True)
     # The component is compiled with the same shared loader flags as generated Programs.  Its
     # manifest must therefore describe that selected host communicator as well; claiming ``serial``
     # for a binary built with POPS_HAS_MPI defeats the exact launch gate later at installation.

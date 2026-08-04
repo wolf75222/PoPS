@@ -516,8 +516,9 @@ def _validate_shared_interface_implicit_execution_before_install(
     if not _requires_shared_interface_implicit_jacvec_pair(install_plan):
         return
     from pops.runtime._component_execution_context import component_execution_data
-    from pops import _pops
+    from pops._native_selector import selected_native_module
 
+    _pops = selected_native_module(required=True)
     _validate_shared_interface_implicit_execution_envelope(
         component_execution_data(install_plan.execution_context),
         _pops.n_ranks(),
@@ -669,8 +670,9 @@ def finalize_runtime_authorities(
                 "prefix; dynamic regrid requires at least two configured levels and the complete "
                 "prefix active at bind")
         levels = _materialized_shared_interface_levels(native, hierarchy)
-        from pops import _pops
+        from pops._native_selector import selected_native_module
 
+        _pops = selected_native_module(required=True)
         _validate_refined_shared_interface_execution(
             levels,
             execution_data,

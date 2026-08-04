@@ -353,11 +353,12 @@ def _common_platform_manifest(
     external: tuple[Any, ...],
 ) -> Any:
     """Prove one platform contract from every executable binary, never a representative."""
-    from pops import _pops
+    from pops._native_selector import selected_native_module
     from pops._platform_contracts import artifact_platform_manifest
     from pops.codegen._native_mpi import native_mpi_communicator
     from pops.runtime._platform_manifest import native_runtime_backend_for_route
 
+    _pops = selected_native_module(required=True)
     # Compilation selects the communicator seam baked into the host module, independently of world
     # size or whether a report happened to observe an initialized process.  A size-one MPI job still
     # produces an MPI_COMM_WORLD artifact and must not alias a genuinely serial binary.

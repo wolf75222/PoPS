@@ -284,9 +284,10 @@ class ExecutionContext:
             raise TypeError(
                 "ExecutionContext.mpi_world requires the exact artifact returned by pops.compile"
             )
-        from pops import _pops
+        from pops._native_selector import selected_native_module
         from pops._native_collectives import require_world
 
+        _pops = selected_native_module(required=True)
         communicator = require_world(_pops.mpi_world())
         from pops.runtime._platform_manifest import native_runtime_backend
         from pops.runtime._platform_manifest import native_device_resource

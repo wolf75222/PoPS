@@ -177,7 +177,9 @@ def decode_value(payload: Any) -> Any:
 
 def require_communicator(communicator: Any, *, allow_world: bool = True) -> Any:
     """Require an exact active native world authority or duplicated observer lane."""
-    from pops import _pops
+    from pops._native_selector import selected_native_module
+
+    _pops = selected_native_module(required=True)
 
     world_type = _pops._NativeWorldCommunicator
     lane_type = getattr(_pops, "_NativeObserverMpiLane", None)
@@ -204,7 +206,9 @@ def require_communicator(communicator: Any, *, allow_world: bool = True) -> Any:
 def require_world(communicator: Any) -> Any:
     """Require the exact active communicator object produced by ``_pops.mpi_world()``."""
     native = require_communicator(communicator)
-    from pops import _pops
+    from pops._native_selector import selected_native_module
+
+    _pops = selected_native_module(required=True)
 
     if type(native) is not _pops._NativeWorldCommunicator:
         raise TypeError("distributed execution requires the native PoPS world communicator")

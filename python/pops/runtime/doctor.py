@@ -97,8 +97,9 @@ def doctor(verbose: bool = True) -> Any:
     checks = {}
 
     # 1. interpreter + extension (cpython-3XY ABI trap)
-    from pops import _pops
+    from pops._native_selector import selected_native_module
 
+    _pops = selected_native_module(required=True)
     so = getattr(_pops, "__file__", "?")
     checks["interpreteur"] = (
         True,
@@ -256,9 +257,11 @@ def capabilities() -> Any:
     the internal descriptor report reads), not hardcoded, so adding or retiring a
     brick cannot silently desync this matrix from the introspectable one.
     """
-    from pops import _pops as _pops_mod  # ADC-291: read the aux limit from the SINGLE C++ source
+    from pops._native_selector import selected_native_module
     from pops.physics.aux import AUX_NAMED_MAX  # fallback mirror (no second hardcoded literal)
 
+    # ADC-291: read the aux limit from the selected SINGLE C++ source.
+    _pops_mod = selected_native_module(required=True)
     aux_max_extra = int(getattr(_pops_mod, "__aux_max_extra__", AUX_NAMED_MAX))
     # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
     # catalogs (the same source as the internal descriptor report) instead of hardcoding them, so a

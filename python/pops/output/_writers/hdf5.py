@@ -38,8 +38,9 @@ def _require_h5py(parallel: bool = False) -> Any:
 
 
 def _require_native_parallel_hdf5() -> tuple[Any, dict[str, Any]]:
-    from pops import _pops
+    from pops._native_selector import selected_native_module
 
+    _pops = selected_native_module(required=True)
     available = getattr(_pops, "__has_parallel_hdf5__", None)
     capability = getattr(_pops, "_parallel_hdf5_capability", None)
     write = getattr(_pops, "_write_parallel_hdf5", None)
