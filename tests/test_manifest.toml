@@ -846,6 +846,11 @@ sources = ["tests/cpp/unit/amr/test_nd_flux_ledger.cpp"]
 labels = ["unit", "amr", "numerics", "fast"]
 
 [[cpp.suite]]
+name = "test_nd_amr_consumers"
+sources = ["tests/cpp/unit/amr/test_nd_amr_consumers.cpp"]
+labels = ["unit", "amr", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_nd_amr_runtime"
 sources = ["tests/cpp/unit/amr/test_nd_amr_runtime.cpp"]
 labels = ["unit", "amr", "runtime", "fast"]

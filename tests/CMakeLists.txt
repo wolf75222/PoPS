@@ -440,6 +440,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_nd_distribution
   test_nd_execution
   test_nd_flux_ledger
+  test_nd_amr_consumers
   test_nd_amr_runtime
   test_nd_hierarchy_plan
   test_nd_layout
